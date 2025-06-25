@@ -11,8 +11,8 @@ id_pattern = re.compile(r'^.\d+$')
 
 # Bot information
 SESSION = environ.get('SESSION', 'TechVJBot')
-API_ID = int(environ.get('API_ID', ''))
-API_HASH = environ.get('API_HASH', '')
+API_ID = int(environ.get('API_ID', '6539456'))
+API_HASH = environ.get('API_HASH', '50d0f275e6d21c2709101a34d77e2bc2')
 BOT_TOKEN = environ.get('BOT_TOKEN', "")
 
 
@@ -59,16 +59,16 @@ DELETE_CHANNELS = [int(dch) if id_pattern.search(dch) else dch for dch in enviro
 
 
 # MongoDB information
-DATABASE_URI = environ.get('DATABASE_URI', "")   # IF Multiple Database Is False Then Fill Only This Database Url.
+DATABASE_URI = environ.get('DATABASE_URI', "mongodb+srv://mrsr:mrsr@cluster0.snp685y.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0")   # IF Multiple Database Is False Then Fill Only This Database Url.
 DATABASE_NAME = environ.get('DATABASE_NAME', "techvjclonefilterbot")
 COLLECTION_NAME = environ.get('COLLECTION_NAME', 'vjcollection')
 
-MULTIPLE_DATABASE = bool(environ.get('MULTIPLE_DATABASE', False)) # Set True or False
+MULTIPLE_DATABASE = bool(environ.get('MULTIPLE_DATABASE', True)) # Set True or False
 
 # If Multiple Database Is True Then Fill All Three Below Database Uri Else You Will Get Error.
-O_DB_URI = environ.get('O_DB_URI', "")   # This Db Is For Other Data Store
-F_DB_URI = environ.get('F_DB_URI', "")   # This Db Is For File Data Store
-S_DB_URI = environ.get('S_DB_URI', "")   # This Db is for File Data Store When First Db Is Going To Be Full.
+O_DB_URI = environ.get('O_DB_URI', "mongodb+srv://mrmv:mrmv@mrmv.djlwzyk.mongodb.net/?retryWrites=true&w=majority&appName=mrmv")   # This Db Is For Other Data Store
+F_DB_URI = environ.get('F_DB_URI', "mongodb+srv://data2mrmv:data2mrmv@cluster3.p8tqukm.mongodb.net/?retryWrites=true&w=majority&appName=Cluster3")   # This Db Is For File Data Store
+S_DB_URI = environ.get('S_DB_URI', "mongodb+srv://data5mrmv:data5mrmv@cluster5.t5ollhs.mongodb.net/?retryWrites=true&w=majority&appName=Cluster5")   # This Db is for File Data Store When First Db Is Going To Be Full.
 
 
 # Premium And Referal Settings
