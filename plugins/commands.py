@@ -135,29 +135,19 @@ async def start(client, message):
     if len(message.command) == 2 and message.command[1] in ["subscribe", "error", "okay", "help"]:
         if PREMIUM_AND_REFERAL_MODE == True:
             buttons = [[
-                InlineKeyboardButton('⤬ ᴀᴅᴅ ᴍᴇ ᴛᴏ ʏᴏᴜʀ ɢʀᴏᴜᴘ ⤬', url=f'http://t.me/{temp.U_NAME}?startgroup=true')
+                InlineKeyboardButton("⚙️ 𝓑𝓞𝓣 𝓤𝓟𝓓𝓐𝓣𝓔 𝓒𝓗𝓐𝓝𝓝𝓔𝓛 ⚙️", url="https://t.me/+d8zuVyrBBcNkYzI1")
             ],[
-                InlineKeyboardButton('ᴇᴀʀɴ ᴍᴏɴᴇʏ', callback_data="shortlink_info"),
-                InlineKeyboardButton('ᴍᴏᴠɪᴇ ɢʀᴏᴜᴘ', url=GRP_LNK)
+                InlineKeyboardButton("📂 𝓙𝓞𝓘𝓝 𝓕𝓞𝓡 𝓤𝓟𝓓𝓐𝓣𝓔 𝓒𝓗𝓐𝓝𝓝𝓔𝓛 📂", url="https://t.me/+rjw2I6MtjW8xYzRl")
             ],[
-                InlineKeyboardButton('ʜᴇʟᴘ', callback_data='help'),
-                InlineKeyboardButton('ᴀʙᴏᴜᴛ', callback_data='about')
-            ],[
-                InlineKeyboardButton('ᴘʀᴇᴍɪᴜᴍ ᴀɴᴅ ʀᴇғᴇʀʀᴀʟ', callback_data='subscription')
-            ],[
-                InlineKeyboardButton('ᴊᴏɪɴ ᴜᴘᴅᴀᴛᴇ ᴄʜᴀɴɴᴇʟ', url=CHNL_LNK)
+                InlineKeyboardButton("🔰 𝓑𝓞𝓣 𝓐𝓑𝓞𝓤𝓣 𝓟𝓐𝓝𝓔𝓛 🔰", callback_data="about")
             ]]
         else:
             buttons = [[
-                InlineKeyboardButton('⤬ ᴀᴅᴅ ᴍᴇ ᴛᴏ ʏᴏᴜʀ ɢʀᴏᴜᴘ ⤬', url=f'http://t.me/{temp.U_NAME}?startgroup=true')
+                InlineKeyboardButton("⚙️ 𝓑𝓞𝓣 𝓤𝓟𝓓𝓐𝓣𝓔 𝓒𝓗𝓐𝓝𝓝𝓔𝓛 ⚙️", url="https://t.me/+d8zuVyrBBcNkYzI1")
             ],[
-                InlineKeyboardButton('ᴇᴀʀɴ ᴍᴏɴᴇʏ', callback_data="shortlink_info"),
-                InlineKeyboardButton('ᴍᴏᴠɪᴇ ɢʀᴏᴜᴘ', url=GRP_LNK)
+                InlineKeyboardButton("📂 𝓙𝓞𝓘𝓝 𝓕𝓞𝓡 𝓤𝓟𝓓𝓐𝓣𝓔 𝓒𝓗𝓐𝓝𝓝𝓔𝓛 📂", url="https://t.me/+rjw2I6MtjW8xYzRl")
             ],[
-                InlineKeyboardButton('ʜᴇʟᴘ', callback_data='help'),
-                InlineKeyboardButton('ᴀʙᴏᴜᴛ', callback_data='about')
-            ],[
-                InlineKeyboardButton('ᴊᴏɪɴ ᴜᴘᴅᴀᴛᴇ ᴄʜᴀɴɴᴇʟ', url=CHNL_LNK)
+                InlineKeyboardButton("🔰 𝓑𝓞𝓣 𝓐𝓑𝓞𝓤𝓣 𝓟𝓐𝓝𝓔𝓛 🔰", callback_data="about")
             ]]
         if CLONE_MODE == True:
             buttons.append([InlineKeyboardButton('ᴄʀᴇᴀᴛᴇ ᴏᴡɴ ᴄʟᴏɴᴇ ʙᴏᴛ', callback_data='clone')])
@@ -204,15 +194,11 @@ async def start(client, message):
                 ]]
             else:
                 buttons = [[
-                    InlineKeyboardButton('⤬ ᴀᴅᴅ ᴍᴇ ᴛᴏ ʏᴏᴜʀ ɢʀᴏᴜᴘ ⤬', url=f'http://t.me/{temp.U_NAME}?startgroup=true')
+                    InlineKeyboardButton("⚙️ 𝓑𝓞𝓣 𝓤𝓟𝓓𝓐𝓣𝓔 𝓒𝓗𝓐𝓝𝓝𝓔𝓛 ⚙️", url="https://t.me/+d8zuVyrBBcNkYzI1")
                 ],[
-                    InlineKeyboardButton('ᴇᴀʀɴ ᴍᴏɴᴇʏ', callback_data="shortlink_info"),
-                    InlineKeyboardButton('ᴍᴏᴠɪᴇ ɢʀᴏᴜᴘ', url=GRP_LNK)
+                    InlineKeyboardButton("📂 𝓙𝓞𝓘𝓝 𝓕𝓞𝓡 𝓤𝓟𝓓𝓐𝓣𝓔 𝓒𝓗𝓐𝓝𝓝𝓔𝓛 📂", url="https://t.me/+rjw2I6MtjW8xYzRl")
                 ],[
-                    InlineKeyboardButton('ʜᴇʟᴘ', callback_data='help'),
-                    InlineKeyboardButton('ᴀʙᴏᴜᴛ', callback_data='about')
-                ],[
-                    InlineKeyboardButton('ᴊᴏɪɴ ᴜᴘᴅᴀᴛᴇ ᴄʜᴀɴɴᴇʟ', url=CHNL_LNK)
+                    InlineKeyboardButton("🔰 𝓑𝓞𝓣 𝓐𝓑𝓞𝓤𝓣 𝓟𝓐𝓝𝓔𝓛 🔰", callback_data="about")
                 ]]
             if CLONE_MODE == True:
                 buttons.append([InlineKeyboardButton('ᴄʀᴇᴀᴛᴇ ᴏᴡɴ ᴄʟᴏɴᴇ ʙᴏᴛ', callback_data='clone')])
