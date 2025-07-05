@@ -2581,7 +2581,7 @@ async def auto_filter(client, name, msg, reply_msg, ai_search, spoll=False):
                 if settings["spell_check"]:
                     return await advantage_spell_chok(client, name, msg, reply_msg, ai_search)
                 else:
-                    return await reply_msg.edit_text(f"**⚠️ No File Found For Your Query - {name}**\n**Make Sure Spelling Is Correct.**")
+                    return await reply_msg.edit_text(f"**•നിങ്ങൾ സേർച്ച് ചെയ്ത File Database ൽ ഇല്ല.**\n**•സ്പെല്ലിംഗ് ശെരി ആണോ എന്ന് പരിശോധിക്കുക.**\n\n**•No File Found For Your Query.**\n**•Make Sure Spelling Is Correct.**")
         else:
             return
     else:
