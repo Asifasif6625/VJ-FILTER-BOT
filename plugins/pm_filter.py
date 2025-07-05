@@ -2584,6 +2584,7 @@ async def auto_filter(client, name, msg, reply_msg, ai_search, spoll=False):
                     kum = await reply_msg.edit_text(f"**•നിങ്ങൾ സേർച്ച് ചെയ്ത File Database ൽ ഇല്ല.**\n**•സ്പെല്ലിംഗ് ശെരി ആണോ എന്ന് പരിശോധിക്കുക.**\n\n**•No File Found For Your Query.**\n**•Make Sure Spelling Is Correct.**")
                     await sleep(10)
                     await kum.delete()
+                    return 
         else:
             return
     else:
