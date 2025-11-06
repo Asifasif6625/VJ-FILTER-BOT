@@ -115,12 +115,12 @@ async def start(client, message):
                         btn.append([InlineKeyboardButton("↻ ᴛʀʏ ᴀɢᴀɪɴ", url=f"https://t.me/{temp.U_NAME}?start={message.command[1]}")])
             if REQUEST_TO_JOIN_MODE == True:
                 if TRY_AGAIN_BTN == True:
-                    text = "**🕵️ ʏᴏᴜ ᴅᴏ ɴᴏᴛ ᴊᴏɪɴ ᴍʏ ʙᴀᴄᴋᴜᴘ ᴄʜᴀɴɴᴇʟ ғɪʀsᴛ ᴊᴏɪɴ ᴄʜᴀɴɴᴇʟ ᴛʜᴇɴ ᴛʀʏ ᴀɢᴀɪɴ**"
+                    text = "**🎗️ Hy You Are Not Joind BackUp Channel, First Join Channel And Try Again !!! \n\nഹായ് ബാക്കപ്പ് ചാനലിൽ ചേർന്നിട്ടില്ല, ആദ്യം ചാനലിൽ ചേർന്നിട്ട് വീണ്ടും ശ്രമിക്കൂ!!!**"
                 else:
                     await db.set_msg_command(message.from_user.id, com=message.command[1])
-                    text = "**🕵️ ʏᴏᴜ ᴅᴏ ɴᴏᴛ ᴊᴏɪɴ ᴍʏ ʙᴀᴄᴋᴜᴘ ᴄʜᴀɴɴᴇʟ ғɪʀsᴛ ᴊᴏɪɴ ᴄʜᴀɴɴᴇʟ**"
+                    text = "**🎗️ Hy You Are Not Joind BackUp Channel, First Join Channel And Try Again !!! \n\nഹായ് ബാക്കപ്പ് ചാനലിൽ ചേർന്നിട്ടില്ല, ആദ്യം ചാനലിൽ ചേർന്നിട്ട് വീണ്ടും ശ്രമിക്കൂ!!!**"
             else:
-                text = "**🕵️ ʏᴏᴜ ᴅᴏ ɴᴏᴛ ᴊᴏɪɴ ᴍʏ ʙᴀᴄᴋᴜᴘ ᴄʜᴀɴɴᴇʟ ғɪʀsᴛ ᴊᴏɪɴ ᴄʜᴀɴɴᴇʟ ᴛʜᴇɴ ᴛʀʏ ᴀɢᴀɪɴ**"
+                text = "**🎗️ Hy You Are Not Joind BackUp Channel, First Join Channel And Try Again !!! \n\nഹായ് ബാക്കപ്പ് ചാനലിൽ ചേർന്നിട്ടില്ല, ആദ്യം ചാനലിൽ ചേർന്നിട്ട് വീണ്ടും ശ്രമിക്കൂ!!!**"
             await client.send_message(
                 chat_id=message.from_user.id,
                 text=text,
@@ -290,7 +290,7 @@ async def start(client, message):
         await asyncio.sleep(600)
         for x in filesarr:
             await x.delete()
-        await k.edit_text("<b>✅ ʏᴏᴜʀ ᴍᴇssᴀɢᴇ ɪs sᴜᴄᴄᴇssғᴜʟʟʏ ᴅᴇʟᴇᴛᴇᴅ</b>")  
+        await k.edit_text("<blockquote>Copyright Protection Notify</blockquote>\n\n <b>Your Requst Movie Files Automaticaly Deleted.\n\nനിങൾ റിക്വസ്റ്റ് ചെയ്ത മൂവി ഫയൽ ഓട്ടോമാറ്റിക്കലി ഡിലീറ്റ് ആയിട്ടുണ്ട്.</b>")  
         return
     
     elif data.split("-", 1)[0] == "DSTORE":
@@ -1390,3 +1390,4 @@ async def purge_requests(client, message):
             parse_mode=enums.ParseMode.MARKDOWN,
             disable_web_page_preview=True
         )
+
