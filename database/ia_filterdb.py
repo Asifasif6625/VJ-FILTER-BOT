@@ -64,8 +64,15 @@ def clean_file_name(file_name):
     for char in unwanted_chars:
         file_name = file_name.replace(char, '')
         
-    return ' '.join(filter(lambda x: not x.startswith('@') and not x.startswith('http') and not x.startswith('www.') and not x.startswith('t.me'), file_name.split()))
+    old_file_name = ' '.join(filter(lambda x: not x.startswith('@') and not x.startswith('http') and not x.startswith('www.') and not x.startswith('t.me'), file_name.split()))
+    new_file_name = add_space_between_e_and_number(old_file_name)
+    return new_file_name
 
+def add_space_between_e_and_number(input_string):
+    # Use regex to find 'e' or 'E' followed by a digit and add a space
+    output_string = re.sub(r'(e|E)([0-9])', r'1 2', input_string)
+    return output_string
+    
 def is_file_already_saved(file_id, file_name):
     """Check if the file is already saved in either collection."""
     found1 = {'file_name': file_name}
