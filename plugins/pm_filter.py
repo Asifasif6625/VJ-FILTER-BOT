@@ -1,4 +1,4 @@
-# Don't Remove Credit @VJ_Botz
+# Don't Remove Credit @VJ_Bots
 # Subscribe YouTube Channel For Amazing Bot @Tech_VJ
 # Ask Doubt on telegram @KingVJ01
 
@@ -54,7 +54,7 @@ async def give_filter(client, message):
             try:
                 if settings['auto_ffilter']:
                     ai_search = True
-                    reply_msg = await message.reply_text(f"<b><i>searching Your Requsted Files 🙈</i></b>")
+                    reply_msg = await message.reply_text(f"<b><i>Searching For {message.text} 🔍</i></b>")
                     await auto_filter(client, message.text, message, reply_msg, ai_search)
             except KeyError:
                 grpid = await active_connection(str(message.from_user.id))
@@ -62,7 +62,7 @@ async def give_filter(client, message):
                 settings = await get_settings(message.chat.id)
                 if settings['auto_ffilter']:
                     ai_search = True
-                    reply_msg = await message.reply_text(f"<b><i>searching Your Requsted Files 🙈</i></b>")
+                    reply_msg = await message.reply_text(f"<b><i>Searching For {message.text} 🔍</i></b>")
                     await auto_filter(client, message.text, message, reply_msg, ai_search)
     else: #a better logic to avoid repeated lines of code in auto_filter function
         search = message.text
@@ -80,17 +80,9 @@ async def pm_text(bot, message):
     if content.startswith("/") or content.startswith("#"): return  # ignore commands and hashtags
     if PM_SEARCH == True:
         ai_search = True
-        reply_msg = await bot.send_message(message.from_user.id, f"<b><i>searching Your Requsted Files 🙈</i></b>", reply_to_message_id=message.id)
+        reply_msg = await bot.send_message(message.from_user.id, f"<b><i>Searching For {content} 🔍</i></b>", reply_to_message_id=message.id)
         await auto_filter(bot, content, message, reply_msg, ai_search)
     
-@Client.on_callback_query(filters.regex(r"^alert_btn#"))
-async def alert_button_callback(bot, query):
-    _, req = query.data.split("#")
-    if int(req) not in [query.from_user.id, 0]:
-        return await query.answer(script.ALRT_TXT.format(query.from_user.first_name), show_alert=True)
-    await query.answer("Movie not found in Database. Your request has been sent to the admins!", show_alert=True)
-    # Optionally, we could send a message to a log channel here if needed.
-
 @Client.on_callback_query(filters.regex(r"^next"))
 async def next_page(bot, query):
     ident, req, key, offset = query.data.split("_")
@@ -259,7 +251,7 @@ async def advantage_spoll_choker(bot, query):
             if files:
                 k = (movie, files, offset, total_results)
                 ai_search = True
-                reply_msg = await query.message.edit_text(f"<b><i>searching Your Requsted Files 🙈</i></b>")
+                reply_msg = await query.message.edit_text(f"<b><i>Searching For {movie} 🔍</i></b>")
                 await auto_filter(bot, movie, query, reply_msg, ai_search, k)
             else:
                 reqstr1 = query.from_user.id if query.from_user else 0
@@ -2586,56 +2578,10 @@ async def auto_filter(client, name, msg, reply_msg, ai_search, spoll=False):
             files, offset, total_results = await get_search_results(message.chat.id ,search, offset=0, filter=True)
             settings = await get_settings(message.chat.id)
             if not files:
-                imdb = await get_poster(search) if settings["imdb"] else None
-                button = [[InlineKeyboardButton("🔔 Alert", callback_data=f"alert_btn#{req}")]]
-                
-                if imdb and imdb.get('poster'):
-                    TEMPLATE = script.IMDB_TEMPLATE_TXT
-                    cap = TEMPLATE.format(
-                        qurey=search,
-                        title=imdb['title'],
-                        votes=imdb['votes'],
-                        aka=imdb["aka"],
-                        seasons=imdb["seasons"],
-                        box_office=imdb['box_office'],
-                        localized_title=imdb['localized_title'],
-                        kind=imdb['kind'],
-                        imdb_id=imdb["imdb_id"],
-                        cast=imdb["cast"],
-                        runtime=imdb["runtime"],
-                        countries=imdb["countries"],
-                        certificates=imdb["certificates"],
-                        languages=imdb["languages"],
-                        director=imdb["director"],
-                        writer=imdb["writer"],
-                        producer=imdb["producer"],
-                        composer=imdb["composer"],
-                        cinematographer=imdb["cinematographer"],
-                        music_team=imdb["music_team"],
-                        distributors=imdb["distributors"],
-                        release_date=imdb['release_date'],
-                        year=imdb['year'],
-                        genres=imdb['genres'],
-                        poster=imdb['poster'],
-                        plot=imdb['plot'],
-                        rating=imdb['rating'],
-                        url=imdb['url'],
-                        remaining_seconds="N/A",
-                        message=message,
-                        **locals()
-                    )
-                    cap += "\n\n**•നിങ്ങൾ സേർച്ച് ചെയ്ത File Database ൽ ഇല്ല.**"
-                    kum = await message.reply_photo(photo=imdb.get('poster'), caption=cap, reply_markup=InlineKeyboardMarkup(button))
+                if settings["spell_check"]:
+                    return await advantage_spell_chok(client, name, msg, reply_msg, ai_search)
                 else:
-                    kum = await reply_msg.edit_text(f"**•നിങ്ങൾ സേർച്ച് ചെയ്ത File Database ൽ ഇല്ല.**\n**•സ്പെല്ലിംഗ് ശെരി ആണോ എന്ന് പരിശോധിക്കുക.**\n\n**•No File Found For Your Query.**\n**•Make Sure Spelling Is Correct.**", reply_markup=InlineKeyboardMarkup(button))
-                
-                await asyncio.sleep(60)
-                try:
-                    await kum.delete()
-                except Exception as e:
-                    print("Failed to delete message:", e)
-                return    
-                    
+                    return await reply_msg.edit_text(f"**⚠️ No File Found For Your Query - {name}**\n**Make Sure Spelling Is Correct.**")
         else:
             return
     else:
