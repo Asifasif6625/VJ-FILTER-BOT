@@ -66,16 +66,21 @@ async def give_filter(client, message):
             # ── English-only guard ──
             if not is_english_only(message.text):
                 reason_btn = InlineKeyboardMarkup([[InlineKeyboardButton("Reason 🔴", callback_data="english_only_reason")]])
-                await message.reply_text(
-                    "<b>⚠️ Only English Language Supported!\n\nThis bot only supports English language movie search.\nPlease send the movie name in English.</b>",
+                alert_msg = await message.reply_text(
+                    "<b>⚠️ Only English Language Supported!\n\nThis bot only supports English language movie search.\nPlease send the movie name in English.</b>\n\n<i>🕐 This message will be deleted in 20 seconds.</i>",
                     reply_markup=reason_btn,
                     parse_mode=enums.ParseMode.HTML
                 )
+                await asyncio.sleep(20)
+                try:
+                    await alert_msg.delete()
+                except:
+                    pass
                 return
             try:
                 if settings['auto_ffilter']:
                     ai_search = True
-                    reply_msg = await message.reply_text(f"<b><i>Searching For {message.text} 🔍</i></b>")
+                    reply_msg = await message.reply_text("​")
                     await auto_filter(client, message.text, message, reply_msg, ai_search)
             except KeyError:
                 grpid = await active_connection(str(message.from_user.id))
@@ -83,7 +88,7 @@ async def give_filter(client, message):
                 settings = await get_settings(message.chat.id)
                 if settings['auto_ffilter']:
                     ai_search = True
-                    reply_msg = await message.reply_text(f"<b><i>Searching For {message.text} 🔍</i></b>")
+                    reply_msg = await message.reply_text("​")
                     await auto_filter(client, message.text, message, reply_msg, ai_search)
     else: #a better logic to avoid repeated lines of code in auto_filter function
         search = message.text
@@ -102,17 +107,22 @@ async def pm_text(bot, message):
     # ── English-only guard ──
     if not is_english_only(content):
         reason_btn = InlineKeyboardMarkup([[InlineKeyboardButton("Reason 🔴", callback_data="english_only_reason")]])
-        await bot.send_message(
+        alert_msg = await bot.send_message(
             message.from_user.id,
-            "<b>⚠️ Only English Language Supported!\n\nThis bot only supports English language movie search.\nPlease send the movie name in English.</b>",
+            "<b>⚠️ Only English Language Supported!\n\nThis bot only supports English language movie search.\nPlease send the movie name in English.</b>\n\n<i>🕐 This message will be deleted in 20 seconds.</i>",
             reply_markup=reason_btn,
             reply_to_message_id=message.id,
             parse_mode=enums.ParseMode.HTML
         )
+        await asyncio.sleep(20)
+        try:
+            await alert_msg.delete()
+        except:
+            pass
         return
     if PM_SEARCH == True:
         ai_search = True
-        reply_msg = await bot.send_message(message.from_user.id, f"<b><i>Searching For {content} 🔍</i></b>", reply_to_message_id=message.id)
+        reply_msg = await bot.send_message(message.from_user.id, "​", reply_to_message_id=message.id)
         await auto_filter(bot, content, message, reply_msg, ai_search)
 
 @Client.on_callback_query(filters.regex(r"^english_only_reason$"))
@@ -2819,7 +2829,7 @@ async def advantage_spell_chok(client, name, msg, reply_msg, vj_search):
     SPELL_CHECK[mv_id] = movielist
     if AI_SPELL_CHECK == True and vj_search == True:
         vj_search_new = False
-        vj_ai_msg = await reply_msg.edit_text("<b><i>I Am Trying To Find Your Movie With Your Wrong Spelling.</i></b>")
+        vj_ai_msg = await reply_msg.edit_text("\u200b")
         movienamelist = []
         movienamelist += [movie.get('title') for movie in movies]
         for techvj in movienamelist:
