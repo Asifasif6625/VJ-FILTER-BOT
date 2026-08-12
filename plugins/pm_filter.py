@@ -77,19 +77,8 @@ async def give_filter(client, message):
                 except:
                     pass
                 return
-            try:
-                if settings['auto_ffilter']:
-                    ai_search = True
-                    reply_msg = await message.reply_text(".")
-                    await auto_filter(client, message.text, message, reply_msg, ai_search)
-            except KeyError:
-                grpid = await active_connection(str(message.from_user.id))
-                await save_group_settings(grpid, 'auto_ffilter', True)
-                settings = await get_settings(message.chat.id)
-                if settings['auto_ffilter']:
-                    ai_search = True
-                    reply_msg = await message.reply_text(".")
-                    await auto_filter(client, message.text, message, reply_msg, ai_search)
+            ai_search = True
+            await auto_filter(client, message.text, message, None, ai_search)
     else: #a better logic to avoid repeated lines of code in auto_filter function
         search = message.text
         temp_files, temp_offset, total_results = await get_search_results(chat_id=message.chat.id, query=search.lower(), offset=0, filter=True)
@@ -122,8 +111,7 @@ async def pm_text(bot, message):
         return
     if PM_SEARCH == True:
         ai_search = True
-        reply_msg = await bot.send_message(message.from_user.id, ".", reply_to_message_id=message.id)
-        await auto_filter(bot, content, message, reply_msg, ai_search)
+        await auto_filter(bot, content, message, None, ai_search)
 
 @Client.on_callback_query(filters.regex(r"^english_only_reason$"))
 async def english_only_reason_alert(bot, query):
@@ -2584,12 +2572,12 @@ async def cb_handler(client: Client, query: CallbackQuery):
             await query.message.edit_reply_markup(reply_markup)
     await query.answer(MSG_ALRT)
 
-async def auto_filter(client, name, msg, reply_msg, ai_search, spoll=False):
+async def auto_filter(client, name, msg, reply_msg=None, ai_search=True, spoll=False):
     curr_time = datetime.now(pytz.timezone('Asia/Kolkata')).time()
     if not spoll:
         message = msg
         if message.text.startswith("/"): return  # ignore commands
-        if re.findall("((^\/|^,|^!|^\.|^[\U0001F600-\U000E007F]).*)", message.text):
+        if re.findall("((^\\/|^,|^!|^\\.|^[\U0001F600-\U000E007F]).*)", message.text):
             return
         if len(message.text) < 100:
             search = name
@@ -2613,7 +2601,11 @@ async def auto_filter(client, name, msg, reply_msg, ai_search, spoll=False):
                 if settings["spell_check"]:
                     return await advantage_spell_chok(client, name, msg, reply_msg, ai_search)
                 else:
-                    return await reply_msg.edit_text(f"**⚠️ No File Found For Your Query - {name}**\n**Make Sure Spelling Is Correct.**")
+                    no_result_msg = f"**⚠️ No File Found For Your Query - {name}**\n**Make Sure Spelling Is Correct.**"
+                    if reply_msg:
+                        return await reply_msg.edit_text(no_result_msg)
+                    else:
+                        return await message.reply_text(no_result_msg)
         else:
             return
     else:
@@ -2735,7 +2727,8 @@ async def auto_filter(client, name, msg, reply_msg, ai_search, spoll=False):
     if imdb and imdb.get('poster'):
         try:
             hehe = await message.reply_photo(photo=imdb.get('poster'), caption=cap, reply_markup=InlineKeyboardMarkup(btn))
-            await reply_msg.delete()
+            if reply_msg:
+                await reply_msg.delete()
             try:
                 if settings['auto_delete']:
                     await asyncio.sleep(300)
@@ -2750,7 +2743,8 @@ async def auto_filter(client, name, msg, reply_msg, ai_search, spoll=False):
             pic = imdb.get('poster')
             poster = pic.replace('.jpg', "._V1_UX360.jpg") 
             hmm = await message.reply_photo(photo=poster, caption=cap, reply_markup=InlineKeyboardMarkup(btn))
-            await reply_msg.delete()
+            if reply_msg:
+                await reply_msg.delete()
             try:
                if settings['auto_delete']:
                     await asyncio.sleep(300)
@@ -2763,7 +2757,10 @@ async def auto_filter(client, name, msg, reply_msg, ai_search, spoll=False):
                 await message.delete()
         except Exception as e:
             logger.exception(e) 
-            fek = await reply_msg.edit_text(text=cap, reply_markup=InlineKeyboardMarkup(btn))
+            if reply_msg:
+                fek = await reply_msg.edit_text(text=cap, reply_markup=InlineKeyboardMarkup(btn))
+            else:
+                fek = await message.reply_text(text=cap, reply_markup=InlineKeyboardMarkup(btn))
             try:
                 if settings['auto_delete']:
                     await asyncio.sleep(300)
@@ -2775,7 +2772,10 @@ async def auto_filter(client, name, msg, reply_msg, ai_search, spoll=False):
                 await fek.delete()
                 await message.delete()
     else:
-        fuk = await reply_msg.edit_text(text=cap, reply_markup=InlineKeyboardMarkup(btn), disable_web_page_preview=True)
+        if reply_msg:
+            fuk = await reply_msg.edit_text(text=cap, reply_markup=InlineKeyboardMarkup(btn), disable_web_page_preview=True)
+        else:
+            fuk = await message.reply_text(text=cap, reply_markup=InlineKeyboardMarkup(btn), disable_web_page_preview=True)
         
         try:
             if settings['auto_delete']:
