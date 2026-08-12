@@ -79,7 +79,7 @@ async def give_filter(client, message):
                 return
             try:
                 if settings['auto_ffilter']:
-                    ai_search = True
+                    ai_search = False
                     reply_msg = await message.reply_text("​")
                     await auto_filter(client, message.text, message, reply_msg, ai_search)
             except KeyError:
@@ -87,7 +87,7 @@ async def give_filter(client, message):
                 await save_group_settings(grpid, 'auto_ffilter', True)
                 settings = await get_settings(message.chat.id)
                 if settings['auto_ffilter']:
-                    ai_search = True
+                    ai_search = False
                     reply_msg = await message.reply_text("​")
                     await auto_filter(client, message.text, message, reply_msg, ai_search)
     else: #a better logic to avoid repeated lines of code in auto_filter function
