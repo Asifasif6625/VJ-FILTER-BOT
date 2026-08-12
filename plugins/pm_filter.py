@@ -31,6 +31,18 @@ BUTTONS1 = {}
 BUTTONS2 = {}
 SPELL_CHECK = {}
 
+# ─── English-Only Language Guard ───────────────────────────────────────────
+def is_english_only(text: str) -> bool:
+    """Returns True if the text contains only English / ASCII printable characters.
+    Digits, spaces and common punctuation are always allowed."""
+    # Strip common ASCII-safe extras (numbers, spaces, punctuation)
+    # If ANY character is outside the basic ASCII Latin block, it's non-English
+    try:
+        text.encode('ascii')
+        return True
+    except UnicodeEncodeError:
+        return False
+
 @Client.on_message(filters.group & filters.text & filters.incoming)
 async def give_filter(client, message):
     if message.chat.id != SUPPORT_CHAT_ID:
@@ -51,6 +63,15 @@ async def give_filter(client, message):
         manual = await manual_filters(client, message)
         if manual == False:
             settings = await get_settings(message.chat.id)
+            # ── English-only guard ──
+            if not is_english_only(message.text):
+                reason_btn = InlineKeyboardMarkup([[InlineKeyboardButton("Reason 🔴", callback_data="english_only_reason")]])
+                await message.reply_text(
+                    "<b>⚠️ Only English Language Supported!\n\nThis bot only supports English language movie search.\nPlease send the movie name in English.</b>",
+                    reply_markup=reason_btn,
+                    parse_mode=enums.ParseMode.HTML
+                )
+                return
             try:
                 if settings['auto_ffilter']:
                     ai_search = True
@@ -78,10 +99,29 @@ async def pm_text(bot, message):
     user = message.from_user.first_name
     user_id = message.from_user.id
     if content.startswith("/") or content.startswith("#"): return  # ignore commands and hashtags
+    # ── English-only guard ──
+    if not is_english_only(content):
+        reason_btn = InlineKeyboardMarkup([[InlineKeyboardButton("Reason 🔴", callback_data="english_only_reason")]])
+        await bot.send_message(
+            message.from_user.id,
+            "<b>⚠️ Only English Language Supported!\n\nThis bot only supports English language movie search.\nPlease send the movie name in English.</b>",
+            reply_markup=reason_btn,
+            reply_to_message_id=message.id,
+            parse_mode=enums.ParseMode.HTML
+        )
+        return
     if PM_SEARCH == True:
         ai_search = True
         reply_msg = await bot.send_message(message.from_user.id, f"<b><i>Searching For {content} 🔍</i></b>", reply_to_message_id=message.id)
         await auto_filter(bot, content, message, reply_msg, ai_search)
+
+@Client.on_callback_query(filters.regex(r"^english_only_reason$"))
+async def english_only_reason_alert(bot, query):
+    """Show a popup alert when user clicks the Reason button for non-English search."""
+    await query.answer(
+        "⚠️ Send movie name in English\nOther language not supports !",
+        show_alert=True
+    )
     
 @Client.on_callback_query(filters.regex(r"^next"))
 async def next_page(bot, query):
