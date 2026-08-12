@@ -79,16 +79,16 @@ async def give_filter(client, message):
                 return
             try:
                 if settings['auto_ffilter']:
-                    ai_search = False
-                    reply_msg = await message.reply_text("​")
+                    ai_search = True
+                    reply_msg = await message.reply_text(".")
                     await auto_filter(client, message.text, message, reply_msg, ai_search)
             except KeyError:
                 grpid = await active_connection(str(message.from_user.id))
                 await save_group_settings(grpid, 'auto_ffilter', True)
                 settings = await get_settings(message.chat.id)
                 if settings['auto_ffilter']:
-                    ai_search = False
-                    reply_msg = await message.reply_text("​")
+                    ai_search = True
+                    reply_msg = await message.reply_text(".")
                     await auto_filter(client, message.text, message, reply_msg, ai_search)
     else: #a better logic to avoid repeated lines of code in auto_filter function
         search = message.text
@@ -122,7 +122,7 @@ async def pm_text(bot, message):
         return
     if PM_SEARCH == True:
         ai_search = True
-        reply_msg = await bot.send_message(message.from_user.id, "​", reply_to_message_id=message.id)
+        reply_msg = await bot.send_message(message.from_user.id, ".", reply_to_message_id=message.id)
         await auto_filter(bot, content, message, reply_msg, ai_search)
 
 @Client.on_callback_query(filters.regex(r"^english_only_reason$"))
