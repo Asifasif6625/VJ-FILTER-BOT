@@ -20,6 +20,7 @@ from pyrogram.types import (
     InlineKeyboardButton,
     Message,
     CallbackQuery,
+    ForceReply,
 )
 from pyrogram.errors import (
     FloodWait,
@@ -219,6 +220,9 @@ def _season_keyboard(total: int, selected: list[int]) -> InlineKeyboardMarkup:
         rows.append(row)
     rows.append([
         InlineKeyboardButton("🟢 Submit Seasons", callback_data="sw#season#submit"),
+        InlineKeyboardButton("⏭ Skip (None)",       callback_data="sw#season#skip"),
+    ])
+    rows.append([
         InlineKeyboardButton("🔴 Cancel",          callback_data="sw#cancel"),
     ])
     return InlineKeyboardMarkup(rows)
@@ -332,6 +336,7 @@ def _user_season_keyboard(sid: str, lang: str, seasons: list[int]) -> InlineKeyb
 
 def _user_episode_keyboard(sid: str, lang: str, season: int, quality: str, episodes: list[int]) -> InlineKeyboardMarkup:
     rows = []
+    rows.append([InlineKeyboardButton("📤 Send All Episodes", callback_data=f"sr#{sid}#l#{lang}#s#{season}#q#{quality}#all")])
     for i in range(0, len(episodes), 4):
         row = [
             InlineKeyboardButton(
@@ -386,8 +391,10 @@ async def cmd_seriesfil(client: Client, message: Message):
         "batch_data": None,
     }
     await message.reply_text(
-        "🎬 <b>Create New Series</b>\n\n"
-        "Please send the <b>series name</b>.",
+        f"🎬 <b>Create New Series</b>\n\n"
+        f"Hey {message.from_user.mention}, please send the <b>series name</b>.",
+        reply_to_message_id=message.id,
+        reply_markup=ForceReply(selective=True),
         parse_mode=enums.ParseMode.HTML,
     )
 
@@ -429,6 +436,9 @@ async def wizard_text_handler(client: Client, message: Message):
     if uid not in SERIES_WIZARD:
         return  # not in wizard — let other handlers process
 
+    if not message.reply_to_message:
+        pass  # We process all text to prevent auto_filter from running
+
     wiz = SERIES_WIZARD[uid]
     state = wiz["state"]
     
@@ -445,6 +455,8 @@ async def wizard_text_handler(client: Client, message: Message):
         wiz["state"] = S_YEAR
         await message.reply_text(
             f"✅ Series name: <b>{text}</b>\n\nPlease send the <b>year</b> (e.g. 2017).",
+            reply_to_message_id=message.id,
+            reply_markup=ForceReply(selective=True),
             parse_mode=enums.ParseMode.HTML,
         )
 
@@ -454,7 +466,9 @@ async def wizard_text_handler(client: Client, message: Message):
         wiz["year"] = text
         wiz["state"] = S_GENRE
         await message.reply_text(
-            f"✅ Year: <b>{text}</b>\n\nPlease send the <b>genre(s)</b> (e.g. Drama, Mystery, Sci-Fi).",
+            f"✅ Year: <b>{text}</b>\n\nPlease send the <b>genre</b> (e.g. Action, Drama).",
+            reply_to_message_id=message.id,
+            reply_markup=ForceReply(selective=True),
             parse_mode=enums.ParseMode.HTML,
         )
 
@@ -465,6 +479,8 @@ async def wizard_text_handler(client: Client, message: Message):
         wiz["state"] = S_RATING
         await message.reply_text(
             f"✅ Genre: <b>{text}</b>\n\nPlease send the <b>Rating</b> (or send <code>skip</code>).",
+            reply_to_message_id=message.id,
+            reply_markup=ForceReply(selective=True),
             parse_mode=enums.ParseMode.HTML,
         )
 
@@ -475,6 +491,8 @@ async def wizard_text_handler(client: Client, message: Message):
         wiz["state"] = S_DESC
         await message.reply_text(
             f"✅ Rating: <b>{wiz.get('rating') or 'Skipped'}</b>\n\nPlease send a short <b>description</b> (or send <code>skip</code>).",
+            reply_to_message_id=message.id,
+            reply_markup=ForceReply(selective=True),
             parse_mode=enums.ParseMode.HTML,
         )
 
@@ -484,7 +502,9 @@ async def wizard_text_handler(client: Client, message: Message):
         wiz["description"] = "" if text.lower() == "skip" else text
         wiz["state"] = S_POSTER
         await message.reply_text(
-            f"✅ Description saved.\n\nPlease send a <b>Poster image</b> (photo) or send <code>skip</code>.",
+            f"✅ Description saved.\n\nNow, <b>send a poster photo</b> (or send an IMDb/TMDB image URL).\n\n<i>Type 'skip' to skip poster.</i>",
+            reply_to_message_id=message.id,
+            reply_markup=ForceReply(selective=True),
             parse_mode=enums.ParseMode.HTML,
         )
 
@@ -619,11 +639,16 @@ async def wizard_callback(client: Client, query: CallbackQuery):
     if action == "season":
         val = parts[2] if len(parts) > 2 else ""
         if val == "submit":
-            if not wiz["seasons"]:
-                return await query.answer("⚠️ Select at least one season.", show_alert=True)
             await query.message.edit_text(
-                "✅ <b>Seasons saved:</b>\n" + "\n".join(f"• Season {s}" for s in sorted(wiz["seasons"])) +
+                "✅ <b>Seasons saved:</b>\n" + ("\n".join(f"• Season {s}" for s in sorted(wiz["seasons"])) if wiz["seasons"] else "None") +
                 "\n\nNow configure quality or add batch files.",
+                reply_markup=_config_menu_keyboard(),
+                parse_mode=enums.ParseMode.HTML,
+            )
+        elif val == "skip":
+            wiz["seasons"] = []
+            await query.message.edit_text(
+                "✅ <b>Seasons skipped.</b>\n\nNow configure quality or add batch files.",
                 reply_markup=_config_menu_keyboard(),
                 parse_mode=enums.ParseMode.HTML,
             )
@@ -667,12 +692,21 @@ async def wizard_callback(client: Client, query: CallbackQuery):
     if action == "blang":
         lang = "#".join(parts[2:])
         wiz["batch_lang"] = lang
-        wiz["state"] = S_BATCH_SEASON
-        await query.message.edit_text(
-            f"📦 Batch — <b>{wiz['name']}</b>\n🌐 Language: <b>{lang}</b>\n\nSelect <b>season</b>:",
-            reply_markup=_batch_season_keyboard(sorted(wiz["seasons"])),
-            parse_mode=enums.ParseMode.HTML,
-        )
+        if not wiz["seasons"]:
+            wiz["batch_season"] = 0
+            wiz["state"] = S_BATCH_QUAL
+            await query.message.edit_text(
+                f"📦 Batch — <b>{wiz['name']}</b>\n🌐 Language: <b>{lang}</b>\n\nSelect <b>quality</b>:",
+                reply_markup=_batch_quality_keyboard(wiz["qualities"]),
+                parse_mode=enums.ParseMode.HTML,
+            )
+        else:
+            wiz["state"] = S_BATCH_SEASON
+            await query.message.edit_text(
+                f"📦 Batch — <b>{wiz['name']}</b>\n🌐 Language: <b>{lang}</b>\n\nSelect <b>season</b>:",
+                reply_markup=_batch_season_keyboard(sorted(wiz["seasons"])),
+                parse_mode=enums.ParseMode.HTML,
+            )
         return await query.answer()
 
     # ── Batch: season selection ───────────────────────────────────────────────
@@ -809,8 +843,6 @@ async def wizard_callback(client: Client, query: CallbackQuery):
             return await query.answer("⚠️ Series name is missing.", show_alert=True)
         if not wiz["languages"]:
             return await query.answer("⚠️ Add at least one language.", show_alert=True)
-        if not wiz["seasons"]:
-            return await query.answer("⚠️ Add at least one season.", show_alert=True)
 
         if wiz.get("series_id"):
             # Update if already saved (happens after batch)
@@ -1014,17 +1046,17 @@ async def cmd_sbatch(client: Client, message: Message):
 async def _send_or_edit(message_or_query, text, reply_markup, poster=None):
     if isinstance(message_or_query, Message):
         if poster:
-            await message_or_query.reply_photo(photo=poster, caption=text, reply_markup=reply_markup, parse_mode=enums.ParseMode.HTML)
+            return await message_or_query.reply_photo(photo=poster, caption=text, reply_markup=reply_markup, parse_mode=enums.ParseMode.HTML)
         else:
-            await message_or_query.reply_text(text, reply_markup=reply_markup, parse_mode=enums.ParseMode.HTML)
+            return await message_or_query.reply_text(text, reply_markup=reply_markup, parse_mode=enums.ParseMode.HTML)
     else:
         try:
             if message_or_query.message.photo:
-                await message_or_query.message.edit_caption(caption=text, reply_markup=reply_markup, parse_mode=enums.ParseMode.HTML)
+                return await message_or_query.message.edit_caption(caption=text, reply_markup=reply_markup, parse_mode=enums.ParseMode.HTML)
             else:
-                await message_or_query.message.edit_text(text, reply_markup=reply_markup, parse_mode=enums.ParseMode.HTML)
+                return await message_or_query.message.edit_text(text, reply_markup=reply_markup, parse_mode=enums.ParseMode.HTML)
         except MessageNotModified:
-            pass
+            return message_or_query.message
 
 
 async def _resolve_nav_step(full_id: str, sid: str, series: dict, lang=None, season=None, qual=None):
@@ -1064,7 +1096,7 @@ async def _resolve_nav_step(full_id: str, sid: str, series: dict, lang=None, sea
     return card + f"\n\n🌐 <b>{lang}</b>  📁 <b>Season {season}</b>  🎞 <b>{qual}</b>\n🎬 <b>Select Episode:</b>", _user_episode_keyboard(sid, lang, season, qual, episodes)
 
 
-@Client.on_message(filters.group & filters.text & filters.incoming, group=1)
+@Client.on_message((filters.group | filters.private) & filters.text & filters.incoming, group=-1)
 async def series_search_handler(client: Client, message: Message):
     if message.text.startswith("/") or len(message.text) > 100 or len(message.text.strip()) < 2:
         return
@@ -1079,13 +1111,28 @@ async def series_search_handler(client: Client, message: Message):
 
     text, rm = await _resolve_nav_step(series_id, sid, series)
     if rm:
-        await _send_or_edit(message, text, rm, poster=series.get("poster"))
+        msg = await _send_or_edit(message, text, rm, poster=series.get("poster"))
+        if msg:
+            from info import AUTO_DELETE
+            if AUTO_DELETE:
+                async def delete_search_msg(m):
+                    await asyncio.sleep(60)
+                    try:
+                        await m.delete()
+                    except:
+                        pass
+                asyncio.create_task(delete_search_msg(msg))
+                
+    from pyrogram.errors import StopPropagation
+    raise StopPropagation
 
 
 @Client.on_callback_query(filters.regex(r"^sr#"), group=1)
 async def series_user_nav(client: Client, query: CallbackQuery):
-    data  = query.data
-    parts = data.split("#")
+    if query.message.reply_to_message and query.from_user.id != query.message.reply_to_message.from_user.id:
+        return await query.answer("This is not for you!", show_alert=True)
+        
+    parts = query.data.split("#")
     
     if len(parts) < 2: return await query.answer()
 
@@ -1101,39 +1148,56 @@ async def series_user_nav(client: Client, query: CallbackQuery):
     qual = None
     
     # ── Send file (Episode selected) ──────────────────────────────────────────
-    # format: sr#{sid}#l#{lang}#s#{season}#q#{quality}#e#{ep}
-    if len(parts) >= 10 and parts[2] == "l" and parts[4] == "s" and parts[6] == "q" and parts[8] == "e":
+    if len(parts) >= 9 and parts[2] == "l" and parts[4] == "s" and parts[6] == "q":
         lang    = parts[3]
         season  = int(parts[5])
         qual    = parts[7]
-        ep      = int(parts[9])
+        
+        if parts[8] == "all":
+            files = []
+            episodes = await list_quality_episodes(full_id, lang, season, qual)
+            for ep in episodes:
+                ep_files = await get_series_files(full_id, lang, season, ep, qual)
+                files.extend(ep_files)
+        elif len(parts) >= 10 and parts[8] == "e":
+            ep      = int(parts[9])
+            files = await get_series_files(full_id, lang, season, ep, qual)
+        else:
+            files = None
 
-        files = await get_series_files(full_id, lang, season, ep, qual)
-        if not files:
+        if files:
+            from info import PM_SEARCH
+            from utils import temp
+            import uuid
+            
+            if PM_SEARCH and query.message.chat.type in [enums.ChatType.GROUP, enums.ChatType.SUPERGROUP]:
+                key = str(uuid.uuid4())
+                temp.GETALL[key] = files
+                return await query.answer(url=f"https://telegram.me/{temp.U_NAME}?start=all_{key}")
+            else:
+                await query.answer("📤 Sending file...")
+                for f in files:
+                    try:
+                        if f.get("chat_id") and f.get("message_id"):
+                            await client.copy_message(
+                                chat_id=query.message.chat.id,
+                                from_chat_id=f["chat_id"],
+                                message_id=f["message_id"],
+                            )
+                        elif f.get("file_id"):
+                            await client.send_document(
+                                chat_id=query.message.chat.id,
+                                document=f["file_id"],
+                                caption=f"🎬 {series['name']} S{season:02d} | {qual}",
+                            )
+                        await asyncio.sleep(1)
+                    except FloodWait as e:
+                        await asyncio.sleep(e.value + 1)
+                    except Exception as ex:
+                        logger.error(f"series file send error: {ex}")
+                return
+        elif files is not None:
             return await query.answer("⚠️ File not found. It may have been removed.", show_alert=True)
-
-        await query.answer("📤 Sending file...")
-
-        for f in files:
-            try:
-                if f.get("chat_id") and f.get("message_id"):
-                    await client.copy_message(
-                        chat_id=query.message.chat.id,
-                        from_chat_id=f["chat_id"],
-                        message_id=f["message_id"],
-                    )
-                elif f.get("file_id"):
-                    await client.send_document(
-                        chat_id=query.message.chat.id,
-                        document=f["file_id"],
-                        caption=f"🎬 {series['name']} S{season:02d}E{ep:02d} | {qual}",
-                    )
-            except FloodWait as e:
-                await asyncio.sleep(e.value + 1)
-            except Exception as ex:
-                logger.error(f"series file send error: {ex}")
-                await query.message.reply_text(f"⚠️ Could not send file: {ex}")
-        return
         
     # Navigation mapping
     if len(parts) >= 4 and parts[2] == "l":

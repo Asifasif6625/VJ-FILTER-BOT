@@ -62,6 +62,9 @@ async def give_filter(client, message):
             
         manual = await manual_filters(client, message)
         if manual == False:
+            from plugins.series import SERIES_WIZARD
+            if message.from_user and message.from_user.id in SERIES_WIZARD:
+                return
             settings = await get_settings(message.chat.id)
             # ── English-only guard ──
             if not is_english_only(message.text):
@@ -93,6 +96,11 @@ async def pm_text(bot, message):
     user = message.from_user.first_name
     user_id = message.from_user.id
     if content.startswith("/") or content.startswith("#"): return  # ignore commands and hashtags
+    
+    from plugins.series import SERIES_WIZARD
+    if user_id in SERIES_WIZARD:
+        return
+        
     # ── English-only guard ──
     if not is_english_only(content):
         reason_btn = InlineKeyboardMarkup([[InlineKeyboardButton("Reason 🔴", callback_data="english_only_reason")]])
