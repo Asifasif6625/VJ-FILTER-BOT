@@ -397,12 +397,18 @@ async def start(client, message):
         filesarr = []
         for file in files:
             file_id = file["file_id"]
-            files1 = await get_file_details(file_id)
-            if not files1: continue
             
-            title = files1["file_name"]
-            size=get_size(files1["file_size"])
-            f_caption=files1["caption"]
+            if file.get("is_series"):
+                files1 = file
+                title = file.get("file_name", "")
+                size = get_size(file.get("file_size", 0))
+                f_caption = ""
+            else:
+                files1 = await get_file_details(file_id)
+                if not files1: continue
+                title = files1["file_name"]
+                size=get_size(files1["file_size"])
+                f_caption=files1.get("caption", "")
             
             if file.get("is_series"):
                 f_caption = (
