@@ -1220,7 +1220,7 @@ async def series_user_nav(client: Client, query: CallbackQuery):
 # ─── /serieslist — Admin: list all series ────────────────────────────────────
 # ═════════════════════════════════════════════════════════════════════════════
 
-@Client.on_message(filters.command("serieslist") & filters.private, group=1)
+@Client.on_message(filters.command(["serieslist", "viewseries"]) & filters.private, group=1)
 async def cmd_serieslist(client: Client, message: Message):
     if not _is_admin(message.from_user.id):
         return await message.reply_text("❌ Not authorized.")
@@ -1248,22 +1248,40 @@ async def cmd_serieslist(client: Client, message: Message):
 # ─── /seriesdel — Admin: delete a series ─────────────────────────────────────
 # ═════════════════════════════════════════════════════════════════════════════
 
-@Client.on_message(filters.command("seriesdel") & filters.private, group=1)
+@Client.on_message(filters.command(["seriesdel", "delseries"]) & filters.private, group=1)
 async def cmd_seriesdel(client: Client, message: Message):
     if not _is_admin(message.from_user.id):
         return await message.reply_text("❌ Not authorized.")
 
-    args = message.command[1:]
-    if not args:
+    args = message.text.split(None, 1)
+    if len(args) < 2:
         return await message.reply_text(
-            "Usage: <code>/seriesdel SERIES_ID</code>\n"
-            "Get IDs with /serieslist",
+            "Usage: <code>/delseries SERIES_NAME</code> or <code>/delseries SERIES_ID</code>\n"
+            "Get names/IDs with /viewseries",
             parse_mode=enums.ParseMode.HTML,
         )
 
-    from database.series_db import delete_series as _del
-    await _del(args[0])
-    await message.reply_text(f"✅ Series <code>{args[0]}</code> deleted (soft).", parse_mode=enums.ParseMode.HTML)
+    arg = args[1].strip().strip('"').strip("'")
+    from database.series_db import delete_series as _del, search_series, get_series_by_name, _normalize
+    import re
+
+    if re.fullmatch(r"[0-9a-fA-F]{24}", arg):
+        await _del(arg)
+        return await message.reply_text(f"✅ Series ID <code>{arg}</code> deleted (soft).", parse_mode=enums.ParseMode.HTML)
+
+    normalized = _normalize(arg)
+    exact = await get_series_by_name(normalized)
+    if exact:
+        await _del(str(exact["_id"]))
+        return await message.reply_text(f"✅ Series <b>{exact['name']}</b> deleted (soft).", parse_mode=enums.ParseMode.HTML)
+        
+    matches = await search_series(arg)
+    if not matches:
+        return await message.reply_text(f"❌ No series found matching '<b>{arg}</b>'.", parse_mode=enums.ParseMode.HTML)
+    
+    match = matches[0]
+    await _del(str(match["_id"]))
+    await message.reply_text(f"✅ Series <b>{match['name']}</b> deleted (soft).", parse_mode=enums.ParseMode.HTML)
 
 
 # ═════════════════════════════════════════════════════════════════════════════
