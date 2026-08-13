@@ -25,10 +25,9 @@ from pyrogram.errors import (
     FloodWait,
     MessageNotModified,
     BadRequest,
-    BadRequest,
     ChatAdminRequired,
-    ContinuePropagation,
 )
+from pyrogram import ContinuePropagation
 
 from info import ADMINS, CHANNELS
 from database.series_db import (
