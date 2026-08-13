@@ -94,8 +94,8 @@ async def pm_text(bot, message):
     user_id = message.from_user.id
     if content.startswith("/") or content.startswith("#"): return  # ignore commands and hashtags
     
-    from plugins.series import SERIES_WIZARD
-    if user_id in SERIES_WIZARD:
+    from utils import temp
+    if user_id in temp.SERIES_WIZARD:
         return
         
     # ── English-only guard ──
