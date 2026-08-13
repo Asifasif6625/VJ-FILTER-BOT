@@ -27,7 +27,6 @@ from pyrogram.errors import (
     BadRequest,
     ChatAdminRequired,
 )
-from pyrogram import ContinuePropagation
 
 from info import ADMINS, CHANNELS
 from database.series_db import (
@@ -371,7 +370,7 @@ def _user_quality_keyboard(sid: str, lang: str, season: int, quals: list[str]) -
 # ─── /seriesfil — START ADMIN WIZARD ─────────────────────────────────────────
 # ═════════════════════════════════════════════════════════════════════════════
 
-@Client.on_message(filters.command("seriesfil") & filters.private)
+@Client.on_message(filters.command("seriesfil") & filters.private, group=1)
 async def cmd_seriesfil(client: Client, message: Message):
     if not _is_admin(message.from_user.id):
         return await message.reply_text("❌ You are not authorized to use this command.")
@@ -397,7 +396,7 @@ async def cmd_seriesfil(client: Client, message: Message):
 # ─── /cancel — ABORT WIZARD ──────────────────────────────────────────────────
 # ═════════════════════════════════════════════════════════════════════════════
 
-@Client.on_message(filters.command("cancel") & filters.private)
+@Client.on_message(filters.command("cancel") & filters.private, group=1)
 async def cmd_cancel(client: Client, message: Message):
     uid = message.from_user.id
     if uid in SERIES_WIZARD:
@@ -424,7 +423,7 @@ async def cmd_cancel(client: Client, message: Message):
      "font", "pin", "unpin", "purge", "whois", "share", "audiobook",
      "stickerid", "video", "mp4", "covid", "stream", "index",
      "setskip", "deleteall", "channel"]
-))
+), group=1)
 async def wizard_text_handler(client: Client, message: Message):
     uid = message.from_user.id
     if uid not in SERIES_WIZARD:
@@ -527,7 +526,7 @@ async def wizard_text_handler(client: Client, message: Message):
 # ─── WIZARD CALLBACK QUERIES (sw#...) ────────────────────────────────────────
 # ═════════════════════════════════════════════════════════════════════════════
 
-@Client.on_callback_query(filters.regex(r"^sw#"))
+@Client.on_callback_query(filters.regex(r"^sw#"), group=1)
 async def wizard_callback(client: Client, query: CallbackQuery):
     uid = query.from_user.id
     if not _is_admin(uid):
@@ -862,7 +861,7 @@ async def wizard_callback(client: Client, query: CallbackQuery):
 # ─── /sbatch — BATCH FILE IMPORTER ───────────────────────────────────────────
 # ═════════════════════════════════════════════════════════════════════════════
 
-@Client.on_message(filters.command("sbatch") & filters.private)
+@Client.on_message(filters.command("sbatch") & filters.private, group=1)
 async def cmd_sbatch(client: Client, message: Message):
     uid = message.from_user.id
     if not _is_admin(uid):
@@ -1065,13 +1064,13 @@ async def _resolve_nav_step(full_id: str, sid: str, series: dict, lang=None, sea
     return card + f"\n\n🌐 <b>{lang}</b>  📁 <b>Season {season}</b>  🎞 <b>{qual}</b>\n🎬 <b>Select Episode:</b>", _user_episode_keyboard(sid, lang, season, qual, episodes)
 
 
-@Client.on_message(filters.group & filters.text & filters.incoming)
+@Client.on_message(filters.group & filters.text & filters.incoming, group=1)
 async def series_search_handler(client: Client, message: Message):
     if message.text.startswith("/") or len(message.text) > 100 or len(message.text.strip()) < 2:
-        raise ContinuePropagation
+        return
 
     matches = await search_series(_normalize(message.text.strip()))
-    if not matches: raise ContinuePropagation
+    if not matches: return
 
     series = matches[0]
     series_id = str(series["_id"])
@@ -1083,7 +1082,7 @@ async def series_search_handler(client: Client, message: Message):
         await _send_or_edit(message, text, rm, poster=series.get("poster"))
 
 
-@Client.on_callback_query(filters.regex(r"^sr#"))
+@Client.on_callback_query(filters.regex(r"^sr#"), group=1)
 async def series_user_nav(client: Client, query: CallbackQuery):
     data  = query.data
     parts = data.split("#")
@@ -1157,7 +1156,7 @@ async def series_user_nav(client: Client, query: CallbackQuery):
 # ─── /serieslist — Admin: list all series ────────────────────────────────────
 # ═════════════════════════════════════════════════════════════════════════════
 
-@Client.on_message(filters.command("serieslist") & filters.private)
+@Client.on_message(filters.command("serieslist") & filters.private, group=1)
 async def cmd_serieslist(client: Client, message: Message):
     if not _is_admin(message.from_user.id):
         return await message.reply_text("❌ Not authorized.")
@@ -1185,7 +1184,7 @@ async def cmd_serieslist(client: Client, message: Message):
 # ─── /seriesdel — Admin: delete a series ─────────────────────────────────────
 # ═════════════════════════════════════════════════════════════════════════════
 
-@Client.on_message(filters.command("seriesdel") & filters.private)
+@Client.on_message(filters.command("seriesdel") & filters.private, group=1)
 async def cmd_seriesdel(client: Client, message: Message):
     if not _is_admin(message.from_user.id):
         return await message.reply_text("❌ Not authorized.")
