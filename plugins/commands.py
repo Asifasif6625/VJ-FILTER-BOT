@@ -412,10 +412,8 @@ async def start(client, message):
             
             if file.get("is_series"):
                 f_caption = (
-                    f"○ file name: {file.get('file_name', '')}\n"
-                    f"○ language: {file.get('language', '')}\n"
-                    f"○ Rating: {file.get('series_rating', '')}\n"
-                    f"○ file number: {file.get('episode_index', 1)}/{file.get('total_episodes', 1)}\n\n"
+                    f"⦿ file name : {file.get('file_name', '')}\n"
+                    f"⦿ file size : {get_size(file.get('file_size', 0))}\n\n"
                     f"@{temp.U_NAME}"
                 )
             elif CUSTOM_FILE_CAPTION:
