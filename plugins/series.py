@@ -186,20 +186,16 @@ def _series_card(series: dict) -> str:
 # ─── ADMIN WIZARD KEYBOARD BUILDERS ──────────────────────────────────────────
 # ═════════════════════════════════════════════════════════════════════════════
 
-def _lang_keyboard(selected: list[str], saved: list[str] = None) -> InlineKeyboardMarkup:
-    if saved is None: saved = []
+def _lang_keyboard(selected: list[str]) -> InlineKeyboardMarkup:
     rows = []
     for i in range(0, len(LANG_OPTIONS), 3):
         row = []
         for lang in LANG_OPTIONS[i:i+3]:
-            if lang in saved:
-                row.append(InlineKeyboardButton(f"☑️ {lang}", callback_data="sw#ignore"))
-            else:
-                tick = "🟢 " if lang in selected else ""
-                row.append(InlineKeyboardButton(
-                    f"{tick}{lang}",
-                    callback_data=f"sw#lang#{lang}"
-                ))
+            tick = "🟢 " if lang in selected else ""
+            row.append(InlineKeyboardButton(
+                f"{tick}{lang}",
+                callback_data=f"sw#lang#{lang}"
+            ))
         rows.append(row)
     rows.append([
         InlineKeyboardButton("🟢 Submit Languages", callback_data="sw#lang#submit"),
@@ -321,7 +317,7 @@ def _user_quality_keyboard(sid: str, lang: str, season: int, quals: list[str]) -
         ]
         rows.append(row)
     rows.append([
-        InlineKeyboardButton("⬅️ Back", callback_data=f"sr#{sid}#l#{lang}"),
+        InlineKeyboardButton("⬅️ Back", callback_data=f"sr#{sid}#home" if season == 0 else f"sr#{sid}#l#{lang}"),
         InlineKeyboardButton("🏠 Home",  callback_data=f"sr#{sid}#home"),
     ])
     return InlineKeyboardMarkup(rows)
@@ -620,8 +616,8 @@ async def wizard_callback(client: Client, query: CallbackQuery):
             wiz["batch_seasons"] = []
             wiz["batch_qualities"] = []
             await query.message.edit_text(
-                "📦 <b>Add Episode Batch</b>\n\nSelect <b>languages</b> for this batch (Already saved languages are disabled with ☑️):",
-                reply_markup=_lang_keyboard(wiz["batch_langs"], saved=wiz["languages"]),
+                "📦 <b>Add Episode Batch</b>\n\nSelect <b>languages</b> for this batch:",
+                reply_markup=_lang_keyboard(wiz["batch_langs"]),
                 parse_mode=enums.ParseMode.HTML,
             )
         return await query.answer()
@@ -655,8 +651,7 @@ async def wizard_callback(client: Client, query: CallbackQuery):
             else:
                 target_list.append(lang)
             try:
-                saved_langs = wiz["languages"] if wiz["state"] == S_BATCH_LANG else []
-                await query.message.edit_reply_markup(_lang_keyboard(target_list, saved=saved_langs))
+                await query.message.edit_reply_markup(_lang_keyboard(target_list))
             except MessageNotModified:
                 pass
         return await query.answer()
@@ -1125,6 +1120,8 @@ async def series_search_handler(client: Client, message: Message):
     sid = _series_short_id(series_id)
 
     text, rm = await _resolve_nav_step(series_id, sid, series)
+    if getattr(message.from_user, "id", 0) in ADMINS:
+        rm.inline_keyboard.append([InlineKeyboardButton("🗑 Delete Series", callback_data=f"sr#{sid}#del")])
     if rm:
         msg = await _send_or_edit(message, text, rm, poster=series.get("poster"))
         if msg:
@@ -1153,11 +1150,31 @@ async def series_user_nav(client: Client, query: CallbackQuery):
     if len(parts) < 2: return await query.answer()
 
     sid = parts[1]
-    full_id = await _get_full_id(sid)
-    if not full_id: return await query.answer("⚠️ Series not found.", show_alert=True)
-
+    full_id = _series_full_id(sid)
+    if not full_id:
+        return await query.answer("Series context expired.", show_alert=True)
+    
     series = await get_series(full_id)
-    if not series: return await query.answer("⚠️ Series not found.", show_alert=True)
+    if not series:
+        return await query.answer("Series not found in database.", show_alert=True)
+        
+    if len(parts) >= 3:
+        if parts[2] in ("del", "delconf"):
+            if query.from_user.id not in ADMINS:
+                return await query.answer("Only admins can delete series.", show_alert=True)
+            if parts[2] == "del":
+                return await query.message.edit_text(
+                    f"⚠️ <b>Confirm Deletion</b>\n\nAre you sure you want to delete the series <b>{series.get('name', 'Unknown')}</b>?",
+                    reply_markup=InlineKeyboardMarkup([
+                        [InlineKeyboardButton("✅ Confirm Delete", callback_data=f"sr#{sid}#delconf")],
+                        [InlineKeyboardButton("🔴 Cancel", callback_data=f"sr#{sid}#home")]
+                    ]),
+                    parse_mode=enums.ParseMode.HTML
+                )
+            elif parts[2] == "delconf":
+                from database.series_db import delete_series as _del
+                await _del(full_id)
+                return await query.message.edit_text("✅ Series deleted successfully.")
 
     lang = None
     season = None
@@ -1203,10 +1220,21 @@ async def series_user_nav(client: Client, query: CallbackQuery):
             if query.message.chat.type == enums.ChatType.PRIVATE:
                 await query.answer()
                 from plugins.commands import start
-                query.message.text = f"/start all_{key}"
-                query.message.command = ["start", f"all_{key}"]
-                query.message.from_user = query.from_user
-                return await start(client, query.message)
+                
+                class MockMsg:
+                    def __init__(self, q, k):
+                        self.message = q.message
+                        self.chat = q.message.chat
+                        self.from_user = q.from_user
+                        self.text = f"/start all_{k}"
+                        self.command = ["start", f"all_{k}"]
+                        self.id = q.message.id
+                        self.date = q.message.date
+                    
+                    def __getattr__(self, name):
+                        return getattr(self.message, name)
+                
+                return await start(client, MockMsg(query, key))
             else:
                 return await query.answer(url=f"t.me/{temp.U_NAME}?start=all_{key}")
         elif files is not None:
