@@ -260,26 +260,32 @@ def _config_menu_keyboard() -> InlineKeyboardMarkup:
     ])
 
 
-def _batch_lang_keyboard(langs: list[str]) -> InlineKeyboardMarkup:
-    rows = [[InlineKeyboardButton(l, callback_data=f"sw#blang#{l}")] for l in langs]
-    rows.append([InlineKeyboardButton("🔴 Cancel", callback_data="sw#cancel")])
-    return InlineKeyboardMarkup(rows)
-
-
-def _batch_season_keyboard(seasons: list[int]) -> InlineKeyboardMarkup:
+def _batch_lang_keyboard() -> InlineKeyboardMarkup:
     rows = []
-    for i in range(0, len(seasons), 4):
-        row = [
-            InlineKeyboardButton(f"Season {s}", callback_data=f"sw#bseason#{s}")
-            for s in seasons[i:i+4]
-        ]
-        rows.append(row)
+    for i in range(0, len(LANG_OPTIONS), 3):
+        rows.append([InlineKeyboardButton(l, callback_data=f"sw#blang#{l}") for l in LANG_OPTIONS[i:i+3]])
     rows.append([InlineKeyboardButton("🔴 Cancel", callback_data="sw#cancel")])
     return InlineKeyboardMarkup(rows)
 
 
-def _batch_quality_keyboard(quals: list[str]) -> InlineKeyboardMarkup:
-    rows = [[InlineKeyboardButton(q, callback_data=f"sw#bquality#{q}")] for q in quals]
+def _batch_season_keyboard() -> InlineKeyboardMarkup:
+    rows = []
+    for i in range(1, MAX_SEASONS+1, 4):
+        rows.append([
+            InlineKeyboardButton(f"Season {s}", callback_data=f"sw#bseason#{s}")
+            for s in range(i, min(i+4, MAX_SEASONS+1))
+        ])
+    rows.append([
+        InlineKeyboardButton("⏭ Skip (No Season)", callback_data="sw#bseason#0"),
+        InlineKeyboardButton("🔴 Cancel", callback_data="sw#cancel")
+    ])
+    return InlineKeyboardMarkup(rows)
+
+
+def _batch_quality_keyboard() -> InlineKeyboardMarkup:
+    rows = []
+    for i in range(0, len(QUALITY_OPTIONS), 3):
+        rows.append([InlineKeyboardButton(q, callback_data=f"sw#bquality#{q}") for q in QUALITY_OPTIONS[i:i+3]])
     rows.append([InlineKeyboardButton("🔴 Cancel", callback_data="sw#cancel")])
     return InlineKeyboardMarkup(rows)
 
@@ -637,20 +643,10 @@ async def wizard_callback(client: Client, query: CallbackQuery):
                 parse_mode=enums.ParseMode.HTML,
             )
         elif sub == "batch":
-            # Send to batch-language selector
-            langs = wiz["languages"]
-            if not langs:
-                return await query.answer("⚠️ Add languages first!", show_alert=True)
-            seasons = wiz["seasons"]
-            if not seasons:
-                return await query.answer("⚠️ Add seasons first!", show_alert=True)
-            quals = wiz["qualities"]
-            if not quals:
-                return await query.answer("⚠️ Add qualities first!", show_alert=True)
             wiz["state"] = S_BATCH_LANG
             await query.message.edit_text(
                 "📦 <b>Add Episode Batch</b>\n\nSelect <b>language</b> for this batch:",
-                reply_markup=_batch_lang_keyboard(langs),
+                reply_markup=_batch_lang_keyboard(),
                 parse_mode=enums.ParseMode.HTML,
             )
         return await query.answer()
@@ -736,21 +732,12 @@ async def wizard_callback(client: Client, query: CallbackQuery):
     if action == "blang":
         lang = "#".join(parts[2:])
         wiz["batch_lang"] = lang
-        if not wiz["seasons"]:
-            wiz["batch_season"] = 0
-            wiz["state"] = S_BATCH_QUAL
-            await query.message.edit_text(
-                f"📦 Batch — <b>{wiz['name']}</b>\n🌐 Language: <b>{lang}</b>\n\nSelect <b>quality</b>:",
-                reply_markup=_batch_quality_keyboard(wiz["qualities"]),
-                parse_mode=enums.ParseMode.HTML,
-            )
-        else:
-            wiz["state"] = S_BATCH_SEASON
-            await query.message.edit_text(
-                f"📦 Batch — <b>{wiz['name']}</b>\n🌐 Language: <b>{lang}</b>\n\nSelect <b>season</b>:",
-                reply_markup=_batch_season_keyboard(sorted(wiz["seasons"])),
-                parse_mode=enums.ParseMode.HTML,
-            )
+        wiz["state"] = S_BATCH_SEASON
+        await query.message.edit_text(
+            f"📦 Batch — <b>{wiz['name']}</b>\n🌐 Language: <b>{lang}</b>\n\nSelect <b>season</b>:",
+            reply_markup=_batch_season_keyboard(),
+            parse_mode=enums.ParseMode.HTML,
+        )
         return await query.answer()
 
     # ── Batch: season selection ───────────────────────────────────────────────
@@ -760,9 +747,9 @@ async def wizard_callback(client: Client, query: CallbackQuery):
         wiz["state"] = S_BATCH_QUAL
         await query.message.edit_text(
             f"📦 Batch — <b>{wiz['name']}</b>\n"
-            f"🌐 {wiz['batch_lang']} · 📁 Season {s}\n\n"
+            f"🌐 {wiz['batch_lang']} · 📁 Season {s if s > 0 else 'None'}\n\n"
             "Select <b>quality</b>:",
-            reply_markup=_batch_quality_keyboard(wiz["qualities"]),
+            reply_markup=_batch_quality_keyboard(),
             parse_mode=enums.ParseMode.HTML,
         )
         return await query.answer()
@@ -1163,7 +1150,8 @@ async def series_search_handler(client: Client, message: Message):
 @Client.on_callback_query(filters.regex(r"^sr#"), group=1)
 async def series_user_nav(client: Client, query: CallbackQuery):
     if query.message.reply_to_message and query.from_user.id != query.message.reply_to_message.from_user.id:
-        return await query.answer("This is not for you!", show_alert=True)
+        from Script import script
+        return await query.answer(script.ALRT_TXT.format(query.from_user.first_name), show_alert=True)
         
     parts = query.data.split("#")
     
@@ -1217,7 +1205,14 @@ async def series_user_nav(client: Client, query: CallbackQuery):
                 "user": query.from_user.id,
                 "files": files
             }
-            return await query.answer(url=f"https://t.me/{temp.U_NAME}?start=all_{key}")
+            if query.message.chat.type == enums.ChatType.PRIVATE:
+                await query.answer()
+                from plugins.commands import start
+                query.message.text = f"/start all_{key}"
+                query.message.from_user = query.from_user
+                return await start(client, query.message)
+            else:
+                return await query.answer(url=f"t.me/{temp.U_NAME}?start=all_{key}")
         elif files is not None:
             return await query.answer("⚠️ File not found. It may have been removed.", show_alert=True)
         
