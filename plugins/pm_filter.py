@@ -120,6 +120,14 @@ async def english_only_reason_alert(bot, query):
         "⚠️ Send movie name in English\nOther language not supports !",
         show_alert=True
     )
+
+@Client.on_callback_query(filters.regex(r"^not_in_db_reason$"))
+async def not_in_db_reason_alert(bot, query):
+    """Show a popup alert when user clicks the Reason button for movie not in db."""
+    await query.answer(
+        "this mosve not availabe database",
+        show_alert=True
+    )
     
 @Client.on_callback_query(filters.regex(r"^next"))
 async def next_page(bot, query):
@@ -2598,14 +2606,27 @@ async def auto_filter(client, name, msg, reply_msg=None, ai_search=True, spoll=F
             files, offset, total_results = await get_search_results(message.chat.id ,search, offset=0, filter=True)
             settings = await get_settings(message.chat.id)
             if not files:
-                if settings["spell_check"]:
-                    return await advantage_spell_chok(client, name, msg, reply_msg, ai_search)
-                else:
-                    no_result_msg = f"**⚠️ No File Found For Your Query - {name}**\n**Make Sure Spelling Is Correct.**"
+                no_db_btn = InlineKeyboardMarkup([[InlineKeyboardButton("🦨Reason", callback_data="not_in_db_reason")]])
+                imdb = await get_poster(name, bulk=False)
+                if imdb and imdb.get('poster'):
+                    cap = f"<b>🎬 Title: {imdb.get('title')}\n📅 Year: {imdb.get('year')}\n🗣️ Language: {imdb.get('languages')}\n\n⚠️ <i>Sorry, this movie is not available in our database.</i>\n\n<i>🕐 This message will be deleted in 50 seconds.</i></b>"
                     if reply_msg:
-                        return await reply_msg.edit_text(no_result_msg)
+                        await reply_msg.delete()
+                    msg_obj = await message.reply_photo(photo=imdb.get('poster'), caption=cap, reply_markup=no_db_btn)
+                else:
+                    msg_text = "<b>sᴏʀʀʏ ɴᴏ ꜰɪʟᴇs ᴡᴇʀᴇ ꜰᴏᴜɴᴅ ꜰᴏʀ ʏᴏᴜʀ ʀᴇǫᴜᴇꜱᴛ😕\n\nᴄʜᴇᴄᴋ ʏᴏᴜʀ sᴘᴇʟʟɪɴɢ ɪɴ ɢᴏᴏɢʟᴇ ᴀɴᴅ ᴛʀʏ ᴀɢᴀɪɴ 😃\n\nᴍᴏᴠɪᴇ ʀᴇǫᴜᴇꜱᴛ ꜰᴏʀᴍᴀᴛ 👇\n\nᴇxᴀᴍᴘʟᴇ : Uncharted or Uncharted 2022 or Uncharted En\n\nꜱᴇʀɪᴇꜱ ʀᴇǫᴜᴇꜱᴛ ꜰᴏʀᴍᴀᴛ 👇\n\nᴇxᴀᴍᴘʟᴇ : Loki S01 or Loki S01E04 or Lucifer S03E24\n\n🚯 ᴅᴏɴᴛ ᴜꜱᴇ ➠ ':(!,./)\n\n<i>🕐 This message will be deleted in 50 seconds.</i></b>"
+                    if reply_msg:
+                        msg_obj = await reply_msg.edit_text(msg_text, reply_markup=no_db_btn)
                     else:
-                        return await message.reply_text(no_result_msg)
+                        msg_obj = await message.reply_text(msg_text, reply_markup=no_db_btn)
+                
+                await asyncio.sleep(50)
+                try:
+                    await msg_obj.delete()
+                    await message.delete()
+                except:
+                    pass
+                return
         else:
             return
     else:
