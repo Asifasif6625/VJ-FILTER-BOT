@@ -376,6 +376,64 @@ async def cmd_seriesfil(client: Client, message: Message):
         parse_mode=enums.ParseMode.HTML,
     )
 
+# ═════════════════════════════════════════════════════════════════════════════
+# ─── /ed_series — EDIT WIZARD ────────────────────────────────────────────────
+# ═════════════════════════════════════════════════════════════════════════════
+
+@Client.on_message(filters.command(["ed_series"]) & (filters.private | filters.group), group=1)
+async def cmd_ed_series(client: Client, message: Message):
+    if not _is_admin(message.from_user.id):
+        return await message.reply_text("❌ You are not authorized to use this command.")
+
+    args = message.text.split(None, 1)
+    if len(args) < 2:
+        return await message.reply_text(
+            "Usage: <code>/ed_series SERIES_NAME</code> or <code>/ed_series SERIES_ID</code>\n",
+            parse_mode=enums.ParseMode.HTML,
+        )
+
+    arg = args[1].strip().strip('"').strip("'")
+    from database.series_db import search_series, get_series_by_name, _normalize
+    import re
+
+    exact = None
+    if re.fullmatch(r"[0-9a-fA-F]{24}", arg):
+        exact = await get_series(arg)
+    else:
+        normalized = _normalize(arg)
+        exact = await get_series_by_name(normalized)
+        if not exact:
+            matches = await search_series(arg)
+            if matches:
+                exact = matches[0]
+
+    if not exact:
+        return await message.reply_text(f"❌ No series found matching '<b>{arg}</b>'.", parse_mode=enums.ParseMode.HTML)
+
+    uid = message.from_user.id
+    temp.SERIES_WIZARD[uid] = {
+        "state": S_DONE,
+        "name": exact["name"],
+        "year": exact.get("year", ""),
+        "genre": exact.get("genre", ""),
+        "description": exact.get("description", ""),
+        "poster": exact.get("poster", ""),
+        "languages": exact.get("languages", []),
+        "seasons": exact.get("seasons", []),
+        "qualities": exact.get("qualities", []),
+        "series_id": str(exact["_id"]),
+        # batch session
+        "batch_lang": "", "batch_season": 0, "batch_quality": "",
+        "batch_data": None,
+    }
+    
+    wiz = temp.SERIES_WIZARD[uid]
+    await message.reply_text(
+        _series_card(wiz) + "\n\n⚙️ <b>Series Configuration</b>\nChoose an option to edit or click Save:",
+        reply_markup=_config_menu_keyboard(),
+        parse_mode=enums.ParseMode.HTML,
+    )
+
 
 # ═════════════════════════════════════════════════════════════════════════════
 # ─── /cancel — ABORT WIZARD ──────────────────────────────────────────────────
@@ -542,8 +600,16 @@ async def wizard_callback(client: Client, query: CallbackQuery):
 
     # ── Cancel ────────────────────────────────────────────────────────────────
     if action == "cancel":
-        del temp.SERIES_WIZARD[uid]
-        await query.message.edit_text("❌ Series wizard cancelled.")
+        if wiz.get("name"):
+            wiz["state"] = S_DONE
+            await query.message.edit_text(
+                _series_card(wiz) + "\n\n⚙️ <b>Series Configuration</b>\nChoose an option to edit or click Save:",
+                reply_markup=_config_menu_keyboard(),
+                parse_mode=enums.ParseMode.HTML,
+            )
+        else:
+            del temp.SERIES_WIZARD[uid]
+            await query.message.edit_text("❌ Series wizard cancelled.")
         return await query.answer()
 
     # ── Config Menu shortcuts ─────────────────────────────────────────────────
@@ -1090,7 +1156,7 @@ async def series_search_handler(client: Client, message: Message):
                         pass
                 asyncio.create_task(delete_search_msg(msg))
                 
-    from pyrogram.errors import StopPropagation
+    from pyrogram import StopPropagation
     raise StopPropagation
 
 
@@ -1120,47 +1186,38 @@ async def series_user_nav(client: Client, query: CallbackQuery):
         season  = int(parts[5])
         qual    = parts[7]
         
+        rating = series.get("rating", "N/A")
         if len(parts) >= 10 and parts[8] == "e":
             ep      = int(parts[9])
             files = await get_series_files(full_id, lang, season, ep, qual)
+            for f in files:
+                f["is_series"] = True
+                f["series_rating"] = rating
+                f["episode_index"] = 1
+                f["total_episodes"] = 1
         else:
             files = []
             episodes = await list_quality_episodes(full_id, lang, season, qual)
-            for ep in episodes:
+            total_eps = len(episodes)
+            for i, ep in enumerate(episodes, start=1):
                 ep_files = await get_series_files(full_id, lang, season, ep, qual)
+                for f in ep_files:
+                    f["is_series"] = True
+                    f["series_rating"] = rating
+                    f["episode_index"] = i
+                    f["total_episodes"] = total_eps
                 files.extend(ep_files)
 
         if files:
-            from info import PM_SEARCH
             from utils import temp
             import uuid
             
-            if PM_SEARCH and query.message.chat.type in [enums.ChatType.GROUP, enums.ChatType.SUPERGROUP]:
-                key = str(uuid.uuid4())
-                temp.GETALL[key] = files
-                return await query.answer(url=f"https://telegram.me/{temp.U_NAME}?start=all_{key}")
-            else:
-                await query.answer("📤 Sending file...")
-                for f in files:
-                    try:
-                        if f.get("chat_id") and f.get("message_id"):
-                            await client.copy_message(
-                                chat_id=query.message.chat.id,
-                                from_chat_id=f["chat_id"],
-                                message_id=f["message_id"],
-                            )
-                        elif f.get("file_id"):
-                            await client.send_document(
-                                chat_id=query.message.chat.id,
-                                document=f["file_id"],
-                                caption=f"🎬 {series['name']} S{season:02d} | {qual}",
-                            )
-                        await asyncio.sleep(1)
-                    except FloodWait as e:
-                        await asyncio.sleep(e.value + 1)
-                    except Exception as ex:
-                        logger.error(f"series file send error: {ex}")
-                return
+            key = str(uuid.uuid4())
+            temp.GETALL[key] = {
+                "user": query.from_user.id,
+                "files": files
+            }
+            return await query.answer(url=f"https://t.me/{temp.U_NAME}?start=all_{key}")
         elif files is not None:
             return await query.answer("⚠️ File not found. It may have been removed.", show_alert=True)
         
@@ -1185,7 +1242,7 @@ async def series_user_nav(client: Client, query: CallbackQuery):
 # ─── /serieslist — Admin: list all series ────────────────────────────────────
 # ═════════════════════════════════════════════════════════════════════════════
 
-@Client.on_message(filters.command(["serieslist", "viewseries"]) & filters.private, group=1)
+@Client.on_message(filters.command(["serieslist", "viewseries"]) & (filters.private | filters.group), group=1)
 async def cmd_serieslist(client: Client, message: Message):
     if not _is_admin(message.from_user.id):
         return await message.reply_text("❌ Not authorized.")
@@ -1213,7 +1270,7 @@ async def cmd_serieslist(client: Client, message: Message):
 # ─── /seriesdel — Admin: delete a series ─────────────────────────────────────
 # ═════════════════════════════════════════════════════════════════════════════
 
-@Client.on_message(filters.command(["seriesdel", "delseries"]) & filters.private, group=1)
+@Client.on_message(filters.command(["seriesdel", "delseries"]) & (filters.private | filters.group), group=1)
 async def cmd_seriesdel(client: Client, message: Message):
     if not _is_admin(message.from_user.id):
         return await message.reply_text("❌ Not authorized.")
