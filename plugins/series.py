@@ -52,10 +52,7 @@ from database.series_db import (
 
 logger = logging.getLogger(__name__)
 
-# ─── In-Memory Wizard State ───────────────────────────────────────────────────
-# Key = admin user_id (int)
-# Value = dict with wizard data and current state name
-SERIES_WIZARD: dict = {}
+from utils import temp
 
 # ─── Wizard State Names ───────────────────────────────────────────────────────
 S_NAME         = "WAITING_NAME"
@@ -334,25 +331,6 @@ def _user_season_keyboard(sid: str, lang: str, seasons: list[int]) -> InlineKeyb
     return InlineKeyboardMarkup(rows)
 
 
-def _user_episode_keyboard(sid: str, lang: str, season: int, quality: str, episodes: list[int]) -> InlineKeyboardMarkup:
-    rows = []
-    rows.append([InlineKeyboardButton("📤 Send All Episodes", callback_data=f"sr#{sid}#l#{lang}#s#{season}#q#{quality}#all")])
-    for i in range(0, len(episodes), 4):
-        row = [
-            InlineKeyboardButton(
-                f"Ep {ep}",
-                callback_data=f"sr#{sid}#l#{lang}#s#{season}#q#{quality}#e#{ep}"
-            )
-            for ep in episodes[i:i+4]
-        ]
-        rows.append(row)
-    rows.append([
-        InlineKeyboardButton("⬅️ Back", callback_data=f"sr#{sid}#l#{lang}#s#{season}"),
-        InlineKeyboardButton("🏠 Home",  callback_data=f"sr#{sid}#home"),
-    ])
-    return InlineKeyboardMarkup(rows)
-
-
 def _user_quality_keyboard(sid: str, lang: str, season: int, quals: list[str]) -> InlineKeyboardMarkup:
     rows = []
     for i in range(0, len(quals), 3):
@@ -381,7 +359,7 @@ async def cmd_seriesfil(client: Client, message: Message):
         return await message.reply_text("❌ You are not authorized to use this command.")
 
     uid = message.from_user.id
-    SERIES_WIZARD[uid] = {
+    temp.SERIES_WIZARD[uid] = {
         "state": S_NAME,
         "name": "", "year": "", "genre": "", "description": "",
         "languages": [], "seasons": [], "qualities": [],
@@ -406,8 +384,8 @@ async def cmd_seriesfil(client: Client, message: Message):
 @Client.on_message(filters.command("cancel") & filters.private, group=1)
 async def cmd_cancel(client: Client, message: Message):
     uid = message.from_user.id
-    if uid in SERIES_WIZARD:
-        del SERIES_WIZARD[uid]
+    if uid in temp.SERIES_WIZARD:
+        del temp.SERIES_WIZARD[uid]
         await message.reply_text("❌ Series wizard cancelled.")
     else:
         await message.reply_text("No active wizard session.")
@@ -433,13 +411,13 @@ async def cmd_cancel(client: Client, message: Message):
 ), group=1)
 async def wizard_text_handler(client: Client, message: Message):
     uid = message.from_user.id
-    if uid not in SERIES_WIZARD:
+    if uid not in temp.SERIES_WIZARD:
         return  # not in wizard — let other handlers process
 
     if not message.reply_to_message:
         pass  # We process all text to prevent auto_filter from running
 
-    wiz = SERIES_WIZARD[uid]
+    wiz = temp.SERIES_WIZARD[uid]
     state = wiz["state"]
     
     text = ""
@@ -556,15 +534,15 @@ async def wizard_callback(client: Client, query: CallbackQuery):
     parts = data.split("#")
     # parts[0] = "sw", parts[1] = action, parts[2..] = values
 
-    if uid not in SERIES_WIZARD:
+    if uid not in temp.SERIES_WIZARD:
         return await query.answer("No active wizard. Run /seriesfil first.", show_alert=True)
 
-    wiz  = SERIES_WIZARD[uid]
+    wiz  = temp.SERIES_WIZARD[uid]
     action = parts[1] if len(parts) > 1 else ""
 
     # ── Cancel ────────────────────────────────────────────────────────────────
     if action == "cancel":
-        del SERIES_WIZARD[uid]
+        del temp.SERIES_WIZARD[uid]
         await query.message.edit_text("❌ Series wizard cancelled.")
         return await query.answer()
 
@@ -873,7 +851,7 @@ async def wizard_callback(client: Client, query: CallbackQuery):
             })
             _register_short_id(series_id)
 
-        del SERIES_WIZARD[uid]
+        del temp.SERIES_WIZARD[uid]
         await query.message.edit_text(
             f"🎉 <b>Series saved!</b>\n\n"
             f"📺 <b>{wiz['name']}</b>\n"
@@ -899,7 +877,7 @@ async def cmd_sbatch(client: Client, message: Message):
     if not _is_admin(uid):
         return await message.reply_text("❌ You are not authorized to use this command.")
 
-    if uid not in SERIES_WIZARD or SERIES_WIZARD[uid].get("state") != S_BATCH_WAIT:
+    if uid not in temp.SERIES_WIZARD or temp.SERIES_WIZARD[uid].get("state") != S_BATCH_WAIT:
         return await message.reply_text(
             "⚠️ Run <code>/seriesfil</code> first and configure language/season/quality "
             "before sending a batch.",
@@ -945,7 +923,7 @@ async def cmd_sbatch(client: Client, message: Message):
             f"❌ Range too large ({total} messages). Maximum allowed is 500 per batch."
         )
 
-    wiz = SERIES_WIZARD[uid]
+    wiz = temp.SERIES_WIZARD[uid]
     processing_msg = await message.reply_text(
         f"⏳ Scanning messages {msg1} → {msg2} ({total} total)..."
     )
@@ -1061,7 +1039,6 @@ async def _send_or_edit(message_or_query, text, reply_markup, poster=None):
 
 async def _resolve_nav_step(full_id: str, sid: str, series: dict, lang=None, season=None, qual=None):
     """
-    Auto-advances if there's only 1 option available at a step.
     Returns (text, reply_markup)
     """
     card = _series_card(series)
@@ -1070,30 +1047,20 @@ async def _resolve_nav_step(full_id: str, sid: str, series: dict, lang=None, sea
         langs = await list_series_languages(full_id)
         if not langs: langs = series.get("languages", [])
         if not langs: return "⚠️ No files yet.", None
-        if len(langs) == 1:
-            return await _resolve_nav_step(full_id, sid, series, lang=langs[0])
         return card + "\n\n🌐 <b>Select Language:</b>", _user_lang_keyboard(sid, langs)
         
     if not season:
         seasons = await list_series_seasons(full_id, lang)
         if not seasons: seasons = sorted(series.get("seasons", []))
         if not seasons: return "⚠️ No seasons found.", None
-        if len(seasons) == 1:
-            return await _resolve_nav_step(full_id, sid, series, lang=lang, season=seasons[0])
         return card + f"\n\n🌐 <b>{lang}</b>\n📁 <b>Select Season:</b>", _user_season_keyboard(sid, lang, seasons)
         
     if not qual:
         quals = await list_season_qualities(full_id, lang, season)
         if not quals: return "⚠️ No qualities found.", None
-        if len(quals) == 1:
-            return await _resolve_nav_step(full_id, sid, series, lang=lang, season=season, qual=quals[0])
         return card + f"\n\n🌐 <b>{lang}</b>\n📁 <b>Season {season}</b>\n🎞 <b>Select Quality:</b>", _user_quality_keyboard(sid, lang, season, quals)
         
-    episodes = await list_quality_episodes(full_id, lang, season, qual)
-    if not episodes:
-        return "⚠️ No episodes found.", None
-        
-    return card + f"\n\n🌐 <b>{lang}</b>  📁 <b>Season {season}</b>  🎞 <b>{qual}</b>\n🎬 <b>Select Episode:</b>", _user_episode_keyboard(sid, lang, season, qual, episodes)
+    return "⚠️ Invalid step.", None
 
 
 @Client.on_message((filters.group | filters.private) & filters.text & filters.incoming, group=-1)
@@ -1147,23 +1114,21 @@ async def series_user_nav(client: Client, query: CallbackQuery):
     season = None
     qual = None
     
-    # ── Send file (Episode selected) ──────────────────────────────────────────
-    if len(parts) >= 9 and parts[2] == "l" and parts[4] == "s" and parts[6] == "q":
+    # ── Send file (Quality selected) ──────────────────────────────────────────
+    if len(parts) >= 8 and parts[2] == "l" and parts[4] == "s" and parts[6] == "q":
         lang    = parts[3]
         season  = int(parts[5])
         qual    = parts[7]
         
-        if parts[8] == "all":
+        if len(parts) >= 10 and parts[8] == "e":
+            ep      = int(parts[9])
+            files = await get_series_files(full_id, lang, season, ep, qual)
+        else:
             files = []
             episodes = await list_quality_episodes(full_id, lang, season, qual)
             for ep in episodes:
                 ep_files = await get_series_files(full_id, lang, season, ep, qual)
                 files.extend(ep_files)
-        elif len(parts) >= 10 and parts[8] == "e":
-            ep      = int(parts[9])
-            files = await get_series_files(full_id, lang, season, ep, qual)
-        else:
-            files = None
 
         if files:
             from info import PM_SEARCH
