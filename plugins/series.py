@@ -186,16 +186,20 @@ def _series_card(series: dict) -> str:
 # ─── ADMIN WIZARD KEYBOARD BUILDERS ──────────────────────────────────────────
 # ═════════════════════════════════════════════════════════════════════════════
 
-def _lang_keyboard(selected: list[str]) -> InlineKeyboardMarkup:
+def _lang_keyboard(selected: list[str], saved: list[str] = None) -> InlineKeyboardMarkup:
+    if saved is None: saved = []
     rows = []
     for i in range(0, len(LANG_OPTIONS), 3):
         row = []
         for lang in LANG_OPTIONS[i:i+3]:
-            tick = "✅ " if lang in selected else ""
-            row.append(InlineKeyboardButton(
-                f"{tick}{lang}",
-                callback_data=f"sw#lang#{lang}"
-            ))
+            if lang in saved:
+                row.append(InlineKeyboardButton(f"☑️ {lang}", callback_data="sw#ignore"))
+            else:
+                tick = "🟢 " if lang in selected else ""
+                row.append(InlineKeyboardButton(
+                    f"{tick}{lang}",
+                    callback_data=f"sw#lang#{lang}"
+                ))
         rows.append(row)
     rows.append([
         InlineKeyboardButton("🟢 Submit Languages", callback_data="sw#lang#submit"),
@@ -295,7 +299,7 @@ def _user_season_keyboard(sid: str, lang: str, seasons: list[int]) -> InlineKeyb
     rows = []
     for i in range(0, len(seasons), 3):
         row = [
-            InlineKeyboardButton(f"Season {s}", callback_data=f"sr#{sid}#l#{lang}#s#{s}")
+            InlineKeyboardButton(f"Season {s}" if s > 0 else "Direct Episodes", callback_data=f"sr#{sid}#l#{lang}#s#{s}")
             for s in seasons[i:i+3]
         ]
         rows.append(row)
@@ -616,8 +620,8 @@ async def wizard_callback(client: Client, query: CallbackQuery):
             wiz["batch_seasons"] = []
             wiz["batch_qualities"] = []
             await query.message.edit_text(
-                "📦 <b>Add Episode Batch</b>\n\nSelect <b>languages</b> for this batch:",
-                reply_markup=_lang_keyboard(wiz["batch_langs"]),
+                "📦 <b>Add Episode Batch</b>\n\nSelect <b>languages</b> for this batch (Already saved languages are disabled with ☑️):",
+                reply_markup=_lang_keyboard(wiz["batch_langs"], saved=wiz["languages"]),
                 parse_mode=enums.ParseMode.HTML,
             )
         return await query.answer()
@@ -651,7 +655,8 @@ async def wizard_callback(client: Client, query: CallbackQuery):
             else:
                 target_list.append(lang)
             try:
-                await query.message.edit_reply_markup(_lang_keyboard(target_list))
+                saved_langs = wiz["languages"] if wiz["state"] == S_BATCH_LANG else []
+                await query.message.edit_reply_markup(_lang_keyboard(target_list, saved=saved_langs))
             except MessageNotModified:
                 pass
         return await query.answer()
@@ -1081,22 +1086,27 @@ async def _resolve_nav_step(full_id: str, sid: str, series: dict, lang=None, sea
     """
     card = _series_card(series)
     
-    if not lang:
+    if lang is None:
         langs = await list_series_languages(full_id)
         if not langs: langs = series.get("languages", [])
         if not langs: return "⚠️ No files yet.", None
         return card + "\n\n🌐 <b>Select Language:</b>", _user_lang_keyboard(sid, langs)
         
-    if not season:
+    if season is None:
         seasons = await list_series_seasons(full_id, lang)
         if not seasons: seasons = sorted(series.get("seasons", []))
         if not seasons: return "⚠️ No seasons found.", None
-        return card + f"\n\n🌐 <b>{lang}</b>\n📁 <b>Select Season:</b>", _user_season_keyboard(sid, lang, seasons)
+        if seasons == [0]:
+            season = 0
+        else:
+            return card + f"\n\n🌐 <b>{lang}</b>\n📁 <b>Select Season:</b>", _user_season_keyboard(sid, lang, seasons)
         
-    if not qual:
+    if qual is None:
         quals = await list_season_qualities(full_id, lang, season)
         if not quals: return "⚠️ No qualities found.", None
-        return card + f"\n\n🌐 <b>{lang}</b>\n📁 <b>Season {season}</b>\n🎞 <b>Select Quality:</b>", _user_quality_keyboard(sid, lang, season, quals)
+        
+        season_str = f"Season {season}" if season > 0 else "Direct Episodes"
+        return card + f"\n\n🌐 <b>{lang}</b>\n📁 <b>{season_str}</b>\n🎞 <b>Select Quality:</b>", _user_quality_keyboard(sid, lang, season, quals)
         
     return "⚠️ Invalid step.", None
 
@@ -1194,6 +1204,7 @@ async def series_user_nav(client: Client, query: CallbackQuery):
                 await query.answer()
                 from plugins.commands import start
                 query.message.text = f"/start all_{key}"
+                query.message.command = ["start", f"all_{key}"]
                 query.message.from_user = query.from_user
                 return await start(client, query.message)
             else:
@@ -1238,7 +1249,7 @@ async def cmd_serieslist(client: Client, message: Message):
         lines.append(
             f"📺 <b>{s['name']}</b> ({s.get('year','?')})\n"
             f"   🌐 {', '.join(s.get('languages',[]))}\n"
-            f"   📁 Seasons: {', '.join(str(x) for x in sorted(s.get('seasons',[])))}\n"
+            f"   📁 Seasons: {', '.join(str(x) if x > 0 else 'Direct' for x in sorted(s.get('seasons',[])))}\n"
             f"   ID: <code>{sid}</code>"
         )
 
