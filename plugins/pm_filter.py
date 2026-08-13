@@ -2607,9 +2607,44 @@ async def auto_filter(client, name, msg, reply_msg=None, ai_search=True, spoll=F
             settings = await get_settings(message.chat.id)
             if not files:
                 no_db_btn = InlineKeyboardMarkup([[InlineKeyboardButton("🦨Reason", callback_data="not_in_db_reason")]])
-                imdb = await get_poster(name, bulk=False)
+                imdb = await get_poster(name, bulk=False) if settings["imdb"] else None
                 if imdb and imdb.get('poster'):
-                    cap = f"<b>🎬 Title: {imdb.get('title')}\n📅 Year: {imdb.get('year')}\n🗣️ Language: {imdb.get('languages')}\n\n⚠️ <i>Sorry, this movie is not available in our database.</i>\n\n<i>🕐 This message will be deleted in 50 seconds.</i></b>"
+                    TEMPLATE = script.IMDB_TEMPLATE_TXT
+                    cur_time = datetime.now(pytz.timezone('Asia/Kolkata')).time()
+                    time_difference = timedelta(hours=cur_time.hour, minutes=cur_time.minute, seconds=(cur_time.second+(cur_time.microsecond/1000000))) - timedelta(hours=curr_time.hour, minutes=curr_time.minute, seconds=(curr_time.second+(curr_time.microsecond/1000000)))
+                    remaining_seconds = "{:.2f}".format(time_difference.total_seconds())
+                    cap = TEMPLATE.format(
+                        qurey=search,
+                        title=imdb.get('title'),
+                        votes=imdb.get('votes'),
+                        aka=imdb.get("aka"),
+                        seasons=imdb.get("seasons"),
+                        box_office=imdb.get('box_office'),
+                        localized_title=imdb.get('localized_title'),
+                        kind=imdb.get('kind'),
+                        imdb_id=imdb.get("imdb_id"),
+                        cast=imdb.get("cast"),
+                        runtime=imdb.get("runtime"),
+                        countries=imdb.get("countries"),
+                        certificates=imdb.get("certificates"),
+                        languages=imdb.get("languages"),
+                        director=imdb.get("director"),
+                        writer=imdb.get("writer"),
+                        producer=imdb.get("producer"),
+                        composer=imdb.get("composer"),
+                        cinematographer=imdb.get("cinematographer"),
+                        music_team=imdb.get("music_team"),
+                        distributors=imdb.get("distributors"),
+                        release_date=imdb.get('release_date'),
+                        year=imdb.get('year'),
+                        genres=imdb.get('genres'),
+                        poster=imdb.get('poster'),
+                        plot=imdb.get('plot'),
+                        rating=imdb.get('rating'),
+                        url=imdb.get('url'),
+                        **locals()
+                    )
+                    cap += f"\n\nSearch: {name.title()}\n\n🎥Movie: {imdb.get('title')}\n🍂Year: {imdb.get('year')}\n🍁Language: {imdb.get('languages')}\n\nNot available in Database This Move"
                     if reply_msg:
                         await reply_msg.delete()
                     msg_obj = await message.reply_photo(photo=imdb.get('poster'), caption=cap, reply_markup=no_db_btn)
