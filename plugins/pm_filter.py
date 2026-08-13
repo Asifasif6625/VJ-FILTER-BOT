@@ -2607,8 +2607,8 @@ async def auto_filter(client, name, msg, reply_msg=None, ai_search=True, spoll=F
             settings = await get_settings(message.chat.id)
             if not files:
                 no_db_btn = InlineKeyboardMarkup([[InlineKeyboardButton("🦨Reason", callback_data="not_in_db_reason")]])
-                imdb = await get_poster(name, bulk=False) if settings["imdb"] else None
-                if imdb and imdb.get('poster'):
+                imdb = await get_poster(search, bulk=False) if settings["imdb"] else None
+                if imdb:
                     TEMPLATE = script.IMDB_TEMPLATE_TXT
                     cur_time = datetime.now(pytz.timezone('Asia/Kolkata')).time()
                     time_difference = timedelta(hours=cur_time.hour, minutes=cur_time.minute, seconds=(cur_time.second+(cur_time.microsecond/1000000))) - timedelta(hours=curr_time.hour, minutes=curr_time.minute, seconds=(curr_time.second+(curr_time.microsecond/1000000)))
@@ -2644,10 +2644,13 @@ async def auto_filter(client, name, msg, reply_msg=None, ai_search=True, spoll=F
                         url=imdb.get('url'),
                         **locals()
                     )
-                    cap += f"\n\nSearch: {name.title()}\n\n🎥Movie: {imdb.get('title')}\n🍂Year: {imdb.get('year')}\n🍁Language: {imdb.get('languages')}\n\nNot available in Database This Move"
+                    cap += f"\n\nSearch: {search.title()}\n\n🎥Movie: {imdb.get('title')}\n🍂Year: {imdb.get('year')}\n🍁Language: {imdb.get('languages')}\n\nNot available in Database This Move"
                     if reply_msg:
                         await reply_msg.delete()
-                    msg_obj = await message.reply_photo(photo=imdb.get('poster'), caption=cap, reply_markup=no_db_btn)
+                    if imdb.get('poster'):
+                        msg_obj = await message.reply_photo(photo=imdb.get('poster'), caption=cap, reply_markup=no_db_btn)
+                    else:
+                        msg_obj = await message.reply_text(text=cap, reply_markup=no_db_btn, disable_web_page_preview=True)
                 else:
                     msg_text = "<b>sᴏʀʀʏ ɴᴏ ꜰɪʟᴇs ᴡᴇʀᴇ ꜰᴏᴜɴᴅ ꜰᴏʀ ʏᴏᴜʀ ʀᴇǫᴜᴇꜱᴛ😕\n\nᴄʜᴇᴄᴋ ʏᴏᴜʀ sᴘᴇʟʟɪɴɢ ɪɴ ɢᴏᴏɢʟᴇ ᴀɴᴅ ᴛʀʏ ᴀɢᴀɪɴ 😃\n\nᴍᴏᴠɪᴇ ʀᴇǫᴜᴇꜱᴛ ꜰᴏʀᴍᴀᴛ 👇\n\nᴇxᴀᴍᴘʟᴇ : Uncharted or Uncharted 2022 or Uncharted En\n\nꜱᴇʀɪᴇꜱ ʀᴇǫᴜᴇꜱᴛ ꜰᴏʀᴍᴀᴛ 👇\n\nᴇxᴀᴍᴘʟᴇ : Loki S01 or Loki S01E04 or Lucifer S03E24\n\n🚯 ᴅᴏɴᴛ ᴜꜱᴇ ➠ ':(!,./)\n\n<i>🕐 This message will be deleted in 50 seconds.</i></b>"
                     if reply_msg:
