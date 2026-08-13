@@ -62,9 +62,6 @@ async def give_filter(client, message):
             
         manual = await manual_filters(client, message)
         if manual == False:
-            from plugins.series import SERIES_WIZARD
-            if message.from_user and message.from_user.id in SERIES_WIZARD:
-                return
             settings = await get_settings(message.chat.id)
             # ── English-only guard ──
             if not is_english_only(message.text):
