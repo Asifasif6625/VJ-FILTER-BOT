@@ -25,7 +25,9 @@ from pyrogram.errors import (
     FloodWait,
     MessageNotModified,
     BadRequest,
+    BadRequest,
     ChatAdminRequired,
+    ContinuePropagation,
 )
 
 from info import ADMINS, CHANNELS
@@ -1067,10 +1069,10 @@ async def _resolve_nav_step(full_id: str, sid: str, series: dict, lang=None, sea
 @Client.on_message(filters.group & filters.text & filters.incoming)
 async def series_search_handler(client: Client, message: Message):
     if message.text.startswith("/") or len(message.text) > 100 or len(message.text.strip()) < 2:
-        return
+        raise ContinuePropagation
 
     matches = await search_series(_normalize(message.text.strip()))
-    if not matches: return
+    if not matches: raise ContinuePropagation
 
     series = matches[0]
     series_id = str(series["_id"])
