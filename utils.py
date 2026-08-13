@@ -40,6 +40,7 @@ class temp(object):
     CURRENT=int(os.environ.get("SKIP", 2))
     CANCEL = False
     MELCOW = {}
+    SERIES_WIZARD = {}
     U_NAME = None
     B_NAME = None
     GETALL = {}
