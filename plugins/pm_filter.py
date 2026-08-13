@@ -2607,7 +2607,7 @@ async def auto_filter(client, name, msg, reply_msg=None, ai_search=True, spoll=F
             settings = await get_settings(message.chat.id)
             if not files:
                 no_db_btn = InlineKeyboardMarkup([[InlineKeyboardButton("🦨Reason", callback_data="not_in_db_reason")]])
-                imdb = await get_poster(search, bulk=False) if settings["imdb"] else None
+                imdb = await get_poster(search, bulk=False) if NOFILEREQ else None
                 if imdb:
                     TEMPLATE = script.IMDB_TEMPLATE_TXT
                     cur_time = datetime.now(pytz.timezone('Asia/Kolkata')).time()
