@@ -269,11 +269,24 @@ async def start(client, message):
     except:
         file_id = data
         pre = ""
-    if data.split("-", 1)[0] == "BATCH":
+    if data.split("-", 1)[0] in ["BATCH", "PBATCH"]:
         sts = await message.reply("<b>ᴘʟᴇᴀsᴇ ᴡᴀɪᴛ...</b>")
-        file_id = data.split("-", 1)[1]
-        msgs = BATCH_FILES.get(file_id)
+        is_pbatch = data.split("-", 1)[0] == "PBATCH"
+        identifier = data.split("-", 1)[1]
+        msgs = BATCH_FILES.get(identifier)
         if not msgs:
+            try:
+                # If identifier is an integer, it's a message ID in LOG_CHANNEL
+                msg_id = int(identifier)
+                post = await client.get_messages(LOG_CHANNEL, msg_id)
+                if not post or not post.document:
+                    await sts.edit("FAILED TO LOCATE BATCH DATA IN LOG_CHANNEL")
+                    return
+                file_id = post.document.file_id
+            except ValueError:
+                # Fallback to old raw file_id logic
+                file_id = identifier
+
             try:
                 file = await client.download_media(file_id)
                 with open(file) as file_data:
@@ -284,7 +297,7 @@ async def start(client, message):
                 logging.getLogger(__name__).error(f"BATCH DOWNLOAD ERROR: {e}")
                 await sts.edit("FAILED TO DOWNLOAD BATCH DATA")
                 return await client.send_message(LOG_CHANNEL, f"UNABLE TO OPEN FILE.\n{e}")
-            BATCH_FILES[file_id] = msgs
+            BATCH_FILES[identifier] = msgs
 
         filesarr = []
         for msg in msgs:

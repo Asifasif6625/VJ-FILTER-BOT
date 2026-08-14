@@ -173,16 +173,19 @@ async def gen_link_batch(bot, message):
     )
     os.remove(json_path)
 
-    file_id = post.document.file_id
+    msg_id = post.id
     
     logger.info("BATCH JSON UPLOADED")
-    logger.info(f"RAW FILE ID: {file_id}")
+    logger.info(f"LOG_CHANNEL MSG ID: {msg_id}")
     logger.info("BATCH LINK GENERATED")
+    
+    # Store whether it's pbatch or normal batch via a prefix
+    prefix = "PBATCH-" if message.command[0] == "pbatch" else "BATCH-"
     
     await sts.edit(
         f"✅ <b>Batch link generated!</b>\n\n"
         f"📦 Contains <code>{og_msg}</code> files"
         + (f" (<code>{errors}</code> skipped)" if errors else "") + ".\n\n"
-        f"🔗 <code>https://t.me/{temp.U_NAME}?start=BATCH-{file_id}</code>",
+        f"🔗 <code>https://t.me/{temp.U_NAME}?start={prefix}{msg_id}</code>",
         parse_mode=enums.ParseMode.HTML,
     )
