@@ -484,14 +484,22 @@ async def start(client, message):
     elif data.startswith("all"):
         import logging
         log = logging.getLogger(__name__)
-        log.info("ALL PAYLOAD RECEIVED")
+        log.info("[ALL] START REQUEST RECEIVED")
+        log.info(f"[ALL] PAYLOAD: {data}")
+        log.info(f"[ALL] UUID: {file_id}")
+        
         data_obj = temp.GETALL.get(file_id)
+        log.info(f"[ALL] GETALL FOUND: {bool(data_obj)}")
+        
         if not data_obj:
-            log.info(f"GETALL KEY FOUND (But empty/missing): {file_id}")
+            log.info(f"[ALL] GETALL KEY FOUND (But empty/missing): {file_id}")
             return await message.reply('<b><i>No such file exist.</b></i>')
             
-        log.info(f"GETALL KEY FOUND: {file_id}")
+        log.info(f"[ALL] GETALL KEY FOUND: {file_id}")
         if isinstance(data_obj, dict) and "user" in data_obj:
+            log.info(f"[ALL] STORED USER ID: {data_obj['user']}")
+            log.info(f"[ALL] REQUEST USER ID: {message.from_user.id}")
+            log.info(f"[ALL] USER MATCH: {message.from_user.id == data_obj['user']}")
             if message.from_user.id != data_obj["user"]:
                 return await message.reply('<b><i>⚠️ This link is not for you! Generate your own from the group.</b></i>')
             
@@ -505,12 +513,15 @@ async def start(client, message):
                 season = query["season"]
                 qual = query["qual"]
                 
-                log.info(f"START RECEIVED, RESOLVING QUERY: {full_id} | {lang} | {season} | {qual}")
+                log.info(f"[ALL] QUERY:\nfull_id={full_id}\nlang={lang}\nseason={season}\nquality={qual}")
                 
                 raw_files = []
                 episodes = await list_quality_episodes(full_id, lang, season, qual)
+                log.info(f"[ALL] EPISODES FOUND IN DB: {episodes}")
+                
                 for ep in episodes:
                     ep_files = await get_series_files(full_id, lang, season, ep, qual)
+                    log.info(f"[ALL] DB MATCH COUNT FOR EP {ep}: {len(ep_files)}")
                     for f in ep_files:
                         if f.get("is_batch"):
                             try:
@@ -525,29 +536,33 @@ async def start(client, message):
                                         "caption": ""
                                     })
                             except Exception as e:
-                                log.error(f"Failed to fetch JSON batch in start handler: {e}")
+                                log.error(f"[ALL] Failed to fetch JSON batch in start handler: {e}")
                         else:
                             f["is_series"] = True
                             f["caption"] = ""
                             raw_files.append(f)
                 files = raw_files
-                log.info(f"START RESOLVED {len(files)} FILES")
+                log.info(f"[ALL] EXPANDED FILE COUNT: {len(files)}")
             else:
                 files = data_obj["files"]
+                log.info(f"[ALL] EXPANDED FILE COUNT (from direct files): {len(files)}")
         else:
             files = data_obj
+            log.info(f"[ALL] EXPANDED FILE COUNT (legacy format): {len(files) if isinstance(files, list) else 'Unknown'}")
             
         is_series_batch = any(f.get("is_series") for f in files) if isinstance(files, list) else False
         if is_series_batch:
-            log.info(f"SERIES FILE COUNT: {len(files)}")
+            log.info(f"[ALL] SERIES FILE COUNT BEFORE SENDING: {len(files)}")
             
         filesarr = []
+        log.info(f"[ALL] STARTING FILE SEND")
+        send_count = 0
         for file in files:
             file_id_str = file["file_id"]
             
             if file.get("is_series"):
                 f_caption = ""
-                log.info("VERIFICATION BYPASSED FOR SERIES")
+                log.info("[ALL] VERIFICATION BYPASSED FOR SERIES")
             else:
                 files1 = await get_file_details(file_id_str)
                 if not files1: continue
@@ -571,7 +586,7 @@ async def start(client, message):
                         ]]
                         text = "<b>ʜᴇʏ {} 👋,\n\nʏᴏᴜ ᴀʀᴇ ɴᴏᴛ ᴠᴇʀɪғɪᴇᴅ ᴛᴏᴅᴀʏ, ᴘʟᴇᴀꜱᴇ ᴄʟɪᴄᴋ ᴏɴ ᴠᴇʀɪғʏ & ɢᴇᴛ ᴜɴʟɪᴍɪᴛᴇᴅ ᴀᴄᴄᴇꜱꜱ ғᴏʀ ᴛᴏᴅᴀʏ</b>"
                         if PREMIUM_AND_REFERAL_MODE == True:
-                            text += "<b>ɪғ ʏᴏᴜ ᴡᴀɴᴛ ᴅɪʀᴇᴄᴛ ғɪʟᴇꜱ ᴡɪᴛʜᴏᴜᴛ ᴀɴʏ ᴠᴇʀɪғɪᴄᴀᴛɪᴏɴꜱ ᴛʜᴇɴ ʙᴜʏ ʙᴏᴛ ꜱᴜʙꜱᴄʀɪᴘᴛɪᴏɴ ☺️\n\n💶 ꜱᴇɴᴅ /plan ᴛᴏ ʙᴜʏ ꜱᴜʙꜱᴄʀɪᴘᴛɪᴏɴ</b>"
+                            text += "<b>ɪғ ʏᴏᴜ ᴡᴀɴᴛ ᴅɪʀᴇᴄᴛ ғɪʟᴇꜱ ᴡɪᴛʜᴏᴜᴛ ᴀɴʏ ᴠᴇʀɪꜰɪᴄᴀᴛɪᴏɴꜱ ᴛʜᴇɴ ʙᴜʏ ʙᴏᴛ ꜱᴜʙꜱᴄʀɪᴘᴛɪᴏɴ ☺️\n\n💶 ꜱᴇɴᴅ /plan ᴛᴏ ʙᴜʏ ꜱᴜʙꜱᴄʀɪᴘᴛɪᴏɴ</b>"
                         await message.reply_text(
                             text=text.format(message.from_user.mention),
                             protect_content=True,
@@ -587,7 +602,7 @@ async def start(client, message):
                 
             try:
                 if file.get("is_series"):
-                    log.info(f"SENDING SERIES FILE: {file_id_str}")
+                    log.info(f"[ALL] SENDING FILE: {file_id_str}")
                 msg = await client.send_cached_media(
                     chat_id=message.from_user.id,
                     file_id=file_id_str,
