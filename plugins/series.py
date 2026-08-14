@@ -243,19 +243,17 @@ def _quality_keyboard(selected: list[str]) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(rows)
 
 
-def _config_menu_keyboard() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup([
-        [
-            InlineKeyboardButton("📦 Add Files (Batch)", callback_data="sw#menu#batch"),
-        ],
-        [
-            InlineKeyboardButton("🟢 Save Series", callback_data="sw#save"),
-            InlineKeyboardButton("🔴 Cancel",       callback_data="sw#cancel"),
-        ],
+def _config_menu_keyboard(series_id: str = None) -> InlineKeyboardMarkup:
+    buttons = [
+        [InlineKeyboardButton("📦 Add Files (Batch)", callback_data="sw#menu#batch")]
+    ]
+    if series_id:
+        buttons.append([InlineKeyboardButton("🗑 Delete Series", callback_data=f"sw#del_series#{series_id}")])
+    buttons.append([
+        InlineKeyboardButton("🟢 Save Series", callback_data="sw#save"),
+        InlineKeyboardButton("🔴 Cancel", callback_data="sw#cancel")
     ])
-
-
-
+    return InlineKeyboardMarkup(buttons)
 
 
 def _batch_confirm_keyboard() -> InlineKeyboardMarkup:
@@ -404,7 +402,7 @@ async def cmd_ed_series(client: Client, message: Message):
     wiz = temp.SERIES_WIZARD[uid]
     await message.reply_text(
         _series_card(wiz) + "\n\n⚙️ <b>Series Configuration</b>\nChoose an option to edit or click Save:",
-        reply_markup=_config_menu_keyboard(),
+        reply_markup=_config_menu_keyboard(wiz.get("series_id")),
         parse_mode=enums.ParseMode.HTML,
     )
 
@@ -572,13 +570,45 @@ async def wizard_callback(client: Client, query: CallbackQuery):
     wiz  = temp.SERIES_WIZARD[uid]
     action = parts[1] if len(parts) > 1 else ""
 
+    if not action:
+        return await query.answer()
+
+    if action == "del_series":
+        if len(parts) < 3: return await query.answer()
+        series_id = parts[2]
+        return await query.message.edit_text(
+            f"⚠️ <b>Confirm Deletion</b>\n\nAre you sure you want to delete the series <b>{wiz.get('name', 'Unknown')}</b>?",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("✅ Confirm Delete", callback_data=f"sw#del_conf#{series_id}")],
+                [InlineKeyboardButton("🔴 Cancel", callback_data=f"sw#back_to_menu")]
+            ]),
+            parse_mode=enums.ParseMode.HTML
+        )
+        
+    if action == "del_conf":
+        if len(parts) < 3: return await query.answer()
+        series_id = parts[2]
+        from database.series_db import delete_series as _del
+        await _del(series_id)
+        if uid in temp.SERIES_WIZARD:
+            del temp.SERIES_WIZARD[uid]
+        return await query.message.edit_text("✅ Series deleted successfully.")
+        
+    if action == "back_to_menu":
+        wiz["state"] = S_DONE
+        return await query.message.edit_text(
+            _series_card(wiz) + "\n\n⚙️ <b>Series Configuration</b>\nChoose an option to edit or click Save:",
+            reply_markup=_config_menu_keyboard(wiz.get("series_id")),
+            parse_mode=enums.ParseMode.HTML,
+        )
+
     # ── Cancel ────────────────────────────────────────────────────────────────
     if action == "cancel":
         if wiz.get("name"):
             wiz["state"] = S_DONE
             await query.message.edit_text(
                 _series_card(wiz) + "\n\n⚙️ <b>Series Configuration</b>\nChoose an option to edit or click Save:",
-                reply_markup=_config_menu_keyboard(),
+                reply_markup=_config_menu_keyboard(wiz.get("series_id")),
                 parse_mode=enums.ParseMode.HTML,
             )
         else:
@@ -1120,8 +1150,6 @@ async def series_search_handler(client: Client, message: Message):
     sid = _series_short_id(series_id)
 
     text, rm = await _resolve_nav_step(series_id, sid, series)
-    if getattr(message.from_user, "id", 0) in ADMINS:
-        rm.inline_keyboard.append([InlineKeyboardButton("🗑 Delete Series", callback_data=f"sr#{sid}#del")])
     if rm:
         msg = await _send_or_edit(message, text, rm, poster=series.get("poster"))
         if msg:
@@ -1150,6 +1178,9 @@ async def series_user_nav(client: Client, query: CallbackQuery):
     if len(parts) < 2: return await query.answer()
 
     sid = parts[1]
+    if sid == "close":
+        return await query.message.delete()
+        
     full_id = _series_full_id(sid)
     if not full_id:
         return await query.answer("Series context expired.", show_alert=True)
@@ -1157,24 +1188,6 @@ async def series_user_nav(client: Client, query: CallbackQuery):
     series = await get_series(full_id)
     if not series:
         return await query.answer("Series not found in database.", show_alert=True)
-        
-    if len(parts) >= 3:
-        if parts[2] in ("del", "delconf"):
-            if query.from_user.id not in ADMINS:
-                return await query.answer("Only admins can delete series.", show_alert=True)
-            if parts[2] == "del":
-                return await query.message.edit_text(
-                    f"⚠️ <b>Confirm Deletion</b>\n\nAre you sure you want to delete the series <b>{series.get('name', 'Unknown')}</b>?",
-                    reply_markup=InlineKeyboardMarkup([
-                        [InlineKeyboardButton("✅ Confirm Delete", callback_data=f"sr#{sid}#delconf")],
-                        [InlineKeyboardButton("🔴 Cancel", callback_data=f"sr#{sid}#home")]
-                    ]),
-                    parse_mode=enums.ParseMode.HTML
-                )
-            elif parts[2] == "delconf":
-                from database.series_db import delete_series as _del
-                await _del(full_id)
-                return await query.message.edit_text("✅ Series deleted successfully.")
 
     lang = None
     season = None
