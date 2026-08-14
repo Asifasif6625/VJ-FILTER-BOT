@@ -566,10 +566,6 @@ async def start(client, message):
         else:
             files = data_obj
             debug_log.append(f"FILES (LEGACY): {len(files) if isinstance(files, list) else 'Unknown'}")
-            
-        # SEND THE DEBUG INFO TO USER IN PM
-        await message.reply('\n'.join(debug_log))
-            
         is_series_batch = any(f.get("is_series") for f in files) if isinstance(files, list) else False
         if is_series_batch:
             log.info(f"[ALL] EXPANDED FILE COUNT: {len(files)}")
@@ -580,17 +576,25 @@ async def start(client, message):
             
         for idx, file in enumerate(files, start=1):
             file_id_str = file["file_id"]
+            protect_content = True if (hasattr(message, "command") and len(message.command) > 1 and message.command[1].startswith("allfilesp")) else False
             
             if file.get("is_series"):
-                f_caption = ""
-                protect_content = True if (hasattr(message, "command") and len(message.command) > 1 and message.command[1].startswith("allfilesp")) else False
+                file_name = file.get("file_name", "Unknown File")
+                raw_size = file.get("file_size", 0)
+                file_size = get_size(raw_size) if raw_size else "Unknown Size"
+                file_number = file.get("episode", "?")
+                
+                f_caption = (
+                    f"<b>File Name :</b> <code>{file_name}</code>\n"
+                    f"<b>File Size :</b> <code>{file_size}</code>\n"
+                    f"<b>File Number :</b> <code>{file_number}</code>"
+                )
             else:
                 files1 = await get_file_details(file_id_str)
                 if not files1: continue
                 title = files1["file_name"]
                 size=get_size(files1["file_size"])
                 f_caption=files1.get("caption", "")
-                protect_content = True if (hasattr(message, "command") and len(message.command) > 1 and message.command[1].startswith("allfilesp")) else False
             
                 if CUSTOM_FILE_CAPTION:
                     try:
@@ -616,7 +620,7 @@ async def start(client, message):
                         )
                         return
                         
-            if STREAM_MODE == True:
+            if STREAM_MODE == True and not file.get("is_series"):
                 button = [[InlineKeyboardButton('sᴛʀᴇᴀᴍ ᴀɴᴅ ᴅᴏᴡɴʟᴏᴀᴅ', callback_data=f'generate_stream_link:{file_id_str}')]]
                 reply_markup=InlineKeyboardMarkup(button)
             else:
