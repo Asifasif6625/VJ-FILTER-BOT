@@ -1469,30 +1469,6 @@ async def fsub(client, message):
         try:
             chat = await client.get_chat(id)
         except Exception as e:
-            return await message.reply_text(f"<b>{id} is invalid!\nMake sure this bot admin in that channel.\n\nError - {e}</b>")
-        if chat.type != enums.ChatType.CHANNEL:
-            return await message.reply_text(f"<b>{id} is not channel.</b>")
-        channels += f'{chat.title}\n'
-    await save_group_settings(grpid, 'fsub', fsub_ids)
-    await message.reply_text(f"<b>Successfully set force channels for {title} to\n\n{channels}\n\nYou can remove it by /nofsub.</b>")
-        
-
-@Client.on_message(filters.command("add_premium"))
-async def give_premium_cmd_handler(client, message):
-    if PREMIUM_AND_REFERAL_MODE == False:
-        return 
-    user_id = message.from_user.id
-    if user_id not in ADMINS:
-        await message.delete()
-        return
-    if len(message.command) == 3:
-        user_id = int(message.command[1])  # Convert the user_id to integer
-        time = message.command[2]        
-        seconds = await get_seconds(time)
-        if seconds > 0:
-            expiry_time = datetime.datetime.now() + datetime.timedelta(seconds=seconds)
-            user_data = {"id": user_id, "expiry_time": expiry_time} 
-            await db.update_user(user_data)  # Use the update_user method to update or insert user data
             await message.reply_text("Premium access added to the user.")            
             await client.send_message(
                 chat_id=user_id,
