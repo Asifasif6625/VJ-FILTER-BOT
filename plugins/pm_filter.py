@@ -1419,31 +1419,39 @@ async def cb_handler(client: Client, query: CallbackQuery):
 
         try:
             if settings['is_shortlink'] and not await db.has_premium_access(query.from_user.id):
-                if clicked == typed:
-                    temp.SHORT[clicked] = query.message.chat.id
-                    await query.answer(url=f"https://telegram.me/{temp.U_NAME}?start=short_{file_id}")
-                    return
-                else:
-                    await query.answer(f"Hᴇʏ {query.from_user.first_name}, Tʜɪs Is Nᴏᴛ Yᴏᴜʀ Mᴏᴠɪᴇ Rᴇǫᴜᴇsᴛ. Rᴇǫᴜᴇsᴛ Yᴏᴜʀ's !", show_alert=True)
-            elif settings['is_shortlink'] and await db.has_premium_access(query.from_user.id):
-                if clicked == typed:
-                    await query.answer(url=f"https://telegram.me/{temp.U_NAME}?start={ident}_{file_id}")
-                    return
-                else:
-                    await query.answer(f"Hᴇʏ {query.from_user.first_name}, Tʜɪs Is Nᴏᴛ Yᴏᴜʀ Mᴏᴠɪᴇ Rᴇǫᴜᴇsᴛ. Rᴇǫᴜᴇsᴛ Yᴏᴜʀ's !", show_alert=True)
-                    
+                cmd = f"short_{file_id}"
             else:
-                if clicked == typed:
-                    await query.answer(url=f"https://telegram.me/{temp.U_NAME}?start={ident}_{file_id}")
-                    return
+                cmd = f"{ident}_{file_id}"
+                
+            if clicked == typed:
+                if query.message.chat.type == enums.ChatType.PRIVATE:
+                    await query.answer()
+                    from plugins.commands import start
+                    class MockMsg:
+                        def __init__(self, q, c):
+                            self.message = q.message
+                            self.chat = q.message.chat
+                            self.from_user = q.from_user
+                            self.text = f"/start {c}"
+                            self.command = ["start", c]
+                            self.id = q.message.id
+                            self.date = q.message.date
+                        def __getattr__(self, name):
+                            return getattr(self.message, name)
+                    return await start(client, MockMsg(query, cmd))
                 else:
-                    await query.answer(f"Hᴇʏ {query.from_user.first_name}, Tʜɪs Is Nᴏᴛ Yᴏᴜʀ Mᴏᴠɪᴇ Rᴇǫᴜᴇsᴛ. Rᴇǫᴜᴇsᴛ Yᴏᴜʀ's !", show_alert=True)
+                    if settings['is_shortlink'] and not await db.has_premium_access(query.from_user.id):
+                        temp.SHORT[clicked] = query.message.chat.id
+                    await query.answer(url=f"https://telegram.me/{temp.U_NAME}?start={cmd}")
+                    return
+            else:
+                await query.answer(f"Hᴇʏ {query.from_user.first_name}, Tʜɪs Is Nᴏᴛ Yᴏᴜʀ Mᴏᴠɪᴇ Rᴇǫᴜᴇsᴛ. Rᴇǫᴜᴇsᴛ Yᴏᴜʀ's !", show_alert=True)
         except UserIsBlocked:
             await query.answer('Uɴʙʟᴏᴄᴋ ᴛʜᴇ ʙᴏᴛ ᴍᴀʜɴ !', show_alert=True)
         except PeerIdInvalid:
-            await query.answer(url=f"https://telegram.me/{temp.U_NAME}?start={ident}_{file_id}")
+            await query.answer(url=f"https://telegram.me/{temp.U_NAME}?start={cmd}")
         except Exception as e:
-            await query.answer(url=f"https://telegram.me/{temp.U_NAME}?start={ident}_{file_id}")
+            await query.answer(url=f"https://telegram.me/{temp.U_NAME}?start={cmd}")
             
     elif query.data.startswith("sendfiles"):
         clicked = query.from_user.id
@@ -1452,22 +1460,35 @@ async def cb_handler(client: Client, query: CallbackQuery):
         pre = 'allfilesp' if settings['file_secure'] else 'allfiles'
         try:
             if settings['is_shortlink'] and not await db.has_premium_access(query.from_user.id):
-                await query.answer(url=f"https://telegram.me/{temp.U_NAME}?start=sendfiles1_{key}")
-            elif settings['is_shortlink'] and await db.has_premium_access(query.from_user.id):
-                await query.answer(url=f"https://telegram.me/{temp.U_NAME}?start={pre}_{key}")
-                return 
+                cmd = f"sendfiles1_{key}"
             else:
-                await query.answer(url=f"https://telegram.me/{temp.U_NAME}?start={pre}_{key}")
+                cmd = f"{pre}_{key}"
                 
-            
+            if query.message.chat.type == enums.ChatType.PRIVATE:
+                await query.answer()
+                from plugins.commands import start
+                class MockMsg:
+                    def __init__(self, q, c):
+                        self.message = q.message
+                        self.chat = q.message.chat
+                        self.from_user = q.from_user
+                        self.text = f"/start {c}"
+                        self.command = ["start", c]
+                        self.id = q.message.id
+                        self.date = q.message.date
+                    def __getattr__(self, name):
+                        return getattr(self.message, name)
+                return await start(client, MockMsg(query, cmd))
+            else:
+                await query.answer(url=f"https://telegram.me/{temp.U_NAME}?start={cmd}")
                 
         except UserIsBlocked:
             await query.answer('Uɴʙʟᴏᴄᴋ ᴛʜᴇ ʙᴏᴛ ᴍᴀʜɴ !', show_alert=True)
         except PeerIdInvalid:
-            await query.answer(url=f"https://telegram.me/{temp.U_NAME}?start=sendfiles3_{key}")
+            await query.answer(url=f"https://telegram.me/{temp.U_NAME}?start={cmd}")
         except Exception as e:
             logger.exception(e)
-            await query.answer(url=f"https://telegram.me/{temp.U_NAME}?start=sendfiles4_{key}")
+            await query.answer(url=f"https://telegram.me/{temp.U_NAME}?start={cmd}")
 
     elif query.data.startswith("unmuteme"):
         ident, userid = query.data.split("#")
@@ -2635,9 +2656,17 @@ async def auto_filter(client, name, msg, reply_msg=None, ai_search=True, spoll=F
             if not files:
                 try:
                     from plugins.series import process_series_search
-                    is_series = await process_series_search(client, message, name, reply_msg)
-                    if is_series:
-                        return
+                    from database.series_db import search_series, _normalize
+                    series_matches = await search_series(_normalize(name))
+                    if not series_matches:
+                        series_matches = await search_series(name)
+                    if series_matches:
+                        if hasattr(msg, "text") and msg.text and name == msg.text:
+                            return
+                        else:
+                            is_series = await process_series_search(client, message, name, reply_msg)
+                            if is_series:
+                                return
                 except Exception as e:
                     pass
                     
