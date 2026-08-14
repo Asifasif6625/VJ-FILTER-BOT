@@ -313,7 +313,7 @@ def _user_season_keyboard(sid: str, lang: str, seasons: list[int]) -> InlineKeyb
     return InlineKeyboardMarkup(rows)
 
 
-def _user_quality_keyboard(user_id: int, full_id: str, sid: str, lang: str, season: int, quals: list[str], rating: str) -> InlineKeyboardMarkup:
+def _user_quality_keyboard(user_id: int, full_id: str, sid: str, lang: str, season: int, quals: list[str], rating: str, is_private: bool = False) -> InlineKeyboardMarkup:
     rows = []
     import uuid
     from utils import temp
@@ -322,27 +322,22 @@ def _user_quality_keyboard(user_id: int, full_id: str, sid: str, lang: str, seas
     for i in range(0, len(quals), 3):
         row = []
         for q in quals[i:i+3]:
-            key = str(uuid.uuid4())
-            temp.GETALL[key] = {
-                "user": user_id,
-                "query": {
-                    "full_id": full_id,
-                    "lang": lang,
-                    "season": season,
-                    "qual": q,
-                    "rating": rating
+            if is_private:
+                row.append(InlineKeyboardButton(q, callback_data=f"sr#{sid}#l#{lang}#s#{season}#q#{q}"))
+            else:
+                key = str(uuid.uuid4())
+                temp.GETALL[key] = {
+                    "user": user_id,
+                    "query": {
+                        "full_id": full_id,
+                        "lang": lang,
+                        "season": season,
+                        "qual": q,
+                        "rating": rating
+                    }
                 }
-            }
-            log.info("SERIES QUALITY BUTTON")
-            log.info(f"series_id = {full_id}, language = {lang}, season = {season}, quality = {q}")
-            log.info(f"GETALL key = {key}")
-            start_url = f"https://t.me/{temp.U_NAME}?start=all_{key}"
-            log.info(f"START URL = {start_url}")
-            
-            row.append(InlineKeyboardButton(
-                q,
-                url=start_url
-            ))
+                start_url = f"https://t.me/{temp.U_NAME}?start=all_{key}"
+                row.append(InlineKeyboardButton(q, url=start_url))
         rows.append(row)
     rows.append([
         InlineKeyboardButton("⬅️ Back", callback_data=f"sr#{sid}#home" if season == 0 else f"sr#{sid}#l#{lang}"),
@@ -1199,7 +1194,7 @@ async def _send_or_edit(message_or_query, text, reply_markup, poster=None):
             return message_or_query.message
 
 
-async def _resolve_nav_step(user_id: int, full_id: str, sid: str, series: dict, lang=None, season=None, qual=None):
+async def _resolve_nav_step(user_id: int, full_id: str, sid: str, series: dict, lang=None, season=None, qual=None, is_private: bool = False):
     """
     Returns (text, reply_markup)
     """
@@ -1226,7 +1221,7 @@ async def _resolve_nav_step(user_id: int, full_id: str, sid: str, series: dict, 
         
         season_str = f"Season {season}" if season > 0 else "Direct Episodes"
         rating = series.get("rating", "N/A")
-        return card + f"\n\n🌐 <b>{lang}</b>\n📁 <b>{season_str}</b>\n🎞 <b>Select Quality:</b>", _user_quality_keyboard(user_id, full_id, sid, lang, season, quals, rating)
+        return card + f"\n\n🌐 <b>{lang}</b>\n📁 <b>{season_str}</b>\n🎞 <b>Select Quality:</b>", _user_quality_keyboard(user_id, full_id, sid, lang, season, quals, rating, is_private=is_private)
         
     return "⚠️ Invalid step.", None
 
@@ -1244,7 +1239,8 @@ async def process_series_search(client: Client, message: Message, txt: str, repl
     _register_short_id(series_id)
     sid = _series_short_id(series_id)
 
-    text, rm = await _resolve_nav_step(message.from_user.id, series_id, sid, series)
+    is_private = (message.chat.type == enums.ChatType.PRIVATE)
+    text, rm = await _resolve_nav_step(message.from_user.id, series_id, sid, series, is_private=is_private)
     if rm:
         if reply_msg:
             try:
@@ -1395,7 +1391,7 @@ async def series_user_nav(client: Client, query: CallbackQuery):
     if len(parts) >= 8 and parts[6] == "q":
         qual = parts[7]
         
-    text, rm = await _resolve_nav_step(query.from_user.id, full_id, sid, series, lang, season, qual)
+    text, rm = await _resolve_nav_step(query.from_user.id, full_id, sid, series, lang, season, qual, is_private=(query.message.chat.type == enums.ChatType.PRIVATE))
     if rm:
         await _send_or_edit(query, text, rm)
         return await query.answer()
