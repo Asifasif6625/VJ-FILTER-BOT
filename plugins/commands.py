@@ -568,7 +568,11 @@ async def start(client, message):
             protect_content = True if (hasattr(message, "command") and len(message.command) > 1 and message.command[1].startswith("allfilesp")) else False
             
             if file.get("is_series"):
-                file_name = file.get("file_name", "Unknown File")
+                import html
+                fname = file.get("file_name", "Unknown File")
+                if len(fname) > 900:
+                    fname = fname[:900] + "..."
+                file_name = html.escape(fname)
                 raw_size = file.get("file_size", 0)
                 file_size = get_size(raw_size) if raw_size else "Unknown Size"
                 file_number = file.get("episode", "?")
