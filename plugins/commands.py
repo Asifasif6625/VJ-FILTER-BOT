@@ -20,89 +20,7 @@ logger = logging.getLogger(__name__)
 BATCH_FILES = {}
 join_db = JoinReqs
 
-async def send_series_files_to_user(client, user_id: int, files: list, query=None):
-    """
-    Directly send a list of series files to a user's PM.
-    Mirrors utils.send_all() — catches UserIsBlocked / PeerIdInvalid visibly.
-    Pass query so we can show alert on failure instead of silently dropping files.
-    """
-    from pyrogram.errors import UserIsBlocked, PeerIdInvalid
 
-    filesarr = []
-    for file in files:
-        file_id = file.get("file_id", "")
-        if not file_id:
-            continue
-        try:
-            if STREAM_MODE:
-                reply_markup = InlineKeyboardMarkup([
-                    [InlineKeyboardButton('sᴛʀᴇᴀᴍ ᴀɴᴅ ᴅᴏᴡɴʟᴏᴀᴅ',
-                                          callback_data=f'generate_stream_link:{file_id}')]
-                ])
-            else:
-                reply_markup = None
-            msg = await client.send_cached_media(
-                chat_id=user_id,
-                file_id=file_id,
-                caption="",
-                protect_content=False,
-                reply_markup=reply_markup,
-            )
-            filesarr.append(msg)
-        except FloodWait as e:
-            await asyncio.sleep(e.value + 1)
-            try:
-                msg = await client.send_cached_media(
-                    chat_id=user_id,
-                    file_id=file_id,
-                    caption="",
-                    protect_content=False,
-                    reply_markup=reply_markup,
-                )
-                filesarr.append(msg)
-            except Exception:
-                pass
-        except UserIsBlocked:
-            if query:
-                await query.answer('Please unblock the bot first!', show_alert=True)
-            return
-        except PeerIdInvalid:
-            if query:
-                await query.answer(
-                    'Please start the bot in PM first, then click again!',
-                    show_alert=True
-                )
-            return
-        except Exception as e:
-            logger.warning(f"send_series_files_to_user error user={user_id} file_id={file_id}: {e}")
-
-    if not filesarr:
-        if query:
-            await query.answer('No files could be sent. Check bot logs.', show_alert=True)
-        return
-
-    k = await client.send_message(
-        chat_id=user_id,
-        text=(
-            "<blockquote><b><u>❗️❗️❗️IMPORTANT❗️️❗️❗️</u></b>\n\n"
-            "ᴛʜɪs ᴍᴇssᴀɢᴇ ᴡɪʟʟ ʙᴇ ᴅᴇʟᴇᴛᴇᴅ ɪɴ <b><u>10 mins</u> 🫥 <i></b>"
-            "(ᴅᴜᴇ ᴛᴏ ᴄᴏᴘʏʀɪɢʜᴛ ɪssᴜᴇs)</i>.\n\n"
-            "<b><i>ᴘʟᴇᴀsᴇ ғᴏʀᴡᴀʀᴅ ᴛʜɪs ᴍᴇssᴀɢᴇ ᴛᴏ ʏᴏᴜʀ sᴀᴠᴇᴅ ᴍᴇssᴀɢᴇs ᴏʀ ᴀɴʏ ᴘʀɪᴠᴀᴛᴇ ᴄʜᴀᴛ.</i></b>"
-            "</blockquote>"
-        ),
-        parse_mode=enums.ParseMode.HTML,
-    )
-    import asyncio
-    await asyncio.sleep(600)
-    for x in filesarr:
-        try:
-            await x.delete()
-        except Exception:
-            pass
-    try:
-        await k.edit_text("<b>✅ ʏᴏᴜʀ ᴍᴇssᴀɢᴇ ɪs sᴜᴄᴄᴇssғᴜʟʟʏ ᴅᴇʟᴇᴛᴇᴅ</b>")
-    except Exception:
-        pass
 
 @Client.on_message(filters.command("start") & filters.incoming)
 async def start(client, message):
@@ -153,80 +71,111 @@ async def start(client, message):
         )
         return
     
-    is_series_request = bool(message.command) and len(message.command) == 2 and message.command[1].startswith("all_")
-    if AUTH_CHANNEL and not await is_subscribed(client, message) and not is_series_request:
-        try:
-            if REQUEST_TO_JOIN_MODE == True:
-                invite_link = await client.create_chat_invite_link(chat_id=(int(AUTH_CHANNEL)), creates_join_request=True)
-            else:
-                invite_link = await client.create_chat_invite_link(int(AUTH_CHANNEL))
-        except Exception as e:
-            print(e)
-            await message.reply_text("Make sure Bot is admin in Forcesub channel")
-            return
-        try:
-            btn = [[InlineKeyboardButton("ʙᴀᴄᴋᴜᴘ ᴄʜᴀɴɴᴇʟ", url=invite_link.invite_link)]]
-            if message.command[1] != "subscribe":
-                if REQUEST_TO_JOIN_MODE == True:
-                    if TRY_AGAIN_BTN == True:
-                        try:
-                            kk, file_id = message.command[1].split("_", 1)
-                            btn.append([InlineKeyboardButton("↻ ᴛʀʏ ᴀɢᴀɪɴ", callback_data=f"checksub#{kk}#{file_id}")])
-                        except (IndexError, ValueError):
-                            btn.append([InlineKeyboardButton("↻ ᴛʀʏ ᴀɢᴀɪɴ", url=f"https://t.me/{temp.U_NAME}?start={message.command[1]}")])
-                else:
-                    try:
-                        kk, file_id = message.command[1].split("_", 1)
-                        btn.append([InlineKeyboardButton("↻ ᴛʀʏ ᴀɢᴀɪɴ", callback_data=f"checksub#{kk}#{file_id}")])
-                    except (IndexError, ValueError):
-                        btn.append([InlineKeyboardButton("↻ ᴛʀʏ ᴀɢᴀɪɴ", url=f"https://t.me/{temp.U_NAME}?start={message.command[1]}")])
-            if REQUEST_TO_JOIN_MODE == True:
-                if TRY_AGAIN_BTN == True:
-                    text = "**🎗️ Hy You Are Not Joind BackUp Channel, First Join Channel And Try Again !!! \n\nഹായ് ബാക്കപ്പ് ചാനലിൽ ചേർന്നിട്ടില്ല, ആദ്യം ചാനലിൽ ചേർന്നിട്ട് വീണ്ടും ശ്രമിക്കൂ!!!**"
-                else:
-                    await db.set_msg_command(message.from_user.id, com=message.command[1])
-                    text = "**🎗️ Hy You Are Not Joind BackUp Channel, First Join Channel And Try Again !!! \n\nഹായ് ബാക്കപ്പ് ചാനലിൽ ചേർന്നിട്ടില്ല, ആദ്യം ചാനലിൽ ചേർന്നിട്ട് വീണ്ടും ശ്രമിക്കൂ!!!**"
-            else:
-                text = "**🎗️ Hy You Are Not Joind BackUp Channel, First Join Channel And Try Again !!! \n\nഹായ് ബാക്കപ്പ് ചാനലിൽ ചേർന്നിട്ടില്ല, ആദ്യം ചാനലിൽ ചേർന്നിട്ട് വീണ്ടും ശ്രമിക്കൂ!!!**"
-            await client.send_message(
-                chat_id=message.from_user.id,
-                text=text,
-                reply_markup=InlineKeyboardMarkup(btn),
-                parse_mode=enums.ParseMode.MARKDOWN
-            )
-            return
-        except Exception as e:
-            print(e)
-            return await message.reply_text("something wrong with force subscribe.")
-            
-    if len(message.command) == 2 and message.command[1] in ["subscribe", "error", "okay", "help"]:
-        if PREMIUM_AND_REFERAL_MODE == True:
-            buttons = [[
-                InlineKeyboardButton("⚙️ 𝓑𝓞𝓣 𝓤𝓟𝓓𝓐𝓣𝓔 𝓒𝓗𝓐𝓝𝓝𝓔𝓛 ⚙️", url="https://t.me/+d8zuVyrBBcNkYzI1")
-            ],[
-                InlineKeyboardButton("📂 𝓙𝓞𝓘𝓝 𝓕𝓞𝓡 𝓤𝓟𝓓𝓐𝓣𝓔 𝓒𝓗𝓐𝓝𝓝𝓔𝓛 📂", url="https://t.me/+rjw2I6MtjW8xYzRl")
-            ],[
-                InlineKeyboardButton("🔰 𝓑𝓞𝓣 𝓐𝓑𝓞𝓤𝓣 𝓟𝓐𝓝𝓔𝓛 🔰", callback_data="about")
-            ]]
-        else:
-            buttons = [[
-                InlineKeyboardButton("⚙️ 𝓑𝓞𝓣 𝓤𝓟𝓓𝓐𝓣𝓔 𝓒𝓗𝓐𝓝𝓝𝓔𝓛 ⚙️", url="https://t.me/+d8zuVyrBBcNkYzI1")
-            ],[
-                InlineKeyboardButton("📂 𝓙𝓞𝓘𝓝 𝓕𝓞𝓡 𝓤𝓟𝓓𝓐𝓣𝓔 𝓒𝓗𝓐𝓝𝓝𝓔𝓛 📂", url="https://t.me/+rjw2I6MtjW8xYzRl")
-            ],[
-                InlineKeyboardButton("🔰 𝓑𝓞𝓣 𝓐𝓑𝓞𝓤𝓣 𝓟𝓐𝓝𝓔𝓛 🔰", callback_data="about")
-            ]]
-        if CLONE_MODE == True:
-            buttons.append([InlineKeyboardButton('ᴄʀᴇᴀᴛᴇ ᴏᴡɴ ᴄʟᴏɴᴇ ʙᴏᴛ', callback_data='clone')])
-        reply_markup = InlineKeyboardMarkup(buttons)      
-        await message.reply_photo(
-            photo=random.choice(PICS),
-            caption=script.START_TXT.format(message.from_user.mention, temp.U_NAME, temp.B_NAME),
-            reply_markup=reply_markup,
-            parse_mode=enums.ParseMode.HTML
-        )
-        return
     data = message.command[1]
+
+    # --- SERIES GROUP TO PM FLOW ---
+    if data.startswith("all_"):
+        file_id = data.split("_", 1)[1]
+        import logging
+        log = logging.getLogger(__name__)
+        
+        data_obj = temp.GETALL.get(file_id)
+        if not data_obj:
+            from database.series_db import get_temp_request
+            data_obj = await get_temp_request(file_id)
+            
+        req_found = bool(data_obj)
+        stored_user = data_obj.get("user", "Unknown") if isinstance(data_obj, dict) else "Unknown"
+        req_user = message.from_user.id
+        user_verified = (stored_user == req_user)
+        
+        log.info(f"\n[ALL START]\nUUID RECEIVED: {file_id}\nREQUEST FOUND: {req_found}\nSTORED USER: {stored_user}\nREQUEST USER: {req_user}\nUSER VERIFIED: {user_verified}")
+        
+        if not data_obj:
+            log.warning(f"[ALL START] GETALL NOT FOUND uuid={file_id}")
+            await message.reply("<b><i>Sorry, this request has expired. Please search the series again.</b></i>")
+            return
+            
+        if isinstance(data_obj, dict) and "user" in data_obj:
+            if message.from_user.id != data_obj["user"]:
+                await message.reply("<b><i>⚠️ This link is not for you!</b></i>")
+                return
+            
+            if "query" in data_obj:
+                from utils import is_subscribed
+                if AUTH_CHANNEL and not await is_subscribed(client, message):
+                    try:
+                        invite_link = await client.create_chat_invite_link(int(AUTH_CHANNEL), creates_join_request=True)
+                    except Exception as e:
+                        log.error(f"Failed to create invite link: {e}")
+                        await message.reply_text("Make sure Bot is admin in Forcesub channel")
+                        return
+                    
+                    text = (
+                        "📢 **Channel Join Request**\n\n"
+                        "ഫയലുകൾ ലഭിക്കുന്നതിന് മുമ്പ് ഞങ്ങളുടെ ചാനലിലേക്ക് Join Request അയയ്ക്കുക.\n\n"
+                        "Request അയച്ച ശേഷം താഴെയുള്ള Try Again ബട്ടൺ ക്ലിക്ക് ചെയ്യുക.\n\n"
+                        "Please send a Join Request to our channel before getting the files.\n\n"
+                        "After sending the request, click Try Again below."
+                    )
+                    btn = [
+                        [InlineKeyboardButton("📢 Send Join Request", url=invite_link.invite_link)],
+                        [InlineKeyboardButton("🔄 Try Again", callback_data=f"checksub#all#{file_id}")]
+                    ]
+                    await client.send_message(
+                        chat_id=message.from_user.id,
+                        text=text,
+                        reply_markup=InlineKeyboardMarkup(btn),
+                        parse_mode=enums.ParseMode.MARKDOWN
+                    )
+                    return
+                
+                from database.series_db import list_quality_episodes, get_series_files
+                import json, os
+                
+                query = data_obj["query"]
+                full_id = query["full_id"]
+                lang = query["lang"]
+                season = query["season"]
+                qual = query["qual"]
+                rating = query.get("rating", "N/A")
+                
+                log.info(f"[ALL START] Calling existing PM Series file-send function")
+                
+                files = []
+                episodes = await list_quality_episodes(full_id, lang, season, qual)
+                for i, ep in enumerate(episodes, start=1):
+                    ep_files = await get_series_files(full_id, lang, season, ep, qual)
+                    for f in ep_files:
+                        if f.get("is_batch"):
+                            try:
+                                file_path = await client.download_media(f["file_id"])
+                                with open(file_path, "r") as json_file:
+                                    batch_files = json.loads(json_file.read())
+                                os.remove(file_path)
+                                for bf in batch_files:
+                                    bf["is_series"] = True
+                                    bf["series_rating"] = rating
+                                    bf["episode_index"] = bf.get("episode", i)
+                                    bf["total_episodes"] = f.get("total_episodes", len(batch_files))
+                                    files.append(bf)
+                            except Exception as e:
+                                log.error(f"Failed to fetch JSON batch: {e}")
+                        else:
+                            f["is_series"] = True
+                            f["series_rating"] = rating
+                            f["episode_index"] = i
+                            f["total_episodes"] = len(episodes)
+                            files.append(f)
+                            
+                log.info(f"[ALL START] EXPANDED FILES: {len(files)}")
+                await send_series_files_to_user(client, message.from_user.id, files)
+                log.info(f"[ALL START] Existing PM Series send function completed")
+        return
+    # --- END SERIES GROUP TO PM FLOW ---
+    
+    # Global Force Subscribe intercepted bypassed as requested
+    
     if data.split("-", 1)[0] == "VJ":
         user_id = int(data.split("-", 1)[1])
         vj = await referal_add_user(user_id, message.from_user.id)
@@ -487,118 +436,15 @@ async def start(client, message):
         await k.edit("<b>✅ ʏᴏᴜʀ ᴍᴇssᴀɢᴇ ɪs sᴜᴄᴄᴇssғᴜʟʟʏ ᴅᴇʟᴇᴛᴇᴅ</b>")
         return
         
-    elif data.startswith("all"):
+    elif data.startswith("allfiles"):
         import logging
         log = logging.getLogger(__name__)
-        # Check temp.GETALL first, fallback to MongoDB
-        data_obj = temp.GETALL.get(file_id)
-        if not data_obj:
-            from database.series_db import get_temp_request
-            data_obj = await get_temp_request(file_id)
-            
-        # Logging format requested by user
-        req_found = bool(data_obj)
-        stored_user = data_obj.get("user", "Unknown") if isinstance(data_obj, dict) else "Unknown"
-        req_user = message.from_user.id
-        user_verified = (stored_user == req_user)
+        # Check temp.GETALL first
+        files = temp.GETALL.get(file_id)
         
-        log.info(f"\n[ALL START]\nUUID RECEIVED: {file_id}\nREQUEST FOUND: {req_found}\nSTORED USER: {stored_user}\nREQUEST USER: {req_user}\nUSER VERIFIED: {user_verified}")
-        
-        if not data_obj:
-            log.warning(f"[ALL START] GETALL NOT FOUND uuid={file_id}")
-            await message.reply("<b><i>Sorry, this request has expired. Please search the series again.</b></i>")
+        if not files:
+            log.warning(f"[ALLFILES START] GETALL NOT FOUND file_id={file_id}")
             return
-            
-        if isinstance(data_obj, dict) and "user" in data_obj:
-            if message.from_user.id != data_obj["user"]:
-                await message.reply("<b><i>⚠️ This link is not for you!</b></i>")
-                return
-            
-            if "query" in data_obj:
-                from utils import is_subscribed
-                if AUTH_CHANNEL and not await is_subscribed(client, message):
-                    try:
-                        invite_link = await client.create_chat_invite_link(int(AUTH_CHANNEL), creates_join_request=True)
-                    except Exception as e:
-                        log.error(f"Failed to create invite link: {e}")
-                        await message.reply_text("Make sure Bot is admin in Forcesub channel")
-                        return
-                    
-                    text = (
-                        "📢 **Channel Join Request**\n\n"
-                        "ഫയലുകൾ ലഭിക്കുന്നതിന് മുമ്പ് ഞങ്ങളുടെ ചാനലിലേക്ക് Join Request അയയ്ക്കുക.\n\n"
-                        "Request അയച്ച ശേഷം താഴെയുള്ള Try Again ബട്ടൺ ക്ലിക്ക് ചെയ്യുക.\n\n"
-                        "Please send a Join Request to our channel before getting the files.\n\n"
-                        "After sending the request, click Try Again below."
-                    )
-                    btn = [
-                        [InlineKeyboardButton("📢 Send Join Request", url=invite_link.invite_link)],
-                        [InlineKeyboardButton("🔄 Try Again", callback_data=f"checksub#all#{file_id}")]
-                    ]
-                    await client.send_message(
-                        chat_id=message.from_user.id,
-                        text=text,
-                        reply_markup=InlineKeyboardMarkup(btn),
-                        parse_mode=enums.ParseMode.MARKDOWN
-                    )
-                    return
-                
-                from database.series_db import list_quality_episodes, get_series_files
-                import json, os
-                
-                query = data_obj["query"]
-                full_id = query["full_id"]
-                lang = query["lang"]
-                season = query["season"]
-                qual = query["qual"]
-                rating = query.get("rating", "N/A")
-                
-                log.info(f"[ALL START] Calling existing PM Series file-send function")
-                log.info(f"[ALL START] full_id: {full_id}")
-                log.info(f"[ALL START] language: {lang}")
-                log.info(f"[ALL START] season: {season}")
-                log.info(f"[ALL START] quality: {qual}")
-                
-                files = []
-                episodes = await list_quality_episodes(full_id, lang, season, qual)
-                total_eps = len(episodes)
-                log.info(f"[ALL START] EPISODES FOUND: {total_eps}")
-                
-                for i, ep in enumerate(episodes, start=1):
-                    ep_files = await get_series_files(full_id, lang, season, ep, qual)
-                    for f in ep_files:
-                        if f.get("is_batch"):
-                            try:
-                                file_path = await client.download_media(f["file_id"])
-                                with open(file_path, "r") as json_file:
-                                    batch_files = json.loads(json_file.read())
-                                os.remove(file_path)
-                                for bf in batch_files:
-                                    bf["is_series"] = True
-                                    bf["series_rating"] = rating
-                                    bf["episode_index"] = bf.get("episode", i)
-                                    bf["total_episodes"] = f.get("total_episodes", len(batch_files))
-                                    files.append(bf)
-                            except Exception as e:
-                                log.error(f"Failed to fetch JSON batch: {e}")
-                        else:
-                            f["is_series"] = True
-                            f["series_rating"] = rating
-                            f["episode_index"] = i
-                            f["total_episodes"] = total_eps
-                            files.append(f)
-                            
-                log.info(f"[ALL START] EXPANDED FILES: {len(files)}")
-                
-                await send_series_files_to_user(client, message.from_user.id, files)
-                log.info(f"[ALL START] Existing PM Series send function completed")
-                
-                return
-                
-            else:
-                files = data_obj["files"]
-        else:
-            files = data_obj
             
         filesarr = []
         
@@ -645,6 +491,7 @@ async def start(client, message):
                     reply_markup = None
                     
                 try:
+                    log.info(f"[NORMAL FILE] Sending\nuser_id={message.from_user.id}\nfile_id={file_id_str}")
                     msg = await client.send_cached_media(
                         chat_id=message.from_user.id,
                         file_id=file_id_str,
@@ -652,6 +499,7 @@ async def start(client, message):
                         protect_content=protect_content,
                         reply_markup=reply_markup
                     )
+                    log.info("[NORMAL FILE] SENT SUCCESSFULLY")
                     filesarr.append(msg)
                 except FloodWait as e:
                     await asyncio.sleep(e.value + 1)
@@ -663,16 +511,27 @@ async def start(client, message):
                             protect_content=protect_content,
                             reply_markup=reply_markup
                         )
+                        log.info("[NORMAL FILE] SENT SUCCESSFULLY")
                         filesarr.append(msg)
                     except Exception as e:
-                        log.error(f"[ALL] SEND ERROR {idx}: {e}")
+                        log.error(f"[NORMAL FILE] SEND ERROR\nuser_id={message.from_user.id}\nfile_id={file_id_str}\nerror={e}")
                 except Exception as e:
-                    log.error(f"[ALL] SEND ERROR {idx}: {e}")
+                    log.error(f"[NORMAL FILE] SEND ERROR\nuser_id={message.from_user.id}\nfile_id={file_id_str}\nerror={e}")
         k = await client.send_message(chat_id = message.from_user.id, text=f"<blockquote><b><u>❗️❗️❗️IMPORTANT❗️️❗️❗️</u></b>\n\nᴛʜɪs ᴍᴇssᴀɢᴇ ᴡɪʟʟ ʙᴇ ᴅᴇʟᴇᴛᴇᴅ ɪɴ <b><u>10 mins</u> 🫥 <i></b>(ᴅᴜᴇ ᴛᴏ ᴄᴏᴘʏʀɪɢʜᴛ ɪssᴜᴇs)</i>.\n\n<b><i>ᴘʟᴇᴀsᴇ ғᴏʀᴡᴀʀᴅ ᴛʜɪs ᴍᴇssᴀɢᴇ ᴛᴏ ʏᴏᴜʀ sᴀᴠᴇᴅ ᴍᴇssᴀɢᴇs ᴏʀ ᴀɴʏ ᴘʀɪᴠᴀᴛᴇ ᴄʜᴀᴛ.</i></b></blockquote>")
-        await asyncio.sleep(600)
-        for x in filesarr:
-            await x.delete()
-        await k.edit_text("<b>✅ ʏᴏᴜʀ ᴍᴇssᴀɢᴇ ɪs sᴜᴄᴄᴇssғᴜʟʟʏ ᴅᴇʟᴇᴛᴇᴅ</b>")
+        
+        async def delete_files_later():
+            await asyncio.sleep(600)
+            for x in filesarr:
+                try:
+                    await x.delete()
+                except Exception:
+                    pass
+            try:
+                await k.edit_text("<b>✅ ʏᴏᴜʀ ᴍᴇssᴀɢᴇ ɪs sᴜᴄᴄᴇssғᴜʟʟʏ ᴅᴇʟᴇᴛᴇᴅ</b>")
+            except Exception:
+                pass
+                
+        asyncio.create_task(delete_files_later())
         return    
         
     elif data.startswith("files"):
@@ -781,18 +640,38 @@ async def start(client, message):
         reply_markup=InlineKeyboardMarkup(button)
     else:
         reply_markup = None
-    msg = await client.send_cached_media(
-        chat_id=message.from_user.id,
-        file_id=file_id,
-        caption="",
-        protect_content=True if pre == 'filep' else False,
-        reply_markup=reply_markup
-    )
+    import logging
+    log = logging.getLogger(__name__)
+    
+    try:
+        log.info(f"[NORMAL FILE] Sending\nuser_id={message.from_user.id}\nfile_id={file_id}")
+        msg = await client.send_cached_media(
+            chat_id=message.from_user.id,
+            file_id=file_id,
+            caption=f_caption,
+            protect_content=True if pre == 'filep' else False,
+            reply_markup=reply_markup
+        )
+        log.info("[NORMAL FILE] SENT SUCCESSFULLY")
+    except Exception as e:
+        log.error(f"[NORMAL FILE] SEND ERROR\nuser_id={message.from_user.id}\nfile_id={file_id}\nerror={e}")
+        return await message.reply("Error sending file.")
+        
     btn = [[InlineKeyboardButton("✅ ɢᴇᴛ ғɪʟᴇ ᴀɢᴀɪɴ ✅", callback_data=f'del#{file_id}')]]
     k = await msg.reply(text=f"<blockquote><b><u>❗️❗️❗️IMPORTANT❗️️❗️❗️</u></b>\n\nᴛʜɪs ᴍᴇssᴀɢᴇ ᴡɪʟʟ ʙᴇ ᴅᴇʟᴇᴛᴇᴅ ɪɴ <b><u>10 mins</u> 🫥 <i></b>(ᴅᴜᴇ ᴛᴏ ᴄᴏᴘʏʀɪɢʜᴛ ɪssᴜᴇs)</i>.\n\n<b><i>ᴘʟᴇᴀsᴇ ғᴏʀᴡᴀʀᴅ ᴛʜɪs ᴍᴇssᴀɢᴇ ᴛᴏ ʏᴏᴜʀ sᴀᴠᴇᴅ ᴍᴇssᴀɢᴇs ᴏʀ ᴀɴʏ ᴘʀɪᴠᴀᴛᴇ ᴄʜᴀᴛ.</i></b></blockquote>")
-    await asyncio.sleep(600)
-    await msg.delete()
-    await k.edit_text("<b>✅ ʏᴏᴜʀ ᴍᴇssᴀɢᴇ ɪs sᴜᴄᴄᴇssғᴜʟʟʏ ᴅᴇʟᴇᴛᴇᴅ ɪғ ʏᴏᴜ ᴡᴀɴᴛ ᴀɢᴀɪɴ ᴛʜᴇɴ ᴄʟɪᴄᴋ ᴏɴ ʙᴇʟᴏᴡ ʙᴜᴛᴛᴏɴ</b>",reply_markup=InlineKeyboardMarkup(btn))
+    
+    async def delete_file_later():
+        await asyncio.sleep(600)
+        try:
+            await msg.delete()
+        except:
+            pass
+        try:
+            await k.edit_text("<b>✅ ʏᴏᴜʀ ᴍᴇssᴀɢᴇ ɪs sᴜᴄᴄᴇssғᴜʟʟʏ ᴅᴇʟᴇᴛᴇᴅ ɪғ ʏᴏᴜ ᴡᴀɴᴛ ᴀɢᴀɪɴ ᴛʜᴇɴ ᴄʟɪᴄᴋ ᴏɴ ʙᴇʟᴏᴡ ʙᴜᴛᴛᴏɴ</b>",reply_markup=InlineKeyboardMarkup(btn))
+        except:
+            pass
+            
+    asyncio.create_task(delete_file_later())
     return   
 
 @Client.on_message(filters.command('channel') & filters.user(ADMINS))
@@ -1635,28 +1514,54 @@ async def send_series_files_to_user(client, user_id, files, query=None):
     
     async def send_one(idx, file_id_str, f_caption):
         async with semaphore:
-            log.info(f"[QUALITY PM] SENDING FILE {idx}/{total_files}: {file_id_str}")
+            log.info(f"[SERIES FILE] Sending\nfile_id={file_id_str}")
             while True:
                 try:
-                    await client.send_cached_media(
+                    msg = await client.send_cached_media(
                         chat_id=user_id,
                         file_id=file_id_str,
                         caption=f_caption,
                         protect_content=False,
                     )
-                    log.info(f"[QUALITY PM] FILE SENT {idx}/{total_files}: {file_id_str}")
-                    break
+                    log.info(f"[SERIES FILE] SENT")
+                    return msg
                 except FloodWait as e:
-                    log.warning(f"[QUALITY PM] FloodWait for {e.value}s on {file_id_str}")
+                    log.warning(f"[SERIES FILE] FloodWait for {e.value}s on {file_id_str}")
                     await asyncio.sleep(e.value + 1)
                 except Exception as e:
-                    log.exception(f"[QUALITY PM] Failed to send series file {file_id_str}: {e}")
-                    break
+                    log.error(f"[SERIES FILE] ERROR: {e}")
+                    return None
 
     log.info(f"[QUALITY PM] STARTING CONCURRENT SEND FOR {total_files} FILES")
     
     if prepared_files:
         tasks = [send_one(idx, file_id, caption) for idx, file_id, caption in prepared_files]
-        await asyncio.gather(*tasks)
+        sent_messages = await asyncio.gather(*tasks)
         
+        valid_msgs = [m for m in sent_messages if m is not None]
+        if valid_msgs:
+            k = await client.send_message(
+                chat_id=user_id,
+                text=(
+                    "<blockquote><b><u>❗️❗️❗️IMPORTANT❗️️❗️❗️</u></b>\n\n"
+                    "ᴛʜɪs ᴍᴇssᴀɢᴇ ᴡɪʟʟ ʙᴇ ᴅᴇʟᴇᴛᴇᴅ ɪɴ <b><u>10 mins</u> 🫥 <i></b>"
+                    "(ᴅᴜᴇ ᴛᴏ ᴄᴏᴘʏʀɪɢʜᴛ ɪssᴜᴇs)</i>.\n\n"
+                    "<b><i>ᴘʟᴇᴀsᴇ ғᴏʀᴡᴀʀᴅ ᴛʜɪs ᴍᴇssᴀɢᴇ ᴛᴏ ʏᴏᴜʀ sᴀᴠᴇᴅ ᴍᴇssᴀɢᴇs ᴏʀ ᴀɴʏ ᴘʀɪᴠᴀᴛᴇ ᴄʜᴀᴛ.</i></b>"
+                    "</blockquote>"
+                ),
+                parse_mode=enums.ParseMode.HTML,
+            )
+            async def delete_series_later():
+                await asyncio.sleep(600)
+                for m in valid_msgs:
+                    try:
+                        await m.delete()
+                    except:
+                        pass
+                try:
+                    await k.edit_text("<b>✅ ʏᴏᴜʀ ᴍᴇssᴀɢᴇ ɪs sᴜᴄᴄᴇssғᴜʟʟʏ ᴅᴇʟᴇᴛᴇᴅ</b>")
+                except:
+                    pass
+            asyncio.create_task(delete_series_later())
+            
     log.info(f"[QUALITY PM] CONCURRENT SEND COMPLETED")
