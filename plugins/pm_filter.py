@@ -334,6 +334,8 @@ async def years_cb_handler(client: Client, query: CallbackQuery):
         pass
     _, key = query.data.split("#")
     search = FRESH.get(key)
+    if not search:
+        return await query.answer("Search Context Expired! Please search again.", show_alert=True)
     try:
         search = search.replace(' ', '_')
     except:
@@ -375,6 +377,8 @@ async def filter_yearss_cb_handler(client: Client, query: CallbackQuery):
     _, lang, key = query.data.split("#")
     curr_time = datetime.now(pytz.timezone('Asia/Kolkata')).time()
     search = FRESH.get(key)
+    if not search:
+        return await query.answer("Search Context Expired! Please search again.", show_alert=True)
     try:
         search = search.replace(' ', '_')
     except:
@@ -541,6 +545,8 @@ async def filter_episodes_cb_handler(client: Client, query: CallbackQuery):
     _, lang, key = query.data.split("#")
     curr_time = datetime.now(pytz.timezone('Asia/Kolkata')).time()
     search = FRESH.get(key)
+    if not search:
+        return await query.answer("Search Context Expired! Please search again.", show_alert=True)
     try:
         search = search.replace(' ', '_')
     except:
@@ -668,6 +674,8 @@ async def languages_cb_handler(client: Client, query: CallbackQuery):
         pass
     _, key = query.data.split("#")
     search = FRESH.get(key)
+    if not search:
+        return await query.answer("Search Context Expired! Please search again.", show_alert=True)
     try:
         search = search.replace(' ', '_')
     except:
@@ -709,6 +717,8 @@ async def filter_languages_cb_handler(client: Client, query: CallbackQuery):
     _, lang, key = query.data.split("#")
     curr_time = datetime.now(pytz.timezone('Asia/Kolkata')).time()
     search = FRESH.get(key)
+    if not search:
+        return await query.answer("Search Context Expired! Please search again.", show_alert=True)
     try:
         search = search.replace(' ', '_')
     except:
@@ -835,6 +845,8 @@ async def seasons_cb_handler(client: Client, query: CallbackQuery):
     
     _, key = query.data.split("#")
     search = FRESH.get(key)
+    if not search:
+        return await query.answer("Search Context Expired! Please search again.", show_alert=True)
     BUTTONS[key] = None
     try:
         search = search.replace(' ', '_')
@@ -877,6 +889,8 @@ async def filter_seasons_cb_handler(client: Client, query: CallbackQuery):
     _, seas, key = query.data.split("#")
     curr_time = datetime.now(pytz.timezone('Asia/Kolkata')).time()
     search = FRESH.get(key)
+    if not search:
+        return await query.answer("Search Context Expired! Please search again.", show_alert=True)
     try:
         search = search.replace(' ', '_')
     except:
@@ -1006,6 +1020,8 @@ async def qualities_cb_handler(client: Client, query: CallbackQuery):
         pass
     _, key = query.data.split("#")
     search = FRESH.get(key)
+    if not search:
+        return await query.answer("Search Context Expired! Please search again.", show_alert=True)
     try:
         search = search.replace(' ', '_')
     except:
@@ -1036,12 +1052,15 @@ async def qualities_cb_handler(client: Client, query: CallbackQuery):
     btn.append([InlineKeyboardButton(text="↭ ʙᴀᴄᴋ ᴛᴏ ʜᴏᴍᴇ ↭", callback_data=f"fl#homepage#{key}")])
 
     await query.edit_message_reply_markup(InlineKeyboardMarkup(btn))
+    await query.answer()
     
 
 @Client.on_callback_query(filters.regex(r"^fl#"))
 async def filter_qualities_cb_handler(client: Client, query: CallbackQuery):
     _, qual, key = query.data.split("#")
     search = FRESH.get(key)
+    if not search:
+        return await query.answer("Search Context Expired! Please search again.", show_alert=True)
     try:
         search = search.replace(' ', '_')
     except:
@@ -1534,10 +1553,13 @@ async def cb_handler(client: Client, query: CallbackQuery):
         await query.answer(url=f"https://telegram.me/{temp.U_NAME}?start=file_{file_id}")
     
     elif query.data.startswith("checksub"):
-        if AUTH_CHANNEL and not await is_subscribed(client, query):
-            await query.answer("Jᴏɪɴ ᴏᴜʀ Bᴀᴄᴋ-ᴜᴘ ᴄʜᴀɴɴᴇʟ ᴍᴀʜɴ! 😒", show_alert=True)
-            return
         ident, kk, file_id = query.data.split("#")
+        if AUTH_CHANNEL and not await is_subscribed(client, query):
+            if kk == "all":
+                await query.answer("⚠️ ആദ്യം ചാനലിലേക്ക് Join Request അയയ്ക്കുക.", show_alert=True)
+            else:
+                await query.answer("Jᴏɪɴ ᴏᴜʀ Bᴀᴄᴋ-ᴜᴘ ᴄʜᴀɴɴᴇʟ ᴍᴀʜɴ! 😒", show_alert=True)
+            return
         
         from plugins.commands import start
         class MockMsg:
