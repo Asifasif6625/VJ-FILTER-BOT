@@ -1248,28 +1248,22 @@ async def series_user_nav(client: Client, query: CallbackQuery):
                 files.extend(ep_files)
 
         if files:
-            from utils import temp
-            import uuid
-            
-            key = str(uuid.uuid4())
-            temp.GETALL[key] = {
-                "user": query.from_user.id,
-                "files": files
-            }
             if query.message.chat.type == enums.ChatType.PRIVATE:
                 await query.answer()
-                from plugins.commands import start
-                
-                msg = query.message
-                msg.text = f"/start all_{key}"
-                msg.command = ["start", f"all_{key}"]
-                msg.from_user = query.from_user
-                
-                return await start(client, msg)
+                from plugins.commands import send_series_files_to_user
+                asyncio.get_event_loop().create_task(
+                    send_series_files_to_user(client, query.from_user.id, files)
+                )
+                return
             else:
+                from utils import temp as _temp
+                import uuid as _uuid
+                key = str(_uuid.uuid4())
+                _temp.GETALL[key] = {"user": query.from_user.id, "files": files}
                 return await query.answer(url=f"https://t.me/{temp.U_NAME}?start=all_{key}")
         elif files is not None:
             return await query.answer("⚠️ File not found. It may have been removed.", show_alert=True)
+
         
     # Navigation mapping
     if len(parts) >= 4 and parts[2] == "l":
