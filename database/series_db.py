@@ -148,13 +148,15 @@ async def add_series_file(data: dict) -> tuple[bool, str]:
         "series_id":  data["series_id"],
         "language":   data["language"],
         "season":     int(data["season"]),
-        "episode":    int(data["episode"]),
+        "episode":    int(data["episode"]) if data.get("episode") is not None else -1,
         "quality":    data["quality"],
         "chat_id":    data.get("chat_id"),
         "message_id": data.get("message_id"),
         "file_id":    data.get("file_id", ""),
         "file_name":  data.get("file_name", ""),
         "file_size":  data.get("file_size", 0),
+        "is_batch":   data.get("is_batch", False),
+        "total_episodes": data.get("total_episodes", 1),
         "created_at": datetime.utcnow(),
     }
     try:
