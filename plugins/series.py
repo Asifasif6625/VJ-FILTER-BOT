@@ -92,7 +92,7 @@ def _is_admin(user_id: int) -> bool:
     return user_id in ADMINS
 
 
-def _parse_tg_link(link: str) -> tuple[str | None, int | None]:
+def _parse_tg_link(link: str) -> tuple[int | str | None, int | None]:
     """
     Parse a Telegram message link.
     Supports:
@@ -102,20 +102,16 @@ def _parse_tg_link(link: str) -> tuple[str | None, int | None]:
     chat_identifier is either '@username' or '-100<chat_id>'.
     """
     link = link.strip()
-    # Private channel: t.me/c/CHAT_ID/MSG_ID
-    m = re.match(r"https?://t\.me/c/(\d+)/(\d+)", link)
-    if m:
-        chat_id = int("-100" + m.group(1))
-        msg_id  = int(m.group(2))
-        return str(chat_id), msg_id
-
-    # Public channel: t.me/USERNAME/MSG_ID
-    m = re.match(r"https?://t\.me/([A-Za-z0-9_]+)/(\d+)", link)
-    if m:
-        username = "@" + m.group(1)
-        msg_id   = int(m.group(2))
-        return username, msg_id
-
+    regex = re.compile(r"(https://)?(t\.me/|telegram\.me/|telegram\.dog/)(c/)?(\d+|[a-zA-Z_0-9]+)/(\d+)$")
+    match = regex.match(link)
+    if match:
+        chat_id = match.group(4)
+        msg_id = int(match.group(5))
+        if chat_id.isnumeric():
+            chat_id = int("-100" + chat_id)
+        else:
+            chat_id = "@" + chat_id
+        return chat_id, msg_id
     return None, None
 
 
@@ -1018,38 +1014,39 @@ async def cmd_sbatch(client: Client, message: Message):
     files_found = []
     errors      = 0
 
-    for mid in range(msg1, msg2 + 1):
+    for batch_start in range(msg1, msg2 + 1, 200):
+        batch_end = min(batch_start + 199, msg2)
         try:
-            msg = await client.get_messages(chat1, mid)
-            if not msg or msg.empty:
-                errors += 1
-                continue
-
-            media = (
-                msg.document or msg.video or msg.audio
-                or msg.photo or msg.animation or msg.voice or msg.video_note
-            )
-            if media:
-                file_id   = getattr(media, "file_id", "")
-                file_name = getattr(media, "file_name", None) or f"file_{mid}"
-                file_size = getattr(media, "file_size", 0)
+            messages = await client.get_messages(chat1, list(range(batch_start, batch_end + 1)))
+            for msg in messages:
+                if not msg or msg.empty:
+                    errors += 1
+                    continue
                 
-                # Attempt to extract episode number
-                ep_num = _extract_episode_number(file_name)
-                if not ep_num and msg.caption:
-                    ep_num = _extract_episode_number(msg.caption)
-                if not ep_num and msg.text:
-                    ep_num = _extract_episode_number(msg.text)
-                
-                files_found.append((chat1, mid, file_id, file_name, file_size, ep_num))
-            else:
-                errors += 1
-
+                media = (
+                    msg.document or msg.video or msg.audio
+                    or msg.photo or msg.animation or msg.voice or msg.video_note
+                )
+                if media:
+                    file_id   = getattr(media, "file_id", "")
+                    file_name = getattr(media, "file_name", None) or f"file_{msg.id}"
+                    file_size = getattr(media, "file_size", 0)
+                    
+                    # Attempt to extract episode number
+                    ep_num = _extract_episode_number(file_name)
+                    if not ep_num and msg.caption:
+                        ep_num = _extract_episode_number(msg.caption)
+                    if not ep_num and msg.text:
+                        ep_num = _extract_episode_number(msg.text)
+                    
+                    files_found.append((chat1, msg.id, file_id, file_name, file_size, ep_num))
+                else:
+                    errors += 1
         except FloodWait as e:
             await asyncio.sleep(e.value + 1)
         except Exception as ex:
-            logger.warning(f"sbatch get_messages error mid={mid}: {ex}")
-            errors += 1
+            logger.warning(f"sbatch get_messages error batch {batch_start}-{batch_end}: {ex}")
+            errors += (batch_end - batch_start + 1)
 
     if not files_found:
         await processing_msg.edit_text(
@@ -1263,22 +1260,14 @@ async def series_user_nav(client: Client, query: CallbackQuery):
                 await query.answer()
                 from plugins.commands import start
                 
-                class MockMsg:
-                    def __init__(self, q, k):
-                        self.message = q.message
-                        self.chat = q.message.chat
-                        self.from_user = q.from_user
-                        self.text = f"/start all_{k}"
-                        self.command = ["start", f"all_{k}"]
-                        self.id = q.message.id
-                        self.date = q.message.date
-                    
-                    def __getattr__(self, name):
-                        return getattr(self.message, name)
+                msg = query.message
+                msg.text = f"/start all_{key}"
+                msg.command = ["start", f"all_{key}"]
+                msg.from_user = query.from_user
                 
-                return await start(client, MockMsg(query, key))
+                return await start(client, msg)
             else:
-                return await query.answer(url=f"t.me/{temp.U_NAME}?start=all_{key}")
+                return await query.answer(url=f"https://t.me/{temp.U_NAME}?start=all_{key}")
         elif files is not None:
             return await query.answer("⚠️ File not found. It may have been removed.", show_alert=True)
         
