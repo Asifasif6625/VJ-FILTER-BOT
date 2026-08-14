@@ -523,14 +523,20 @@ async def start(client, message):
                 lang = query["lang"]
                 season = query["season"]
                 qual = query["qual"]
+                rating = query.get("rating", "N/A")
                 
-                log.info(f"\n[ALL SERIES]\nFULL ID: {full_id}\nLANGUAGE: {lang}\nSEASON: {season}\nQUALITY: {qual}")
+                log.info(f"[ALL START] Calling existing PM Series file-send function")
+                log.info(f"[ALL START] full_id: {full_id}")
+                log.info(f"[ALL START] language: {lang}")
+                log.info(f"[ALL START] season: {season}")
+                log.info(f"[ALL START] quality: {qual}")
                 
-                raw_files = []
+                files = []
                 episodes = await list_quality_episodes(full_id, lang, season, qual)
-                log.info(f"\n[ALL SERIES]\nEPISODES FOUND: {len(episodes)}")
+                total_eps = len(episodes)
+                log.info(f"[ALL START] EPISODES FOUND: {total_eps}")
                 
-                for ep in episodes:
+                for i, ep in enumerate(episodes, start=1):
                     ep_files = await get_series_files(full_id, lang, season, ep, qual)
                     for f in ep_files:
                         if f.get("is_batch"):
@@ -540,87 +546,37 @@ async def start(client, message):
                                     batch_files = json.loads(json_file.read())
                                 os.remove(file_path)
                                 for bf in batch_files:
-                                    raw_files.append({
-                                        "file_id": bf.get("file_id"),
-                                        "is_series": True,
-                                        "caption": ""
-                                    })
+                                    bf["is_series"] = True
+                                    bf["series_rating"] = rating
+                                    bf["episode_index"] = bf.get("episode", i)
+                                    bf["total_episodes"] = f.get("total_episodes", len(batch_files))
+                                    files.append(bf)
                             except Exception as e:
-                                log.error(f"JSON BATCH ERROR: {e}")
+                                log.error(f"Failed to fetch JSON batch: {e}")
                         else:
                             f["is_series"] = True
-                            f["caption"] = ""
-                            raw_files.append(f)
-                files = raw_files
-                log.info(f"\n[ALL SERIES]\nFILES EXPANDED: {len(files)}")
+                            f["series_rating"] = rating
+                            f["episode_index"] = i
+                            f["total_episodes"] = total_eps
+                            files.append(f)
+                            
+                log.info(f"[ALL START] EXPANDED FILES: {len(files)}")
+                
+                from plugins.commands import send_series_files_to_user
+                await send_series_files_to_user(client, message.from_user.id, files)
+                log.info(f"[ALL START] Existing PM Series send function completed")
+                
+                return
+                
             else:
                 files = data_obj["files"]
         else:
             files = data_obj
-        is_series_batch = any(f.get("is_series") for f in files) if isinstance(files, list) else False
+            
         filesarr = []
         
-        if is_series_batch:
-            log.info(f"\n[ALL SERIES]\nSTARTING PM SEND")
-            total_files = len(files)
-            sent_files = 0
-            
-            for idx, file in enumerate(files, start=1):
-                file_id_str = file["file_id"]
-                protect_content = True if (hasattr(message, "command") and len(message.command) > 1 and message.command[1].startswith("allfilesp")) else False
-                
-                import html
-                fname = file.get("file_name", "Unknown File")
-                if len(fname) > 900:
-                    fname = fname[:900] + "..."
-                file_name = html.escape(fname)
-                raw_size = file.get("file_size", 0)
-                file_size = get_size(raw_size) if raw_size else "Unknown Size"
-                file_number = file.get("episode", "?")
-                
-                f_caption = (
-                    f"<b>File Name :</b> <code>{file_name}</code>\n"
-                    f"<b>File Size :</b> <code>{file_size}</code>\n"
-                    f"<b>File Number :</b> <code>{file_number}</code>"
-                )
-                
-                reply_markup = None
-                
-                log.info(f"[ALL] SENDING FILE {idx}/{total_files}")
-                try:
-                    msg = await client.send_cached_media(
-                        chat_id=message.from_user.id,
-                        file_id=file_id_str,
-                        caption=f_caption,
-                        protect_content=protect_content,
-                        reply_markup=reply_markup
-                    )
-                    filesarr.append(msg)
-                    log.info(f"[ALL] FILE SENT {idx}/{total_files}")
-                    sent_files += 1
-                except FloodWait as e:
-                    await asyncio.sleep(e.value + 1)
-                    try:
-                        msg = await client.send_cached_media(
-                            chat_id=message.from_user.id,
-                            file_id=file_id_str,
-                            caption=f_caption,
-                            protect_content=protect_content,
-                            reply_markup=reply_markup
-                        )
-                        filesarr.append(msg)
-                        log.info(f"[ALL] FILE SENT {idx}/{total_files}")
-                        sent_files += 1
-                    except Exception as e:
-                        log.exception(f"[ALL] FILE SEND FAILED: {e}")
-                except Exception as e:
-                    log.exception(f"[ALL] FILE SEND FAILED: {e}")
-                    
-            log.info(f"[ALL] SEND COMPLETED: {sent_files}/{total_files}")
-            
-        else:
-            # ORIGINAL NON-SERIES LOGIC
-            for idx, file in enumerate(files, start=1):
+        # ORIGINAL NON-SERIES LOGIC
+        for idx, file in enumerate(files, start=1):
                 file_id_str = file["file_id"]
                 protect_content = True if (hasattr(message, "command") and len(message.command) > 1 and message.command[1].startswith("allfilesp")) else False
                 
