@@ -1311,6 +1311,36 @@ async def series_user_nav(client: Client, query: CallbackQuery):
         logger.info(f"[PM SERIES] SEASON: {season}")
         logger.info(f"[PM SERIES] QUALITY: {qual}")
         
+        if query.message.chat.type == enums.ChatType.PRIVATE:
+            from utils import is_subscribed
+            from info import AUTH_CHANNEL
+            if AUTH_CHANNEL and not await is_subscribed(client, query):
+                try:
+                    invite_link = await client.create_chat_invite_link(int(AUTH_CHANNEL))
+                except Exception as e:
+                    logger.error(f"Failed to create invite link: {e}")
+                    await query.answer("Make sure Bot is admin in Forcesub channel", show_alert=True)
+                    return
+                
+                text = (
+                    "📢 **Channel Join Required**\n\n"
+                    "ഫയലുകൾ ലഭിക്കുന്നതിന് മുമ്പ് നിങ്ങൾ ഞങ്ങളുടെ ചാനലിൽ Join ചെയ്യണം.\n\n"
+                    "ചാനലിൽ Join ചെയ്ത ശേഷം താഴെയുള്ള Try Again ബട്ടൺ ക്ലിക്ക് ചെയ്യുക.\n\n"
+                    "You must join our channel before getting the files.\n\n"
+                    "After joining the channel, click the Try Again button below."
+                )
+                btn = [
+                    [InlineKeyboardButton("🔔 Join Channel", url=invite_link.invite_link)],
+                    [InlineKeyboardButton("🔄 Try Again", callback_data=query.data)]
+                ]
+                await client.send_message(
+                    chat_id=query.from_user.id,
+                    text=text,
+                    reply_markup=InlineKeyboardMarkup(btn),
+                    parse_mode=enums.ParseMode.MARKDOWN
+                )
+                return await query.answer("Please join the channel first.", show_alert=True)
+        
         rating = series.get("rating", "N/A")
         if len(parts) >= 10 and parts[8] == "e":
             ep      = int(parts[9])
@@ -1372,6 +1402,11 @@ async def series_user_nav(client: Client, query: CallbackQuery):
             logger.info(f"[PM SERIES] FILE COUNT: {len(files)}")
             if query.message.chat.type == enums.ChatType.PRIVATE:
                 await query.answer()
+                if query.message.text and "Channel Join Required" in query.message.text:
+                    try:
+                        await query.message.delete()
+                    except:
+                        pass
                 from plugins.commands import send_series_files_to_user
                 await send_series_files_to_user(client, query.from_user.id, files, query=query)
                 logger.info(f"[PM SERIES] SEND COMPLETED")
@@ -1420,26 +1455,57 @@ async def series_user_nav(client: Client, query: CallbackQuery):
 
 @Client.on_message(filters.command(["serieslist", "viewseries"]) & (filters.private | filters.group), group=1)
 async def cmd_serieslist(client: Client, message: Message):
-    if not _is_admin(message.from_user.id):
-        return await message.reply_text("❌ Not authorized.")
+    try:
+        is_admin = _is_admin(message.from_user.id)
+        logger.info("[/viewseries] COMMAND RECEIVED")
+        logger.info(f"[/viewseries] ADMIN: {is_admin}")
+        
+        if not is_admin:
+            return await message.reply_text("❌ You are not authorized to use this command.")
 
-    all_series = await list_all_series()
-    if not all_series:
-        return await message.reply_text("No series added yet. Use /seriesfil to create one.")
+        logger.info("[/viewseries] FETCHING SERIES LIST")
+        all_series = await list_all_series()
+        
+        if not all_series:
+            logger.info("[/viewseries] UNIQUE SERIES COUNT: 0")
+            return await message.reply_text("No series added yet.")
 
-    lines = []
-    for s in all_series:
-        sid = str(s["_id"])
-        _register_short_id(sid)
-        lines.append(
-            f"📺 <b>{s['name']}</b> ({s.get('year','?')})\n"
-            f"   🌐 {', '.join(s.get('languages',[]))}\n"
-            f"   📁 Seasons: {', '.join(str(x) if x > 0 else 'Direct' for x in sorted(s.get('seasons',[])))}\n"
-            f"   ID: <code>{sid}</code>"
-        )
+        # Extract unique names and sort alphabetically
+        unique_names = sorted(list(set(s["name"] for s in all_series)), key=lambda x: x.lower())
+        total_count = len(unique_names)
+        
+        logger.info(f"[/viewseries] UNIQUE SERIES COUNT: {total_count}")
 
-    text = "📋 <b>All Series</b>\n\n" + "\n\n".join(lines)
-    await message.reply_text(text, parse_mode=enums.ParseMode.HTML)
+        header = "📺 <b>SERIES LIST</b>\n\n"
+        footer = f"\nTotal Series: {total_count}"
+        
+        lines = []
+        for i, name in enumerate(unique_names, start=1):
+            lines.append(f"{i}. {name}")
+            
+        # Split into chunks if necessary (Telegram limit ~4096)
+        MAX_LEN = 4000
+        current_text = header
+        
+        for line in lines:
+            if len(current_text) + len(line) + 1 > MAX_LEN:
+                await message.reply_text(current_text)
+                current_text = line + "\n"
+            else:
+                current_text += line + "\n"
+                
+        # Append footer if it fits, else send current and then footer
+        if len(current_text) + len(footer) > MAX_LEN:
+            await message.reply_text(current_text)
+            await message.reply_text(footer)
+        else:
+            current_text += footer
+            await message.reply_text(current_text)
+
+        logger.info("[/viewseries] LIST SENT")
+
+    except Exception as e:
+        logger.exception(f"[/viewseries] ERROR: {e}")
 
 
 # ═════════════════════════════════════════════════════════════════════════════
