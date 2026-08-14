@@ -494,7 +494,46 @@ async def start(client, message):
         if isinstance(data_obj, dict) and "user" in data_obj:
             if message.from_user.id != data_obj["user"]:
                 return await message.reply('<b><i>⚠️ This link is not for you! Generate your own from the group.</b></i>')
-            files = data_obj["files"]
+            
+            if "query" in data_obj:
+                from database.series_db import list_quality_episodes, get_series_files
+                import json, os
+                
+                query = data_obj["query"]
+                full_id = query["full_id"]
+                lang = query["lang"]
+                season = query["season"]
+                qual = query["qual"]
+                
+                log.info(f"START RECEIVED, RESOLVING QUERY: {full_id} | {lang} | {season} | {qual}")
+                
+                raw_files = []
+                episodes = await list_quality_episodes(full_id, lang, season, qual)
+                for ep in episodes:
+                    ep_files = await get_series_files(full_id, lang, season, ep, qual)
+                    for f in ep_files:
+                        if f.get("is_batch"):
+                            try:
+                                file_path = await client.download_media(f["file_id"])
+                                with open(file_path, "r") as json_file:
+                                    batch_files = json.loads(json_file.read())
+                                os.remove(file_path)
+                                for bf in batch_files:
+                                    raw_files.append({
+                                        "file_id": bf.get("file_id"),
+                                        "is_series": True,
+                                        "caption": ""
+                                    })
+                            except Exception as e:
+                                log.error(f"Failed to fetch JSON batch in start handler: {e}")
+                        else:
+                            f["is_series"] = True
+                            f["caption"] = ""
+                            raw_files.append(f)
+                files = raw_files
+                log.info(f"START RESOLVED {len(files)} FILES")
+            else:
+                files = data_obj["files"]
         else:
             files = data_obj
             
