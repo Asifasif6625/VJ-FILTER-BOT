@@ -233,7 +233,7 @@ async def start(client, message):
                 msg = await client.send_cached_media(
                     chat_id=message.from_user.id,
                     file_id=msg.get("file_id"),
-                    caption=f_caption,
+                    caption="",
                     protect_content=msg.get('protect', False),
                     reply_markup=reply_markup
                 )
@@ -244,7 +244,7 @@ async def start(client, message):
                 msg = await client.send_cached_media(
                     chat_id=message.from_user.id,
                     file_id=msg.get("file_id"),
-                    caption=f_caption,
+                    caption="",
                     protect_content=msg.get('protect', False),
                     reply_markup=InlineKeyboardMarkup(button)
                 )
@@ -302,10 +302,10 @@ async def start(client, message):
                 else:
                     reply_markup = None
                 try:
-                    p = await msg.copy(message.chat.id, caption=f_caption, protect_content=True if protect == "/pbatch" else False, reply_markup=reply_markup)
+                    p = await msg.copy(message.chat.id, caption="", protect_content=True if protect == "/pbatch" else False, reply_markup=reply_markup)
                 except FloodWait as e:
                     await asyncio.sleep(e.value)
-                    p = await msg.copy(message.chat.id, caption=f_caption, protect_content=True if protect == "/pbatch" else False, reply_markup=reply_markup)
+                    p = await msg.copy(message.chat.id, caption="", protect_content=True if protect == "/pbatch" else False, reply_markup=reply_markup)
                 except:
                     continue
             elif msg.empty:
@@ -456,7 +456,7 @@ async def start(client, message):
             msg = await client.send_cached_media(
                 chat_id=message.from_user.id,
                 file_id=file_id,
-                caption=f_caption,
+                caption="",
                 protect_content=True if pre == 'allfilesp' else False,
                 reply_markup=reply_markup
             )
@@ -577,7 +577,7 @@ async def start(client, message):
     msg = await client.send_cached_media(
         chat_id=message.from_user.id,
         file_id=file_id,
-        caption=f_caption,
+        caption="",
         protect_content=True if pre == 'filep' else False,
         reply_markup=reply_markup
     )
