@@ -21,6 +21,7 @@ series_col   = _db["series"]
 sfiles_col   = _db["series_files"]
 sbatch_col   = _db["series_batches"]
 temp_reqs_col = _db["temp_requests"]
+settings_col = _db["settings"]
 
 
 # ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -89,19 +90,65 @@ async def get_series_by_name(normalized_name: str) -> dict | None:
 
 
 async def search_series(query: str) -> list[dict]:
-    """Regex search across series names.  Returns up to 5 matches."""
+    """Substring search across series names, scored and deduplicated."""
     q = query.strip()
     if not q:
         return []
+    
+    q_norm = _normalize(q)
     try:
-        raw = r"(^|\s)" + re.escape(q)
-        regex = re.compile(raw, re.IGNORECASE)
+        regex = re.compile(re.escape(q_norm), re.IGNORECASE)
     except Exception:
         regex = re.compile(re.escape(q), re.IGNORECASE)
+        
     cursor = series_col.find(
         {"normalized_name": regex, "status": "active"}
-    ).limit(5)
-    return [doc async for doc in cursor]
+    ).limit(30)
+    
+    results = [doc async for doc in cursor]
+    if not results:
+        return []
+        
+    def get_score(doc):
+        name = doc.get("normalized_name", "")
+        if name == q_norm:
+            return 1
+        elif name.startswith(q_norm):
+            return 2
+        elif re.search(r'(^|\s)' + re.escape(q_norm) + r'(\s|$)', name):
+            return 3
+        else:
+            return 4
+
+    results.sort(key=lambda x: (get_score(x), x.get("name", "")))
+    
+    seen = set()
+    dedup = []
+    for doc in results:
+        name_lower = doc.get("name", "").lower()
+        if name_lower not in seen:
+            seen.add(name_lower)
+            dedup.append(doc)
+            if len(dedup) == 10:
+                break
+                
+    return dedup
+
+# ─── Settings / Global Thumbnail ─────────────────────────────────────────────
+
+async def save_series_thumbnail(file_id: str):
+    await settings_col.update_one(
+        {"_id": "global_thumbnail"},
+        {"$set": {"file_id": file_id}},
+        upsert=True
+    )
+
+async def get_series_thumbnail() -> str | None:
+    doc = await settings_col.find_one({"_id": "global_thumbnail"})
+    return doc.get("file_id") if doc else None
+
+async def delete_series_thumbnail():
+    await settings_col.delete_one({"_id": "global_thumbnail"})
 
 
 async def update_series(series_id: str, data: dict):
