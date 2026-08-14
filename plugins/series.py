@@ -1301,6 +1301,13 @@ async def series_user_nav(client: Client, query: CallbackQuery):
         season  = int(parts[5])
         qual    = parts[7]
         
+        logger.info(f"[QUALITY PM] CALLBACK RECEIVED: {query.data}")
+        logger.info(f"[QUALITY PM] USER ID: {query.from_user.id}")
+        logger.info(f"[QUALITY PM] FULL ID: {full_id}")
+        logger.info(f"[QUALITY PM] LANGUAGE: {lang}")
+        logger.info(f"[QUALITY PM] SEASON: {season}")
+        logger.info(f"[QUALITY PM] QUALITY: {qual}")
+        
         rating = series.get("rating", "N/A")
         if len(parts) >= 10 and parts[8] == "e":
             ep      = int(parts[9])
@@ -1358,6 +1365,8 @@ async def series_user_nav(client: Client, query: CallbackQuery):
                         files.append(f)
 
         if files:
+            logger.info("[QUALITY PM] DATABASE QUERY MATCHED")
+            logger.info(f"[QUALITY PM] MATCHING EPISODES/FILES COUNT: {len(files)}")
             if query.message.chat.type == enums.ChatType.PRIVATE:
                 await query.answer()
                 from plugins.commands import send_series_files_to_user
@@ -1379,6 +1388,7 @@ async def series_user_nav(client: Client, query: CallbackQuery):
                     parse_mode=enums.ParseMode.HTML
                 )
         elif files is not None:
+            logger.info("[QUALITY PM] DATABASE QUERY RETURNED NO MATCHING FILES")
             return await query.answer("⚠️ File not found. It may have been removed.", show_alert=True)
 
 
