@@ -173,7 +173,12 @@ async def gen_link_batch(bot, message):
     )
     os.remove(json_path)
 
-    file_id, ref = unpack_new_file_id(post.document.file_id)
+    file_id = post.document.file_id
+    
+    logger.info("BATCH JSON UPLOADED")
+    logger.info(f"RAW FILE ID: {file_id}")
+    logger.info("BATCH LINK GENERATED")
+    
     await sts.edit(
         f"✅ <b>Batch link generated!</b>\n\n"
         f"📦 Contains <code>{og_msg}</code> files"
