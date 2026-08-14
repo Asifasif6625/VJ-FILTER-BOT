@@ -1315,22 +1315,26 @@ async def series_user_nav(client: Client, query: CallbackQuery):
             from utils import is_subscribed
             from info import AUTH_CHANNEL
             if AUTH_CHANNEL and not await is_subscribed(client, query):
+                is_try_again = query.message.text and "Join Request" in query.message.text
+                if is_try_again:
+                    return await query.answer("⚠️ ആദ്യം ചാനലിലേക്ക് Join Request അയയ്ക്കുക.", show_alert=True)
+                
                 try:
-                    invite_link = await client.create_chat_invite_link(int(AUTH_CHANNEL))
+                    invite_link = await client.create_chat_invite_link(int(AUTH_CHANNEL), creates_join_request=True)
                 except Exception as e:
                     logger.error(f"Failed to create invite link: {e}")
                     await query.answer("Make sure Bot is admin in Forcesub channel", show_alert=True)
                     return
                 
                 text = (
-                    "📢 **Channel Join Required**\n\n"
-                    "ഫയലുകൾ ലഭിക്കുന്നതിന് മുമ്പ് നിങ്ങൾ ഞങ്ങളുടെ ചാനലിൽ Join ചെയ്യണം.\n\n"
-                    "ചാനലിൽ Join ചെയ്ത ശേഷം താഴെയുള്ള Try Again ബട്ടൺ ക്ലിക്ക് ചെയ്യുക.\n\n"
-                    "You must join our channel before getting the files.\n\n"
-                    "After joining the channel, click the Try Again button below."
+                    "📢 **Channel Join Request**\n\n"
+                    "ഫയലുകൾ ലഭിക്കുന്നതിന് മുമ്പ് ഞങ്ങളുടെ ചാനലിലേക്ക് Join Request അയയ്ക്കുക.\n\n"
+                    "Request അയച്ച ശേഷം താഴെയുള്ള Try Again ബട്ടൺ ക്ലിക്ക് ചെയ്യുക.\n\n"
+                    "Please send a Join Request to our channel before getting the files.\n\n"
+                    "After sending the request, click Try Again below."
                 )
                 btn = [
-                    [InlineKeyboardButton("🔔 Join Channel", url=invite_link.invite_link)],
+                    [InlineKeyboardButton("📢 Send Join Request", url=invite_link.invite_link)],
                     [InlineKeyboardButton("🔄 Try Again", callback_data=query.data)]
                 ]
                 await client.send_message(
@@ -1339,7 +1343,7 @@ async def series_user_nav(client: Client, query: CallbackQuery):
                     reply_markup=InlineKeyboardMarkup(btn),
                     parse_mode=enums.ParseMode.MARKDOWN
                 )
-                return await query.answer("Please join the channel first.", show_alert=True)
+                return await query.answer("Please send a Join Request first.", show_alert=True)
         
         rating = series.get("rating", "N/A")
         if len(parts) >= 10 and parts[8] == "e":
@@ -1415,7 +1419,17 @@ async def series_user_nav(client: Client, query: CallbackQuery):
                 from utils import temp as _temp
                 import uuid as _uuid
                 key = str(_uuid.uuid4())
-                _temp.GETALL[key] = {"user": query.from_user.id, "files": files}
+                _temp.GETALL[key] = {
+                    "user": query.from_user.id,
+                    "files": files,
+                    "query": {
+                        "full_id": full_id,
+                        "lang": lang,
+                        "season": season,
+                        "qual": qual,
+                        "rating": rating
+                    }
+                }
                 start_url = f"https://t.me/{temp.U_NAME}?start=all_{key}"
                 
                 await query.answer()
