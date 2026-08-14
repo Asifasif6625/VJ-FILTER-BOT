@@ -1372,7 +1372,16 @@ async def series_user_nav(client: Client, query: CallbackQuery):
                 import uuid as _uuid
                 key = str(_uuid.uuid4())
                 _temp.GETALL[key] = {"user": query.from_user.id, "files": files}
-                return await query.answer(url=f"https://t.me/{temp.U_NAME}?start=all_{key}")
+                start_url = f"https://t.me/{temp.U_NAME}?start=all_{key}"
+                
+                await query.answer()
+                return await query.message.edit_text(
+                    "<b>✅ Files Ready!</b>\n\nClick the button below to receive your files in PM.",
+                    reply_markup=InlineKeyboardMarkup([[
+                        InlineKeyboardButton("📥 Get Files in PM", url=start_url)
+                    ]]),
+                    parse_mode=enums.ParseMode.HTML
+                )
         elif files is not None:
             return await query.answer("⚠️ File not found. It may have been removed.", show_alert=True)
 

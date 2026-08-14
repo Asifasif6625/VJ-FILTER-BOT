@@ -105,6 +105,26 @@ async def send_series_files_to_user(client, user_id: int, files: list, query=Non
 
 @Client.on_message(filters.command("start") & filters.incoming)
 async def start(client, message):
+    import logging
+    log = logging.getLogger(__name__)
+    
+    # 1. Log at the very beginning
+    log.info(f"[DEBUG START] Raw text: {message.text}")
+    log.info(f"[DEBUG START] Command list: {message.command}")
+    log.info(f"[DEBUG START] Command len: {len(message.command)}")
+    
+    if len(message.command) >= 2:
+        log.info(f"[DEBUG START] Payload: {message.command[1]}")
+        
+        # Test if it starts with all_
+        is_all_ = message.command[1].startswith("all_")
+        is_all = message.command[1].startswith("all")
+        log.info(f"[DEBUG START] startswith('all_'): {is_all_} | startswith('all'): {is_all}")
+        
+        if is_all or is_all_:
+            # SEND DEBUG TO TELEGRAM TO CONFIRM IT REACHES HERE
+            await message.reply(f"🚨 <b>ENTRY POINT REACHED</b>\nPayload: <code>{message.command[1]}</code>\nStartsWith 'all': {is_all}")
+    
     try:
         await message.react(emoji=random.choice(REACTIONS), big=True)
     except:
@@ -484,24 +504,20 @@ async def start(client, message):
     elif data.startswith("all"):
         import logging
         log = logging.getLogger(__name__)
-        log.info("[ALL] START REQUEST RECEIVED")
-        log.info(f"[ALL] PAYLOAD: {data}")
-        log.info(f"[ALL] UUID: {file_id}")
+        debug_log = [f"🛠 <b>START DEBUG INFO</b>\nPayload: <code>{data}</code>\nUUID: <code>{file_id}</code>"]
         
         data_obj = temp.GETALL.get(file_id)
-        log.info(f"[ALL] GETALL FOUND: {bool(data_obj)}")
+        debug_log.append(f"GETALL FOUND: {bool(data_obj)}")
         
         if not data_obj:
-            log.info(f"[ALL] GETALL KEY FOUND (But empty/missing): {file_id}")
-            return await message.reply('<b><i>No such file exist.</b></i>')
+            await message.reply('\n'.join(debug_log) + "\n\n<b><i>No such file exist (or UUID expired).</b></i>")
+            return
             
-        log.info(f"[ALL] GETALL KEY FOUND: {file_id}")
         if isinstance(data_obj, dict) and "user" in data_obj:
-            log.info(f"[ALL] STORED USER ID: {data_obj['user']}")
-            log.info(f"[ALL] REQUEST USER ID: {message.from_user.id}")
-            log.info(f"[ALL] USER MATCH: {message.from_user.id == data_obj['user']}")
+            debug_log.append(f"STORED USER: {data_obj['user']} | REQUEST USER: {message.from_user.id}")
             if message.from_user.id != data_obj["user"]:
-                return await message.reply('<b><i>⚠️ This link is not for you! Generate your own from the group.</b></i>')
+                await message.reply('\n'.join(debug_log) + "\n\n<b><i>⚠️ This link is not for you!</b></i>")
+                return
             
             if "query" in data_obj:
                 from database.series_db import list_quality_episodes, get_series_files
@@ -513,15 +529,15 @@ async def start(client, message):
                 season = query["season"]
                 qual = query["qual"]
                 
-                log.info(f"[ALL] QUERY:\nfull_id={full_id}\nlang={lang}\nseason={season}\nquality={qual}")
+                debug_log.append(f"QUERY: {full_id[:8]}... | {lang} | S{season} | {qual}")
                 
                 raw_files = []
                 episodes = await list_quality_episodes(full_id, lang, season, qual)
-                log.info(f"[ALL] EPISODES FOUND IN DB: {episodes}")
+                debug_log.append(f"EPISODES IN DB: {episodes}")
                 
                 for ep in episodes:
                     ep_files = await get_series_files(full_id, lang, season, ep, qual)
-                    log.info(f"[ALL] DB MATCH COUNT FOR EP {ep}: {len(ep_files)}")
+                    debug_log.append(f"EP {ep} FILE COUNT: {len(ep_files)}")
                     for f in ep_files:
                         if f.get("is_batch"):
                             try:
@@ -536,19 +552,22 @@ async def start(client, message):
                                         "caption": ""
                                     })
                             except Exception as e:
-                                log.error(f"[ALL] Failed to fetch JSON batch in start handler: {e}")
+                                debug_log.append(f"JSON BATCH ERROR: {e}")
                         else:
                             f["is_series"] = True
                             f["caption"] = ""
                             raw_files.append(f)
                 files = raw_files
-                log.info(f"[ALL] EXPANDED FILE COUNT: {len(files)}")
+                debug_log.append(f"EXPANDED FILES: {len(files)}")
             else:
                 files = data_obj["files"]
-                log.info(f"[ALL] EXPANDED FILE COUNT (from direct files): {len(files)}")
+                debug_log.append(f"FILES (DIRECT): {len(files)}")
         else:
             files = data_obj
-            log.info(f"[ALL] EXPANDED FILE COUNT (legacy format): {len(files) if isinstance(files, list) else 'Unknown'}")
+            debug_log.append(f"FILES (LEGACY): {len(files) if isinstance(files, list) else 'Unknown'}")
+            
+        # SEND THE DEBUG INFO TO USER IN PM
+        await message.reply('\n'.join(debug_log))
             
         is_series_batch = any(f.get("is_series") for f in files) if isinstance(files, list) else False
         if is_series_batch:
