@@ -92,16 +92,25 @@ async def start(client, message):
         return
         
     elif data.startswith("all"):
+        import logging
+        log = logging.getLogger(__name__)
+        log.info("ALL PAYLOAD RECEIVED")
         data_obj = temp.GETALL.get(file_id)
         if not data_obj:
+            log.info(f"GETALL KEY FOUND (But empty/missing): {file_id}")
             return await message.reply('<b><i>No such file exist.</b></i>')
             
+        log.info(f"GETALL KEY FOUND: {file_id}")
         if isinstance(data_obj, dict) and "user" in data_obj:
             if message.from_user.id != data_obj["user"]:
                 return await message.reply('<b><i>⚠️ This link is not for you! Generate your own from the group.</b></i>')
             files = data_obj["files"]
         else:
             files = data_obj
+            
+        is_series_batch = any(f.get("is_series") for f in files) if isinstance(files, list) else False
+        if is_series_batch:
+            log.info(f"SERIES FILE COUNT: {len(files)}")
             
         filesarr = []
         for file in files:
@@ -110,29 +119,14 @@ async def start(client, message):
                 k = await temp.BOT.send_cached_media(chat_id=PUBLIC_FILE_CHANNEL, file_id=vj_file_id)
                 vj = await client.get_messages(PUBLIC_FILE_CHANNEL, k.id)
                 mg = getattr(vj, vj.media.value)
-                file_id = mg.file_id
+                file_id_str = mg.file_id
             except Exception as e:
-                import logging
-                logging.getLogger(__name__).warning(f"Clone bot failed to forward file {vj_file_id}: {e}")
+                log.warning(f"Clone bot failed to forward file {vj_file_id}: {e}")
                 continue
+                
             if file.get("is_series"):
-                files1 = file
-                title = file.get("file_name", "")
-                size = get_size(file.get("file_size", 0))
-                
-                lang_str = file.get('language', '')
-                season = file.get('season', 0)
-                qual_str = file.get('quality', '')
-                season_line = f"⦿ season : Season {season}\n" if season > 0 else ""
-                
-                f_caption = (
-                    f"⦿ file name : {file.get('file_name', '')}\n"
-                    f"⦿ file size : {size}\n"
-                    f"⦿ language : {lang_str}\n"
-                    f"{season_line}"
-                    f"⦿ quality : {qual_str}\n\n"
-                    f"@{temp.U_NAME}"
-                )
+                f_caption = ""
+                log.info("VERIFICATION BYPASSED FOR SERIES")
             else:
                 files_ = await get_file_details(vj_file_id)
                 if not files_: continue
@@ -142,6 +136,7 @@ async def start(client, message):
                 f_caption=files1['caption']
                 if f_caption is None:
                     f_caption = f"{' '.join(filter(lambda x: not x.startswith('[') and not x.startswith('@'), files1['file_name'].split()))}"
+            
             if cd["update_channel_link"] != None:
                 up = cd["update_channel_link"]
                 button = [[
@@ -150,20 +145,32 @@ async def start(client, message):
                 reply_markup=InlineKeyboardMarkup(button)
             else:
                 reply_markup=None
+                
+            if file.get("is_series"):
+                reply_markup = None
        
             try:
+                if file.get("is_series"):
+                    log.info(f"SENDING SERIES FILE: {file_id_str}")
                 msg = await client.send_cached_media(
                     chat_id=message.from_user.id,
-                    file_id=file_id,
-                    caption="",
+                    file_id=file_id_str,
+                    caption=f_caption,
                     protect_content=False,
                     reply_markup=reply_markup
                 )
                 filesarr.append(msg)
+                if file.get("is_series"):
+                    log.info(f"SERIES FILE SENT: {file_id_str}")
             except Exception as e:
-                import logging
-                logging.getLogger(__name__).warning(f"Clone bot failed to send cached media {file_id}: {e}")
+                if file.get("is_series"):
+                    log.error(f"SERIES SEND FAILED: {e}")
+                else:
+                    log.warning(f"Clone bot failed to send cached media {file_id_str}: {e}")
                 continue
+                
+        if is_series_batch:
+            log.info("SERIES SEND COMPLETED")
         k = await client.send_message(chat_id = message.from_user.id, text=f"<b><u>❗️❗️❗️IMPORTANT❗️️❗️❗️</u></b>\n\nThis Movie Files/Videos will be deleted in <b><u>10 mins</u> 🫥 <i></b>(Due to Copyright Issues)</i>.\n\n<b><i>Please forward this ALL Files/Videos to your Saved Messages and Start Download there</i></b>")
         await asyncio.sleep(600)
         for x in filesarr:
