@@ -21,18 +21,18 @@ async def allowed(_, __, message):
 
 @Client.on_message(filters.command(['link', 'plink']) & filters.create(allowed))
 async def gen_link_s(bot, message):
-    vj = await bot.ask(chat_id = message.from_user.id, text = "Now Send Me Your Message Which You Want To Store.")
+    vj = await bot.ask(chat_id=message.from_user.id, text="Now Send Me Your Message Which You Want To Store.")
     file_type = vj.media
     if file_type not in [enums.MessageMediaType.VIDEO, enums.MessageMediaType.AUDIO, enums.MessageMediaType.DOCUMENT]:
-        return await vj.reply("Send me only video,audio,file or document.")
+        return await vj.reply("Send me only video, audio, file or document.")
     if message.has_protected_content and message.chat.id not in ADMINS:
         return await message.reply("okDa")
     file_id, ref = unpack_new_file_id((getattr(vj, file_type.value)).file_id)
     string = 'filep_' if message.text.lower().strip() == "/plink" else 'file_'
     string += file_id
     outstr = base64.urlsafe_b64encode(string.encode("ascii")).decode().strip("=")
-    await message.reply(f"Here is your Link:\nhttps://t.me/{temp.U_NAME}?start={outstr}")    
-    
+    await message.reply(f"Here is your Link:\nhttps://t.me/{temp.U_NAME}?start={outstr}")
+
 @Client.on_message(filters.command(['batch', 'pbatch']) & filters.create(allowed))
 async def gen_link_batch(bot, message):
     if " " not in message.text:
@@ -75,9 +75,7 @@ async def gen_link_batch(bot, message):
         chat = await bot.get_chat(f_chat_id)
         chat_id = chat.id
     except ChannelInvalid:
-        return await message.reply(
-            'This may be a private channel / group. Make me an admin over there first.'
-        )
+        return await message.reply('This may be a private channel / group. Make me an admin over there first.')
     except (UsernameInvalid, UsernameNotModified):
         return await message.reply('Invalid link specified.')
     except Exception as e:
@@ -94,42 +92,61 @@ async def gen_link_batch(bot, message):
         b_64 = base64.urlsafe_b64encode(string.encode("ascii")).decode().strip("=")
         return await sts.edit(f"Here is your link https://t.me/{temp.U_NAME}?start=DSTORE-{b_64}")
 
-    # ── Collect media messages ────────────────────────────────────────────────
-    outlist  = []
-    og_msg   = 0
-    tot      = 0
+    # ── Verify bot can read the channel ───────────────────────────────────────
+    try:
+        await bot.get_messages(chat_id, f_msg_id)
+    except Exception as e:
+        return await sts.edit(
+            f"❌ <b>Cannot read messages from this channel.</b>\n\n"
+            f"Make sure the bot is added as an <b>admin</b> in the channel.\n\n"
+            f"<code>{e}</code>",
+            parse_mode=enums.ParseMode.HTML,
+        )
+
+    # ── Collect media messages using chunked get_messages ────────────────────
+    outlist   = []
+    og_msg    = 0
+    errors    = 0
     is_pbatch = cmd.lower().strip() == "/pbatch"
 
-    async for msg in bot.iter_messages(chat_id, l_msg_id, f_msg_id):
-        tot += 1
-        if msg.empty or msg.service:
-            continue
-        if not msg.media:
-            continue
+    for chunk_start in range(f_msg_id, l_msg_id + 1, 200):
+        chunk_end = min(chunk_start + 199, l_msg_id)
         try:
-            file_type = msg.media
-            file      = getattr(msg, file_type.value)
-            if not file:
-                continue
-
-            # caption: msg.caption is already a plain str in Pyrogram v2+
-            caption = getattr(msg, 'caption', '') or ''
-
-            outlist.append({
-                "file_id": file.file_id,
-                "caption": caption,
-                "title":   getattr(file, "file_name", "") or "",
-                "size":    getattr(file, "file_size", 0) or 0,
-                "protect": is_pbatch,
-            })
-            og_msg += 1
+            messages = await bot.get_messages(chat_id, list(range(chunk_start, chunk_end + 1)))
+            for msg in messages:
+                if not msg or msg.empty or msg.service:
+                    errors += 1
+                    continue
+                if not msg.media:
+                    errors += 1
+                    continue
+                try:
+                    file_type = msg.media
+                    file      = getattr(msg, file_type.value)
+                    if not file:
+                        errors += 1
+                        continue
+                    caption = getattr(msg, 'caption', '') or ''
+                    outlist.append({
+                        "file_id": file.file_id,
+                        "caption": caption,
+                        "title":   getattr(file, "file_name", "") or "",
+                        "size":    getattr(file, "file_size", 0) or 0,
+                        "protect": is_pbatch,
+                    })
+                    og_msg += 1
+                except Exception as ex:
+                    logger.warning(f"batch scan error mid={msg.id}: {ex}")
+                    errors += 1
         except Exception as ex:
-            logger.warning(f"batch scan error mid={msg.id}: {ex}")
+            logger.warning(f"batch chunk error {chunk_start}-{chunk_end}: {ex}")
+            errors += (chunk_end - chunk_start + 1)
 
     if og_msg == 0:
         return await sts.edit(
             "❌ <b>No media files found</b> in the given range.\n\n"
-            "Make sure the bot is a member of the channel and the messages contain files.",
+            "• Make sure the bot is an <b>admin</b> in the channel.\n"
+            "• Make sure the messages in the range contain files.",
             parse_mode=enums.ParseMode.HTML,
         )
 
@@ -149,7 +166,8 @@ async def gen_link_batch(bot, message):
     file_id, ref = unpack_new_file_id(post.document.file_id)
     await sts.edit(
         f"✅ <b>Batch link generated!</b>\n\n"
-        f"📦 Contains <code>{og_msg}</code> files.\n\n"
+        f"📦 Contains <code>{og_msg}</code> files"
+        + (f" (<code>{errors}</code> skipped)" if errors else "") + ".\n\n"
         f"🔗 <code>https://t.me/{temp.U_NAME}?start=BATCH-{file_id}</code>",
         parse_mode=enums.ParseMode.HTML,
     )
