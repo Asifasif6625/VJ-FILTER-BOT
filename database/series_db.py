@@ -20,6 +20,7 @@ _db = _client[DATABASE_NAME]
 series_col   = _db["series"]
 sfiles_col   = _db["series_files"]
 sbatch_col   = _db["series_batches"]
+temp_reqs_col = _db["temp_requests"]
 
 
 # ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -39,6 +40,8 @@ async def _ensure_indexes():
         await sbatch_col.create_index(
             ["series_id", "language", "season", "quality"]
         )
+        # TTL index for temporary requests (expires after 1 hour)
+        await temp_reqs_col.create_index("created_at", expireAfterSeconds=3600)
     except Exception as e:
         logger.warning(f"Series DB index creation: {e}")
 
@@ -108,6 +111,31 @@ async def update_series(series_id: str, data: dict):
         {"_id": ObjectId(series_id)},
         {"$set": data}
     )
+
+
+async def set_sbatch_msgid(doc_id: str, message_id: int):
+    """Set the forwarded batch message_id on an existing sbatch doc."""
+    await sbatch_col.update_one(
+        {"_id": ObjectId(doc_id)},
+        {"$set": {"message_id": message_id}}
+    )
+
+
+# ─── Temp Requests (Group -> PM Flow) ─────────────────────────────────────────
+
+async def save_temp_request(req_id: str, data: dict):
+    """Save a temporary request (e.g. for series quality navigation)."""
+    data["_id"] = req_id
+    data["created_at"] = datetime.utcnow()
+    try:
+        await temp_reqs_col.insert_one(data)
+    except DuplicateKeyError:
+        pass
+        
+async def get_temp_request(req_id: str) -> dict:
+    """Retrieve and delete a temporary request."""
+    doc = await temp_reqs_col.find_one({"_id": req_id})
+    return doc
 
 
 async def delete_series(series_id: str):
