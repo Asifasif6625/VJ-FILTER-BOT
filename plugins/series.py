@@ -848,30 +848,66 @@ async def wizard_callback(client: Client, query: CallbackQuery):
             if not seasons_to_add:
                 seasons_to_add = [0]
 
+            outlist = []
             for ep_num, ep_chat_id, ep_msg_id, ep_file_id, ep_file_name, ep_file_size in bd["files"]:
-                for lang in wiz["batch_langs"]:
-                    for season in seasons_to_add:
-                        for quality in wiz["batch_qualities"]:
-                            try:
-                                status, reason = await add_series_file({
-                                    "series_id":  series_id,
-                                    "language":   lang,
-                                    "season":     season,
-                                    "episode":    ep_num,
-                                    "quality":    quality,
-                                    "chat_id":    ep_chat_id,
-                                    "message_id": ep_msg_id,
-                                    "file_id":    ep_file_id,
-                                    "file_name":  ep_file_name,
-                                    "file_size":  ep_file_size,
-                                })
-                                if status:
-                                    inserted += 1
-                                else:
-                                    duplicates += 1
-                            except Exception as e:
-                                logger.warning(f"add_series_file error ep={ep_num}: {e}")
-                                duplicates += 1
+                outlist.append({
+                    "episode": ep_num,
+                    "chat_id": ep_chat_id,
+                    "message_id": ep_msg_id,
+                    "file_id": ep_file_id,
+                    "file_name": ep_file_name,
+                    "file_size": ep_file_size,
+                })
+            
+            import json
+            import os
+            from info import LOG_CHANNEL
+            json_path = f"sbatch_{series_id}_{uid}.json"
+            with open(json_path, "w+") as out:
+                json.dump(outlist, out)
+            
+            try:
+                post = await client.send_document(
+                    LOG_CHANNEL,
+                    json_path,
+                    file_name=f"SBatch_{wiz['name'][:20]}.json",
+                    caption=f"⚠️ Series Batch for {wiz['name']}\n\nDo not delete this message."
+                )
+                raw_file_id = post.document.file_id
+            except Exception as e:
+                logger.error(f"Failed to upload SBatch JSON: {e}")
+                if os.path.exists(json_path):
+                    os.remove(json_path)
+                return await query.answer("Failed to upload batch JSON to LOG_CHANNEL.", show_alert=True)
+                
+            if os.path.exists(json_path):
+                os.remove(json_path)
+
+            for lang in wiz["batch_langs"]:
+                for season in seasons_to_add:
+                    for quality in wiz["batch_qualities"]:
+                        try:
+                            status, reason = await add_series_file({
+                                "series_id":  series_id,
+                                "language":   lang,
+                                "season":     season,
+                                "episode":    -1,
+                                "quality":    quality,
+                                "chat_id":    bd["chat_id"],
+                                "message_id": bd["first_msg_id"],
+                                "file_id":    raw_file_id,
+                                "file_name":  f"SBatch_{wiz['name'][:20]}.json",
+                                "file_size":  0,
+                                "is_batch":   True,
+                                "total_episodes": len(outlist)
+                            })
+                            if status:
+                                inserted += len(outlist)
+                            else:
+                                duplicates += len(outlist)
+                        except Exception as e:
+                            logger.warning(f"add_series_file error for batch: {e}")
+                            duplicates += len(outlist)
 
             # Save batch record
             for lang in wiz["batch_langs"]:
@@ -1251,24 +1287,58 @@ async def series_user_nav(client: Client, query: CallbackQuery):
         rating = series.get("rating", "N/A")
         if len(parts) >= 10 and parts[8] == "e":
             ep      = int(parts[9])
-            files = await get_series_files(full_id, lang, season, ep, qual)
-            for f in files:
-                f["is_series"] = True
-                f["series_rating"] = rating
-                f["episode_index"] = 1
-                f["total_episodes"] = 1
+            files = []
+            raw_ep_files = await get_series_files(full_id, lang, season, ep, qual)
+            import json, os
+            for f in raw_ep_files:
+                if f.get("is_batch"):
+                    try:
+                        file_path = await client.download_media(f["file_id"])
+                        with open(file_path, "r") as json_file:
+                            batch_files = json.loads(json_file.read())
+                        os.remove(file_path)
+                        for bf in batch_files:
+                            bf["is_series"] = True
+                            bf["series_rating"] = rating
+                            bf["episode_index"] = bf.get("episode", 1)
+                            bf["total_episodes"] = f.get("total_episodes", len(batch_files))
+                            files.append(bf)
+                    except Exception as e:
+                        logger.error(f"Failed to fetch JSON batch: {e}")
+                else:
+                    f["is_series"] = True
+                    f["series_rating"] = rating
+                    f["episode_index"] = 1
+                    f["total_episodes"] = 1
+                    files.append(f)
         else:
             files = []
             episodes = await list_quality_episodes(full_id, lang, season, qual)
             total_eps = len(episodes)
+            import json, os
             for i, ep in enumerate(episodes, start=1):
                 ep_files = await get_series_files(full_id, lang, season, ep, qual)
                 for f in ep_files:
-                    f["is_series"] = True
-                    f["series_rating"] = rating
-                    f["episode_index"] = i
-                    f["total_episodes"] = total_eps
-                files.extend(ep_files)
+                    if f.get("is_batch"):
+                        try:
+                            file_path = await client.download_media(f["file_id"])
+                            with open(file_path, "r") as json_file:
+                                batch_files = json.loads(json_file.read())
+                            os.remove(file_path)
+                            for bf in batch_files:
+                                bf["is_series"] = True
+                                bf["series_rating"] = rating
+                                bf["episode_index"] = bf.get("episode", i)
+                                bf["total_episodes"] = f.get("total_episodes", len(batch_files))
+                                files.append(bf)
+                        except Exception as e:
+                            logger.error(f"Failed to fetch JSON batch: {e}")
+                    else:
+                        f["is_series"] = True
+                        f["series_rating"] = rating
+                        f["episode_index"] = i
+                        f["total_episodes"] = total_eps
+                        files.append(f)
 
         if files:
             if query.message.chat.type == enums.ChatType.PRIVATE:
