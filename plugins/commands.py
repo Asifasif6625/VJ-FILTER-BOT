@@ -505,19 +505,28 @@ async def start(client, message):
     elif data.startswith("all"):
         import logging
         log = logging.getLogger(__name__)
-        debug_log = [f"🛠 <b>START DEBUG INFO</b>\nPayload: <code>{data}</code>\nUUID: <code>{file_id}</code>"]
         
+        # Check temp.GETALL first, fallback to MongoDB
         data_obj = temp.GETALL.get(file_id)
-        debug_log.append(f"GETALL FOUND: {bool(data_obj)}")
+        if not data_obj:
+            from database.series_db import get_temp_request
+            data_obj = await get_temp_request(file_id)
+            
+        # Logging format requested by user
+        req_found = bool(data_obj)
+        stored_user = data_obj.get("user", "Unknown") if isinstance(data_obj, dict) else "Unknown"
+        req_user = message.from_user.id
+        user_verified = (stored_user == req_user)
+        
+        log.info(f"\n[ALL START]\nUUID RECEIVED: {file_id}\nREQUEST FOUND: {req_found}\nSTORED USER: {stored_user}\nREQUEST USER: {req_user}\nUSER VERIFIED: {user_verified}")
         
         if not data_obj:
-            await message.reply('\n'.join(debug_log) + "\n\n<b><i>No such file exist (or UUID expired).</b></i>")
+            await message.reply("<b><i>No such file exist (or UUID expired).</b></i>")
             return
             
         if isinstance(data_obj, dict) and "user" in data_obj:
-            debug_log.append(f"STORED USER: {data_obj['user']} | REQUEST USER: {message.from_user.id}")
             if message.from_user.id != data_obj["user"]:
-                await message.reply('\n'.join(debug_log) + "\n\n<b><i>⚠️ This link is not for you!</b></i>")
+                await message.reply("<b><i>⚠️ This link is not for you!</b></i>")
                 return
             
             if "query" in data_obj:
@@ -530,15 +539,14 @@ async def start(client, message):
                 season = query["season"]
                 qual = query["qual"]
                 
-                debug_log.append(f"QUERY: {full_id[:8]}... | {lang} | S{season} | {qual}")
+                log.info(f"\n[ALL SERIES]\nFULL ID: {full_id}\nLANGUAGE: {lang}\nSEASON: {season}\nQUALITY: {qual}")
                 
                 raw_files = []
                 episodes = await list_quality_episodes(full_id, lang, season, qual)
-                debug_log.append(f"EPISODES IN DB: {episodes}")
+                log.info(f"\n[ALL SERIES]\nEPISODES FOUND: {len(episodes)}")
                 
                 for ep in episodes:
                     ep_files = await get_series_files(full_id, lang, season, ep, qual)
-                    debug_log.append(f"EP {ep} FILE COUNT: {len(ep_files)}")
                     for f in ep_files:
                         if f.get("is_batch"):
                             try:
@@ -553,26 +561,21 @@ async def start(client, message):
                                         "caption": ""
                                     })
                             except Exception as e:
-                                debug_log.append(f"JSON BATCH ERROR: {e}")
+                                log.error(f"JSON BATCH ERROR: {e}")
                         else:
                             f["is_series"] = True
                             f["caption"] = ""
                             raw_files.append(f)
                 files = raw_files
-                debug_log.append(f"EXPANDED FILES: {len(files)}")
+                log.info(f"\n[ALL SERIES]\nFILES EXPANDED: {len(files)}")
             else:
                 files = data_obj["files"]
-                debug_log.append(f"FILES (DIRECT): {len(files)}")
         else:
             files = data_obj
-            debug_log.append(f"FILES (LEGACY): {len(files) if isinstance(files, list) else 'Unknown'}")
         is_series_batch = any(f.get("is_series") for f in files) if isinstance(files, list) else False
-        if is_series_batch:
-            log.info(f"[ALL] EXPANDED FILE COUNT: {len(files)}")
-            
         filesarr = []
         if is_series_batch:
-            log.info(f"[ALL] STARTING SEND LOOP")
+            log.info(f"\n[ALL SERIES]\nSTARTING PM SEND")
             
         for idx, file in enumerate(files, start=1):
             file_id_str = file["file_id"]
