@@ -836,33 +836,41 @@ async def wizard_callback(client: Client, query: CallbackQuery):
                     "poster": wiz.get("poster", ""),
                 })
 
-            # Process batch files
+            # Process batch files — use ep_ prefix to avoid overwriting outer vars
             await query.message.edit_text(
                 f"⏳ Processing batch... saving {bd['total_files']} files."
             )
             inserted = 0
             duplicates = 0
 
-            seasons_to_add = wiz["batch_seasons"] if wiz["batch_seasons"] else [0]
-            for ep_num, chat_id, msg_id, file_id, file_name, file_size in bd["files"]:
+            # Ensure seasons_to_add always has at least one value
+            seasons_to_add = wiz.get("batch_seasons") or [0]
+            if not seasons_to_add:
+                seasons_to_add = [0]
+
+            for ep_num, ep_chat_id, ep_msg_id, ep_file_id, ep_file_name, ep_file_size in bd["files"]:
                 for lang in wiz["batch_langs"]:
                     for season in seasons_to_add:
                         for quality in wiz["batch_qualities"]:
-                            status, reason = await add_series_file({
-                                "series_id": series_id,
-                                "language": lang,
-                                "season": season,
-                                "episode": ep_num,
-                                "quality": quality,
-                                "chat_id": chat_id,
-                                "message_id": msg_id,
-                                "file_id": file_id,
-                                "file_name": file_name,
-                                "file_size": file_size,
-                            })
-                            if status:
-                                inserted += 1
-                            else:
+                            try:
+                                status, reason = await add_series_file({
+                                    "series_id":  series_id,
+                                    "language":   lang,
+                                    "season":     season,
+                                    "episode":    ep_num,
+                                    "quality":    quality,
+                                    "chat_id":    ep_chat_id,
+                                    "message_id": ep_msg_id,
+                                    "file_id":    ep_file_id,
+                                    "file_name":  ep_file_name,
+                                    "file_size":  ep_file_size,
+                                })
+                                if status:
+                                    inserted += 1
+                                else:
+                                    duplicates += 1
+                            except Exception as e:
+                                logger.warning(f"add_series_file error ep={ep_num}: {e}")
                                 duplicates += 1
 
             # Save batch record
@@ -1010,41 +1018,58 @@ async def cmd_sbatch(client: Client, message: Message):
         f"⏳ Scanning messages {msg1} → {msg2} ({total} total)...\nThis may take time depending on number of messages."
     )
 
-    # ── Collect files using iter_messages (same as /batch in genlink.py) ───────
+    # ── Collect files using chunked get_messages (same as /batch in genlink.py) ─
     files_found = []
     errors      = 0
-    done        = 0
 
-    async for msg in client.iter_messages(chat1, msg2, msg1):
-        done += 1
-        if msg.empty or msg.service:
-            errors += 1
-            continue
-        if not msg.media:
-            errors += 1
-            continue
+    # Verify bot can read the channel first
+    try:
+        await client.get_messages(chat1, msg1)
+    except Exception as e:
+        await processing_msg.edit_text(
+            f"❌ <b>Cannot read messages from this channel.</b>\n\n"
+            f"Make sure the bot is added as an <b>admin</b> in the source channel.\n\n"
+            f"<code>{e}</code>",
+            parse_mode=enums.ParseMode.HTML,
+        )
+        return
+
+    for chunk_start in range(msg1, msg2 + 1, 200):
+        chunk_end = min(chunk_start + 199, msg2)
         try:
-            file_type = msg.media
-            media     = getattr(msg, file_type.value)
-            if not media:
-                errors += 1
-                continue
+            messages = await client.get_messages(chat1, list(range(chunk_start, chunk_end + 1)))
+            for msg in messages:
+                if not msg or msg.empty or msg.service:
+                    errors += 1
+                    continue
+                if not msg.media:
+                    errors += 1
+                    continue
+                try:
+                    file_type = msg.media
+                    media     = getattr(msg, file_type.value)
+                    if not media:
+                        errors += 1
+                        continue
 
-            file_id   = getattr(media, "file_id", "")
-            file_name = getattr(media, "file_name", None) or f"file_{msg.id}"
-            file_size = getattr(media, "file_size", 0) or 0
+                    file_id   = getattr(media, "file_id", "")
+                    file_name = getattr(media, "file_name", None) or f"file_{msg.id}"
+                    file_size = getattr(media, "file_size", 0) or 0
 
-            # Attempt to extract episode number from filename, caption, or text
-            ep_num = _extract_episode_number(file_name)
-            if not ep_num and msg.caption:
-                ep_num = _extract_episode_number(msg.caption)
-            if not ep_num and msg.text:
-                ep_num = _extract_episode_number(msg.text)
+                    # Attempt to extract episode number from filename, caption, or text
+                    ep_num = _extract_episode_number(file_name)
+                    if not ep_num and msg.caption:
+                        ep_num = _extract_episode_number(msg.caption)
+                    if not ep_num and msg.text:
+                        ep_num = _extract_episode_number(msg.text)
 
-            files_found.append((chat1, msg.id, file_id, file_name, file_size, ep_num))
+                    files_found.append((chat1, msg.id, file_id, file_name, file_size, ep_num))
+                except Exception as ex:
+                    logger.warning(f"sbatch scan error mid={msg.id}: {ex}")
+                    errors += 1
         except Exception as ex:
-            logger.warning(f"sbatch iter error mid={msg.id}: {ex}")
-            errors += 1
+            logger.warning(f"sbatch chunk error {chunk_start}-{chunk_end}: {ex}")
+            errors += (chunk_end - chunk_start + 1)
 
     if not files_found:
         await processing_msg.edit_text(
