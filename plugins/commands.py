@@ -1404,7 +1404,103 @@ async def removetutorial(bot, message):
     user = await bot.get_chat_member(grpid, userid)
     if user.status != enums.ChatMemberStatus.ADMINISTRATOR and user.status != enums.ChatMemberStatus.OWNER and str(userid) not in ADMINS:
         return
+    else:
+        pass
+    reply = await message.reply_text("<b>Please Wait...</b>")
+    await save_group_settings(grpid, 'tutorial', "")
+    await save_group_settings(grpid, 'is_tutorial', False)
+    await reply.edit_text(f"<b>Successfully Removed Your Tutorial Link!!!</b>")
 
+@Client.on_message(filters.command("restart") & filters.user(ADMINS))
+async def stop_button(bot, message):
+    msg = await bot.send_message(text="**🔄 𝙿𝚁𝙾𝙲𝙴𝚂𝚂𝙴𝚂 𝚂𝚃𝙾𝙿𝙴𝙳. 𝙱𝙾𝚃 𝙸𝚂 𝚁𝙴𝚂𝚃𝙰𝚁𝚃𝙸𝙽𝙶...**", chat_id=message.chat.id)       
+    import sys
+    import os
+    import asyncio
+    await asyncio.sleep(3)
+    await msg.edit("**✅️ 𝙱𝙾𝚃 𝙸𝚂 𝚁𝙴𝚂𝚃𝙰𝚁𝚃𝙴𝙳. 𝙽𝙾𝚆 𝚈𝙾𝚄 𝙲𝙰𝙽 𝚄𝚂𝙴 𝙼𝙴**")
+    os.execl(sys.executable, sys.executable, *sys.argv)
+
+@Client.on_message(filters.command("nofsub"))
+async def nofsub(client, message):
+    userid = message.from_user.id if message.from_user else None
+    if not userid:
+        return await message.reply(f"<b>You are anonymous admin. Turn off anonymous admin and try again this command</b>")
+    chat_type = message.chat.type
+    if chat_type == enums.ChatType.PRIVATE:
+        return await message.reply_text("<b>This Command Work Only in group\n\nTry it in your own group</b>")
+    elif chat_type in [enums.ChatType.GROUP, enums.ChatType.SUPERGROUP]:
+        grpid = message.chat.id
+        title = message.chat.title
+    else:
+        return
+    userid = message.from_user.id
+    user = await client.get_chat_member(grpid, userid)
+    if user.status != enums.ChatMemberStatus.ADMINISTRATOR and user.status != enums.ChatMemberStatus.OWNER and str(userid) not in ADMINS:
+        return
+    else:
+        pass
+    await save_group_settings(grpid, 'fsub', None)
+    await message.reply_text(f"<b>Successfully removed force subscribe from {title}.</b>")
+
+@Client.on_message(filters.command('fsub'))
+async def fsub(client, message):
+    userid = message.from_user.id if message.from_user else None
+    if not userid:
+        return await message.reply(f"<b>You are anonymous admin. Turn off anonymous admin and try again this command</b>")
+    chat_type = message.chat.type
+    if chat_type == enums.ChatType.PRIVATE:
+        return await message.reply_text("<b>This Command Work Only in group\n\nTry it in your own group</b>")
+    elif chat_type in [enums.ChatType.GROUP, enums.ChatType.SUPERGROUP]:
+        grpid = message.chat.id
+        title = message.chat.title
+    else:
+        return
+    userid = message.from_user.id
+    user = await client.get_chat_member(grpid, userid)
+    if user.status != enums.ChatMemberStatus.ADMINISTRATOR and user.status != enums.ChatMemberStatus.OWNER and str(userid) not in ADMINS:
+        return
+    else:
+        pass
+    try:
+        ids = message.text.split(" ", 1)[1]
+        fsub_ids = [int(id) for id in ids.split()]
+    except IndexError:
+        return await message.reply_text("<b>Command Incomplete!\n\nAdd Multiple Channel By Seperate Space. Like: /fsub id1 id2 id3</b>")
+    except ValueError:
+        return await message.reply_text('<b>Make Sure Ids are Integer.</b>')        
+    channels = "Channels:\n"
+    for id in fsub_ids:
+        try:
+            chat = await client.get_chat(id)
+        except Exception as e:
+            await message.reply_text(f"<b>Bot is not an admin in {id} or channel is private.</b>")
+            return
+        channels += f"{chat.title}\n"
+    await save_group_settings(grpid, 'fsub', fsub_ids)
+    await message.reply_text(f"<b>Successfully added force subscribe in {title}\n\n{channels}</b>")
+
+@Client.on_message(filters.command("add_premium"))
+async def add_premium_cmd_handler(client, message):
+    if PREMIUM_AND_REFERAL_MODE == False:
+        return 
+    user_id = message.from_user.id
+    if user_id not in ADMINS:
+        await message.delete()
+        return
+    if len(message.command) == 3:
+        user_id = int(message.command[1])  # Convert the user_id to integer
+        time = message.command[2]        
+        seconds = await get_seconds(time)
+        if seconds > 0:
+            expiry_time = datetime.datetime.now() + datetime.timedelta(seconds=seconds)
+            user_data = {"id": user_id, "expiry_time": expiry_time}  # Using "id" instead of "user_id"
+            await db.update_user(user_data)  # Use the update_user method to update or insert user data
+            await message.reply_text("Premium access added to the user.")            
+            await client.send_message(
+                chat_id=user_id,
+                text=f"<b>ᴘʀᴇᴍɪᴜᴍ ᴀᴅᴅᴇᴅ ᴛᴏ ʏᴏᴜʀ ᴀᴄᴄᴏᴜɴᴛ ꜰᴏʀ {time} ᴇɴᴊᴏʏ 😀\n</b>",                
+            )
         else:
             await message.reply_text("Invalid time format. Please use '1day for days', '1hour for hours', or '1min for minutes', or '1month for months' or '1year for year'")
     else:
