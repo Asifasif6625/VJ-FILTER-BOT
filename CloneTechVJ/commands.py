@@ -102,13 +102,33 @@ async def start(client, message):
             vj = await client.get_messages(PUBLIC_FILE_CHANNEL, k.id)
             mg = getattr(vj, vj.media.value)
             file_id = mg.file_id
-            files_ = await get_file_details(vj_file_id)
-            files1 = files_
-            title = ' '.join(filter(lambda x: not x.startswith('[') and not x.startswith('@'), files1['file_name'].split()))
-            size=get_size(files1['file_size'])
-            f_caption=files1['caption']
-            if f_caption is None:
-                f_caption = f"{' '.join(filter(lambda x: not x.startswith('[') and not x.startswith('@'), files1['file_name'].split()))}"
+            if file.get("is_series"):
+                files1 = file
+                title = file.get("file_name", "")
+                size = get_size(file.get("file_size", 0))
+                
+                lang_str = file.get('language', '')
+                season = file.get('season', 0)
+                qual_str = file.get('quality', '')
+                season_line = f"⦿ season : Season {season}\n" if season > 0 else ""
+                
+                f_caption = (
+                    f"⦿ file name : {file.get('file_name', '')}\n"
+                    f"⦿ file size : {size}\n"
+                    f"⦿ language : {lang_str}\n"
+                    f"{season_line}"
+                    f"⦿ quality : {qual_str}\n\n"
+                    f"@{temp.U_NAME}"
+                )
+            else:
+                files_ = await get_file_details(vj_file_id)
+                if not files_: continue
+                files1 = files_
+                title = ' '.join(filter(lambda x: not x.startswith('[') and not x.startswith('@'), files1['file_name'].split()))
+                size=get_size(files1['file_size'])
+                f_caption=files1['caption']
+                if f_caption is None:
+                    f_caption = f"{' '.join(filter(lambda x: not x.startswith('[') and not x.startswith('@'), files1['file_name'].split()))}"
             if cd["update_channel_link"] != None:
                 up = cd["update_channel_link"]
                 button = [[
