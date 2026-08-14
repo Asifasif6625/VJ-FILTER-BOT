@@ -192,6 +192,7 @@ async def start(client, message):
                                 for bf in batch_files:
                                     bf["is_series"] = True
                                     bf["series_rating"] = rating
+                                    bf["language"] = lang
                                     bf["episode_index"] = bf.get("episode", i)
                                     bf["total_episodes"] = f.get("total_episodes", len(batch_files))
                                     files.append(bf)
@@ -200,6 +201,7 @@ async def start(client, message):
                         else:
                             f["is_series"] = True
                             f["series_rating"] = rating
+                            f["language"] = lang
                             f["episode_index"] = i
                             f["total_episodes"] = len(episodes)
                             files.append(f)
@@ -1543,17 +1545,36 @@ async def send_series_files_to_user(client, user_id, files, query=None):
         
         raw_size = file.get("file_size", 0)
         file_size = get_size(raw_size) if raw_size else "Unknown Size"
-        file_number = file.get("episode", "?")
         
+        bot_uname = temp.U_NAME if hasattr(temp, "U_NAME") and temp.U_NAME else "BotUsername"
+        language = file.get("language", "Unknown")
+        rating = file.get("series_rating", "")
+        file_number = file.get("episode_index", "?")
+        total_episodes = file.get("total_episodes", "?")
+
         f_caption = (
-            f"<b>File Name :</b> <code>{file_name}</code>\n"
-            f"<b>File Size :</b> <code>{file_size}</code>\n"
-            f"<b>File Number :</b> <code>{file_number}</code>"
+            f"⦿ <i>File name:</i> <code>{file_name}</code>\n"
+            f"⦿ <i>Size:</i> {file_size}\n"
+            f"⦿ <i>Language:</i> {language}\n"
+        )
+        if rating and str(rating).lower() not in ["skip", "n/a", ""]:
+            f_caption += f"⦿ <i>Rating:</i> ⭐ {rating}\n"
+            
+        f_caption += (
+            f"⦿ <i>File:</i> {file_number} / {total_episodes}\n\n"
+            f"@{bot_uname}"
         )
         prepared_files.append((idx, file_id_str, f_caption))
         
     total_files = len(prepared_files)
     
+    async def delayed_delete(m, delay):
+        await asyncio.sleep(delay)
+        try:
+            await m.delete()
+        except Exception:
+            pass
+
     async def send_one(idx, file_id_str, f_caption):
         async with semaphore:
             log.info(f"[SERIES FILE] Sending\nfile_id={file_id_str}")
@@ -1566,6 +1587,7 @@ async def send_series_files_to_user(client, user_id, files, query=None):
                         protect_content=False,
                     )
                     log.info(f"[SERIES FILE] SENT")
+                    asyncio.create_task(delayed_delete(msg, 240))
                     return msg
                 except FloodWait as e:
                     log.warning(f"[SERIES FILE] FloodWait for {e.value}s on {file_id_str}")
@@ -1586,24 +1608,13 @@ async def send_series_files_to_user(client, user_id, files, query=None):
                 chat_id=user_id,
                 text=(
                     "<blockquote><b><u>❗️❗️❗️IMPORTANT❗️️❗️❗️</u></b>\n\n"
-                    "ᴛʜɪs ᴍᴇssᴀɢᴇ ᴡɪʟʟ ʙᴇ ᴅᴇʟᴇᴛᴇᴅ ɪɴ <b><u>10 mins</u> 🫥 <i></b>"
+                    "ᴛʜɪs ᴍᴇssᴀɢᴇ ᴡɪʟʟ ʙᴇ ᴅᴇʟᴇᴛᴇᴅ ɪɴ <b><u>4 mins</u> 🫥 <i></b>"
                     "(ᴅᴜᴇ ᴛᴏ ᴄᴏᴘʏʀɪɢʜᴛ ɪssᴜᴇs)</i>.\n\n"
                     "<b><i>ᴘʟᴇᴀsᴇ ғᴏʀᴡᴀʀᴅ ᴛʜɪs ᴍᴇssᴀɢᴇ ᴛᴏ ʏᴏᴜʀ sᴀᴠᴇᴅ ᴍᴇssᴀɢᴇs ᴏʀ ᴀɴʏ ᴘʀɪᴠᴀᴛᴇ ᴄʜᴀᴛ.</i></b>"
                     "</blockquote>"
                 ),
                 parse_mode=enums.ParseMode.HTML,
             )
-            async def delete_series_later():
-                await asyncio.sleep(600)
-                for m in valid_msgs:
-                    try:
-                        await m.delete()
-                    except:
-                        pass
-                try:
-                    await k.edit_text("<b>✅ ʏᴏᴜʀ ᴍᴇssᴀɢᴇ ɪs sᴜᴄᴄᴇssғᴜʟʟʏ ᴅᴇʟᴇᴛᴇᴅ</b>")
-                except:
-                    pass
-            asyncio.create_task(delete_series_later())
+            asyncio.create_task(delayed_delete(k, 240))
             
     log.info(f"[QUALITY PM] CONCURRENT SEND COMPLETED")

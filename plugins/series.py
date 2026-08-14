@@ -194,7 +194,8 @@ def _lang_keyboard(selected: list[str]) -> InlineKeyboardMarkup:
             ))
         rows.append(row)
     rows.append([
-        InlineKeyboardButton("🟢 Submit Languages", callback_data="sw#lang#submit"),
+        InlineKeyboardButton("🟢 Submit", callback_data="sw#lang#submit"),
+        InlineKeyboardButton("⬅️ Back", callback_data="sw#lang#back"),
         InlineKeyboardButton("🔴 Cancel",            callback_data="sw#cancel"),
     ])
     return InlineKeyboardMarkup(rows)
@@ -212,14 +213,43 @@ def _season_keyboard(total: int, selected: list[int]) -> InlineKeyboardMarkup:
             ))
         rows.append(row)
     rows.append([
-        InlineKeyboardButton("🟢 Submit Seasons", callback_data="sw#season#submit"),
-        InlineKeyboardButton("⏭ Skip (None)",       callback_data="sw#season#skip"),
+        InlineKeyboardButton("🟢 Submit", callback_data="sw#season#submit"),
+        InlineKeyboardButton("⏭ Skip",       callback_data="sw#season#skip"),
     ])
     rows.append([
+        InlineKeyboardButton("⬅️ Back", callback_data="sw#season#back"),
         InlineKeyboardButton("🔴 Cancel",          callback_data="sw#cancel"),
     ])
     return InlineKeyboardMarkup(rows)
 
+
+async def _get_used_qualities(wiz: dict) -> list[str]:
+    from database.series_db import list_season_qualities
+    if not wiz.get("series_id"):
+        return []
+        
+    langs = wiz.get("batch_langs", [])
+    seasons = wiz.get("batch_seasons", [])
+    if not langs or not seasons:
+        return []
+        
+    combination_qualities = []
+    for l in langs:
+        for s in seasons:
+            qs = await list_season_qualities(wiz["series_id"], l, s)
+            combination_qualities.append(set(qs))
+            
+    if not combination_qualities:
+        return []
+        
+    # Only block if it is used in ALL selected combinations
+    used = set.intersection(*combination_qualities)
+    
+    import logging
+    log = logging.getLogger(__name__)
+    log.info(f"[SERIES QUALITY]\nseries_id = {wiz.get('series_id')}\nlanguage = {langs}\nseason = {seasons}\n")
+    log.info(f"[SERIES QUALITY]\nexisting qualities (intersection) = {list(used)}")
+    return list(used)
 
 def _quality_keyboard(
     selected: list[str],
@@ -228,7 +258,7 @@ def _quality_keyboard(
     """
     selected      — qualities chosen for the CURRENT batch (shown with 🟢)
     already_saved — qualities already committed to the series (shown with ✅)
-                    They are still tap-able; the tick is purely informational.
+                    They are now non-selectable.
     """
     already_saved = already_saved or []
     rows = []
@@ -237,17 +267,21 @@ def _quality_keyboard(
         for q in QUALITY_OPTIONS[i:i+3]:
             if q in selected:
                 tick = "🟢 "        # active in current batch selection
+                cb = f"sw#quality#{q}"
             elif q in already_saved:
                 tick = "✅ "        # already saved to this series
+                cb = f"sw#quality_used#{q}"
             else:
                 tick = ""
+                cb = f"sw#quality#{q}"
             row.append(InlineKeyboardButton(
                 f"{tick}{q}",
-                callback_data=f"sw#quality#{q}"
+                callback_data=cb
             ))
         rows.append(row)
     rows.append([
-        InlineKeyboardButton("🟢 Submit Quality", callback_data="sw#quality#submit"),
+        InlineKeyboardButton("🟢 Submit", callback_data="sw#quality#submit"),
+        InlineKeyboardButton("⬅️ Back", callback_data="sw#quality#back"),
         InlineKeyboardButton("🔴 Cancel",           callback_data="sw#cancel"),
     ])
     return InlineKeyboardMarkup(rows)
@@ -701,12 +735,19 @@ async def wizard_callback(client: Client, query: CallbackQuery):
                     reply_markup=_config_menu_keyboard(),
                     parse_mode=enums.ParseMode.HTML,
                 )
+        elif val == "back":
+            if wiz["state"] == S_BATCH_LANG or wiz["state"] == S_LANGS:
+                await query.message.edit_text(
+                    f"⚙️ <b>Series Configuration</b>\n\n"
+                    f"🎬 <b>{wiz.get('name', 'Unknown')}</b>\n\n"
+                    f"Select an option to configure or batch files.",
+                    reply_markup=_config_menu_keyboard(),
+                    parse_mode=enums.ParseMode.HTML,
+                )
         else:
             lang = val
-            if lang in target_list:
-                target_list.remove(lang)
-            else:
-                target_list.append(lang)
+            target_list.clear()
+            target_list.append(lang)
             try:
                 await query.message.edit_reply_markup(_lang_keyboard(target_list))
             except MessageNotModified:
@@ -721,12 +762,13 @@ async def wizard_callback(client: Client, query: CallbackQuery):
             if wiz["state"] == S_BATCH_SEASON:
                 wiz["seasons"] = list(set(wiz["seasons"] + target_list))
                 wiz["state"] = S_BATCH_QUAL
+                used_qualities = await _get_used_qualities(wiz)
                 await query.message.edit_text(
                     f"📦 Batch — <b>{wiz['name']}</b>\n"
                     f"🌐 {', '.join(wiz['batch_langs'])} · 📁 Seasons {', '.join(str(s) for s in sorted(target_list)) if target_list else 'None'}\n\n"
                     "Select <b>qualities</b>:\n"
                     "<i>✅ = already saved to series  |  🟢 = selected for this batch</i>",
-                    reply_markup=_quality_keyboard(wiz["batch_qualities"], wiz["qualities"]),
+                    reply_markup=_quality_keyboard(wiz["batch_qualities"], used_qualities),
                     parse_mode=enums.ParseMode.HTML,
                 )
             else:
@@ -740,12 +782,13 @@ async def wizard_callback(client: Client, query: CallbackQuery):
             if wiz["state"] == S_BATCH_SEASON:
                 wiz["batch_seasons"] = [0]
                 wiz["state"] = S_BATCH_QUAL
+                used_qualities = await _get_used_qualities(wiz)
                 await query.message.edit_text(
                     f"📦 Batch — <b>{wiz['name']}</b>\n"
                     f"🌐 {', '.join(wiz['batch_langs'])} · 📁 Season None\n\n"
                     "Select <b>qualities</b>:\n"
                     "<i>✅ = already saved to series  |  🟢 = selected for this batch</i>",
-                    reply_markup=_quality_keyboard(wiz["batch_qualities"], wiz["qualities"]),
+                    reply_markup=_quality_keyboard(wiz["batch_qualities"], used_qualities),
                     parse_mode=enums.ParseMode.HTML,
                 )
             else:
@@ -755,12 +798,25 @@ async def wizard_callback(client: Client, query: CallbackQuery):
                     reply_markup=_config_menu_keyboard(),
                     parse_mode=enums.ParseMode.HTML,
                 )
+        elif val == "back":
+            if wiz["state"] == S_BATCH_SEASON:
+                wiz["state"] = S_BATCH_LANG
+                await query.message.edit_text(
+                    f"📦 Batch — <b>{wiz['name']}</b>\n\nSelect <b>languages</b>:",
+                    reply_markup=_lang_keyboard(wiz["batch_langs"]),
+                    parse_mode=enums.ParseMode.HTML,
+                )
+            elif wiz["state"] == S_SEASONS:
+                wiz["state"] = S_LANGS
+                await query.message.edit_text(
+                    f"Editing <b>{wiz['name']}</b>\n\nSelect <b>languages</b>:",
+                    reply_markup=_lang_keyboard(wiz["languages"]),
+                    parse_mode=enums.ParseMode.HTML,
+                )
         else:
             n = int(val)
-            if n in target_list:
-                target_list.remove(n)
-            else:
-                target_list.append(n)
+            target_list.clear()
+            target_list.append(n)
             try:
                 await query.message.edit_reply_markup(_season_keyboard(MAX_SEASONS, target_list))
             except MessageNotModified:
@@ -796,19 +852,39 @@ async def wizard_callback(client: Client, query: CallbackQuery):
                     reply_markup=_config_menu_keyboard(),
                     parse_mode=enums.ParseMode.HTML,
                 )
+        elif val == "back":
+            if wiz["state"] == S_BATCH_QUAL:
+                wiz["state"] = S_BATCH_SEASON
+                await query.message.edit_text(
+                    f"📦 Batch — <b>{wiz['name']}</b>\n🌐 Languages: <b>{', '.join(wiz['batch_langs'])}</b>\n\nSelect <b>seasons</b>:",
+                    reply_markup=_season_keyboard(MAX_SEASONS, wiz["batch_seasons"]),
+                    parse_mode=enums.ParseMode.HTML,
+                )
+            elif wiz["state"] == S_QUALITIES:
+                wiz["state"] = S_SEASONS
+                await query.message.edit_text(
+                    f"Editing <b>{wiz['name']}</b>\n🌐 Languages: <b>{', '.join(wiz['languages'])}</b>\n\nSelect <b>seasons</b>:",
+                    reply_markup=_season_keyboard(MAX_SEASONS, wiz["seasons"]),
+                    parse_mode=enums.ParseMode.HTML,
+                )
         else:
             q = val
-            if q in target_list:
-                target_list.remove(q)
-            else:
-                target_list.append(q)
+            target_list.clear()
+            target_list.append(q)
             # In batch mode show already-saved series qualities with ✅
-            already_saved = wiz["qualities"] if wiz["state"] == S_BATCH_QUAL else []
+            if wiz["state"] == S_BATCH_QUAL:
+                used_qualities = await _get_used_qualities(wiz)
+            else:
+                used_qualities = []
             try:
-                await query.message.edit_reply_markup(_quality_keyboard(target_list, already_saved))
+                await query.message.edit_reply_markup(_quality_keyboard(target_list, used_qualities))
             except MessageNotModified:
                 pass
         return await query.answer()
+
+    if action == "quality_used":
+        q = parts[2]
+        return await query.answer(f"⚠️ {q} files are already added for the selected language and season.", show_alert=True)
 
     # ── Batch confirm ─────────────────────────────────────────────────────────
     if action == "bconfirm":
@@ -1255,10 +1331,10 @@ async def process_series_search(client: Client, message: Message, txt: str, repl
             from info import AUTO_DELETE
             if AUTO_DELETE:
                 async def delete_search_msg(m):
-                    await asyncio.sleep(60)
+                    await asyncio.sleep(240)
                     try:
                         await m.delete()
-                    except:
+                    except Exception:
                         pass
                 import asyncio
                 asyncio.create_task(delete_search_msg(msg))
@@ -1389,6 +1465,7 @@ async def series_user_nav(client: Client, query: CallbackQuery):
                             for bf in batch_files:
                                 bf["is_series"] = True
                                 bf["series_rating"] = rating
+                                bf["language"] = lang
                                 bf["episode_index"] = bf.get("episode", i)
                                 bf["total_episodes"] = f.get("total_episodes", len(batch_files))
                                 files.append(bf)
@@ -1397,6 +1474,7 @@ async def series_user_nav(client: Client, query: CallbackQuery):
                     else:
                         f["is_series"] = True
                         f["series_rating"] = rating
+                        f["language"] = lang
                         f["episode_index"] = i
                         f["total_episodes"] = total_eps
                         files.append(f)
