@@ -313,10 +313,11 @@ def _user_season_keyboard(sid: str, lang: str, seasons: list[int]) -> InlineKeyb
     return InlineKeyboardMarkup(rows)
 
 
-def _user_quality_keyboard(user_id: int, full_id: str, sid: str, lang: str, season: int, quals: list[str], rating: str, is_private: bool = False) -> InlineKeyboardMarkup:
+async def _user_quality_keyboard(user_id: int, full_id: str, sid: str, lang: str, season: int, quals: list[str], rating: str, is_private: bool = False) -> InlineKeyboardMarkup:
     rows = []
     import uuid
     from utils import temp
+    from database.series_db import save_temp_request
     import logging
     log = logging.getLogger(__name__)
     for i in range(0, len(quals), 3):
@@ -326,7 +327,7 @@ def _user_quality_keyboard(user_id: int, full_id: str, sid: str, lang: str, seas
                 row.append(InlineKeyboardButton(q, callback_data=f"sr#{sid}#l#{lang}#s#{season}#q#{q}"))
             else:
                 key = str(uuid.uuid4())
-                temp.GETALL[key] = {
+                await save_temp_request(key, {
                     "user": user_id,
                     "query": {
                         "full_id": full_id,
@@ -335,8 +336,9 @@ def _user_quality_keyboard(user_id: int, full_id: str, sid: str, lang: str, seas
                         "qual": q,
                         "rating": rating
                     }
-                }
+                })
                 start_url = f"https://t.me/{temp.U_NAME}?start=all_{key}"
+                log.info(f"\n[GROUP QUALITY]\nUUID CREATED: {key}\nREQUEST SAVED: True\nUSER: {user_id}\nBUTTON URL: {start_url}")
                 row.append(InlineKeyboardButton(q, url=start_url))
         rows.append(row)
     rows.append([
@@ -1221,7 +1223,8 @@ async def _resolve_nav_step(user_id: int, full_id: str, sid: str, series: dict, 
         
         season_str = f"Season {season}" if season > 0 else "Direct Episodes"
         rating = series.get("rating", "N/A")
-        return card + f"\n\n🌐 <b>{lang}</b>\n📁 <b>{season_str}</b>\n🎞 <b>Select Quality:</b>", _user_quality_keyboard(user_id, full_id, sid, lang, season, quals, rating, is_private=is_private)
+        kb = await _user_quality_keyboard(user_id, full_id, sid, lang, season, quals, rating, is_private=is_private)
+        return card + f"\n\n🌐 <b>{lang}</b>\n📁 <b>{season_str}</b>\n🎞 <b>Select Quality:</b>", kb
         
     return "⚠️ Invalid step.", None
 
