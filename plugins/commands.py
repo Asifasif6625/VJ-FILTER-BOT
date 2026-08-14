@@ -515,6 +515,34 @@ async def start(client, message):
                 return
             
             if "query" in data_obj:
+                from utils import is_subscribed
+                if AUTH_CHANNEL and not await is_subscribed(client, message):
+                    try:
+                        invite_link = await client.create_chat_invite_link(int(AUTH_CHANNEL))
+                    except Exception as e:
+                        log.error(f"Failed to create invite link: {e}")
+                        await message.reply_text("Make sure Bot is admin in Forcesub channel")
+                        return
+                    
+                    text = (
+                        "📢 **Channel Join Required**\n\n"
+                        "ഫയലുകൾ ലഭിക്കുന്നതിന് മുമ്പ് നിങ്ങൾ ഞങ്ങളുടെ ചാനലിൽ Join ചെയ്യണം.\n\n"
+                        "ചാനലിൽ Join ചെയ്ത ശേഷം താഴെയുള്ള Try Again ബട്ടൺ ക്ലിക്ക് ചെയ്യുക.\n\n"
+                        "You must join our channel before getting the files.\n\n"
+                        "After joining the channel, click the Try Again button below."
+                    )
+                    btn = [
+                        [InlineKeyboardButton("🔔 Join Channel", url=invite_link.invite_link)],
+                        [InlineKeyboardButton("🔄 Try Again", callback_data=f"checksub#all#{file_id}")]
+                    ]
+                    await client.send_message(
+                        chat_id=message.from_user.id,
+                        text=text,
+                        reply_markup=InlineKeyboardMarkup(btn),
+                        parse_mode=enums.ParseMode.MARKDOWN
+                    )
+                    return
+                
                 from database.series_db import list_quality_episodes, get_series_files
                 import json, os
                 
