@@ -572,23 +572,25 @@ async def start(client, message):
             
         is_series_batch = any(f.get("is_series") for f in files) if isinstance(files, list) else False
         if is_series_batch:
-            log.info(f"[ALL] SERIES FILE COUNT BEFORE SENDING: {len(files)}")
+            log.info(f"[ALL] EXPANDED FILE COUNT: {len(files)}")
             
         filesarr = []
-        log.info(f"[ALL] STARTING FILE SEND")
-        send_count = 0
-        for file in files:
+        if is_series_batch:
+            log.info(f"[ALL] STARTING SEND LOOP")
+            
+        for idx, file in enumerate(files, start=1):
             file_id_str = file["file_id"]
             
             if file.get("is_series"):
                 f_caption = ""
-                log.info("[ALL] VERIFICATION BYPASSED FOR SERIES")
+                protect_content = True if (hasattr(message, "command") and len(message.command) > 1 and message.command[1].startswith("allfilesp")) else False
             else:
                 files1 = await get_file_details(file_id_str)
                 if not files1: continue
                 title = files1["file_name"]
                 size=get_size(files1["file_size"])
                 f_caption=files1.get("caption", "")
+                protect_content = True if (hasattr(message, "command") and len(message.command) > 1 and message.command[1].startswith("allfilesp")) else False
             
                 if CUSTOM_FILE_CAPTION:
                     try:
@@ -622,17 +624,17 @@ async def start(client, message):
                 
             try:
                 if file.get("is_series"):
-                    log.info(f"[ALL] SENDING FILE: {file_id_str}")
+                    log.info(f"[ALL] SENDING FILE {idx}/{len(files)}")
                 msg = await client.send_cached_media(
                     chat_id=message.from_user.id,
                     file_id=file_id_str,
                     caption=f_caption,
-                    protect_content=True if pre == 'allfilesp' else False,
+                    protect_content=protect_content,
                     reply_markup=reply_markup
                 )
                 filesarr.append(msg)
                 if file.get("is_series"):
-                    log.info(f"SERIES FILE SENT: {file_id_str}")
+                    log.info(f"[ALL] FILE {idx} SENT")
             except FloodWait as e:
                 await asyncio.sleep(e.value + 1)
                 try:
@@ -640,15 +642,15 @@ async def start(client, message):
                         chat_id=message.from_user.id,
                         file_id=file_id_str,
                         caption=f_caption,
-                        protect_content=True if pre == 'allfilesp' else False,
+                        protect_content=protect_content,
                         reply_markup=reply_markup
                     )
                     filesarr.append(msg)
                     if file.get("is_series"):
-                        log.info(f"SERIES FILE SENT: {file_id_str}")
+                        log.info(f"[ALL] FILE {idx} SENT")
                 except Exception as e:
                     if file.get("is_series"):
-                        log.error(f"Failed to send series file {file_id_str} after FloodWait: {e}")
+                        log.error(f"[ALL] Failed to send series file {file_id_str} after FloodWait: {e}")
                     pass
             except Exception as e:
                 if file.get("is_series"):
@@ -656,7 +658,7 @@ async def start(client, message):
                 continue
                 
         if is_series_batch:
-            log.info("SERIES SEND COMPLETED")
+            log.info(f"[ALL] SEND COMPLETED: {len(filesarr)}/{len(files)}")
         k = await client.send_message(chat_id = message.from_user.id, text=f"<blockquote><b><u>❗️❗️❗️IMPORTANT❗️️❗️❗️</u></b>\n\nᴛʜɪs ᴍᴇssᴀɢᴇ ᴡɪʟʟ ʙᴇ ᴅᴇʟᴇᴛᴇᴅ ɪɴ <b><u>10 mins</u> 🫥 <i></b>(ᴅᴜᴇ ᴛᴏ ᴄᴏᴘʏʀɪɢʜᴛ ɪssᴜᴇs)</i>.\n\n<b><i>ᴘʟᴇᴀsᴇ ғᴏʀᴡᴀʀᴅ ᴛʜɪs ᴍᴇssᴀɢᴇ ᴛᴏ ʏᴏᴜʀ sᴀᴠᴇᴅ ᴍᴇssᴀɢᴇs ᴏʀ ᴀɴʏ ᴘʀɪᴠᴀᴛᴇ ᴄʜᴀᴛ.</i></b></blockquote>")
         await asyncio.sleep(600)
         for x in filesarr:
