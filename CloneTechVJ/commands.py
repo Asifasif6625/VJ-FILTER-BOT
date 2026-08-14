@@ -92,16 +92,29 @@ async def start(client, message):
         return
         
     elif data.startswith("all"):
-        files = temp.GETALL.get(file_id)
-        if not files:
+        data_obj = temp.GETALL.get(file_id)
+        if not data_obj:
             return await message.reply('<b><i>No such file exist.</b></i>')
+            
+        if isinstance(data_obj, dict) and "user" in data_obj:
+            if message.from_user.id != data_obj["user"]:
+                return await message.reply('<b><i>⚠️ This link is not for you! Generate your own from the group.</b></i>')
+            files = data_obj["files"]
+        else:
+            files = data_obj
+            
         filesarr = []
         for file in files:
             vj_file_id = file['file_id']
-            k = await temp.BOT.send_cached_media(chat_id=PUBLIC_FILE_CHANNEL, file_id=vj_file_id)
-            vj = await client.get_messages(PUBLIC_FILE_CHANNEL, k.id)
-            mg = getattr(vj, vj.media.value)
-            file_id = mg.file_id
+            try:
+                k = await temp.BOT.send_cached_media(chat_id=PUBLIC_FILE_CHANNEL, file_id=vj_file_id)
+                vj = await client.get_messages(PUBLIC_FILE_CHANNEL, k.id)
+                mg = getattr(vj, vj.media.value)
+                file_id = mg.file_id
+            except Exception as e:
+                import logging
+                logging.getLogger(__name__).warning(f"Clone bot failed to forward file {vj_file_id}: {e}")
+                continue
             if file.get("is_series"):
                 files1 = file
                 title = file.get("file_name", "")
@@ -138,14 +151,19 @@ async def start(client, message):
             else:
                 reply_markup=None
        
-            msg = await client.send_cached_media(
-                chat_id=message.from_user.id,
-                file_id=file_id,
-                caption="",
-                protect_content=False,
-                reply_markup=reply_markup
-            )
-            filesarr.append(msg)
+            try:
+                msg = await client.send_cached_media(
+                    chat_id=message.from_user.id,
+                    file_id=file_id,
+                    caption="",
+                    protect_content=False,
+                    reply_markup=reply_markup
+                )
+                filesarr.append(msg)
+            except Exception as e:
+                import logging
+                logging.getLogger(__name__).warning(f"Clone bot failed to send cached media {file_id}: {e}")
+                continue
         k = await client.send_message(chat_id = message.from_user.id, text=f"<b><u>❗️❗️❗️IMPORTANT❗️️❗️❗️</u></b>\n\nThis Movie Files/Videos will be deleted in <b><u>10 mins</u> 🫥 <i></b>(Due to Copyright Issues)</i>.\n\n<b><i>Please forward this ALL Files/Videos to your Saved Messages and Start Download there</i></b>")
         await asyncio.sleep(600)
         for x in filesarr:
