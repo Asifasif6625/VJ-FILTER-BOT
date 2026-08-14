@@ -1404,78 +1404,7 @@ async def removetutorial(bot, message):
     user = await bot.get_chat_member(grpid, userid)
     if user.status != enums.ChatMemberStatus.ADMINISTRATOR and user.status != enums.ChatMemberStatus.OWNER and str(userid) not in ADMINS:
         return
-    else:
-        pass
-    reply = await message.reply_text("<b>Please Wait...</b>")
-    await save_group_settings(grpid, 'tutorial', "")
-    await save_group_settings(grpid, 'is_tutorial', False)
-    await reply.edit_text(f"<b>Successfully Removed Your Tutorial Link!!!</b>")
 
-@Client.on_message(filters.command("restart") & filters.user(ADMINS))
-async def stop_button(bot, message):
-    msg = await bot.send_message(text="**🔄 𝙿𝚁𝙾𝙲𝙴𝚂𝚂𝙴𝚂 𝚂𝚃𝙾𝙿𝙴𝙳. 𝙱𝙾𝚃 𝙸𝚂 𝚁𝙴𝚂𝚃𝙰𝚁𝚃𝙸𝙽𝙶...**", chat_id=message.chat.id)       
-    await asyncio.sleep(3)
-    await msg.edit("**✅️ 𝙱𝙾𝚃 𝙸𝚂 𝚁𝙴𝚂𝚃𝙰𝚁𝚃𝙴𝙳. 𝙽𝙾𝚆 𝚈𝙾𝚄 𝙲𝙰𝙽 𝚄𝚂𝙴 𝙼𝙴**")
-    os.execl(sys.executable, sys.executable, *sys.argv)
-
-@Client.on_message(filters.command("nofsub"))
-async def nofsub(client, message):
-    userid = message.from_user.id if message.from_user else None
-    if not userid:
-        return await message.reply(f"<b>You are anonymous admin. Turn off anonymous admin and try again this command</b>")
-    chat_type = message.chat.type
-    if chat_type == enums.ChatType.PRIVATE:
-        return await message.reply_text("<b>This Command Work Only in group\n\nTry it in your own group</b>")
-    elif chat_type in [enums.ChatType.GROUP, enums.ChatType.SUPERGROUP]:
-        grpid = message.chat.id
-        title = message.chat.title
-    else:
-        return
-    userid = message.from_user.id
-    user = await client.get_chat_member(grpid, userid)
-    if user.status != enums.ChatMemberStatus.ADMINISTRATOR and user.status != enums.ChatMemberStatus.OWNER and str(userid) not in ADMINS:
-        return
-    else:
-        pass
-    await save_group_settings(grpid, 'fsub', None)
-    await message.reply_text(f"<b>Successfully removed force subscribe from {title}.</b>")
-
-@Client.on_message(filters.command('fsub'))
-async def fsub(client, message):
-    userid = message.from_user.id if message.from_user else None
-    if not userid:
-        return await message.reply(f"<b>You are anonymous admin. Turn off anonymous admin and try again this command</b>")
-    chat_type = message.chat.type
-    if chat_type == enums.ChatType.PRIVATE:
-        return await message.reply_text("<b>This Command Work Only in group\n\nTry it in your own group</b>")
-    elif chat_type in [enums.ChatType.GROUP, enums.ChatType.SUPERGROUP]:
-        grpid = message.chat.id
-        title = message.chat.title
-    else:
-        return
-    userid = message.from_user.id
-    user = await client.get_chat_member(grpid, userid)
-    if user.status != enums.ChatMemberStatus.ADMINISTRATOR and user.status != enums.ChatMemberStatus.OWNER and str(userid) not in ADMINS:
-        return
-    else:
-        pass
-    try:
-        ids = message.text.split(" ", 1)[1]
-        fsub_ids = [int(id) for id in ids.split()]
-    except IndexError:
-        return await message.reply_text("<b>Command Incomplete!\n\nAdd Multiple Channel By Seperate Space. Like: /fsub id1 id2 id3</b>")
-    except ValueError:
-        return await message.reply_text('<b>Make Sure Ids are Integer.</b>')        
-    channels = "Channels:\n"
-    for id in fsub_ids:
-        try:
-            chat = await client.get_chat(id)
-        except Exception as e:
-            await message.reply_text("Premium access added to the user.")            
-            await client.send_message(
-                chat_id=user_id,
-                text=f"<b>ᴘʀᴇᴍɪᴜᴍ ᴀᴅᴅᴇᴅ ᴛᴏ ʏᴏᴜʀ ᴀᴄᴄᴏᴜɴᴛ ꜰᴏʀ {time} ᴇɴᴊᴏʏ 😀\n</b>",                
-            )
         else:
             await message.reply_text("Invalid time format. Please use '1day for days', '1hour for hours', or '1min for minutes', or '1month for months' or '1year for year'")
     else:
@@ -1566,20 +1495,26 @@ async def purge_requests(client, message):
 
 async def send_series_files_to_user(client, user_id, files, query=None):
     from utils import get_size
-    from database.ia_filterdb import get_file_details
-    from info import CUSTOM_FILE_CAPTION
     import logging
     
     log = logging.getLogger(__name__)
-    debug_log = [f"🛠 <b>PM DIRECT SEND DEBUG</b>", f"Files to send: {len(files)}"]
     
     for idx, file in enumerate(files):
         file_id_str = file.get("file_id")
         if not file_id_str:
-            debug_log.append(f"File {idx}: Missing file_id")
             continue
             
-        f_caption = ""
+        file_name = file.get("file_name", "Unknown File")
+        raw_size = file.get("file_size", 0)
+        file_size = get_size(raw_size) if raw_size else "Unknown Size"
+        file_number = file.get("episode", "?")
+        
+        f_caption = (
+            f"<b>File Name :</b> <code>{file_name}</code>\n"
+            f"<b>File Size :</b> <code>{file_size}</code>\n"
+            f"<b>File Number :</b> <code>{file_number}</code>"
+        )
+        
         log.info(f"[QUALITY PM] SENDING FILE: {file_id_str}")
         try:
             msg = await client.send_cached_media(
@@ -1589,14 +1524,7 @@ async def send_series_files_to_user(client, user_id, files, query=None):
                 protect_content=False,
             )
             log.info(f"[QUALITY PM] FILE SENT: {file_id_str}")
-            debug_log.append(f"File {idx}: SENT")
             import asyncio
             await asyncio.sleep(0.5)
         except Exception as e:
-            debug_log.append(f"File {idx} ERROR: {e}")
             log.error(f"Failed to send series file directly: {e}")
-            
-    try:
-        await client.send_message(chat_id=user_id, text='\n'.join(debug_log))
-    except:
-        pass
