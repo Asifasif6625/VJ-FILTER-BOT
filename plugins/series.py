@@ -1301,12 +1301,12 @@ async def series_user_nav(client: Client, query: CallbackQuery):
         season  = int(parts[5])
         qual    = parts[7]
         
-        logger.info(f"[QUALITY PM] CALLBACK RECEIVED: {query.data}")
-        logger.info(f"[QUALITY PM] USER ID: {query.from_user.id}")
-        logger.info(f"[QUALITY PM] FULL ID: {full_id}")
-        logger.info(f"[QUALITY PM] LANGUAGE: {lang}")
-        logger.info(f"[QUALITY PM] SEASON: {season}")
-        logger.info(f"[QUALITY PM] QUALITY: {qual}")
+        logger.info(f"[PM SERIES] QUALITY CALLBACK RECEIVED: {query.data}")
+        logger.info(f"[PM SERIES] USER ID: {query.from_user.id}")
+        logger.info(f"[PM SERIES] FULL ID: {full_id}")
+        logger.info(f"[PM SERIES] LANGUAGE: {lang}")
+        logger.info(f"[PM SERIES] SEASON: {season}")
+        logger.info(f"[PM SERIES] QUALITY: {qual}")
         
         rating = series.get("rating", "N/A")
         if len(parts) >= 10 and parts[8] == "e":
@@ -1365,12 +1365,13 @@ async def series_user_nav(client: Client, query: CallbackQuery):
                         files.append(f)
 
         if files:
-            logger.info("[QUALITY PM] DATABASE QUERY MATCHED")
-            logger.info(f"[QUALITY PM] MATCHING EPISODES/FILES COUNT: {len(files)}")
+            logger.info(f"[PM SERIES] DB MATCH COUNT: {len(files)}")
+            logger.info(f"[PM SERIES] FILE COUNT: {len(files)}")
             if query.message.chat.type == enums.ChatType.PRIVATE:
                 await query.answer()
                 from plugins.commands import send_series_files_to_user
                 await send_series_files_to_user(client, query.from_user.id, files, query=query)
+                logger.info(f"[PM SERIES] SEND COMPLETED")
                 return
             else:
                 from utils import temp as _temp
@@ -1388,7 +1389,7 @@ async def series_user_nav(client: Client, query: CallbackQuery):
                     parse_mode=enums.ParseMode.HTML
                 )
         elif files is not None:
-            logger.info("[QUALITY PM] DATABASE QUERY RETURNED NO MATCHING FILES")
+            logger.info("[PM SERIES] DB MATCH COUNT: 0")
             return await query.answer("⚠️ File not found. It may have been removed.", show_alert=True)
 
 
