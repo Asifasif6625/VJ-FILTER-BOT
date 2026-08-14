@@ -274,14 +274,16 @@ async def start(client, message):
         file_id = data.split("-", 1)[1]
         msgs = BATCH_FILES.get(file_id)
         if not msgs:
-            file = await client.download_media(file_id)
-            try: 
+            try:
+                file = await client.download_media(file_id)
                 with open(file) as file_data:
                     msgs=json.loads(file_data.read())
-            except:
-                await sts.edit("FAILED")
-                return await client.send_message(LOG_CHANNEL, "UNABLE TO OPEN FILE.")
-            os.remove(file)
+                os.remove(file)
+            except Exception as e:
+                import logging
+                logging.getLogger(__name__).error(f"BATCH DOWNLOAD ERROR: {e}")
+                await sts.edit("FAILED TO DOWNLOAD BATCH DATA")
+                return await client.send_message(LOG_CHANNEL, f"UNABLE TO OPEN FILE.\n{e}")
             BATCH_FILES[file_id] = msgs
 
         filesarr = []
