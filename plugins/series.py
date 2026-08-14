@@ -1000,53 +1000,51 @@ async def cmd_sbatch(client: Client, message: Message):
         )
 
     total = msg2 - msg1 + 1
-    if total > 500:
+    if total > 1000:
         return await message.reply_text(
-            f"❌ Range too large ({total} messages). Maximum allowed is 500 per batch."
+            f"❌ Range too large ({total} messages). Maximum allowed is 1000 per batch."
         )
 
     wiz = temp.SERIES_WIZARD[uid]
     processing_msg = await message.reply_text(
-        f"⏳ Scanning messages {msg1} → {msg2} ({total} total)..."
+        f"⏳ Scanning messages {msg1} → {msg2} ({total} total)...\nThis may take time depending on number of messages."
     )
 
-    # ── Collect files ─────────────────────────────────────────────────────────
+    # ── Collect files using iter_messages (same as /batch in genlink.py) ───────
     files_found = []
     errors      = 0
+    done        = 0
 
-    for batch_start in range(msg1, msg2 + 1, 200):
-        batch_end = min(batch_start + 199, msg2)
+    async for msg in client.iter_messages(chat1, msg2, msg1):
+        done += 1
+        if msg.empty or msg.service:
+            errors += 1
+            continue
+        if not msg.media:
+            errors += 1
+            continue
         try:
-            messages = await client.get_messages(chat1, list(range(batch_start, batch_end + 1)))
-            for msg in messages:
-                if not msg or msg.empty:
-                    errors += 1
-                    continue
-                
-                media = (
-                    msg.document or msg.video or msg.audio
-                    or msg.photo or msg.animation or msg.voice or msg.video_note
-                )
-                if media:
-                    file_id   = getattr(media, "file_id", "")
-                    file_name = getattr(media, "file_name", None) or f"file_{msg.id}"
-                    file_size = getattr(media, "file_size", 0)
-                    
-                    # Attempt to extract episode number
-                    ep_num = _extract_episode_number(file_name)
-                    if not ep_num and msg.caption:
-                        ep_num = _extract_episode_number(msg.caption)
-                    if not ep_num and msg.text:
-                        ep_num = _extract_episode_number(msg.text)
-                    
-                    files_found.append((chat1, msg.id, file_id, file_name, file_size, ep_num))
-                else:
-                    errors += 1
-        except FloodWait as e:
-            await asyncio.sleep(e.value + 1)
+            file_type = msg.media
+            media     = getattr(msg, file_type.value)
+            if not media:
+                errors += 1
+                continue
+
+            file_id   = getattr(media, "file_id", "")
+            file_name = getattr(media, "file_name", None) or f"file_{msg.id}"
+            file_size = getattr(media, "file_size", 0) or 0
+
+            # Attempt to extract episode number from filename, caption, or text
+            ep_num = _extract_episode_number(file_name)
+            if not ep_num and msg.caption:
+                ep_num = _extract_episode_number(msg.caption)
+            if not ep_num and msg.text:
+                ep_num = _extract_episode_number(msg.text)
+
+            files_found.append((chat1, msg.id, file_id, file_name, file_size, ep_num))
         except Exception as ex:
-            logger.warning(f"sbatch get_messages error batch {batch_start}-{batch_end}: {ex}")
-            errors += (batch_end - batch_start + 1)
+            logger.warning(f"sbatch iter error mid={msg.id}: {ex}")
+            errors += 1
 
     if not files_found:
         await processing_msg.edit_text(
