@@ -147,7 +147,7 @@ async def start(client, message):
         )
         return
     
-    is_series_request = len(message.command) == 2 and message.command[1].startswith("all_")
+    is_series_request = bool(message.command) and len(message.command) == 2 and message.command[1].startswith("all_")
     if AUTH_CHANNEL and not await is_subscribed(client, message) and not is_series_request:
         try:
             if REQUEST_TO_JOIN_MODE == True:
@@ -537,14 +537,33 @@ async def start(client, message):
                 reply_markup=InlineKeyboardMarkup(button)
             else:
                 reply_markup = None
-            msg = await client.send_cached_media(
-                chat_id=message.from_user.id,
-                file_id=file_id,
-                caption="",
-                protect_content=True if pre == 'allfilesp' else False,
-                reply_markup=reply_markup
-            )
-            filesarr.append(msg)
+                
+            try:
+                msg = await client.send_cached_media(
+                    chat_id=message.from_user.id,
+                    file_id=file_id,
+                    caption="",
+                    protect_content=True if pre == 'allfilesp' else False,
+                    reply_markup=reply_markup
+                )
+                filesarr.append(msg)
+            except FloodWait as e:
+                await asyncio.sleep(e.value + 1)
+                try:
+                    msg = await client.send_cached_media(
+                        chat_id=message.from_user.id,
+                        file_id=file_id,
+                        caption="",
+                        protect_content=True if pre == 'allfilesp' else False,
+                        reply_markup=reply_markup
+                    )
+                    filesarr.append(msg)
+                except Exception:
+                    pass
+            except Exception as e:
+                import logging
+                logging.getLogger(__name__).warning(f"Error sending file in all_ payload: {e}")
+                continue
         k = await client.send_message(chat_id = message.from_user.id, text=f"<blockquote><b><u>❗️❗️❗️IMPORTANT❗️️❗️❗️</u></b>\n\nᴛʜɪs ᴍᴇssᴀɢᴇ ᴡɪʟʟ ʙᴇ ᴅᴇʟᴇᴛᴇᴅ ɪɴ <b><u>10 mins</u> 🫥 <i></b>(ᴅᴜᴇ ᴛᴏ ᴄᴏᴘʏʀɪɢʜᴛ ɪssᴜᴇs)</i>.\n\n<b><i>ᴘʟᴇᴀsᴇ ғᴏʀᴡᴀʀᴅ ᴛʜɪs ᴍᴇssᴀɢᴇ ᴛᴏ ʏᴏᴜʀ sᴀᴠᴇᴅ ᴍᴇssᴀɢᴇs ᴏʀ ᴀɴʏ ᴘʀɪᴠᴀᴛᴇ ᴄʜᴀᴛ.</i></b></blockquote>")
         await asyncio.sleep(600)
         for x in filesarr:
