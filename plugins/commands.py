@@ -467,10 +467,15 @@ async def start(client, message):
         return
         
     elif data.startswith("all"):
+        import logging
+        log = logging.getLogger(__name__)
+        log.info("ALL PAYLOAD RECEIVED")
         data_obj = temp.GETALL.get(file_id)
         if not data_obj:
+            log.info(f"GETALL KEY FOUND (But empty/missing): {file_id}")
             return await message.reply('<b><i>No such file exist.</b></i>')
             
+        log.info(f"GETALL KEY FOUND: {file_id}")
         if isinstance(data_obj, dict) and "user" in data_obj:
             if message.from_user.id != data_obj["user"]:
                 return await message.reply('<b><i>⚠️ This link is not for you! Generate your own from the group.</b></i>')
@@ -478,92 +483,91 @@ async def start(client, message):
         else:
             files = data_obj
             
+        is_series_batch = any(f.get("is_series") for f in files) if isinstance(files, list) else False
+        if is_series_batch:
+            log.info(f"SERIES FILE COUNT: {len(files)}")
+            
         filesarr = []
         for file in files:
-            file_id = file["file_id"]
+            file_id_str = file["file_id"]
             
             if file.get("is_series"):
-                files1 = file
-                title = file.get("file_name", "")
-                size = get_size(file.get("file_size", 0))
                 f_caption = ""
+                log.info("VERIFICATION BYPASSED FOR SERIES")
             else:
-                files1 = await get_file_details(file_id)
+                files1 = await get_file_details(file_id_str)
                 if not files1: continue
                 title = files1["file_name"]
                 size=get_size(files1["file_size"])
                 f_caption=files1.get("caption", "")
             
-            if file.get("is_series"):
-                lang_str = file.get('language', '')
-                season = file.get('season', 0)
-                qual_str = file.get('quality', '')
-                
-                season_line = f"⦿ season : Season {season}\n" if season > 0 else ""
-                
-                f_caption = (
-                    f"⦿ file name : {file.get('file_name', '')}\n"
-                    f"⦿ file size : {get_size(file.get('file_size', 0))}\n"
-                    f"⦿ language : {lang_str}\n"
-                    f"{season_line}"
-                    f"⦿ quality : {qual_str}\n\n"
-                    f"@{temp.U_NAME}"
-                )
-            elif CUSTOM_FILE_CAPTION:
-                try:
-                    f_caption=CUSTOM_FILE_CAPTION.format(file_name= '' if title is None else title, file_size='' if size is None else size, file_caption='' if f_caption is None else f_caption)
-                except:
-                    f_caption=f_caption
-            if f_caption is None:
-                f_caption = f"{' '.join(filter(lambda x: not x.startswith('[') and not x.startswith('@'), files1['file_name'].split()))}"
-            if not await db.has_premium_access(message.from_user.id):
-                if not await check_verification(client, message.from_user.id) and VERIFY == True:
-                    btn = [[
-                        InlineKeyboardButton("ᴠᴇʀɪғʏ", url=await get_token(client, message.from_user.id, f"https://telegram.me/{temp.U_NAME}?start="))
-                    ],[
-                        InlineKeyboardButton("ʜᴏᴡ ᴛᴏ ᴠᴇʀɪғʏ", url=VERIFY_TUTORIAL)
-                    ]]
-                    text = "<b>ʜᴇʏ {} 👋,\n\nʏᴏᴜ ᴀʀᴇ ɴᴏᴛ ᴠᴇʀɪғɪᴇᴅ ᴛᴏᴅᴀʏ, ᴘʟᴇᴀꜱᴇ ᴄʟɪᴄᴋ ᴏɴ ᴠᴇʀɪғʏ & ɢᴇᴛ ᴜɴʟɪᴍɪᴛᴇᴅ ᴀᴄᴄᴇꜱꜱ ғᴏʀ ᴛᴏᴅᴀʏ</b>"
-                    if PREMIUM_AND_REFERAL_MODE == True:
-                        text += "<b>ɪғ ʏᴏᴜ ᴡᴀɴᴛ ᴅɪʀᴇᴄᴛ ғɪʟᴇꜱ ᴡɪᴛʜᴏᴜᴛ ᴀɴʏ ᴠᴇʀɪғɪᴄᴀᴛɪᴏɴꜱ ᴛʜᴇɴ ʙᴜʏ ʙᴏᴛ ꜱᴜʙꜱᴄʀɪᴘᴛɪᴏɴ ☺️\n\n💶 ꜱᴇɴᴅ /plan ᴛᴏ ʙᴜʏ ꜱᴜʙꜱᴄʀɪᴘᴛɪᴏɴ</b>"
-                    await message.reply_text(
-                        text=text.format(message.from_user.mention),
-                        protect_content=True,
-                        reply_markup=InlineKeyboardMarkup(btn)
-                    )
-                    return
+                if CUSTOM_FILE_CAPTION:
+                    try:
+                        f_caption=CUSTOM_FILE_CAPTION.format(file_name= '' if title is None else title, file_size='' if size is None else size, file_caption='' if f_caption is None else f_caption)
+                    except:
+                        f_caption=f_caption
+                if f_caption is None:
+                    f_caption = f"{' '.join(filter(lambda x: not x.startswith('[') and not x.startswith('@'), files1['file_name'].split()))}"
+                if not await db.has_premium_access(message.from_user.id):
+                    if not await check_verification(client, message.from_user.id) and VERIFY == True:
+                        btn = [[
+                            InlineKeyboardButton("ᴠᴇʀɪғʏ", url=await get_token(client, message.from_user.id, f"https://telegram.me/{temp.U_NAME}?start="))
+                        ],[
+                            InlineKeyboardButton("ʜᴏᴡ ᴛᴏ ᴠᴇʀɪғʏ", url=VERIFY_TUTORIAL)
+                        ]]
+                        text = "<b>ʜᴇʏ {} 👋,\n\nʏᴏᴜ ᴀʀᴇ ɴᴏᴛ ᴠᴇʀɪғɪᴇᴅ ᴛᴏᴅᴀʏ, ᴘʟᴇᴀꜱᴇ ᴄʟɪᴄᴋ ᴏɴ ᴠᴇʀɪғʏ & ɢᴇᴛ ᴜɴʟɪᴍɪᴛᴇᴅ ᴀᴄᴄᴇꜱꜱ ғᴏʀ ᴛᴏᴅᴀʏ</b>"
+                        if PREMIUM_AND_REFERAL_MODE == True:
+                            text += "<b>ɪғ ʏᴏᴜ ᴡᴀɴᴛ ᴅɪʀᴇᴄᴛ ғɪʟᴇꜱ ᴡɪᴛʜᴏᴜᴛ ᴀɴʏ ᴠᴇʀɪғɪᴄᴀᴛɪᴏɴꜱ ᴛʜᴇɴ ʙᴜʏ ʙᴏᴛ ꜱᴜʙꜱᴄʀɪᴘᴛɪᴏɴ ☺️\n\n💶 ꜱᴇɴᴅ /plan ᴛᴏ ʙᴜʏ ꜱᴜʙꜱᴄʀɪᴘᴛɪᴏɴ</b>"
+                        await message.reply_text(
+                            text=text.format(message.from_user.mention),
+                            protect_content=True,
+                            reply_markup=InlineKeyboardMarkup(btn)
+                        )
+                        return
+                        
             if STREAM_MODE == True:
-                button = [[InlineKeyboardButton('sᴛʀᴇᴀᴍ ᴀɴᴅ ᴅᴏᴡɴʟᴏᴀᴅ', callback_data=f'generate_stream_link:{file_id}')]]
+                button = [[InlineKeyboardButton('sᴛʀᴇᴀᴍ ᴀɴᴅ ᴅᴏᴡɴʟᴏᴀᴅ', callback_data=f'generate_stream_link:{file_id_str}')]]
                 reply_markup=InlineKeyboardMarkup(button)
             else:
                 reply_markup = None
                 
             try:
+                if file.get("is_series"):
+                    log.info(f"SENDING SERIES FILE: {file_id_str}")
                 msg = await client.send_cached_media(
                     chat_id=message.from_user.id,
-                    file_id=file_id,
-                    caption="",
+                    file_id=file_id_str,
+                    caption=f_caption,
                     protect_content=True if pre == 'allfilesp' else False,
                     reply_markup=reply_markup
                 )
                 filesarr.append(msg)
+                if file.get("is_series"):
+                    log.info(f"SERIES FILE SENT: {file_id_str}")
             except FloodWait as e:
                 await asyncio.sleep(e.value + 1)
                 try:
                     msg = await client.send_cached_media(
                         chat_id=message.from_user.id,
-                        file_id=file_id,
-                        caption="",
+                        file_id=file_id_str,
+                        caption=f_caption,
                         protect_content=True if pre == 'allfilesp' else False,
                         reply_markup=reply_markup
                     )
                     filesarr.append(msg)
-                except Exception:
+                    if file.get("is_series"):
+                        log.info(f"SERIES FILE SENT: {file_id_str}")
+                except Exception as e:
+                    if file.get("is_series"):
+                        log.error(f"Failed to send series file {file_id_str} after FloodWait: {e}")
                     pass
             except Exception as e:
-                import logging
-                logging.getLogger(__name__).warning(f"Error sending file in all_ payload: {e}")
+                if file.get("is_series"):
+                    log.error(f"Failed to send series file {file_id_str}: {e}")
                 continue
+                
+        if is_series_batch:
+            log.info("SERIES SEND COMPLETED")
         k = await client.send_message(chat_id = message.from_user.id, text=f"<blockquote><b><u>❗️❗️❗️IMPORTANT❗️️❗️❗️</u></b>\n\nᴛʜɪs ᴍᴇssᴀɢᴇ ᴡɪʟʟ ʙᴇ ᴅᴇʟᴇᴛᴇᴅ ɪɴ <b><u>10 mins</u> 🫥 <i></b>(ᴅᴜᴇ ᴛᴏ ᴄᴏᴘʏʀɪɢʜᴛ ɪssᴜᴇs)</i>.\n\n<b><i>ᴘʟᴇᴀsᴇ ғᴏʀᴡᴀʀᴅ ᴛʜɪs ᴍᴇssᴀɢᴇ ᴛᴏ ʏᴏᴜʀ sᴀᴠᴇᴅ ᴍᴇssᴀɢᴇs ᴏʀ ᴀɴʏ ᴘʀɪᴠᴀᴛᴇ ᴄʜᴀᴛ.</i></b></blockquote>")
         await asyncio.sleep(600)
         for x in filesarr:
