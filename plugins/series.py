@@ -383,6 +383,39 @@ async def _user_quality_keyboard(user_id: int, full_id: str, sid: str, lang: str
 
 
 # ═════════════════════════════════════════════════════════════════════════════
+# ─── GLOBAL THUMBNAIL COMMANDS ───────────────────────────────────────────────
+# ═════════════════════════════════════════════════════════════════════════════
+
+@Client.on_message(filters.command("thumpseries") & filters.private, group=1)
+async def cmd_thumpseries(client: Client, message: Message):
+    if not _is_admin(message.from_user.id):
+        return await message.reply_text("❌ You are not authorized to use this command.")
+        
+    if not hasattr(temp, "SETTING_SERIES_THUMB"):
+        temp.SETTING_SERIES_THUMB = {}
+        
+    temp.SETTING_SERIES_THUMB[message.from_user.id] = True
+    await message.reply_text(
+        "Send me the image you want to use for Series Search.",
+        reply_to_message_id=message.id,
+        reply_markup=ForceReply(selective=True)
+    )
+
+@Client.on_message(filters.command("delthumbseries") & filters.private, group=1)
+async def cmd_delthumbseries(client: Client, message: Message):
+    if not _is_admin(message.from_user.id):
+        return await message.reply_text("❌ You are not authorized to use this command.")
+        
+    from database.series_db import delete_series_thumbnail, get_series_thumbnail
+    existing = await get_series_thumbnail()
+    if existing:
+        await delete_series_thumbnail()
+        await message.reply_text("✅ Series search thumbnail removed.")
+    else:
+        await message.reply_text("ℹ️ No Series search thumbnail is currently set.")
+
+
+# ═════════════════════════════════════════════════════════════════════════════
 # ─── /seriesfil — START ADMIN WIZARD ─────────────────────────────────────────
 # ═════════════════════════════════════════════════════════════════════════════
 
@@ -412,6 +445,40 @@ async def cmd_seriesfil(client: Client, message: Message):
 # ═════════════════════════════════════════════════════════════════════════════
 # ─── /ed_series — EDIT WIZARD ────────────────────────────────────────────────
 # ═════════════════════════════════════════════════════════════════════════════
+
+@Client.on_callback_query(filters.regex(r"^edser#") & (filters.private | filters.group), group=1)
+async def cb_edser(client: Client, query: CallbackQuery):
+    if not _is_admin(query.from_user.id):
+        return await query.answer("❌ You are not authorized.", show_alert=True)
+    
+    series_id = query.data.split("#")[1]
+    from database.series_db import get_series
+    exact = await get_series(series_id)
+    if not exact:
+        return await query.answer("Series not found.", show_alert=True)
+        
+    uid = query.from_user.id
+    temp.SERIES_WIZARD[uid] = {
+        "state": S_DONE,
+        "name": exact["name"],
+        "year": exact.get("year", ""),
+        "genre": exact.get("genre", ""),
+        "description": exact.get("description", ""),
+        "poster": exact.get("poster", ""),
+        "languages": exact.get("languages", []),
+        "seasons": exact.get("seasons", []),
+        "qualities": exact.get("qualities", []),
+        "series_id": str(exact["_id"]),
+        "batch_langs": [], "batch_seasons": [], "batch_qualities": [],
+        "batch_data": None,
+    }
+    
+    wiz = temp.SERIES_WIZARD[uid]
+    await query.message.edit_text(
+        _series_card(wiz) + "\n\n⚙️ <b>Series Configuration</b>\nChoose an option to edit or click Save:",
+        reply_markup=_config_menu_keyboard(wiz.get("series_id")),
+        parse_mode=enums.ParseMode.HTML,
+    )
 
 @Client.on_message(filters.command(["ed_series"]) & (filters.private | filters.group), group=1)
 async def cmd_ed_series(client: Client, message: Message):
@@ -475,11 +542,20 @@ async def cmd_ed_series(client: Client, message: Message):
 @Client.on_message(filters.command("cancel") & filters.private, group=1)
 async def cmd_cancel(client: Client, message: Message):
     uid = message.from_user.id
+    cancelled = False
+    
+    if hasattr(temp, "SETTING_SERIES_THUMB") and temp.SETTING_SERIES_THUMB.get(uid):
+        del temp.SETTING_SERIES_THUMB[uid]
+        cancelled = True
+        
     if uid in temp.SERIES_WIZARD:
         del temp.SERIES_WIZARD[uid]
-        await message.reply_text("❌ Series wizard cancelled.")
+        cancelled = True
+        
+    if cancelled:
+        await message.reply_text("❌ Action cancelled.")
     else:
-        await message.reply_text("No active wizard session.")
+        await message.reply_text("No active wizard or session to cancel.")
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -502,6 +578,16 @@ async def cmd_cancel(client: Client, message: Message):
 ), group=1)
 async def wizard_text_handler(client: Client, message: Message):
     uid = message.from_user.id
+    
+    if hasattr(temp, "SETTING_SERIES_THUMB") and temp.SETTING_SERIES_THUMB.get(uid):
+        if message.photo:
+            from database.series_db import save_series_thumbnail
+            await save_series_thumbnail(message.photo.file_id)
+            del temp.SETTING_SERIES_THUMB[uid]
+            return await message.reply_text("✅ Series search thumbnail updated successfully.")
+        else:
+            return await message.reply_text("⚠️ Please send a PHOTO to set as thumbnail, or /cancel to abort.")
+
     if uid not in temp.SERIES_WIZARD:
         return  # not in wizard — let other handlers process
 
@@ -520,6 +606,23 @@ async def wizard_text_handler(client: Client, message: Message):
     # ── Name ──────────────────────────────────────────────────────────────────
     if state == S_NAME:
         if not text: return
+        
+        from database.series_db import get_series_by_name, _normalize
+        normalized = _normalize(text)
+        existing = await get_series_by_name(normalized)
+        
+        if existing:
+            del temp.SERIES_WIZARD[uid]
+            series_id = str(existing["_id"])
+            btn = [[InlineKeyboardButton("✏️ Edit Existing Series", callback_data=f"edser#{series_id}")]]
+            return await message.reply_text(
+                f"⚠️ <b>Series Already Saved</b>\n\n"
+                f"<b>{existing['name']}</b> is already added.\n\n"
+                f"Please use the existing Series to add new languages, seasons or qualities.",
+                reply_markup=InlineKeyboardMarkup(btn),
+                parse_mode=enums.ParseMode.HTML
+            )
+            
         wiz["name"] = text
         wiz["state"] = S_YEAR
         await message.reply_text(
@@ -1265,7 +1368,14 @@ async def _send_or_edit(message_or_query, text, reply_markup, poster=None):
     else:
         try:
             if message_or_query.message.photo:
-                return await message_or_query.message.edit_caption(caption=text, reply_markup=reply_markup, parse_mode=enums.ParseMode.HTML)
+                if poster and message_or_query.message.photo.file_id != poster:
+                    from pyrogram.types import InputMediaPhoto
+                    return await message_or_query.message.edit_media(
+                        media=InputMediaPhoto(poster, caption=text),
+                        reply_markup=reply_markup
+                    )
+                else:
+                    return await message_or_query.message.edit_caption(caption=text, reply_markup=reply_markup, parse_mode=enums.ParseMode.HTML)
             else:
                 return await message_or_query.message.edit_text(text, reply_markup=reply_markup, parse_mode=enums.ParseMode.HTML)
         except MessageNotModified:
@@ -1305,28 +1415,45 @@ async def _resolve_nav_step(user_id: int, full_id: str, sid: str, series: dict, 
     return "⚠️ Invalid step.", None
 
 
+def _user_suggestions_keyboard(matches: list[dict]) -> InlineKeyboardMarkup:
+    rows = []
+    for m in matches:
+        sid = _series_short_id(str(m["_id"]))
+        rows.append([InlineKeyboardButton(m["name"], callback_data=f"sr#{sid}")])
+    return InlineKeyboardMarkup(rows)
+
+
 async def process_series_search(client: Client, message: Message, txt: str, reply_msg: Message = None):
-    # Try normalized first, then raw text for better matching
-    matches = await search_series(_normalize(txt))
-    if not matches:
-        matches = await search_series(txt)
+    matches = await search_series(txt)
     if not matches:
         return False
 
-    series = matches[0]
-    series_id = str(series["_id"])
-    _register_short_id(series_id)
-    sid = _series_short_id(series_id)
+    if len(matches) == 1:
+        series = matches[0]
+        series_id = str(series["_id"])
+        _register_short_id(series_id)
+        sid = _series_short_id(series_id)
 
-    is_private = (message.chat.type == enums.ChatType.PRIVATE)
-    text, rm = await _resolve_nav_step(message.from_user.id, series_id, sid, series, is_private=is_private)
+        is_private = (message.chat.type == enums.ChatType.PRIVATE)
+        text, rm = await _resolve_nav_step(message.from_user.id, series_id, sid, series, is_private=is_private)
+        poster = series.get("poster")
+    else:
+        from database.series_db import get_series_thumbnail
+        poster = await get_series_thumbnail()
+        
+        for m in matches:
+            _register_short_id(str(m["_id"]))
+            
+        text = "Choose the series/movie you want to view"
+        rm = _user_suggestions_keyboard(matches)
+
     if rm:
         if reply_msg:
             try:
                 await reply_msg.delete()
             except:
                 pass
-        msg = await _send_or_edit(message, text, rm, poster=series.get("poster"))
+        msg = await _send_or_edit(message, text, rm, poster=poster)
         if msg:
             from info import AUTO_DELETE
             if AUTO_DELETE:
@@ -1534,7 +1661,8 @@ async def series_user_nav(client: Client, query: CallbackQuery):
         
     text, rm = await _resolve_nav_step(query.from_user.id, full_id, sid, series, lang, season, qual, is_private=(query.message.chat.type == enums.ChatType.PRIVATE))
     if rm:
-        await _send_or_edit(query, text, rm)
+        poster = series.get("poster")
+        await _send_or_edit(query, text, rm, poster=poster)
         return await query.answer()
     
     return await query.answer(text, show_alert=True)
@@ -1545,59 +1673,90 @@ async def series_user_nav(client: Client, query: CallbackQuery):
 # ─── /serieslist — Admin: list all series ────────────────────────────────────
 # ═════════════════════════════════════════════════════════════════════════════
 
+import math
+
+async def send_series_list(message_or_query, unique_series, page=0):
+    per_page = 10
+    total_pages = math.ceil(len(unique_series) / per_page)
+    if total_pages == 0:
+        total_pages = 1
+        
+    start_idx = page * per_page
+    end_idx = start_idx + per_page
+    
+    page_series = unique_series[start_idx:end_idx]
+    
+    text = f"📚 <b>Added Series — Page {page + 1}/{total_pages}</b>\n\n"
+    for i, s in enumerate(page_series, start=start_idx + 1):
+        text += f"{i}. {s['name']}\n"
+    text += f"\nTotal: {len(unique_series)} Series"
+    
+    rows = []
+    for s in page_series:
+        series_id = str(s["_id"])
+        rows.append([InlineKeyboardButton(f"✏️ {s['name']}", callback_data=f"edser#{series_id}")])
+        
+    nav_buttons = []
+    if page > 0:
+        nav_buttons.append(InlineKeyboardButton("⬅️ Previous", callback_data=f"vser#{page - 1}"))
+    if page < total_pages - 1:
+        nav_buttons.append(InlineKeyboardButton("Next ➡️", callback_data=f"vser#{page + 1}"))
+        
+    if nav_buttons:
+        rows.append(nav_buttons)
+        
+    markup = InlineKeyboardMarkup(rows) if rows else None
+    
+    if isinstance(message_or_query, Message):
+        await message_or_query.reply_text(text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
+    else:
+        await message_or_query.message.edit_text(text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
+
+
+@Client.on_callback_query(filters.regex(r"^vser#") & (filters.private | filters.group), group=1)
+async def cb_vser_page(client: Client, query: CallbackQuery):
+    if not _is_admin(query.from_user.id):
+        return await query.answer("❌ You are not authorized.", show_alert=True)
+        
+    page = int(query.data.split("#")[1])
+    from database.series_db import list_all_series
+    all_series = await list_all_series()
+    
+    seen = set()
+    unique_series = []
+    for s in all_series:
+        name = s.get("name", "").strip()
+        name_lower = name.lower()
+        if name_lower not in seen:
+            seen.add(name_lower)
+            unique_series.append(s)
+
+    unique_series.sort(key=lambda x: x.get("name", "").lower())
+    await send_series_list(query, unique_series, page=page)
+
+
 @Client.on_message(filters.command(["serieslist", "viewseries"]) & (filters.private | filters.group), group=1)
 async def cmd_serieslist(client: Client, message: Message):
-    try:
-        is_admin = _is_admin(message.from_user.id)
-        logger.info("[/viewseries] COMMAND RECEIVED")
-        logger.info(f"[/viewseries] ADMIN: {is_admin}")
-        
-        if not is_admin:
-            return await message.reply_text("❌ You are not authorized to use this command.")
+    if not _is_admin(message.from_user.id):
+        return await message.reply_text("❌ You are not authorized to use this command.")
 
-        logger.info("[/viewseries] FETCHING SERIES LIST")
-        all_series = await list_all_series()
-        
-        if not all_series:
-            logger.info("[/viewseries] UNIQUE SERIES COUNT: 0")
-            return await message.reply_text("No series added yet.")
+    from database.series_db import list_all_series
+    all_series = await list_all_series()
+    
+    if not all_series:
+        return await message.reply_text("No series added yet.")
 
-        # Extract unique names and sort alphabetically
-        unique_names = sorted(list(set(s["name"] for s in all_series)), key=lambda x: x.lower())
-        total_count = len(unique_names)
-        
-        logger.info(f"[/viewseries] UNIQUE SERIES COUNT: {total_count}")
+    seen = set()
+    unique_series = []
+    for s in all_series:
+        name = s.get("name", "").strip()
+        name_lower = name.lower()
+        if name_lower not in seen:
+            seen.add(name_lower)
+            unique_series.append(s)
 
-        header = "📺 <b>SERIES LIST</b>\n\n"
-        footer = f"\nTotal Series: {total_count}"
-        
-        lines = []
-        for i, name in enumerate(unique_names, start=1):
-            lines.append(f"{i}. {name}")
-            
-        # Split into chunks if necessary (Telegram limit ~4096)
-        MAX_LEN = 4000
-        current_text = header
-        
-        for line in lines:
-            if len(current_text) + len(line) + 1 > MAX_LEN:
-                await message.reply_text(current_text)
-                current_text = line + "\n"
-            else:
-                current_text += line + "\n"
-                
-        # Append footer if it fits, else send current and then footer
-        if len(current_text) + len(footer) > MAX_LEN:
-            await message.reply_text(current_text)
-            await message.reply_text(footer)
-        else:
-            current_text += footer
-            await message.reply_text(current_text)
-
-        logger.info("[/viewseries] LIST SENT")
-
-    except Exception as e:
-        logger.exception(f"[/viewseries] ERROR: {e}")
+    unique_series.sort(key=lambda x: x.get("name", "").lower())
+    await send_series_list(message, unique_series, page=0)
 
 
 # ═════════════════════════════════════════════════════════════════════════════
