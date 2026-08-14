@@ -73,6 +73,42 @@ async def start(client, message):
     
     data = message.command[1]
 
+    if data.startswith("fsub_"):
+        req_id = data.split("_", 1)[1]
+        req = temp.GROUP_MOVIE_REQS.get(req_id)
+        if not req:
+            return await message.reply("<b><i>Sorry, this request has expired. Please search again.</b></i>")
+        if message.from_user.id != req["user"]:
+            return await message.reply("<b><i>⚠️ This request is not for you!</b></i>")
+            
+        import logging
+        logging.getLogger(__name__).info(f"[GROUP MOVIE] SHOW JOIN REQUEST")
+        
+        try:
+            invite_link = await client.create_chat_invite_link(int(AUTH_CHANNEL), creates_join_request=True)
+        except Exception as e:
+            await message.reply_text("Make sure Bot is admin in Forcesub channel")
+            return
+            
+        text = (
+            "📢 **Channel Join Request**\n\n"
+            "ഫയൽ ലഭിക്കുന്നതിന് മുമ്പ് ഞങ്ങളുടെ ചാനലിലേക്ക് Join Request അയയ്ക്കുക.\n\n"
+            "Request അയച്ച ശേഷം താഴെയുള്ള Try Again ബട്ടൺ ക്ലിക്ക് ചെയ്യുക.\n\n"
+            "Please send a Join Request to our channel before getting the file.\n\n"
+            "After sending the request, click Try Again below."
+        )
+        btn = [
+            [InlineKeyboardButton("📢 Send Join Request", url=invite_link.invite_link)],
+            [InlineKeyboardButton("🔄 Try Again", callback_data=f"checksub#movie#{req_id}")]
+        ]
+        await client.send_message(
+            chat_id=message.from_user.id,
+            text=text,
+            reply_markup=InlineKeyboardMarkup(btn),
+            parse_mode=enums.ParseMode.MARKDOWN
+        )
+        return
+        
     # --- SERIES GROUP TO PM FLOW ---
     if data.startswith("all_"):
         file_id = data.split("_", 1)[1]

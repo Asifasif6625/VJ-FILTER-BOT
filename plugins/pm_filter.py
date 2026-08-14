@@ -1459,10 +1459,28 @@ async def cb_handler(client: Client, query: CallbackQuery):
                             return getattr(self.message, name)
                     return await start(client, MockMsg(query, cmd))
                 else:
-                    if settings['is_shortlink'] and not await db.has_premium_access(query.from_user.id):
-                        temp.SHORT[clicked] = query.message.chat.id
-                    await query.answer(url=f"https://telegram.me/{temp.U_NAME}?start={cmd}")
-                    return
+                    import logging
+                    log = logging.getLogger(__name__)
+                    if not hasattr(temp, "GROUP_MOVIE_REQS"):
+                        temp.GROUP_MOVIE_REQS = {}
+                        
+                    if AUTH_CHANNEL and not await is_subscribed(client, query):
+                        import uuid
+                        req_id = str(uuid.uuid4())[:8]
+                        temp.GROUP_MOVIE_REQS[req_id] = {
+                            "user": clicked,
+                            "source": "group",
+                            "cmd": cmd
+                        }
+                        log.info(f"[GROUP MOVIE] FILE CLICK\n[GROUP MOVIE] USER = {clicked}\n[GROUP MOVIE] REQUEST ID = {req_id}\n[GROUP MOVIE] FORCE SUB CHECK\n[GROUP MOVIE] FORCE SUB RESULT = FAIL")
+                        await query.answer(url=f"https://telegram.me/{temp.U_NAME}?start=fsub_{req_id}")
+                        return
+                    else:
+                        log.info(f"[GROUP MOVIE] NEW FILE REQUEST\n[GROUP MOVIE] FRESH FORCE SUB CHECK\n[GROUP MOVIE] FORCE SUB RESULT = PASS")
+                        if settings['is_shortlink'] and not await db.has_premium_access(query.from_user.id):
+                            temp.SHORT[clicked] = query.message.chat.id
+                        await query.answer(url=f"https://telegram.me/{temp.U_NAME}?start={cmd}")
+                        return
             else:
                 await query.answer(f"Hᴇʏ {query.from_user.first_name}, Tʜɪs Is Nᴏᴛ Yᴏᴜʀ Mᴏᴠɪᴇ Rᴇǫᴜᴇsᴛ. Rᴇǫᴜᴇsᴛ Yᴏᴜʀ's !", show_alert=True)
         except UserIsBlocked:
@@ -1499,7 +1517,26 @@ async def cb_handler(client: Client, query: CallbackQuery):
                         return getattr(self.message, name)
                 return await start(client, MockMsg(query, cmd))
             else:
-                await query.answer(url=f"https://telegram.me/{temp.U_NAME}?start={cmd}")
+                import logging
+                log = logging.getLogger(__name__)
+                if not hasattr(temp, "GROUP_MOVIE_REQS"):
+                    temp.GROUP_MOVIE_REQS = {}
+                    
+                if AUTH_CHANNEL and not await is_subscribed(client, query):
+                    import uuid
+                    req_id = str(uuid.uuid4())[:8]
+                    temp.GROUP_MOVIE_REQS[req_id] = {
+                        "user": clicked,
+                        "source": "group",
+                        "cmd": cmd
+                    }
+                    log.info(f"[GROUP MOVIE] FILE CLICK\n[GROUP MOVIE] USER = {clicked}\n[GROUP MOVIE] REQUEST ID = {req_id}\n[GROUP MOVIE] FORCE SUB CHECK\n[GROUP MOVIE] FORCE SUB RESULT = FAIL")
+                    await query.answer(url=f"https://telegram.me/{temp.U_NAME}?start=fsub_{req_id}")
+                    return
+                else:
+                    log.info(f"[GROUP MOVIE] NEW FILE REQUEST\n[GROUP MOVIE] FRESH FORCE SUB CHECK\n[GROUP MOVIE] FORCE SUB RESULT = PASS")
+                    await query.answer(url=f"https://telegram.me/{temp.U_NAME}?start={cmd}")
+                    return
                 
         except UserIsBlocked:
             await query.answer('Uɴʙʟᴏᴄᴋ ᴛʜᴇ ʙᴏᴛ ᴍᴀʜɴ !', show_alert=True)
@@ -1554,6 +1591,57 @@ async def cb_handler(client: Client, query: CallbackQuery):
     
     elif query.data.startswith("checksub"):
         ident, kk, file_id = query.data.split("#")
+        import logging
+        log = logging.getLogger(__name__)
+        
+        if kk == "movie":
+            req_id = file_id
+            log.info(f"[TRY AGAIN] CLICKED\n[TRY AGAIN] REQUEST ID = {req_id}\n[TRY AGAIN] USER = {query.from_user.id}")
+            if not hasattr(temp, "GROUP_MOVIE_REQS"):
+                temp.GROUP_MOVIE_REQS = {}
+            req = temp.GROUP_MOVIE_REQS.get(req_id)
+            if not req:
+                return await query.answer("Request expired.", show_alert=True)
+            if query.from_user.id != req["user"]:
+                return await query.answer("⚠️ This request is not for you.", show_alert=True)
+            
+            if AUTH_CHANNEL and not await is_subscribed(client, query):
+                log.info(f"[TRY AGAIN] FORCE SUB RESULT = FAIL\n[TRY AGAIN] NOT VERIFIED - SHOWING ALERT")
+                return await query.answer("⚠️ ആദ്യം ചാനലിലേക്ക് Join Request അയയ്ക്കുക.", show_alert=True)
+            
+            log.info(f"[TRY AGAIN] FORCE SUB RESULT = PASS\n[TRY AGAIN] VERIFIED - SENDING ORIGINAL FILE")
+            cmd = req["cmd"]
+            del temp.GROUP_MOVIE_REQS[req_id]
+            log.info(f"[GROUP MOVIE] SENDING FILE")
+            
+            from plugins.commands import start
+            class MockMsg:
+                def __init__(self, q, c):
+                    self.message = q.message
+                    self.chat = q.message.chat
+                    self.from_user = q.from_user
+                    self.text = f"/start {c}"
+                    self.command = ["start", c]
+                    self.id = q.message.id
+                    self.date = q.message.date
+                def __getattr__(self, name):
+                    return getattr(self.message, name)
+                async def reply(self, text, *args, **kwargs):
+                    kwargs.pop("reply_to_message_id", None)
+                    return await self.message._client.send_message(self.chat.id, text, *args, **kwargs)
+                async def reply_text(self, text, *args, **kwargs):
+                    kwargs.pop("reply_to_message_id", None)
+                    return await self.message._client.send_message(self.chat.id, text, *args, **kwargs)
+                async def reply_photo(self, photo, *args, **kwargs):
+                    kwargs.pop("reply_to_message_id", None)
+                    return await self.message._client.send_photo(self.chat.id, photo, *args, **kwargs)
+                    
+            try:
+                await query.message.delete()
+            except:
+                pass
+            return await start(client, MockMsg(query, cmd))
+            
         if AUTH_CHANNEL and not await is_subscribed(client, query):
             if kk == "all":
                 await query.answer("⚠️ ആദ്യം ചാനലിലേക്ക് Join Request അയയ്ക്കുക.", show_alert=True)
