@@ -590,7 +590,6 @@ async def start(client, message):
                             
                 log.info(f"[ALL START] EXPANDED FILES: {len(files)}")
                 
-                from plugins.commands import send_series_files_to_user
                 await send_series_files_to_user(client, message.from_user.id, files)
                 log.info(f"[ALL START] Existing PM Series send function completed")
                 

@@ -1573,6 +1573,17 @@ async def cb_handler(client: Client, query: CallbackQuery):
                 self.date = q.message.date
             def __getattr__(self, name):
                 return getattr(self.message, name)
+            async def reply(self, text, *args, **kwargs):
+                from pyrogram.client import Client
+                # kwargs may contain reply_markup, etc. we should not pass reply_to_message_id if the message is deleted
+                kwargs.pop("reply_to_message_id", None)
+                return await self.message._client.send_message(self.chat.id, text, *args, **kwargs)
+            async def reply_text(self, text, *args, **kwargs):
+                kwargs.pop("reply_to_message_id", None)
+                return await self.message._client.send_message(self.chat.id, text, *args, **kwargs)
+            async def reply_photo(self, photo, *args, **kwargs):
+                kwargs.pop("reply_to_message_id", None)
+                return await self.message._client.send_photo(self.chat.id, photo, *args, **kwargs)
                 
         await query.message.delete()
         await start(client, MockMsg(query, kk, file_id))
