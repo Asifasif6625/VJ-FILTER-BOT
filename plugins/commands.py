@@ -1507,11 +1507,17 @@ async def total_requests(client, message):
 async def purge_requests(client, message):   
     if join_db().isActive():
         await join_db().delete_all_users()
-        await message.reply_text(
-            text="Purged All Requests.",
-            parse_mode=enums.ParseMode.MARKDOWN,
-            disable_web_page_preview=True
-        )
+        
+    msg = await message.reply_text("Purging pending join requests...", parse_mode=enums.ParseMode.MARKDOWN)
+    
+    try:
+        if AUTH_CHANNEL:
+            await client.decline_all_chat_join_requests(int(AUTH_CHANNEL))
+            await msg.edit("Purged All Pending Join Requests from Database and Channel.", parse_mode=enums.ParseMode.MARKDOWN)
+        else:
+            await msg.edit("Purged All Requests from Database (No AUTH_CHANNEL set).", parse_mode=enums.ParseMode.MARKDOWN)
+    except Exception as e:
+        await msg.edit(f"Purged from Database, but failed to purge from channel: {e}", parse_mode=enums.ParseMode.MARKDOWN)
 
 async def send_series_files_to_user(client, user_id, files, query=None):
     from utils import get_size
