@@ -20,12 +20,14 @@ logger = logging.getLogger(__name__)
 BATCH_FILES = {}
 join_db = JoinReqs
 
-async def send_series_files_to_user(client, user_id: int, files: list):
+async def send_series_files_to_user(client, user_id: int, files: list, query=None):
     """
     Directly send a list of series files to a user's PM.
-    Called from series.py quality-button callback to avoid the broken
-    start() re-entry hack (Pyrogram Message.command is read-only).
+    Mirrors utils.send_all() — catches UserIsBlocked / PeerIdInvalid visibly.
+    Pass query so we can show alert on failure instead of silently dropping files.
     """
+    from pyrogram.errors import UserIsBlocked, PeerIdInvalid
+
     filesarr = []
     for file in files:
         file_id = file.get("file_id", "")
@@ -60,30 +62,46 @@ async def send_series_files_to_user(client, user_id: int, files: list):
                 filesarr.append(msg)
             except Exception:
                 pass
-        except Exception:
-            pass
+        except UserIsBlocked:
+            if query:
+                await query.answer('Please unblock the bot first!', show_alert=True)
+            return
+        except PeerIdInvalid:
+            if query:
+                await query.answer(
+                    'Please start the bot in PM first, then click again!',
+                    show_alert=True
+                )
+            return
+        except Exception as e:
+            logger.warning(f"send_series_files_to_user error user={user_id} file_id={file_id}: {e}")
 
-    if filesarr:
-        k = await client.send_message(
-            chat_id=user_id,
-            text=(
-                "<blockquote><b><u>❗️❗️❗️IMPORTANT❗️️❗️❗️</u></b>\n\n"
-                "ᴛʜɪs ᴍᴇssᴀɢᴇ ᴡɪʟʟ ʙᴇ ᴅᴇʟᴇᴛᴇᴅ ɪɴ <b><u>10 mins</u> 🫥 <i></b>"
-                "(ᴅᴜᴇ ᴛᴏ ᴄᴏᴘʏʀɪɢʜᴛ ɪssᴜᴇs)</i>.\n\n"
-                "<b><i>ᴘʟᴇᴀsᴇ ғᴏʀᴡᴀʀᴅ ᴛʜɪs ᴍᴇssᴀɢᴇ ᴛᴏ ʏᴏᴜʀ sᴀᴠᴇᴅ ᴍᴇssᴀɢᴇs ᴏʀ ᴀɴʏ ᴘʀɪᴠᴀᴛᴇ ᴄʜᴀᴛ.</i></b>"
-                "</blockquote>"
-            )
-        )
-        await asyncio.sleep(600)
-        for x in filesarr:
-            try:
-                await x.delete()
-            except Exception:
-                pass
+    if not filesarr:
+        if query:
+            await query.answer('No files could be sent. Check bot logs.', show_alert=True)
+        return
+
+    k = await client.send_message(
+        chat_id=user_id,
+        text=(
+            "<blockquote><b><u>❗️❗️❗️IMPORTANT❗️️❗️❗️</u></b>\n\n"
+            "ᴛʜɪs ᴍᴇssᴀɢᴇ ᴡɪʟʟ ʙᴇ ᴅᴇʟᴇᴛᴇᴅ ɪɴ <b><u>10 mins</u> 🫥 <i></b>"
+            "(ᴅᴜᴇ ᴛᴏ ᴄᴏᴘʏʀɪɢʜᴛ ɪssᴜᴇs)</i>.\n\n"
+            "<b><i>ᴘʟᴇᴀsᴇ ғᴏʀᴡᴀʀᴅ ᴛʜɪs ᴍᴇssᴀɢᴇ ᴛᴏ ʏᴏᴜʀ sᴀᴠᴇᴅ ᴍᴇssᴀɢᴇs ᴏʀ ᴀɴʏ ᴘʀɪᴠᴀᴛᴇ ᴄʜᴀᴛ.</i></b>"
+            "</blockquote>"
+        ),
+        parse_mode=enums.ParseMode.HTML,
+    )
+    await asyncio.sleep(600)
+    for x in filesarr:
         try:
-            await k.edit_text("<b>✅ ʏᴏᴜʀ ᴍᴇssᴀɢᴇ ɪs sᴜᴄᴄᴇssғᴜʟʟʏ ᴅᴇʟᴇᴛᴇᴅ</b>")
+            await x.delete()
         except Exception:
             pass
+    try:
+        await k.edit_text("<b>✅ ʏᴏᴜʀ ᴍᴇssᴀɢᴇ ɪs sᴜᴄᴄᴇssғᴜʟʟʏ ᴅᴇʟᴇᴛᴇᴅ</b>")
+    except Exception:
+        pass
 
 @Client.on_message(filters.command("start") & filters.incoming)
 async def start(client, message):
