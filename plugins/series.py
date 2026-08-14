@@ -225,12 +225,26 @@ def _season_keyboard(total: int, selected: list[int]) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(rows)
 
 
-def _quality_keyboard(selected: list[str]) -> InlineKeyboardMarkup:
+def _quality_keyboard(
+    selected: list[str],
+    already_saved: list[str] = None,
+) -> InlineKeyboardMarkup:
+    """
+    selected      — qualities chosen for the CURRENT batch (shown with 🟢)
+    already_saved — qualities already committed to the series (shown with ✅)
+                    They are still tap-able; the tick is purely informational.
+    """
+    already_saved = already_saved or []
     rows = []
     for i in range(0, len(QUALITY_OPTIONS), 3):
         row = []
         for q in QUALITY_OPTIONS[i:i+3]:
-            tick = "✅ " if q in selected else ""
+            if q in selected:
+                tick = "🟢 "        # active in current batch selection
+            elif q in already_saved:
+                tick = "✅ "        # already saved to this series
+            else:
+                tick = ""
             row.append(InlineKeyboardButton(
                 f"{tick}{q}",
                 callback_data=f"sw#quality#{q}"
@@ -697,8 +711,9 @@ async def wizard_callback(client: Client, query: CallbackQuery):
                 await query.message.edit_text(
                     f"📦 Batch — <b>{wiz['name']}</b>\n"
                     f"🌐 {', '.join(wiz['batch_langs'])} · 📁 Seasons {', '.join(str(s) for s in sorted(target_list)) if target_list else 'None'}\n\n"
-                    "Select <b>qualities</b>:",
-                    reply_markup=_quality_keyboard(wiz["batch_qualities"]),
+                    "Select <b>qualities</b>:\n"
+                    "<i>✅ = already saved to series  |  🟢 = selected for this batch</i>",
+                    reply_markup=_quality_keyboard(wiz["batch_qualities"], wiz["qualities"]),
                     parse_mode=enums.ParseMode.HTML,
                 )
             else:
@@ -715,8 +730,9 @@ async def wizard_callback(client: Client, query: CallbackQuery):
                 await query.message.edit_text(
                     f"📦 Batch — <b>{wiz['name']}</b>\n"
                     f"🌐 {', '.join(wiz['batch_langs'])} · 📁 Season None\n\n"
-                    "Select <b>qualities</b>:",
-                    reply_markup=_quality_keyboard(wiz["batch_qualities"]),
+                    "Select <b>qualities</b>:\n"
+                    "<i>✅ = already saved to series  |  🟢 = selected for this batch</i>",
+                    reply_markup=_quality_keyboard(wiz["batch_qualities"], wiz["qualities"]),
                     parse_mode=enums.ParseMode.HTML,
                 )
             else:
@@ -773,8 +789,10 @@ async def wizard_callback(client: Client, query: CallbackQuery):
                 target_list.remove(q)
             else:
                 target_list.append(q)
+            # In batch mode show already-saved series qualities with ✅
+            already_saved = wiz["qualities"] if wiz["state"] == S_BATCH_QUAL else []
             try:
-                await query.message.edit_reply_markup(_quality_keyboard(target_list))
+                await query.message.edit_reply_markup(_quality_keyboard(target_list, already_saved))
             except MessageNotModified:
                 pass
         return await query.answer()
@@ -1136,13 +1154,18 @@ async def _resolve_nav_step(full_id: str, sid: str, series: dict, lang=None, sea
     return "⚠️ Invalid step.", None
 
 
-@Client.on_message((filters.group | filters.private) & filters.text & filters.incoming, group=-1)
+@Client.on_message((filters.group | filters.private) & filters.text & filters.incoming, group=2)
 async def series_search_handler(client: Client, message: Message):
-    if message.text.startswith("/") or len(message.text) > 100 or len(message.text.strip()) < 2:
+    txt = message.text.strip()
+    if txt.startswith("/") or len(txt) > 100 or len(txt) < 2:
         return
 
-    matches = await search_series(_normalize(message.text.strip()))
-    if not matches: return
+    # Try normalized first, then raw text for better matching
+    matches = await search_series(_normalize(txt))
+    if not matches:
+        matches = await search_series(txt)
+    if not matches:
+        return
 
     series = matches[0]
     series_id = str(series["_id"])
@@ -1162,9 +1185,6 @@ async def series_search_handler(client: Client, message: Message):
                     except:
                         pass
                 asyncio.create_task(delete_search_msg(msg))
-                
-    from pyrogram import StopPropagation
-    raise StopPropagation
 
 
 @Client.on_callback_query(filters.regex(r"^sr#"), group=1)
@@ -1181,7 +1201,7 @@ async def series_user_nav(client: Client, query: CallbackQuery):
     if sid == "close":
         return await query.message.delete()
         
-    full_id = _series_full_id(sid)
+    full_id = await _get_full_id(sid)
     if not full_id:
         return await query.answer("Series context expired.", show_alert=True)
     
