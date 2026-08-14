@@ -1154,18 +1154,13 @@ async def _resolve_nav_step(full_id: str, sid: str, series: dict, lang=None, sea
     return "⚠️ Invalid step.", None
 
 
-@Client.on_message((filters.group | filters.private) & filters.text & filters.incoming, group=2)
-async def series_search_handler(client: Client, message: Message):
-    txt = message.text.strip()
-    if txt.startswith("/") or len(txt) > 100 or len(txt) < 2:
-        return
-
+async def process_series_search(client: Client, message: Message, txt: str, reply_msg: Message = None):
     # Try normalized first, then raw text for better matching
     matches = await search_series(_normalize(txt))
     if not matches:
         matches = await search_series(txt)
     if not matches:
-        return
+        return False
 
     series = matches[0]
     series_id = str(series["_id"])
@@ -1174,6 +1169,11 @@ async def series_search_handler(client: Client, message: Message):
 
     text, rm = await _resolve_nav_step(series_id, sid, series)
     if rm:
+        if reply_msg:
+            try:
+                await reply_msg.delete()
+            except:
+                pass
         msg = await _send_or_edit(message, text, rm, poster=series.get("poster"))
         if msg:
             from info import AUTO_DELETE
@@ -1184,7 +1184,16 @@ async def series_search_handler(client: Client, message: Message):
                         await m.delete()
                     except:
                         pass
+                import asyncio
                 asyncio.create_task(delete_search_msg(msg))
+    return True
+
+@Client.on_message((filters.group | filters.private) & filters.text & filters.incoming, group=2)
+async def series_search_handler(client: Client, message: Message):
+    txt = message.text.strip()
+    if txt.startswith("/") or len(txt) > 100 or len(txt) < 2:
+        return
+    await process_series_search(client, message, txt)
 
 
 @Client.on_callback_query(filters.regex(r"^sr#"), group=1)

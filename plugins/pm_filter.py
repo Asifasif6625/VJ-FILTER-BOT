@@ -305,6 +305,13 @@ async def advantage_spoll_choker(bot, query):
                 reply_msg = await query.message.edit_text(f"<b><i>Searching For {movie} 🔍</i></b>")
                 await auto_filter(bot, movie, query, reply_msg, ai_search, k)
             else:
+                try:
+                    from plugins.series import process_series_search
+                    is_series = await process_series_search(bot, query.message.reply_to_message or query.message, movie, query.message)
+                    if is_series:
+                        return
+                except Exception:
+                    pass
                 reqstr1 = query.from_user.id if query.from_user else 0
                 reqstr = await bot.get_users(reqstr1)
                 if NO_RESULTS_MSG:
@@ -2626,6 +2633,14 @@ async def auto_filter(client, name, msg, reply_msg=None, ai_search=True, spoll=F
             files, offset, total_results = await get_search_results(message.chat.id ,search, offset=0, filter=True)
             settings = await get_settings(message.chat.id)
             if not files:
+                try:
+                    from plugins.series import process_series_search
+                    is_series = await process_series_search(client, message, name, reply_msg)
+                    if is_series:
+                        return
+                except Exception as e:
+                    pass
+                    
                 no_db_btn = InlineKeyboardMarkup([[InlineKeyboardButton("🦨Reason", callback_data="not_in_db_reason")]])
                 imdb = await get_poster(search, bulk=False) if NOFILEREQ else None
                 if imdb:
