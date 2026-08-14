@@ -20,6 +20,71 @@ logger = logging.getLogger(__name__)
 BATCH_FILES = {}
 join_db = JoinReqs
 
+async def send_series_files_to_user(client, user_id: int, files: list):
+    """
+    Directly send a list of series files to a user's PM.
+    Called from series.py quality-button callback to avoid the broken
+    start() re-entry hack (Pyrogram Message.command is read-only).
+    """
+    filesarr = []
+    for file in files:
+        file_id = file.get("file_id", "")
+        if not file_id:
+            continue
+        try:
+            if STREAM_MODE:
+                reply_markup = InlineKeyboardMarkup([
+                    [InlineKeyboardButton('sᴛʀᴇᴀᴍ ᴀɴᴅ ᴅᴏᴡɴʟᴏᴀᴅ',
+                                          callback_data=f'generate_stream_link:{file_id}')]
+                ])
+            else:
+                reply_markup = None
+            msg = await client.send_cached_media(
+                chat_id=user_id,
+                file_id=file_id,
+                caption="",
+                protect_content=False,
+                reply_markup=reply_markup,
+            )
+            filesarr.append(msg)
+        except FloodWait as e:
+            await asyncio.sleep(e.value + 1)
+            try:
+                msg = await client.send_cached_media(
+                    chat_id=user_id,
+                    file_id=file_id,
+                    caption="",
+                    protect_content=False,
+                    reply_markup=reply_markup,
+                )
+                filesarr.append(msg)
+            except Exception:
+                pass
+        except Exception:
+            pass
+
+    if filesarr:
+        k = await client.send_message(
+            chat_id=user_id,
+            text=(
+                "<blockquote><b><u>❗️❗️❗️IMPORTANT❗️️❗️❗️</u></b>\n\n"
+                "ᴛʜɪs ᴍᴇssᴀɢᴇ ᴡɪʟʟ ʙᴇ ᴅᴇʟᴇᴛᴇᴅ ɪɴ <b><u>10 mins</u> 🫥 <i></b>"
+                "(ᴅᴜᴇ ᴛᴏ ᴄᴏᴘʏʀɪɢʜᴛ ɪssᴜᴇs)</i>.\n\n"
+                "<b><i>ᴘʟᴇᴀsᴇ ғᴏʀᴡᴀʀᴅ ᴛʜɪs ᴍᴇssᴀɢᴇ ᴛᴏ ʏᴏᴜʀ sᴀᴠᴇᴅ ᴍᴇssᴀɢᴇs ᴏʀ ᴀɴʏ ᴘʀɪᴠᴀᴛᴇ ᴄʜᴀᴛ.</i></b>"
+                "</blockquote>"
+            )
+        )
+        await asyncio.sleep(600)
+        for x in filesarr:
+            try:
+                await x.delete()
+            except Exception:
+                pass
+        try:
+            await k.edit_text("<b>✅ ʏᴏᴜʀ ᴍᴇssᴀɢᴇ ɪs sᴜᴄᴄᴇssғᴜʟʟʏ ᴅᴇʟᴇᴛᴇᴅ</b>")
+        except Exception:
+            pass
+
 @Client.on_message(filters.command("start") & filters.incoming)
 async def start(client, message):
     try:
