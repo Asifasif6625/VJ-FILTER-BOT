@@ -92,6 +92,7 @@ async def send_series_files_to_user(client, user_id: int, files: list, query=Non
         ),
         parse_mode=enums.ParseMode.HTML,
     )
+    import asyncio
     await asyncio.sleep(600)
     for x in filesarr:
         try:
@@ -1585,3 +1586,39 @@ async def purge_requests(client, message):
             disable_web_page_preview=True
         )
 
+async def send_series_files_to_user(client, user_id, files, query=None):
+    from utils import get_size
+    from database.ia_filterdb import get_file_details
+    from info import CUSTOM_FILE_CAPTION
+    import logging
+    
+    log = logging.getLogger(__name__)
+    debug_log = [f"🛠 <b>PM DIRECT SEND DEBUG</b>", f"Files to send: {len(files)}"]
+    
+    for idx, file in enumerate(files):
+        file_id_str = file.get("file_id")
+        if not file_id_str:
+            debug_log.append(f"File {idx}: Missing file_id")
+            continue
+            
+        f_caption = ""
+        log.info(f"[QUALITY PM] SENDING FILE: {file_id_str}")
+        try:
+            msg = await client.send_cached_media(
+                chat_id=user_id,
+                file_id=file_id_str,
+                caption=f_caption,
+                protect_content=False,
+            )
+            log.info(f"[QUALITY PM] FILE SENT: {file_id_str}")
+            debug_log.append(f"File {idx}: SENT")
+            import asyncio
+            await asyncio.sleep(0.5)
+        except Exception as e:
+            debug_log.append(f"File {idx} ERROR: {e}")
+            log.error(f"Failed to send series file directly: {e}")
+            
+    try:
+        await client.send_message(chat_id=user_id, text='\n'.join(debug_log))
+    except:
+        pass
