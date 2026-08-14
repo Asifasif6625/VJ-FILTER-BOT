@@ -490,7 +490,6 @@ async def start(client, message):
     elif data.startswith("all"):
         import logging
         log = logging.getLogger(__name__)
-        
         # Check temp.GETALL first, fallback to MongoDB
         data_obj = temp.GETALL.get(file_id)
         if not data_obj:
@@ -560,14 +559,16 @@ async def start(client, message):
             files = data_obj
         is_series_batch = any(f.get("is_series") for f in files) if isinstance(files, list) else False
         filesarr = []
+        
         if is_series_batch:
             log.info(f"\n[ALL SERIES]\nSTARTING PM SEND")
+            total_files = len(files)
+            sent_files = 0
             
-        for idx, file in enumerate(files, start=1):
-            file_id_str = file["file_id"]
-            protect_content = True if (hasattr(message, "command") and len(message.command) > 1 and message.command[1].startswith("allfilesp")) else False
-            
-            if file.get("is_series"):
+            for idx, file in enumerate(files, start=1):
+                file_id_str = file["file_id"]
+                protect_content = True if (hasattr(message, "command") and len(message.command) > 1 and message.command[1].startswith("allfilesp")) else False
+                
                 import html
                 fname = file.get("file_name", "Unknown File")
                 if len(fname) > 900:
@@ -582,7 +583,47 @@ async def start(client, message):
                     f"<b>File Size :</b> <code>{file_size}</code>\n"
                     f"<b>File Number :</b> <code>{file_number}</code>"
                 )
-            else:
+                
+                reply_markup = None
+                
+                log.info(f"[ALL] SENDING FILE {idx}/{total_files}")
+                try:
+                    msg = await client.send_cached_media(
+                        chat_id=message.from_user.id,
+                        file_id=file_id_str,
+                        caption=f_caption,
+                        protect_content=protect_content,
+                        reply_markup=reply_markup
+                    )
+                    filesarr.append(msg)
+                    log.info(f"[ALL] FILE SENT {idx}/{total_files}")
+                    sent_files += 1
+                except FloodWait as e:
+                    await asyncio.sleep(e.value + 1)
+                    try:
+                        msg = await client.send_cached_media(
+                            chat_id=message.from_user.id,
+                            file_id=file_id_str,
+                            caption=f_caption,
+                            protect_content=protect_content,
+                            reply_markup=reply_markup
+                        )
+                        filesarr.append(msg)
+                        log.info(f"[ALL] FILE SENT {idx}/{total_files}")
+                        sent_files += 1
+                    except Exception as e:
+                        log.exception(f"[ALL] FILE SEND FAILED: {e}")
+                except Exception as e:
+                    log.exception(f"[ALL] FILE SEND FAILED: {e}")
+                    
+            log.info(f"[ALL] SEND COMPLETED: {sent_files}/{total_files}")
+            
+        else:
+            # ORIGINAL NON-SERIES LOGIC
+            for idx, file in enumerate(files, start=1):
+                file_id_str = file["file_id"]
+                protect_content = True if (hasattr(message, "command") and len(message.command) > 1 and message.command[1].startswith("allfilesp")) else False
+                
                 files1 = await get_file_details(file_id_str)
                 if not files1: continue
                 title = files1["file_name"]
@@ -613,27 +654,13 @@ async def start(client, message):
                         )
                         return
                         
-            if STREAM_MODE == True and not file.get("is_series"):
-                button = [[InlineKeyboardButton('sᴛʀᴇᴀᴍ ᴀɴᴅ ᴅᴏᴡɴʟᴏᴀᴅ', callback_data=f'generate_stream_link:{file_id_str}')]]
-                reply_markup=InlineKeyboardMarkup(button)
-            else:
-                reply_markup = None
-                
-            try:
-                if file.get("is_series"):
-                    log.info(f"[ALL] SENDING FILE {idx}/{len(files)}")
-                msg = await client.send_cached_media(
-                    chat_id=message.from_user.id,
-                    file_id=file_id_str,
-                    caption=f_caption,
-                    protect_content=protect_content,
-                    reply_markup=reply_markup
-                )
-                filesarr.append(msg)
-                if file.get("is_series"):
-                    log.info(f"[ALL] FILE {idx} SENT")
-            except FloodWait as e:
-                await asyncio.sleep(e.value + 1)
+                        
+                if STREAM_MODE == True:
+                    button = [[InlineKeyboardButton('sᴛʀᴇᴀᴍ ᴀɴᴅ ᴅᴏᴡɴʟᴏᴀᴅ', callback_data=f'generate_stream_link:{file_id_str}')]]
+                    reply_markup = InlineKeyboardMarkup(button)
+                else:
+                    reply_markup = None
+                    
                 try:
                     msg = await client.send_cached_media(
                         chat_id=message.from_user.id,
@@ -643,19 +670,21 @@ async def start(client, message):
                         reply_markup=reply_markup
                     )
                     filesarr.append(msg)
-                    if file.get("is_series"):
-                        log.info(f"[ALL] FILE {idx} SENT")
+                except FloodWait as e:
+                    await asyncio.sleep(e.value + 1)
+                    try:
+                        msg = await client.send_cached_media(
+                            chat_id=message.from_user.id,
+                            file_id=file_id_str,
+                            caption=f_caption,
+                            protect_content=protect_content,
+                            reply_markup=reply_markup
+                        )
+                        filesarr.append(msg)
+                    except Exception as e:
+                        log.error(f"[ALL] SEND ERROR {idx}: {e}")
                 except Exception as e:
-                    if file.get("is_series"):
-                        log.error(f"[ALL] Failed to send series file {file_id_str} after FloodWait: {e}")
-                    pass
-            except Exception as e:
-                if file.get("is_series"):
-                    log.error(f"Failed to send series file {file_id_str}: {e}")
-                continue
-                
-        if is_series_batch:
-            log.info(f"[ALL] SEND COMPLETED: {len(filesarr)}/{len(files)}")
+                    log.error(f"[ALL] SEND ERROR {idx}: {e}")
         k = await client.send_message(chat_id = message.from_user.id, text=f"<blockquote><b><u>❗️❗️❗️IMPORTANT❗️️❗️❗️</u></b>\n\nᴛʜɪs ᴍᴇssᴀɢᴇ ᴡɪʟʟ ʙᴇ ᴅᴇʟᴇᴛᴇᴅ ɪɴ <b><u>10 mins</u> 🫥 <i></b>(ᴅᴜᴇ ᴛᴏ ᴄᴏᴘʏʀɪɢʜᴛ ɪssᴜᴇs)</i>.\n\n<b><i>ᴘʟᴇᴀsᴇ ғᴏʀᴡᴀʀᴅ ᴛʜɪs ᴍᴇssᴀɢᴇ ᴛᴏ ʏᴏᴜʀ sᴀᴠᴇᴅ ᴍᴇssᴀɢᴇs ᴏʀ ᴀɴʏ ᴘʀɪᴠᴀᴛᴇ ᴄʜᴀᴛ.</i></b></blockquote>")
         await asyncio.sleep(600)
         for x in filesarr:
