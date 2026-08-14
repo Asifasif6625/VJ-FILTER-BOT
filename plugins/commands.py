@@ -109,22 +109,7 @@ async def start(client, message):
     import logging
     log = logging.getLogger(__name__)
     
-    # 1. Log at the very beginning
     log.info(f"[DEBUG START] Raw text: {message.text}")
-    log.info(f"[DEBUG START] Command list: {message.command}")
-    log.info(f"[DEBUG START] Command len: {len(message.command)}")
-    
-    if len(message.command) >= 2:
-        log.info(f"[DEBUG START] Payload: {message.command[1]}")
-        
-        # Test if it starts with all_
-        is_all_ = message.command[1].startswith("all_")
-        is_all = message.command[1].startswith("all")
-        log.info(f"[DEBUG START] startswith('all_'): {is_all_} | startswith('all'): {is_all}")
-        
-        if is_all or is_all_:
-            # SEND DEBUG TO TELEGRAM TO CONFIRM IT REACHES HERE
-            await message.reply(f"🚨 <b>ENTRY POINT REACHED</b>\nPayload: <code>{message.command[1]}</code>\nStartsWith 'all': {is_all}")
     
     try:
         await message.react(emoji=random.choice(REACTIONS), big=True)
@@ -521,7 +506,8 @@ async def start(client, message):
         log.info(f"\n[ALL START]\nUUID RECEIVED: {file_id}\nREQUEST FOUND: {req_found}\nSTORED USER: {stored_user}\nREQUEST USER: {req_user}\nUSER VERIFIED: {user_verified}")
         
         if not data_obj:
-            await message.reply("<b><i>No such file exist (or UUID expired).</b></i>")
+            log.warning(f"[ALL START] GETALL NOT FOUND uuid={file_id}")
+            await message.reply("<b><i>Sorry, this request has expired. Please search the series again.</b></i>")
             return
             
         if isinstance(data_obj, dict) and "user" in data_obj:
