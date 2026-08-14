@@ -1573,16 +1573,26 @@ async def purge_requests(client, message):
 
 async def send_series_files_to_user(client, user_id, files, query=None):
     from utils import get_size
+    from pyrogram.errors import FloodWait
     import logging
+    import asyncio
+    import html
     
     log = logging.getLogger(__name__)
+    semaphore = asyncio.Semaphore(3)
     
-    for idx, file in enumerate(files):
+    # Pre-process all file information to avoid unnecessary work during sending
+    prepared_files = []
+    for idx, file in enumerate(files, start=1):
         file_id_str = file.get("file_id")
         if not file_id_str:
             continue
             
-        file_name = file.get("file_name", "Unknown File")
+        fname = file.get("file_name", "Unknown File")
+        if len(fname) > 900:
+            fname = fname[:900] + "..."
+        file_name = html.escape(fname)
+        
         raw_size = file.get("file_size", 0)
         file_size = get_size(raw_size) if raw_size else "Unknown Size"
         file_number = file.get("episode", "?")
@@ -1592,17 +1602,34 @@ async def send_series_files_to_user(client, user_id, files, query=None):
             f"<b>File Size :</b> <code>{file_size}</code>\n"
             f"<b>File Number :</b> <code>{file_number}</code>"
         )
+        prepared_files.append((idx, file_id_str, f_caption))
         
-        log.info(f"[QUALITY PM] SENDING FILE: {file_id_str}")
-        try:
-            msg = await client.send_cached_media(
-                chat_id=user_id,
-                file_id=file_id_str,
-                caption=f_caption,
-                protect_content=False,
-            )
-            log.info(f"[QUALITY PM] FILE SENT: {file_id_str}")
-            import asyncio
-            await asyncio.sleep(0.5)
-        except Exception as e:
-            log.error(f"Failed to send series file directly: {e}")
+    total_files = len(prepared_files)
+    
+    async def send_one(idx, file_id_str, f_caption):
+        async with semaphore:
+            log.info(f"[QUALITY PM] SENDING FILE {idx}/{total_files}: {file_id_str}")
+            while True:
+                try:
+                    await client.send_cached_media(
+                        chat_id=user_id,
+                        file_id=file_id_str,
+                        caption=f_caption,
+                        protect_content=False,
+                    )
+                    log.info(f"[QUALITY PM] FILE SENT {idx}/{total_files}: {file_id_str}")
+                    break
+                except FloodWait as e:
+                    log.warning(f"[QUALITY PM] FloodWait for {e.value}s on {file_id_str}")
+                    await asyncio.sleep(e.value + 1)
+                except Exception as e:
+                    log.exception(f"[QUALITY PM] Failed to send series file {file_id_str}: {e}")
+                    break
+
+    log.info(f"[QUALITY PM] STARTING CONCURRENT SEND FOR {total_files} FILES")
+    
+    if prepared_files:
+        tasks = [send_one(idx, file_id, caption) for idx, file_id, caption in prepared_files]
+        await asyncio.gather(*tasks)
+        
+    log.info(f"[QUALITY PM] CONCURRENT SEND COMPLETED")
