@@ -262,10 +262,6 @@ async def next_page(bot, query):
                     InlineKeyboardButton("𝐍𝐄𝐗𝐓 ➪", callback_data=f"next_{req}_{key}_{n_offset}")
                 ],
             )
-    _usr_id = getattr(message.from_user if 'message' in locals() and message else (query.from_user if 'query' in locals() and query else None), "id", 0)
-    if _usr_id in ADMINS:
-        btn.append([InlineKeyboardButton("🗑 Delete Filter", callback_data=f"del_filter#{key}")])
-    
     if not settings["button"]:
         cur_time = datetime.now(pytz.timezone('Asia/Kolkata')).time()
         time_difference = timedelta(hours=cur_time.hour, minutes=cur_time.minute, seconds=(cur_time.second+(cur_time.microsecond/1000000))) - timedelta(hours=curr_time.hour, minutes=curr_time.minute, seconds=(curr_time.second+(curr_time.microsecond/1000000)))
@@ -464,10 +460,6 @@ async def filter_yearss_cb_handler(client: Client, query: CallbackQuery):
         offset = 0
         btn.append([InlineKeyboardButton(text="↭ ʙᴀᴄᴋ ᴛᴏ ʜᴏᴍᴇ ↭", callback_data=f"fy#homepage#{key}")])
     
-    _usr_id = getattr(message.from_user if 'message' in locals() and message else (query.from_user if 'query' in locals() and query else None), "id", 0)
-    if _usr_id in ADMINS:
-        btn.append([InlineKeyboardButton("🗑 Delete Filter", callback_data=f"del_filter#{key}")])
-    
     if not settings["button"]:
         cur_time = datetime.now(pytz.timezone('Asia/Kolkata')).time()
         time_difference = timedelta(hours=cur_time.hour, minutes=cur_time.minute, seconds=(cur_time.second+(cur_time.microsecond/1000000))) - timedelta(hours=curr_time.hour, minutes=curr_time.minute, seconds=(curr_time.second+(curr_time.microsecond/1000000)))
@@ -633,10 +625,6 @@ async def filter_episodes_cb_handler(client: Client, query: CallbackQuery):
         req = query.from_user.id
         offset = 0
         btn.append([InlineKeyboardButton(text="↭ ʙᴀᴄᴋ ᴛᴏ ʜᴏᴍᴇ ↭", callback_data=f"fe#homepage#{key}")])
-    
-    _usr_id = getattr(message.from_user if 'message' in locals() and message else (query.from_user if 'query' in locals() and query else None), "id", 0)
-    if _usr_id in ADMINS:
-        btn.append([InlineKeyboardButton("🗑 Delete Filter", callback_data=f"del_filter#{key}")])
     
     if not settings["button"]:
         cur_time = datetime.now(pytz.timezone('Asia/Kolkata')).time()
@@ -805,10 +793,6 @@ async def filter_languages_cb_handler(client: Client, query: CallbackQuery):
         req = query.from_user.id
         offset = 0
         btn.append([InlineKeyboardButton(text="↭ ʙᴀᴄᴋ ᴛᴏ ʜᴏᴍᴇ ↭", callback_data=f"fl#homepage#{key}")])
-    
-    _usr_id = getattr(message.from_user if 'message' in locals() and message else (query.from_user if 'query' in locals() and query else None), "id", 0)
-    if _usr_id in ADMINS:
-        btn.append([InlineKeyboardButton("🗑 Delete Filter", callback_data=f"del_filter#{key}")])
     
     if not settings["button"]:
         cur_time = datetime.now(pytz.timezone('Asia/Kolkata')).time()
@@ -986,10 +970,6 @@ async def filter_seasons_cb_handler(client: Client, query: CallbackQuery):
         offset = 0
         btn.append([InlineKeyboardButton(text="↭ ʙᴀᴄᴋ ᴛᴏ ʜᴏᴍᴇ ↭", callback_data=f"next_{req}_{key}_{offset}")])
     
-    _usr_id = getattr(message.from_user if 'message' in locals() and message else (query.from_user if 'query' in locals() and query else None), "id", 0)
-    if _usr_id in ADMINS:
-        btn.append([InlineKeyboardButton("🗑 Delete Filter", callback_data=f"del_filter#{key}")])
-    
     if not settings["button"]:
         cur_time = datetime.now(pytz.timezone('Asia/Kolkata')).time()
         time_difference = timedelta(hours=cur_time.hour, minutes=cur_time.minute, seconds=(cur_time.second+(cur_time.microsecond/1000000))) - timedelta(hours=curr_time.hour, minutes=curr_time.minute, seconds=(curr_time.second+(curr_time.microsecond/1000000)))
@@ -1148,10 +1128,6 @@ async def filter_qualities_cb_handler(client: Client, query: CallbackQuery):
         req = query.from_user.id
         offset = 0
         btn.append([InlineKeyboardButton(text="↭ ʙᴀᴄᴋ ᴛᴏ ʜᴏᴍᴇ ↭", callback_data=f"next_{req}_{key}_{offset}")])
-    
-    _usr_id = getattr(message.from_user if 'message' in locals() and message else (query.from_user if 'query' in locals() and query else None), "id", 0)
-    if _usr_id in ADMINS:
-        btn.append([InlineKeyboardButton("🗑 Delete Filter", callback_data=f"del_filter#{key}")])
     
     if not settings["button"]:
         cur_time = datetime.now(pytz.timezone('Asia/Kolkata')).time()
@@ -1579,23 +1555,6 @@ async def cb_handler(client: Client, query: CallbackQuery):
         files, n_offset, total = await get_search_results(query.message.chat.id, search, offset=int(offset), filter=True)
         await send_all(client, query.from_user.id, files, ident, query.message.chat.id, query.from_user.first_name, query)
         await query.answer(f"Hey {query.from_user.first_name}, All files on this page has been sent successfully to your PM !", show_alert=True)
-        
-    elif query.data.startswith("del_filter"):
-        if query.from_user.id not in ADMINS:
-            return await query.answer("Only admins can do this!", show_alert=True)
-        ident, key = query.data.split("#")
-        search = BUTTONS.get(key) or BUTTONS1.get(key) or BUTTONS2.get(key) or FRESH.get(key)
-        if not search:
-            return await query.answer("Query expired!", show_alert=True)
-            
-        await query.message.edit_text(
-            f"⚠️ <b>Confirm Deletion</b>\n\nAre you sure you want to delete all files matching <b>{search}</b> from the database?",
-            reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("✅ Confirm Delete", callback_data=f"killfilesdq#{search}")],
-                [InlineKeyboardButton("🔴 Cancel", callback_data="close_data")]
-            ]),
-            parse_mode=enums.ParseMode.HTML
-        )
         
     elif query.data.startswith("killfilesdq"):
         ident, keyword = query.data.split("#")
@@ -2831,10 +2790,6 @@ async def auto_filter(client, name, msg, reply_msg=None, ai_search=True, spoll=F
             **locals()
         )
         temp.IMDB_CAP[message.from_user.id] = cap
-        _usr_id = getattr(message.from_user if 'message' in locals() and message else (query.from_user if 'query' in locals() and query else None), "id", 0)
-        if _usr_id in ADMINS:
-            btn.append([InlineKeyboardButton("🗑 Delete Filter", callback_data=f"del_filter#{key}")])
-        
         if not settings["button"]:
             cap+="<b>\n\n<u>🍿 Your Movie Files 👇</u></b>\n"
             for file in files:
