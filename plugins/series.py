@@ -1498,8 +1498,15 @@ def _user_suggestions_keyboard(matches: list[dict]) -> InlineKeyboardMarkup:
 
 
 async def process_series_search(client: Client, message: Message, txt: str, reply_msg: Message = None):
+    import logging
+    logger = logging.getLogger(__name__)
+
     matches = await search_series(txt)
+    logger.info(f"[SERIES ROUTING] query={txt}")
+    logger.info(f"[SERIES ROUTING] raw_matches={len(matches) if matches else 0}")
+    
     if not matches:
+        logger.info("[SERIES ROUTING] decision=MOVIE_FILTER")
         return False
 
     seen = set()
@@ -1511,7 +1518,10 @@ async def process_series_search(client: Client, message: Message, txt: str, repl
             seen.add(name_lower)
             unique_matches.append(m)
 
+    logger.info(f"[SERIES ROUTING] unique_matches={len(unique_matches)}")
+
     if len(unique_matches) == 1:
+        logger.info("[SERIES ROUTING] decision=SERIES_DIRECT")
         series = unique_matches[0]
         series_id = str(series["_id"])
         _register_short_id(series_id)
@@ -1521,6 +1531,7 @@ async def process_series_search(client: Client, message: Message, txt: str, repl
         text, rm = await _resolve_nav_step(message.from_user.id, series_id, sid, series, is_private=is_private)
         poster = series.get("poster")
     else:
+        logger.info("[SERIES ROUTING] decision=SERIES_SUGGESTIONS")
         from database.series_db import get_series_thumbnail
         poster = await get_series_thumbnail()
         
@@ -1550,12 +1561,7 @@ async def process_series_search(client: Client, message: Message, txt: str, repl
                 asyncio.create_task(delete_search_msg(msg))
     return True
 
-@Client.on_message((filters.group | filters.private) & filters.text & filters.incoming, group=2)
-async def series_search_handler(client: Client, message: Message):
-    txt = message.text.strip()
-    if txt.startswith("/") or len(txt) > 100 or len(txt) < 2:
-        return
-    await process_series_search(client, message, txt)
+# series_search_handler removed to prevent competing with auto_filter
 
 
 @Client.on_callback_query(filters.regex(r"^sr#"), group=1)
