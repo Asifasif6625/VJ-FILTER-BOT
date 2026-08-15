@@ -1970,13 +1970,20 @@ async def series_user_nav(client: Client, query: CallbackQuery):
         from info import AUTH_CHANNEL
         if AUTH_CHANNEL:
             if not await is_subscribed(client, query):
-                log.info(f"[REQUEST KEY TRACE]\nstage=JOIN_REQUEST\nkey={key}")
+                log.info(f"[REQUEST FLOW]\nrequest_key={key}\nuser_id={query.from_user.id}\ntype=SERIES\nseries_id={sid}")
+                await query.answer()
+                
+                if req.get("join_message_id"):
+                    try:
+                        await client.delete_messages(chat_id=query.from_user.id, message_ids=req["join_message_id"])
+                    except Exception:
+                        pass
+                
                 try:
                     invite_link = await client.create_chat_invite_link(int(AUTH_CHANNEL), creates_join_request=True)
                 except Exception as e:
                     log.error(f"Failed to create invite link: {e}")
-                    await query.answer("Make sure Bot is admin in Forcesub channel", show_alert=True)
-                    return
+                    return await query.answer("Make sure Bot is admin in Forcesub channel", show_alert=True)
                 
                 text = (
                     "📢 **Channel Join Request**\n\n"
@@ -1989,15 +1996,15 @@ async def series_user_nav(client: Client, query: CallbackQuery):
                     [InlineKeyboardButton("📢 Send Join Request", url=invite_link.invite_link)],
                     [InlineKeyboardButton("🔄 Try Again", callback_data=f"checksub#series#{query.data}")]
                 ]
-                await client.send_message(
+                join_msg = await client.send_message(
                     chat_id=query.from_user.id,
                     text=text,
                     reply_markup=InlineKeyboardMarkup(btn),
                     parse_mode=enums.ParseMode.MARKDOWN
                 )
-                return await query.answer("Please send a Join Request first.", show_alert=True)
-
-
+                req["join_message_id"] = join_msg.id
+                log.info(f"[JOIN REQUEST]\nrequest_key={key}\naction=CREATED\nmessage_id={join_msg.id}")
+                return
 
     full_id = await _get_full_id(sid)
     if not full_id:
@@ -2006,8 +2013,6 @@ async def series_user_nav(client: Client, query: CallbackQuery):
     series = await get_series(full_id)
     if not series:
         return await query.answer("Series not found in database.", show_alert=True)
-
-
 
     lang = None
     season = None
@@ -2031,6 +2036,7 @@ async def series_user_nav(client: Client, query: CallbackQuery):
             key_pm = str(_uuid.uuid4())[:8]
             req_data = {
                 "user": req["user"],
+                "type": "series",
                 "source": "series_group",
                 "query": {
                     "full_id": full_id,
@@ -2038,7 +2044,8 @@ async def series_user_nav(client: Client, query: CallbackQuery):
                     "season": season,
                     "qual": qual,
                     "rating": rating
-                }
+                },
+                "delivery_status": "pending"
             }
             _temp.GETALL[key_pm] = req_data
             try:
@@ -2054,6 +2061,12 @@ async def series_user_nav(client: Client, query: CallbackQuery):
             return await query.answer(url=start_url)
             
         log.info(f"[REQUEST KEY TRACE]\nstage=PM\nkey={key}")
+
+        # Check delivery status
+        if req.get("delivery_status") == "completed":
+            return await query.answer("✅ Files already sent.", show_alert=True)
+        if req.get("delivery_status") == "sending":
+            return await query.answer("⏳ Files are already being sent.", show_alert=True)
 
         # ── 10-Second Cooldown Protection (PM Series Quality Button) ──
         import time, math
@@ -2081,6 +2094,7 @@ async def series_user_nav(client: Client, query: CallbackQuery):
                 log.info(f"[SERIES PM QUALITY]\nuser_id={query.from_user.id}\nrequest={key}\nquality={qual}\naction=COOLDOWN_EXPIRED")
 
         temp.SERIES_PM_QUALITY_COOLDOWNS[cooldown_key] = now
+        req["delivery_status"] = "sending"
         log.info(f"[SERIES PM QUALITY]\nuser_id={query.from_user.id}\nrequest={key}\nquality={qual}\naction=ACCEPTED\ncooldown=10")
 
         if len(parts) >= 10 and parts[8] == "e":
@@ -2190,25 +2204,25 @@ async def series_user_nav(client: Client, query: CallbackQuery):
                         f["total_episodes"] = total_eps
                         files.append(f)
 
-
-
         if files:
-            log.info(f"[PM SERIES] DB MATCH COUNT: {len(files)}")
-            log.info(f"[PM SERIES] FILE COUNT: {len(files)}")
+            log.info(f"[REQUEST FLOW]\nrequest_key={key}\nuser_id={query.from_user.id}\ntype=SERIES\nseries_id={full_id}\nlanguage={lang}\nseason={season}\nquality={qual}")
+            log.info(f"[DELIVERY]\nrequest_key={key}\ntype=SERIES\nseries_id={full_id}\nquality={qual}\nfile_count={len(files)}")
             for f in files:
                 log.info(f"[FILE SEND]\nsource=series_user_nav\nuser_id={query.from_user.id}\nfile_id={f.get('file_id')}\nfile_name={f.get('file_name', 'Unknown')}\nrequest_key={key}")
             await query.answer()
-            if query.message.text and "Channel Join Required" in query.message.text:
+            if query.message.text and "Channel Join" in query.message.text:
                 try:
                     await query.message.delete()
                 except:
                     pass
             from plugins.commands import send_series_files_to_user
             await send_series_files_to_user(client, query.from_user.id, files, query=query)
-            log.info(f"[PM SERIES] SEND COMPLETED")
+            req["delivery_status"] = "completed"
+            log.info(f"[DELIVERY]\nrequest_key={key}\naction=COMPLETED")
             return
         elif files is not None:
             log.info("[PM SERIES] DB MATCH COUNT: 0")
+            req["delivery_status"] = "failed"
             return await query.answer("⚠️ File not found. It may have been removed.", show_alert=True)
 
 
