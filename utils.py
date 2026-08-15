@@ -41,12 +41,14 @@ class temp(object):
     CANCEL = False
     MELCOW = {}
     SERIES_WIZARD = {}
+    SERIES_STATE = {}
     U_NAME = None
     B_NAME = None
     GETALL = {}
     SHORT = {}
     SETTINGS = {}
     IMDB_CAP = {}
+    SERIES_PM_QUALITY_COOLDOWNS = {}
 
 
 async def pub_is_subscribed(bot, query, channel):
