@@ -47,14 +47,11 @@ async def start():
                 
             plugins_dir = Path(f"plugins/{plugin_name}.py")
             import_path = "plugins.{}".format(plugin_name)
-            try:
-                spec = importlib.util.spec_from_file_location(import_path, plugins_dir)
-                load = importlib.util.module_from_spec(spec)
-                spec.loader.exec_module(load)
-                sys.modules["plugins." + plugin_name] = load
-                print("Tech VJ Imported => " + plugin_name)
-            except Exception as e:
-                print(f"Tech VJ Failed to import {plugin_name}: {e}")
+            spec = importlib.util.spec_from_file_location(import_path, plugins_dir)
+            load = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(load)
+            sys.modules["plugins." + plugin_name] = load
+            print("Tech VJ Imported => " + plugin_name)
     if ON_HEROKU:
         asyncio.create_task(ping_server())
     b_users, b_chats = await db.get_banned()
