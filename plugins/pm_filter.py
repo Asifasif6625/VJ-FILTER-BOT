@@ -1615,14 +1615,13 @@ async def cb_handler(client: Client, query: CallbackQuery):
                     return
                     
                 first_check = not await is_subscribed(client, query) if AUTH_CHANNEL else False
-                log.info(f"[TRY AGAIN] first_check={first_check}")
-                
                 if AUTH_CHANNEL and first_check:
-                    log.info(f"[TRY AGAIN] membership_failed -> alert")
+                    log.info(f"[TRY AGAIN] user_id={query.from_user.id} membership=NOT_JOINED")
+                    log.info("[TRY AGAIN] alert_sent=NOT_JOINED")
                     await query.answer("⚠️ Please send a Join Request first.", show_alert=True)
                     return
                     
-                log.info(f"[TRY AGAIN] membership_success")
+                log.info(f"[TRY AGAIN] user_id={query.from_user.id} membership=JOINED")
                 req["state"] = "SENDING"
                 cmd = req["cmd"]
                 
@@ -1676,14 +1675,13 @@ async def cb_handler(client: Client, query: CallbackQuery):
                     return
                     
                 first_check = not await is_subscribed(client, query) if AUTH_CHANNEL else False
-                log.info(f"[TRY AGAIN] first_check={first_check}")
-                
                 if AUTH_CHANNEL and first_check:
-                    log.info(f"[TRY AGAIN] membership_failed -> alert")
+                    log.info(f"[TRY AGAIN] user_id={query.from_user.id} membership=NOT_JOINED")
+                    log.info("[TRY AGAIN] alert_sent=NOT_JOINED")
                     await query.answer("⚠️ Please send a Join Request first.", show_alert=True)
                     return
                     
-                log.info(f"[TRY AGAIN] membership_success")
+                log.info(f"[TRY AGAIN] user_id={query.from_user.id} membership=JOINED")
                 if isinstance(req, dict):
                     req["state"] = "SENDING"
                     
