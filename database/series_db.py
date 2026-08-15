@@ -208,22 +208,26 @@ async def add_series_file(data: dict) -> tuple[bool, str]:
                quality, chat_id, message_id, file_id, file_name, file_size
     Returns (True, 'inserted') or (False, 'duplicate').
     """
-    existing = await sfiles_col.find_one({
-        "series_id": data["series_id"],
+    ep = int(data["episode"]) if data.get("episode") is not None else -1
+    query = {
+        "series_id": str(data["series_id"]),
         "language":  data["language"],
-        "season":    data["season"],
-        "episode":   data["episode"],
+        "season":    int(data["season"]),
+        "episode":   ep,
         "quality":   data["quality"],
-        "message_id": data["message_id"],
-    })
+    }
+    if ep == -1 and data.get("message_id"):
+        query["message_id"] = data["message_id"]
+
+    existing = await sfiles_col.find_one(query)
     if existing:
         return False, "duplicate"
 
     doc = {
-        "series_id":  data["series_id"],
+        "series_id":  str(data["series_id"]),
         "language":   data["language"],
         "season":     int(data["season"]),
-        "episode":    int(data["episode"]) if data.get("episode") is not None else -1,
+        "episode":    ep,
         "quality":    data["quality"],
         "chat_id":    data.get("chat_id"),
         "message_id": data.get("message_id"),
@@ -244,16 +248,33 @@ async def add_series_file(data: dict) -> tuple[bool, str]:
         return False, "error"
 
 
+async def check_episode_exists(
+    series_id: str, language: str, season: int, episode: int, quality: str
+) -> bool:
+    """Check if a specific episode exists for given series context."""
+    doc = await sfiles_col.find_one({
+        "series_id": str(series_id),
+        "language":  language,
+        "season":    int(season),
+        "episode":   int(episode),
+        "quality":   quality,
+    })
+    return doc is not None
+
+
 async def replace_series_file(data: dict):
     """Replace an existing episode file document."""
-    await sfiles_col.delete_many({
-        "series_id": data["series_id"],
+    ep = int(data["episode"]) if data.get("episode") is not None else -1
+    del_query = {
+        "series_id": str(data["series_id"]),
         "language":  data["language"],
-        "season":    data["season"],
-        "episode":   data["episode"],
+        "season":    int(data["season"]),
+        "episode":   ep,
         "quality":   data["quality"],
-        "message_id": data["message_id"],
-    })
+    }
+    if ep == -1 and data.get("message_id"):
+        del_query["message_id"] = data["message_id"]
+    await sfiles_col.delete_many(del_query)
     await add_series_file(data)
 
 
@@ -266,7 +287,7 @@ async def get_series_files(
 ) -> list[dict]:
     """Fetch all files matching (series, lang, season, episode, quality)."""
     cursor = sfiles_col.find({
-        "series_id": series_id,
+        "series_id": str(series_id),
         "language":  language,
         "season":    int(season),
         "episode":   int(episode),
@@ -277,13 +298,13 @@ async def get_series_files(
 
 async def list_series_languages(series_id: str) -> list[str]:
     """Distinct languages with at least one file saved."""
-    return await sfiles_col.distinct("language", {"series_id": series_id})
+    return await sfiles_col.distinct("language", {"series_id": str(series_id)})
 
 
 async def list_series_seasons(series_id: str, language: str) -> list[int]:
     """Distinct season numbers for (series, language)."""
     vals = await sfiles_col.distinct(
-        "season", {"series_id": series_id, "language": language}
+        "season", {"series_id": str(series_id), "language": language}
     )
     return sorted(vals)
 
@@ -293,7 +314,7 @@ async def list_season_qualities(series_id: str, language: str, season: int) -> l
     return await sfiles_col.distinct(
         "quality",
         {
-            "series_id": series_id,
+            "series_id": str(series_id),
             "language":  language,
             "season":    int(season),
         }
@@ -303,17 +324,25 @@ async def list_season_qualities(series_id: str, language: str, season: int) -> l
 async def list_quality_episodes(
     series_id: str, language: str, season: int, quality: str
 ) -> list[int]:
-    """Distinct episodes for (series, language, season, quality)."""
+    """Distinct episodes for (series, language, season, quality) sorted strictly numerically."""
     vals = await sfiles_col.distinct(
         "episode",
         {
-            "series_id": series_id,
+            "series_id": str(series_id),
             "language":  language,
             "season":    int(season),
             "quality":   quality,
         }
     )
-    return sorted(vals)
+    pos_vals = sorted(list(set(
+        int(v) for v in vals 
+        if (isinstance(v, int) or (isinstance(v, str) and v.isdigit())) and int(v) > 0
+    )))
+    neg_vals = sorted(list(set(
+        int(v) for v in vals 
+        if (isinstance(v, int) or (isinstance(v, str) and v.lstrip("-").isdigit())) and int(v) <= 0
+    )))
+    return pos_vals + neg_vals
 
 
 # ─── Batch Records ────────────────────────────────────────────────────────────
