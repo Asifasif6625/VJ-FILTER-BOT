@@ -2,10 +2,11 @@
 # Subscribe YouTube Channel For Amazing Bot @Tech_VJ
 # Ask Doubt on telegram @KingVJ01
 #
-# ─── series.py —” Series & Episode Management System ──────────────────────────
+# ─── series.py — Series & Episode Management System ──────────────────────────
 #
-# Admin commands:   /seriesfil   —” create / manage series
-#                   /sbatch      —” add episode batch from channel link range
+# Admin commands:   /seriesfil   — create / manage series
+#                   /sbatch      — add episode batch from channel link range
+#                   /slink       — add single episode from channel link
 # User flow:        Search series name in group → Language → Season → Episode → Quality → File
 #
 
@@ -38,6 +39,7 @@ from database.series_db import (
     update_series,
     list_all_series,
     add_series_file,
+    check_episode_exists,
     replace_series_file,
     get_series_files,
     list_series_languages,
@@ -71,6 +73,8 @@ S_BATCH_WAIT   = "WAITING_BATCH"
 S_BATCH_CONF   = "CONFIRMING_BATCH"
 S_DONE         = "SAVED"
 
+
+
 # ─── Language / Season / Quality choices ─────────────────────────────────────
 LANG_OPTIONS = [
     "Malayalam", "English", "Hindi", "Tamil", "Telugu",
@@ -84,12 +88,20 @@ QUALITY_OPTIONS = [
 MAX_SEASONS = 15
 
 
+
+
+
 # ═════════════════════════════════════════════════════════════════════════════
 # ─── HELPERS ─────────────────────────────────────────────────────────────────
 # ═════════════════════════════════════════════════════════════════════════════
 
+
+
 def _is_admin(user_id: int) -> bool:
     return user_id in ADMINS
+
+
+
 
 
 def _parse_tg_link(link: str) -> tuple[int | str | None, int | None]:
@@ -115,30 +127,50 @@ def _parse_tg_link(link: str) -> tuple[int | str | None, int | None]:
     return None, None
 
 
+
+
+
 def _series_short_id(series_id: str) -> str:
     """Use last 8 chars of ObjectId to keep callback data short."""
     return series_id[-8:]
+
+
+
 
 
 def _extract_episode_number(text: str) -> int | None:
     if not text:
         return None
     
-    # Common patterns: S01E01, S1E1, E01, Episode 1, EP 01
+    # Exclude resolution indicators to avoid matching 1080/720/480/360 as episode numbers
+    clean_text = re.sub(r'\b(2160|1080|720|480|360|4k|8k)p?\b', '', text, flags=re.IGNORECASE)
+    
+    # Common patterns: S01E01, S1E1, E01, Episode 1, EP 01, [01], etc.
     patterns = [
-        r"S\d{1,2}[\s\-]?E(\d{1,3})", # S01E01, S1 E1, S01-E01
-        r"E[P]?[\s\-]?(\d{1,3})",     # E01, EP01, EP 01, E-01
-        r"Episode[\s\-]?(\d{1,3})",   # Episode 1, Episode-01
+        r"S\d{1,2}[\s\.\-_]?E(\d{1,4})\b",           # S01E06, S1 E6, S01-E06, S01.E06
+        r"\bE[P]?[\s\.\-_]?(\d{1,4})\b",              # E06, EP06, EP 06, E-06, E.06
+        r"\bEpisode[\s\.\-_]?(\d{1,4})\b",           # Episode 06, Episode-06
+        r"\[(\d{1,4})\]",                             # [06], [12]
+        r"\b(\d{1,4})\s*(?:st|nd|rd|th)?\s*episode\b",# 6th episode, 6 episode
+        r"\b(?:ep|episode)\.?\s*(\d{1,4})\b",         # ep.06, ep 6
     ]
     for p in patterns:
-        match = re.search(p, text, re.IGNORECASE)
+        match = re.search(p, clean_text, re.IGNORECASE)
         if match:
-            return int(match.group(1))
+            try:
+                ep_val = int(match.group(1))
+                if ep_val > 0:
+                    return ep_val
+            except Exception:
+                continue
     return None
 
 
 # Reverse lookup: short_id → full_id (populated at runtime)
 _SERIES_ID_MAP: dict[str, str] = {}
+
+
+
 
 
 async def _get_full_id(short_id: str) -> str | None:
@@ -156,8 +188,14 @@ async def _get_full_id(short_id: str) -> str | None:
     return _SERIES_ID_MAP.get(short_id)
 
 
+
+
+
 def _register_short_id(full_id: str):
     _SERIES_ID_MAP[full_id[-8:]] = full_id
+
+
+
 
 
 def _series_card(series: dict) -> str:
@@ -174,15 +212,11 @@ def _series_card(series: dict) -> str:
     if genre and genre != "N/A":
         card += f"🎭 <b>Genre:</b> {genre}\n"
     if rating:
-        card += f"⭐ <b>Rating:</b> {rating}\n"
+        card += f"⭐  <b>Rating:</b> {rating}\n"
     if desc:
-        card += f"\n📁 {desc[:300]}"
+        card += f"\n📁  {desc[:300]}"
     return card
 
-
-# ═════════════════════════════════════════════════════════════════════════════
-# ─── ADMIN WIZARD KEYBOARD BUILDERS ──────────────────────────────────────────
-# ═════════════════════════════════════════════════════════════════════════════
 
 def _lang_keyboard(selected: list[str]) -> InlineKeyboardMarkup:
     rows = []
@@ -190,77 +224,48 @@ def _lang_keyboard(selected: list[str]) -> InlineKeyboardMarkup:
         row = []
         for lang in LANG_OPTIONS[i:i+3]:
             tick = "🟢 " if lang in selected else ""
-            row.append(InlineKeyboardButton(
-                f"{tick}{lang}",
-                callback_data=f"sw#lang#{lang}"
-            ))
+            row.append(InlineKeyboardButton(f"{tick}{lang}", callback_data=f"sw#lang#{lang}"))
         rows.append(row)
     rows.append([
         InlineKeyboardButton("🟢 Submit", callback_data="sw#lang#submit"),
-        InlineKeyboardButton("⬅️ Back", callback_data="sw#lang#back"),
-        InlineKeyboardButton("🔴 Cancel",            callback_data="sw#cancel"),
+        InlineKeyboardButton("⬅️ Back", callback_data="sw#lang#back"),
+        InlineKeyboardButton("🔴 Cancel", callback_data="sw#cancel"),
     ])
     return InlineKeyboardMarkup(rows)
 
 
-def _season_keyboard(total: int, selected: list[int]) -> InlineKeyboardMarkup:
+def _season_keyboard(
+    max_seasons: int,
+    selected: list[int],
+    show_skip: bool = False,
+) -> InlineKeyboardMarkup:
     rows = []
-    for i in range(0, total, 4):
+    for i in range(1, max_seasons + 1, 3):
         row = []
-        for n in range(i+1, min(i+5, total+1)):
-            tick = "✅ " if n in selected else ""
-            row.append(InlineKeyboardButton(
-                f"{tick}S{n}",
-                callback_data=f"sw#season#{n}"
-            ))
+        for s in range(i, min(i + 3, max_seasons + 1)):
+            tick = "🟢 " if s in selected else ""
+            row.append(InlineKeyboardButton(f"{tick}S{s}", callback_data=f"sw#season#{s}"))
         rows.append(row)
+    
+    control_row = [InlineKeyboardButton("🟢 Submit", callback_data="sw#season#submit")]
+    if show_skip:
+        control_row.append(InlineKeyboardButton("⏭️ Skip Season", callback_data="sw#season#skip"))
+    rows.append(control_row)
+    
     rows.append([
-        InlineKeyboardButton("🟢 Submit", callback_data="sw#season#submit"),
-        InlineKeyboardButton("â­ Skip",       callback_data="sw#season#skip"),
-    ])
-    rows.append([
-        InlineKeyboardButton("⬅️ Back", callback_data="sw#season#back"),
-        InlineKeyboardButton("🔴 Cancel",          callback_data="sw#cancel"),
+        InlineKeyboardButton("⬅️ Back", callback_data="sw#season#back"),
+        InlineKeyboardButton("🔴 Cancel", callback_data="sw#cancel"),
     ])
     return InlineKeyboardMarkup(rows)
 
-
-async def _get_used_qualities(wiz: dict) -> list[str]:
-    from database.series_db import list_season_qualities
-    if not wiz.get("series_id"):
-        return []
-        
-    langs = wiz.get("batch_langs", [])
-    seasons = wiz.get("batch_seasons", [])
-    if not langs or not seasons:
-        return []
-        
-    combination_qualities = []
-    for l in langs:
-        for s in seasons:
-            qs = await list_season_qualities(wiz["series_id"], l, s)
-            combination_qualities.append(set(qs))
-            
-    if not combination_qualities:
-        return []
-        
-    # Only block if it is used in ALL selected combinations
-    used = set.intersection(*combination_qualities)
-    
-    import logging
-    log = logging.getLogger(__name__)
-    log.info(f"[SERIES QUALITY]\nseries_id = {wiz.get('series_id')}\nlanguage = {langs}\nseason = {seasons}\n")
-    log.info(f"[SERIES QUALITY]\nexisting qualities (intersection) = {list(used)}")
-    return list(used)
 
 def _quality_keyboard(
     selected: list[str],
     already_saved: list[str] = None,
 ) -> InlineKeyboardMarkup:
     """
-    selected      —” qualities chosen for the CURRENT batch (shown with 🟢)
-    already_saved —” qualities already committed to the series (shown with ✅)
-                    They are now non-selectable.
+    selected      — qualities chosen for the CURRENT batch (shown with 🟢)
+    already_saved — qualities already committed to the series (shown with ✅)
     """
     already_saved = already_saved or []
     rows = []
@@ -268,10 +273,10 @@ def _quality_keyboard(
         row = []
         for q in QUALITY_OPTIONS[i:i+3]:
             if q in selected:
-                tick = "🟢 "        # active in current batch selection
+                tick = "🟢 "
                 cb = f"sw#quality#{q}"
             elif q in already_saved:
-                tick = "✅ "        # already saved to this series
+                tick = "✅ "
                 cb = f"sw#quality_used#{q}"
             else:
                 tick = ""
@@ -283,12 +288,24 @@ def _quality_keyboard(
         rows.append(row)
     rows.append([
         InlineKeyboardButton("🟢 Submit", callback_data="sw#quality#submit"),
-        InlineKeyboardButton("⬅️ Back", callback_data="sw#quality#back"),
-        InlineKeyboardButton("🟢 Submit", callback_data="sw#quality#submit"),
         InlineKeyboardButton("⬅️ Back", callback_data="sw#quality#back"),
-        InlineKeyboardButton("🔴 Cancel",           callback_data="sw#cancel"),
+        InlineKeyboardButton("🔴 Cancel", callback_data="sw#cancel"),
     ])
     return InlineKeyboardMarkup(rows)
+
+
+async def _get_used_qualities(wiz: dict) -> list[str]:
+    series_id = wiz.get("series_id")
+    if not series_id:
+        return []
+    langs = wiz.get("batch_langs") or wiz.get("languages") or []
+    seasons = wiz.get("batch_seasons") or wiz.get("seasons") or [0]
+    used = set()
+    for lang in langs:
+        for season in seasons:
+            quals = await list_season_qualities(series_id, lang, season)
+            used.update(quals)
+    return list(used)
 
 
 def _config_menu_keyboard(series_id: str = None, from_viewseries: bool = False) -> InlineKeyboardMarkup:
@@ -316,6 +333,9 @@ def _config_menu_keyboard(series_id: str = None, from_viewseries: bool = False) 
     return InlineKeyboardMarkup(buttons)
 
 
+
+
+
 def _batch_confirm_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
         [
@@ -323,6 +343,9 @@ def _batch_confirm_keyboard() -> InlineKeyboardMarkup:
             InlineKeyboardButton("🔴 No",       callback_data="sw#bconfirm#no"),
         ]
     ])
+
+
+
 
 
 def _duplicate_file_keyboard(data_key: str) -> InlineKeyboardMarkup:
@@ -334,9 +357,14 @@ def _duplicate_file_keyboard(data_key: str) -> InlineKeyboardMarkup:
     ])
 
 
+
+
+
 # ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ 
 # ─── USER NAVIGATION KEYBOARD BUILDERS ───────────────────────────────────────
 # ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ 
+
+
 
 def _user_lang_keyboard(sid: str, langs: list[str]) -> InlineKeyboardMarkup:
     rows = []
@@ -347,6 +375,9 @@ def _user_lang_keyboard(sid: str, langs: list[str]) -> InlineKeyboardMarkup:
         ]
         rows.append(row)
     return InlineKeyboardMarkup(rows)
+
+
+
 
 
 def _user_season_keyboard(sid: str, lang: str, seasons: list[int]) -> InlineKeyboardMarkup:
@@ -361,6 +392,9 @@ def _user_season_keyboard(sid: str, lang: str, seasons: list[int]) -> InlineKeyb
         InlineKeyboardButton("⬅️ Back", callback_data=f"sr#{sid}#home"),
     ])
     return InlineKeyboardMarkup(rows)
+
+
+
 
 
 async def _user_quality_keyboard(user_id: int, full_id: str, sid: str, lang: str, season: int, quals: list[str], rating: str, is_private: bool = False) -> InlineKeyboardMarkup:
@@ -379,9 +413,14 @@ async def _user_quality_keyboard(user_id: int, full_id: str, sid: str, lang: str
     return InlineKeyboardMarkup(rows)
 
 
+
+
+
 # ═════════════════════════════════════════════════════════════════════════════
 # ─── GLOBAL THUMBNAIL COMMANDS ───────────────────────────────────────────────
 # ═════════════════════════════════════════════════════════════════════════════
+
+
 
 @Client.on_message(filters.command("thumpseries"), group=1)
 async def cmd_thumpseries(client: Client, message: Message):
@@ -401,6 +440,8 @@ async def cmd_thumpseries(client: Client, message: Message):
         "prompt_msg_id": prompt.id
     }
 
+
+
 @Client.on_message(filters.command("delthumbseries") & filters.private, group=1)
 async def cmd_delthumbseries(client: Client, message: Message):
     if not _is_admin(message.from_user.id):
@@ -415,14 +456,21 @@ async def cmd_delthumbseries(client: Client, message: Message):
         await message.reply_text("ℹ️ No Series search thumbnail is currently set.")
 
 
+
+
+
 # ═════════════════════════════════════════════════════════════════════════════
 # ─── /seriesfil —” START ADMIN WIZARD ─────────────────────────────────────────
 # ═════════════════════════════════════════════════════════════════════════════
+
+
 
 @Client.on_message(filters.command("seriesfil") & filters.private, group=1)
 async def cmd_seriesfil(client: Client, message: Message):
     if not _is_admin(message.from_user.id):
         return await message.reply_text("âŒ You are not authorized to use this command.")
+
+
 
     uid = message.from_user.id
     temp.SERIES_WIZARD[uid] = {
@@ -443,9 +491,13 @@ async def cmd_seriesfil(client: Client, message: Message):
         parse_mode=enums.ParseMode.HTML,
     )
 
+
+
 # ═════════════════════════════════════════════════════════════════════════════
 # ─── /ed_series —” EDIT WIZARD ────────────────────────────────────────────────
 # ═════════════════════════════════════════════════════════════════════════════
+
+
 
 @Client.on_callback_query(filters.regex(r"^edser#"), group=1)
 async def cb_edser(client: Client, query: CallbackQuery):
@@ -496,10 +548,15 @@ async def cb_edser(client: Client, query: CallbackQuery):
     await query.answer()
 
 
+
+
+
 @Client.on_message(filters.command(["ed_series"]), group=1)
 async def cmd_ed_series(client: Client, message: Message):
     if not _is_admin(message.from_user.id):
         return await message.reply_text("❌ You are not authorized to use this command.")
+
+
 
     args = message.text.split(None, 1)
     if len(args) < 2:
@@ -508,9 +565,13 @@ async def cmd_ed_series(client: Client, message: Message):
             parse_mode=enums.ParseMode.HTML,
         )
 
+
+
     arg = args[1].strip().strip('"').strip("'")
     from database.series_db import search_series, get_series_by_name, _normalize
     import re
+
+
 
     exact = None
     if re.fullmatch(r"[0-9a-fA-F]{24}", arg):
@@ -523,8 +584,12 @@ async def cmd_ed_series(client: Client, message: Message):
             if matches:
                 exact = matches[0]
 
+
+
     if not exact:
         return await message.reply_text(f"❌ No series found matching '<b>{arg}</b>'.", parse_mode=enums.ParseMode.HTML)
+
+
 
     uid = message.from_user.id
     temp.SERIES_WIZARD[uid] = {
@@ -553,9 +618,14 @@ async def cmd_ed_series(client: Client, message: Message):
     )
 
 
+
+
+
 # ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ 
 # ─── /cancel — ABORT WIZARD ──────────────────────────────────────────────────
 # ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ 
+
+
 
 @Client.on_message(filters.command("cancel") & filters.private, group=1)
 async def cmd_cancel(client: Client, message: Message):
@@ -576,9 +646,14 @@ async def cmd_cancel(client: Client, message: Message):
         await message.reply_text("No active wizard or session to cancel.")
 
 
+
+
+
 # ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ 
 # ─── TEXT HANDLER — WIZARD STEPS ─────────────────────────────────────────────
 # ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ 
+
+
 
 @Client.on_message(filters.private & (filters.text | filters.photo) & ~filters.command(
     ["seriesfil", "sbatch", "slink", "cancel", "start", "help", "settings",
@@ -634,8 +709,12 @@ async def wizard_text_handler(client: Client, message: Message):
         else:
             return await message.reply_text("⚠️ Please send a PHOTO to set as thumbnail, or /cancel to abort.")
 
+
+
     if uid not in temp.SERIES_WIZARD:
         return
+
+
 
     wiz = temp.SERIES_WIZARD[uid]
     state = wiz["state"]
@@ -645,6 +724,8 @@ async def wizard_text_handler(client: Client, message: Message):
         text = message.text.strip()
     elif message.caption:
         text = message.caption.strip()
+
+
 
     # ── Name ──────────────────────────────────────────────────────────────────
     if state == S_NAME:
@@ -675,6 +756,8 @@ async def wizard_text_handler(client: Client, message: Message):
             parse_mode=enums.ParseMode.HTML,
         )
 
+
+
     # ── Year ──────────────────────────────────────────────────────────────────
     elif state == S_YEAR:
         if not text: return
@@ -686,6 +769,8 @@ async def wizard_text_handler(client: Client, message: Message):
             reply_markup=ForceReply(selective=True),
             parse_mode=enums.ParseMode.HTML,
         )
+
+
 
     # ── Genre ─────────────────────────────────────────────────────────────────
     elif state == S_GENRE:
@@ -701,6 +786,8 @@ async def wizard_text_handler(client: Client, message: Message):
             parse_mode=enums.ParseMode.HTML,
         )
 
+
+
     # ── Rating ────────────────────────────────────────────────────────────────
     elif state == S_RATING:
         if text.lower() == "/skip":
@@ -715,6 +802,8 @@ async def wizard_text_handler(client: Client, message: Message):
             parse_mode=enums.ParseMode.HTML,
         )
 
+
+
     # ── Description ───────────────────────────────────────────────────────────
     elif state == S_DESC:
         if text.lower() == "/skip":
@@ -728,6 +817,8 @@ async def wizard_text_handler(client: Client, message: Message):
             parse_mode=enums.ParseMode.HTML,
         )
 
+
+
     # ── Poster ────────────────────────────────────────────────────────────────
     elif state == S_POSTER:
         if message.photo:
@@ -737,6 +828,8 @@ async def wizard_text_handler(client: Client, message: Message):
         else:
             return await message.reply_text("Please send a photo or /skip.")
 
+
+
         wiz["state"] = S_DONE
         await message.reply_text(
             _series_card(wiz) + "\n\n⚙️ <b>Series Configuration</b>\nChoose an option to edit or click Save:",
@@ -745,9 +838,14 @@ async def wizard_text_handler(client: Client, message: Message):
         )
 
 
+
+
+
 # ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ 
 # ─── CALLBACK HANDLER — WIZARD BUTTONS ───────────────────────────────────────
 # ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ 
+
+
 
 @Client.on_callback_query(filters.regex(r"^sw#"), group=1)
 async def wizard_callback(client: Client, query: CallbackQuery):
@@ -755,17 +853,27 @@ async def wizard_callback(client: Client, query: CallbackQuery):
     if not _is_admin(uid):
         return await query.answer("❌ Not authorized.", show_alert=True)
 
+
+
     data = query.data
     parts = data.split("#")
+
+
 
     if uid not in temp.SERIES_WIZARD:
         return await query.answer("No active wizard. Run /seriesfil first.", show_alert=True)
 
+
+
     wiz = temp.SERIES_WIZARD[uid]
     action = parts[1] if len(parts) > 1 else ""
 
+
+
     if not action:
         return await query.answer()
+
+
 
     if action == "del_series":
         if len(parts) < 3: return await query.answer()
@@ -812,6 +920,8 @@ async def wizard_callback(client: Client, query: CallbackQuery):
             parse_mode=enums.ParseMode.HTML,
         )
 
+
+
     # ── Cancel ────────────────────────────────────────────────────────────────
     if action == "cancel":
         if wiz.get("name"):
@@ -825,6 +935,8 @@ async def wizard_callback(client: Client, query: CallbackQuery):
             del temp.SERIES_WIZARD[uid]
             await query.message.edit_text("❌ Series wizard cancelled.")
         return await query.answer()
+
+
 
     # ── Config Menu shortcuts ─────────────────────────────────────────────────
     if action == "menu":
@@ -840,9 +952,10 @@ async def wizard_callback(client: Client, query: CallbackQuery):
         elif sub == "season":
             wiz["state"] = S_SEASONS
             logger.info(f"[SERIES EDIT]\nuser_id={uid}\nseries_id={wiz.get('series_id')}\naction=SEASON")
+            is_existing = bool(wiz.get("series_id") or wiz.get("from_viewseries") or wiz.get("seasons"))
             await query.message.edit_text(
                 "📁 <b>Select Seasons</b>\n\nTap to toggle, then press Submit.",
-                reply_markup=_season_keyboard(MAX_SEASONS, wiz["seasons"]),
+                reply_markup=_season_keyboard(MAX_SEASONS, wiz["seasons"], show_skip=is_existing),
                 parse_mode=enums.ParseMode.HTML,
             )
         elif sub == "quality":
@@ -865,6 +978,8 @@ async def wizard_callback(client: Client, query: CallbackQuery):
                 parse_mode=enums.ParseMode.HTML,
             )
         return await query.answer()
+
+
 
     # ── Language toggle ───────────────────────────────────────────────────────
     if action == "lang":
@@ -909,10 +1024,13 @@ async def wizard_callback(client: Client, query: CallbackQuery):
                 pass
         return await query.answer()
 
+
+
     # ── Season toggle ─────────────────────────────────────────────────────────
     if action == "season":
         val = parts[2] if len(parts) > 2 else ""
         target_list = wiz["batch_seasons"] if wiz["state"] == S_BATCH_SEASON else wiz["seasons"]
+        is_existing = bool(wiz.get("series_id") or wiz.get("from_viewseries") or wiz.get("seasons"))
         if val == "submit":
             if wiz["state"] == S_BATCH_SEASON:
                 wiz["seasons"] = list(set(wiz["seasons"] + target_list))
@@ -938,24 +1056,28 @@ async def wizard_callback(client: Client, query: CallbackQuery):
                 )
         elif val == "skip":
             if wiz["state"] == S_BATCH_SEASON:
-                wiz["batch_seasons"] = [0]
+                # Automatically reuse the previously selected/existing season
+                existing_seasons = wiz.get("seasons", [])
+                wiz["batch_seasons"] = list(existing_seasons) if existing_seasons else [0]
                 wiz["state"] = S_BATCH_QUAL
                 used_qualities = await _get_used_qualities(wiz)
+                seasons_text = ", ".join(f"Season {s}" if s > 0 else "Direct Episodes" for s in sorted(wiz["batch_seasons"])) if wiz["batch_seasons"] and wiz["batch_seasons"] != [0] else "Direct Episodes"
                 await query.message.edit_text(
                     f"📂 Batch — <b>{wiz['name']}</b>\n"
-                    f"🌐 {', '.join(wiz['batch_langs'])} · 📁 Season None\n\n"
+                    f"🌐 {', '.join(wiz['batch_langs'])} · 📁 <b>Reused Season:</b> {seasons_text}\n\n"
                     "Select <b>qualities</b>:\n"
                     "<i>✅ = already saved to series  |  🟢 = selected for this batch</i>",
                     reply_markup=_quality_keyboard(wiz["batch_qualities"], used_qualities),
                     parse_mode=enums.ParseMode.HTML,
                 )
             else:
-                wiz["seasons"] = []
+                # In series editing flow, retain existing seasons consistently
                 if wiz.get("series_id"):
                     await update_series(wiz["series_id"], {"seasons": wiz["seasons"]})
                     logger.info(f"[SERIES EDIT]\nuser_id={uid}\nseries_id={wiz['series_id']}\naction=UPDATE_SUCCESS")
+                seasons_text = "\n".join(f"• Season {s}" for s in sorted(wiz["seasons"])) if wiz.get("seasons") else "None (Direct Episodes)"
                 await query.message.edit_text(
-                    "✅ <b>Seasons skipped.</b>\n\nNow configure quality or add batch files.",
+                    f"✅ <b>Existing seasons retained:</b>\n{seasons_text}\n\nNow configure quality or add batch files.",
                     reply_markup=_config_menu_keyboard(wiz.get("series_id"), wiz.get("from_viewseries", False)),
                     parse_mode=enums.ParseMode.HTML,
                 )
@@ -980,7 +1102,7 @@ async def wizard_callback(client: Client, query: CallbackQuery):
             else:
                 target_list.append(n)
             try:
-                await query.message.edit_reply_markup(_season_keyboard(MAX_SEASONS, target_list))
+                await query.message.edit_reply_markup(_season_keyboard(MAX_SEASONS, target_list, show_skip=is_existing))
             except MessageNotModified:
                 pass
         return await query.answer()
@@ -1020,9 +1142,10 @@ async def wizard_callback(client: Client, query: CallbackQuery):
         elif val == "back":
             if wiz["state"] == S_BATCH_QUAL:
                 wiz["state"] = S_BATCH_SEASON
+                is_existing = bool(wiz.get("series_id") or wiz.get("from_viewseries") or wiz.get("seasons"))
                 await query.message.edit_text(
                     f"📂 Batch — <b>{wiz['name']}</b>\n🌐 Languages: <b>{', '.join(wiz['batch_langs'])}</b>\n\nSelect <b>seasons</b>:",
-                    reply_markup=_season_keyboard(MAX_SEASONS, wiz["batch_seasons"]),
+                    reply_markup=_season_keyboard(MAX_SEASONS, wiz["batch_seasons"], show_skip=is_existing),
                     parse_mode=enums.ParseMode.HTML,
                 )
             else:
@@ -1047,9 +1170,13 @@ async def wizard_callback(client: Client, query: CallbackQuery):
                 pass
         return await query.answer()
 
+
+
     if action == "quality_used":
         q = parts[2]
         return await query.answer(f"⚠️ {q} files are already added for the selected language and season.", show_alert=True)
+
+
 
     # ── Batch confirm ─────────────────────────────────────────────────────────
     if action == "bconfirm":
@@ -1085,88 +1212,50 @@ async def wizard_callback(client: Client, query: CallbackQuery):
                 _register_short_id(series_id)
             else:
                 series_id = wiz["series_id"]
-                await update_series(series_id, {
-                    "languages": wiz["languages"],
-                    "seasons": wiz["seasons"],
-                    "qualities": wiz["qualities"],
-                    "rating": wiz.get("rating", ""),
-                    "poster": wiz.get("poster", ""),
-                })
 
-            await query.message.edit_text(
-                f"⏳ Processing batch... saving {bd['total_files']} files."
-            )
-            inserted = 0
-            duplicates = 0
-
-            seasons_to_add = wiz.get("batch_seasons") or [0]
+            langs_to_add = wiz.get("batch_langs") or wiz.get("languages") or ["Unknown"]
+            seasons_to_add = wiz.get("batch_seasons") or wiz.get("seasons") or [0]
             if not seasons_to_add:
                 seasons_to_add = [0]
+            quals_to_add = wiz.get("batch_qualities") or wiz.get("qualities") or ["Default"]
 
-            outlist = []
-            for ep_num, ep_chat_id, ep_msg_id, ep_file_id, ep_file_name, ep_file_size in bd["files"]:
-                outlist.append({
-                    "episode": ep_num,
-                    "chat_id": ep_chat_id,
-                    "message_id": ep_msg_id,
-                    "file_id": ep_file_id,
-                    "file_name": ep_file_name,
-                    "file_size": ep_file_size,
-                })
-            
-            import json
-            import os
-            from info import LOG_CHANNEL
-            json_path = f"sbatch_{series_id}_{uid}.json"
-            with open(json_path, "w+") as out:
-                json.dump(outlist, out)
-            
-            try:
-                post = await client.send_document(
-                    LOG_CHANNEL,
-                    json_path,
-                    file_name=f"SBatch_{wiz['name'][:20]}.json",
-                    caption=f"⚠️ Series Batch for {wiz['name']}\n\nDo not delete this message."
-                )
-                raw_file_id = post.document.file_id
-            except Exception as e:
-                logger.error(f"Failed to upload SBatch JSON: {e}")
-                if os.path.exists(json_path):
-                    os.remove(json_path)
-                return await query.answer("Failed to upload batch JSON to LOG_CHANNEL.", show_alert=True)
-                
-            if os.path.exists(json_path):
-                os.remove(json_path)
+            added_eps = []
+            skipped_eps = []
 
-            for lang in wiz["batch_langs"]:
+            for lang in langs_to_add:
                 for season in seasons_to_add:
-                    for quality in wiz["batch_qualities"]:
-                        try:
-                            status, reason = await add_series_file({
-                                "series_id":  series_id,
-                                "language":   lang,
-                                "season":     season,
-                                "episode":    -1,
-                                "quality":    quality,
-                                "chat_id":    bd["chat_id"],
-                                "message_id": bd["first_msg_id"],
-                                "file_id":    raw_file_id,
-                                "file_name":  f"SBatch_{wiz['name'][:20]}.json",
-                                "file_size":  0,
-                                "is_batch":   True,
-                                "total_episodes": len(outlist)
-                            })
-                            if status:
-                                inserted += len(outlist)
-                            else:
-                                duplicates += len(outlist)
-                        except Exception as e:
-                            logger.warning(f"add_series_file error for batch: {e}")
-                            duplicates += len(outlist)
+                    for quality in quals_to_add:
+                        for ep_num, ep_chat_id, ep_msg_id, ep_file_id, ep_file_name, ep_file_size in bd["files"]:
+                            try:
+                                is_dup = await check_episode_exists(series_id, lang, season, ep_num, quality)
+                                if is_dup:
+                                    skipped_eps.append(ep_num)
+                                    logger.info(f"[SERIES SBATCH]\nuser_id={uid}\nseries_id={series_id}\nseason={season}\nepisode={ep_num}\nlanguage={lang}\nquality={quality}\naction=DUPLICATE_SKIPPED")
+                                else:
+                                    status, reason = await add_series_file({
+                                        "series_id":  series_id,
+                                        "language":   lang,
+                                        "season":     season,
+                                        "episode":    ep_num,
+                                        "quality":    quality,
+                                        "chat_id":    ep_chat_id,
+                                        "message_id": ep_msg_id,
+                                        "file_id":    ep_file_id,
+                                        "file_name":  ep_file_name,
+                                        "file_size":  ep_file_size,
+                                        "is_batch":   False,
+                                        "total_episodes": 1
+                                    })
+                                    if status:
+                                        added_eps.append(ep_num)
+                                        logger.info(f"[SERIES SBATCH]\nuser_id={uid}\nseries_id={series_id}\nseason={season}\nepisode={ep_num}\nlanguage={lang}\nquality={quality}\naction=ADDED")
+                                    else:
+                                        skipped_eps.append(ep_num)
+                                        logger.info(f"[SERIES SBATCH]\nuser_id={uid}\nseries_id={series_id}\nseason={season}\nepisode={ep_num}\nlanguage={lang}\nquality={quality}\naction=DUPLICATE_SKIPPED")
+                            except Exception as e:
+                                logger.warning(f"add_series_file error for batch episode {ep_num}: {e}")
+                                skipped_eps.append(ep_num)
 
-            for lang in wiz["batch_langs"]:
-                for season in seasons_to_add:
-                    for quality in wiz["batch_qualities"]:
                         await save_batch({
                             "series_id": series_id,
                             "language": lang,
@@ -1175,22 +1264,40 @@ async def wizard_callback(client: Client, query: CallbackQuery):
                             "chat_id": bd["chat_id"],
                             "first_message_id": bd["first_msg_id"],
                             "last_message_id": bd["last_msg_id"],
-                            "total_files": inserted,
+                            "total_files": len(added_eps),
                         })
+
+            all_langs = list(set(wiz.get("languages", []) + langs_to_add))
+            all_seasons = list(set(wiz.get("seasons", []) + seasons_to_add))
+            all_quals = list(set(wiz.get("qualities", []) + quals_to_add))
+            wiz["languages"] = all_langs
+            wiz["seasons"] = all_seasons
+            wiz["qualities"] = all_quals
+
+            await update_series(series_id, {
+                "languages": all_langs,
+                "seasons": all_seasons,
+                "qualities": all_quals,
+            })
 
             wiz["batch_data"] = None
             wiz["state"] = S_DONE
-            logger.info(f"[SERIES EDIT]\nuser_id={uid}\nseries_id={series_id}\naction=UPDATE_SUCCESS")
+            logger.info(f"[SERIES SBATCH]\nuser_id={uid}\nseries_id={series_id}\ntotal_added={len(added_eps)}\ntotal_skipped={len(skipped_eps)}\naction=COMPLETED")
+
+            unique_added = sorted(list(set(added_eps)))
+            unique_skipped = sorted(list(set(skipped_eps)))
+            added_str = ", ".join(f"E{e:02d}" for e in unique_added) if unique_added else "None"
+            skipped_str = ", ".join(f"E{e:02d}" for e in unique_skipped) if unique_skipped else "None"
 
             await query.message.edit_text(
-                f"✅ <b>Batch saved successfully!</b>\n\n"
-                f"📺 {wiz['name']}\n"
-                f"🌐 Languages: {', '.join(wiz['batch_langs'])}\n"
-                f"📁 Seasons: {', '.join(str(s) for s in wiz['batch_seasons']) if wiz['batch_seasons'] and wiz['batch_seasons'] != [0] else 'None'}\n"
-                f"🎞️ Qualities: {', '.join(wiz['batch_qualities'])}\n\n"
-                f"✅ {inserted} files added.\n"
-                f"⚠️ {duplicates} duplicates skipped.\n\n"
-                "Add more batches or save the series.",
+                f"✅ <b>Batch processing completed!</b>\n\n"
+                f"📺 <b>Series:</b> {wiz['name']}\n"
+                f"🌐 <b>Languages:</b> {', '.join(langs_to_add)}\n"
+                f"📁 <b>Seasons:</b> {', '.join(str(s) for s in seasons_to_add) if seasons_to_add and seasons_to_add != [0] else 'None'}\n"
+                f"🎞 <b>Qualities:</b> {', '.join(quals_to_add)}\n\n"
+                f"✅ <b>Added ({len(added_eps)}):</b> {added_str}\n"
+                f"⚠️ <b>Already existed ({len(skipped_eps)}):</b> {skipped_str}\n\n"
+                f"Existing episodes were not modified.\nAdd more batches or save the series.",
                 reply_markup=_config_menu_keyboard(wiz.get("series_id"), wiz.get("from_viewseries", False)),
                 parse_mode=enums.ParseMode.HTML,
             )
@@ -1202,6 +1309,8 @@ async def wizard_callback(client: Client, query: CallbackQuery):
             return await query.answer("⚠️ Series name is missing.", show_alert=True)
         if not wiz["languages"]:
             return await query.answer("⚠️ Add at least one language.", show_alert=True)
+
+
 
         if wiz.get("series_id"):
             await update_series(wiz["series_id"], {
@@ -1232,6 +1341,8 @@ async def wizard_callback(client: Client, query: CallbackQuery):
             })
             _register_short_id(series_id)
 
+
+
         del temp.SERIES_WIZARD[uid]
         await query.message.edit_text(
             f"🎉 <b>Series saved!</b>\n\n"
@@ -1244,6 +1355,9 @@ async def wizard_callback(client: Client, query: CallbackQuery):
             parse_mode=enums.ParseMode.HTML,
         )
         return await query.answer("✅ Series saved!")
+
+
+
 
 
 @Client.on_callback_query(filters.regex(r"^send_fsall#"))
@@ -1268,9 +1382,13 @@ async def handle_send_fsall(client: Client, query: CallbackQuery):
     start_url = f"https://t.me/{temp.U_NAME}?start=all_{key}"
     await query.answer(url=start_url)
 
+
+
 # ──────────────────────────────────────────────────────────────────
 # ─── /sbatch — BATCH FILE IMPORTER ────────────────────────────────
 # ──────────────────────────────────────────────────────────────────
+
+
 
 @Client.on_message(filters.command("sbatch") & filters.private, group=1)
 async def cmd_sbatch(client: Client, message: Message):
@@ -1278,12 +1396,16 @@ async def cmd_sbatch(client: Client, message: Message):
     if not _is_admin(uid):
         return await message.reply_text("❌ You are not authorized to use this command.")
 
+
+
     if uid not in temp.SERIES_WIZARD or temp.SERIES_WIZARD[uid].get("state") != S_BATCH_WAIT:
         return await message.reply_text(
             "⚠️ Run <code>/seriesfil</code> first and configure language/season/quality "
             "before sending a batch.",
             parse_mode=enums.ParseMode.HTML,
         )
+
+
 
     args = message.command[1:]
     if len(args) < 2:
@@ -1294,9 +1416,13 @@ async def cmd_sbatch(client: Client, message: Message):
             parse_mode=enums.ParseMode.HTML,
         )
 
+
+
     link1, link2 = args[0], args[1]
     chat1, msg1 = _parse_tg_link(link1)
     chat2, msg2 = _parse_tg_link(link2)
+
+
 
     if not chat1 or not msg1 or not chat2 or not msg2:
         return await message.reply_text(
@@ -1307,16 +1433,22 @@ async def cmd_sbatch(client: Client, message: Message):
             parse_mode=enums.ParseMode.HTML,
         )
 
+
+
     if chat1 != chat2:
         return await message.reply_text(
             "❌ Both links must be from the <b>same channel</b>.",
             parse_mode=enums.ParseMode.HTML,
         )
 
+
+
     if msg1 > msg2:
         return await message.reply_text(
             "❌ First link must have a <b>lower</b> message ID than the second."
         )
+
+
 
     total = msg2 - msg1 + 1
     if total > 1000:
@@ -1324,14 +1456,20 @@ async def cmd_sbatch(client: Client, message: Message):
             f"❌ Range too large ({total} messages). Maximum allowed is 1000 per batch."
         )
 
+
+
     wiz = temp.SERIES_WIZARD[uid]
     processing_msg = await message.reply_text(
         f"⏳ Scanning messages {msg1} → {msg2} ({total} total)...\nThis may take time depending on number of messages."
     )
 
+
+
     # ── Collect files using chunked get_messages (same as /batch in genlink.py) ──
     files_found = []
     errors      = 0
+
+
 
     # Verify bot can read the channel first
     try:
@@ -1344,6 +1482,8 @@ async def cmd_sbatch(client: Client, message: Message):
             parse_mode=enums.ParseMode.HTML,
         )
         return
+
+
 
     for chunk_start in range(msg1, msg2 + 1, 200):
         chunk_end = min(chunk_start + 199, msg2)
@@ -1363,9 +1503,13 @@ async def cmd_sbatch(client: Client, message: Message):
                         errors += 1
                         continue
 
+
+
                     file_id   = getattr(media, "file_id", "")
                     file_name = getattr(media, "file_name", None) or f"file_{msg.id}"
                     file_size = getattr(media, "file_size", 0) or 0
+
+
 
                     # Attempt to extract episode number from filename, caption, or text
                     ep_num = _extract_episode_number(file_name)
@@ -1373,6 +1517,8 @@ async def cmd_sbatch(client: Client, message: Message):
                         ep_num = _extract_episode_number(msg.caption)
                     if not ep_num and msg.text:
                         ep_num = _extract_episode_number(msg.text)
+
+
 
                     files_found.append((chat1, msg.id, file_id, file_name, file_size, ep_num))
                 except Exception as ex:
@@ -1382,6 +1528,8 @@ async def cmd_sbatch(client: Client, message: Message):
             logger.warning(f"sbatch chunk error {chunk_start}-{chunk_end}: {ex}")
             errors += (chunk_end - chunk_start + 1)
 
+
+
     if not files_found:
         await processing_msg.edit_text(
             "❌ <b>No files found</b> in the given range.\n\n"
@@ -1389,6 +1537,8 @@ async def cmd_sbatch(client: Client, message: Message):
             parse_mode=enums.ParseMode.HTML,
         )
         return
+
+
 
     # Process episode mapping
     mapped_files = []
@@ -1399,6 +1549,8 @@ async def cmd_sbatch(client: Client, message: Message):
         mapped_files.append((ep_num, chat_id, mid, file_id, file_name, file_size))
         last_ep = ep_num
 
+
+
     # Build episode preview
     ep_preview = "\n".join(
         f"  Ep {ep_num:02d} — {fname}"
@@ -1406,6 +1558,8 @@ async def cmd_sbatch(client: Client, message: Message):
     )
     if len(mapped_files) > 10:
         ep_preview += f"\n  ... and {len(mapped_files) - 10} more"
+
+
 
     # Store in wizard
     wiz["batch_data"] = {
@@ -1416,6 +1570,8 @@ async def cmd_sbatch(client: Client, message: Message):
         "files":       mapped_files,
     }
     wiz["state"] = S_BATCH_CONF
+
+
 
     await processing_msg.edit_text(
         f"📦 <b>Batch Preview</b>\n\n"
@@ -1434,9 +1590,14 @@ async def cmd_sbatch(client: Client, message: Message):
     )
 
 
+
+
+
 # ──────────────────────────────────────────────────────────────────
 # ─── /slink — SINGLE SERIES FILE IMPORTER ─────────────────────────
 # ──────────────────────────────────────────────────────────────────
+
+
 
 @Client.on_message(filters.command("slink") & filters.private, group=1)
 async def cmd_slink(client: Client, message: Message):
@@ -1496,7 +1657,12 @@ async def cmd_slink(client: Client, message: Message):
     file_id = getattr(media, "file_id", "")
     file_name = getattr(media, "file_name", None) or f"file_{msg.id}"
     file_size = getattr(media, "file_size", 0) or 0
-    ep_num = _extract_episode_number(file_name) or 1
+    ep_num = (
+        _extract_episode_number(file_name)
+        or (msg.caption and _extract_episode_number(msg.caption))
+        or (msg.text and _extract_episode_number(msg.text))
+        or 1
+    )
 
     # Ensure series is saved or updated
     if not wiz.get("series_id"):
@@ -1527,28 +1693,36 @@ async def cmd_slink(client: Client, message: Message):
         for season in seasons:
             for quality in qualities:
                 try:
-                    status, reason = await add_series_file({
-                        "series_id": series_id,
-                        "language": lang,
-                        "season": season,
-                        "episode": ep_num,
-                        "quality": quality,
-                        "chat_id": chat_id,
-                        "message_id": msg_id,
-                        "file_id": file_id,
-                        "file_name": file_name,
-                        "file_size": file_size,
-                        "is_batch": False,
-                        "total_episodes": 1
-                    })
-                    if status:
-                        inserted += 1
-                    else:
+                    logger.info(f"[SERIES SLINK]\nuser_id={uid}\nseries_id={series_id}\nseason={season}\nepisode={ep_num}\nlanguage={lang}\nquality={quality}\naction=ADD_SINGLE")
+                    is_dup = await check_episode_exists(series_id, lang, season, ep_num, quality)
+                    if is_dup:
                         duplicates += 1
-                    logger.info(f"[SERIES SLINK]\nuser_id={uid}\nseries_id={series_id}\nlanguage={lang}\nseason={season}\nquality={quality}\naction=LINK_SAVED")
+                        logger.info(f"[SERIES SLINK]\nuser_id={uid}\nseries_id={series_id}\nseason={season}\nepisode={ep_num}\nlanguage={lang}\nquality={quality}\naction=DUPLICATE_SKIPPED")
+                    else:
+                        status, reason = await add_series_file({
+                            "series_id": series_id,
+                            "language": lang,
+                            "season": season,
+                            "episode": ep_num,
+                            "quality": quality,
+                            "chat_id": chat_id,
+                            "message_id": msg_id,
+                            "file_id": file_id,
+                            "file_name": file_name,
+                            "file_size": file_size,
+                            "is_batch": False,
+                            "total_episodes": 1
+                        })
+                        if status:
+                            inserted += 1
+                            logger.info(f"[SERIES SLINK]\nuser_id={uid}\nseries_id={series_id}\nseason={season}\nepisode={ep_num}\nlanguage={lang}\nquality={quality}\naction=ADDED")
+                        else:
+                            duplicates += 1
+                            logger.info(f"[SERIES SLINK]\nuser_id={uid}\nseries_id={series_id}\nseason={season}\nepisode={ep_num}\nlanguage={lang}\nquality={quality}\naction=DUPLICATE_SKIPPED")
                 except Exception as ex:
                     logger.warning(f"add_series_file error for slink: {ex}")
                     duplicates += 1
+                    logger.info(f"[SERIES SLINK]\nuser_id={uid}\nseries_id={series_id}\nseason={season}\nepisode={ep_num}\nlanguage={lang}\nquality={quality}\naction=DUPLICATE_SKIPPED")
 
     all_langs = list(set(wiz.get("languages", []) + langs))
     all_seasons = list(set(wiz.get("seasons", []) + seasons))
@@ -1565,22 +1739,28 @@ async def cmd_slink(client: Client, message: Message):
 
     wiz["state"] = S_DONE
 
+    if inserted > 0:
+        feedback_title = f"✅ <b>Episode {ep_num:02d} added successfully. Existing episodes were not modified.</b>"
+    else:
+        feedback_title = f"⚠️ <b>Episode {ep_num:02d} already exists.</b>"
+
     await processing_msg.edit_text(
-        f"✅ <b>Single file link added successfully!</b>\n\n"
+        f"{feedback_title}\n\n"
         f"📺 <b>Series:</b> {wiz['name']}\n"
         f"📁 <b>File:</b> {file_name}\n"
         f"🌐 <b>Language(s):</b> {', '.join(langs)}\n"
         f"📁 <b>Season(s):</b> {', '.join(str(s) for s in seasons) if seasons != [0] else 'None'}\n"
         f"🎞 <b>Quality(s):</b> {', '.join(qualities)}\n\n"
-        f"✅ Added: {inserted} | ⚠️ Duplicates: {duplicates}",
+        f"✅ Added: {inserted} | ⚠️ Already existed: {duplicates}",
         reply_markup=_config_menu_keyboard(wiz.get("series_id"), wiz.get("from_viewseries", False)),
         parse_mode=enums.ParseMode.HTML,
     )
 
-
 # ──────────────────────────────────────────────────────────────────
 # ─── USER SEARCH & NAVIGATION LOGIC ──────────────────────────────
 # ──────────────────────────────────────────────────────────────────
+
+
 
 async def _send_or_edit(message_or_query, text, reply_markup, poster=None):
     if isinstance(message_or_query, Message):
@@ -1603,6 +1783,9 @@ async def _send_or_edit(message_or_query, text, reply_markup, poster=None):
                 return await message_or_query.message.edit_text(text, reply_markup=reply_markup, parse_mode=enums.ParseMode.HTML)
         except MessageNotModified:
             return message_or_query.message
+
+
+
 
 
 async def _resolve_nav_step(user_id: int, full_id: str, sid: str, series: dict, lang=None, season=None, qual=None, is_private: bool = False):
@@ -1638,6 +1821,9 @@ async def _resolve_nav_step(user_id: int, full_id: str, sid: str, series: dict, 
     return "⚠️ Invalid step.", None
 
 
+
+
+
 def _user_suggestions_keyboard(matches: list[dict], user_id: int) -> InlineKeyboardMarkup:
     rows = []
     import uuid
@@ -1652,9 +1838,14 @@ def _user_suggestions_keyboard(matches: list[dict], user_id: int) -> InlineKeybo
     return InlineKeyboardMarkup(rows)
 
 
+
+
+
 async def process_series_search(client: Client, message: Message, txt: str, reply_msg: Message = None):
     import logging
     logger = logging.getLogger(__name__)
+
+
 
     matches = await search_series(txt)
     logger.info(f"[SERIES ROUTING] query={txt}")
@@ -1663,6 +1854,8 @@ async def process_series_search(client: Client, message: Message, txt: str, repl
     if not matches:
         logger.info("[SERIES ROUTING] decision=MOVIE_FILTER")
         return False
+
+
 
     seen = set()
     unique_matches = []
@@ -1673,7 +1866,11 @@ async def process_series_search(client: Client, message: Message, txt: str, repl
             seen.add(name_lower)
             unique_matches.append(m)
 
+
+
     logger.info(f"[SERIES ROUTING] unique_matches={len(unique_matches)}")
+
+
 
     if len(unique_matches) == 1:
         logger.info("[SERIES ROUTING] decision=SERIES_DIRECT")
@@ -1690,6 +1887,8 @@ async def process_series_search(client: Client, message: Message, txt: str, repl
         
         sid = series_id
 
+
+
         is_private = (message.chat.type == enums.ChatType.PRIVATE)
         text, rm = await _resolve_nav_step(message.from_user.id, series_id, key, series, is_private=is_private)
         poster = series.get("poster")
@@ -1703,6 +1902,8 @@ async def process_series_search(client: Client, message: Message, txt: str, repl
             
         text = "Choose the series/movie you want to view"
         rm = _user_suggestions_keyboard(unique_matches, message.from_user.id)
+
+
 
     if rm:
         if reply_msg:
@@ -1724,7 +1925,12 @@ async def process_series_search(client: Client, message: Message, txt: str, repl
                 asyncio.create_task(delete_search_msg(msg))
     return True
 
+
+
 # series_search_handler removed to prevent competing with auto_filter
+
+
+
 
 
 @Client.on_callback_query(filters.regex(r"^sr#"), group=1)
@@ -1733,9 +1939,13 @@ async def series_user_nav(client: Client, query: CallbackQuery):
     import logging
     log = logging.getLogger(__name__)
 
+
+
     parts = query.data.split("#")
     
     if len(parts) < 2: return await query.answer()
+
+
 
     key = parts[1]
     if key == "close":
@@ -1787,6 +1997,8 @@ async def series_user_nav(client: Client, query: CallbackQuery):
                 )
                 return await query.answer("Please send a Join Request first.", show_alert=True)
 
+
+
     full_id = await _get_full_id(sid)
     if not full_id:
         return await query.answer("Series context expired.", show_alert=True)
@@ -1794,6 +2006,8 @@ async def series_user_nav(client: Client, query: CallbackQuery):
     series = await get_series(full_id)
     if not series:
         return await query.answer("Series not found in database.", show_alert=True)
+
+
 
     lang = None
     season = None
@@ -1911,6 +2125,8 @@ async def series_user_nav(client: Client, query: CallbackQuery):
                         f["total_episodes"] = total_eps
                         files.append(f)
 
+
+
         if files:
             log.info(f"[PM SERIES] DB MATCH COUNT: {len(files)}")
             log.info(f"[PM SERIES] FILE COUNT: {len(files)}")
@@ -1930,6 +2146,8 @@ async def series_user_nav(client: Client, query: CallbackQuery):
             log.info("[PM SERIES] DB MATCH COUNT: 0")
             return await query.answer("⚠️ File not found. It may have been removed.", show_alert=True)
 
+
+
     # Navigation mapping
     if len(parts) >= 4 and parts[2] == "l":
         lang = parts[3]
@@ -1947,11 +2165,18 @@ async def series_user_nav(client: Client, query: CallbackQuery):
     return await query.answer(text, show_alert=True)
 
 
+
+
+
 # ═════════════════════════════════════════════════════════════════════════════
 # ─── /serieslist —” Admin: list all series ────────────────────────────────────
 # ═════════════════════════════════════════════════════════════════════════════
 
+
+
 import math
+
+
 
 async def send_series_list(message_or_query, unique_series, page=0):
     per_page = 10
@@ -1991,6 +2216,9 @@ async def send_series_list(message_or_query, unique_series, page=0):
         await message_or_query.message.edit_text(text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
 
 
+
+
+
 @Client.on_callback_query(filters.regex(r"^vser#"), group=1)
 async def cb_vser_page(client: Client, query: CallbackQuery):
     if not _is_admin(query.from_user.id):
@@ -2009,12 +2237,18 @@ async def cb_vser_page(client: Client, query: CallbackQuery):
             seen.add(name_lower)
             unique_series.append(s)
 
+
+
     unique_series.sort(key=lambda x: x.get("name", "").lower())
     await send_series_list(query, unique_series, page=page)
+
+
 
 import logging
 logger = logging.getLogger(__name__)
 logger.info("[VIEWSERIES] handler registered")
+
+
 
 @Client.on_message(filters.command(["serieslist", "viewseries"]), group=1)
 async def cmd_serieslist(client: Client, message: Message):
@@ -2028,6 +2262,8 @@ async def cmd_serieslist(client: Client, message: Message):
     if not is_admin:
         return await message.reply_text("âŒ You are not authorized to use this command.")
 
+
+
     from database.series_db import list_all_series
     all_series = await list_all_series()
     
@@ -2035,6 +2271,8 @@ async def cmd_serieslist(client: Client, message: Message):
     
     if not all_series:
         return await message.reply_text("No Series have been added yet.")
+
+
 
     seen = set()
     unique_series = []
@@ -2045,13 +2283,20 @@ async def cmd_serieslist(client: Client, message: Message):
             seen.add(name_lower)
             unique_series.append(s)
 
+
+
     unique_series.sort(key=lambda x: x.get("name", "").lower())
     await send_series_list(message, unique_series, page=0)
+
+
+
 
 
 # ═════════════════════════════════════════════════════════════════════════════
 # ─── /seriesdel —” Admin: delete a series ─────────────────────────────────────
 # ═════════════════════════════════════════════════════════════════════════════
+
+
 
 @Client.on_message(filters.command(["seriesdel", "delseries"]) & (filters.private | filters.group), group=1)
 async def cmd_seriesdel(client: Client, message: Message):
@@ -2064,6 +2309,8 @@ async def cmd_seriesdel(client: Client, message: Message):
     if not is_admin:
         return await message.reply_text("âŒ Not authorized.")
 
+
+
     args = message.text.split(None, 1)
     if len(args) < 2:
         return await message.reply_text(
@@ -2072,13 +2319,19 @@ async def cmd_seriesdel(client: Client, message: Message):
             parse_mode=enums.ParseMode.HTML,
         )
 
+
+
     arg = args[1].strip().strip('"').strip("'")
     from database.series_db import delete_series as _del, search_series, get_series_by_name, _normalize
     import re
 
+
+
     if re.fullmatch(r"[0-9a-fA-F]{24}", arg):
         await _del(arg)
         return await message.reply_text(f"✅ Series ID <code>{arg}</code> deleted (soft).", parse_mode=enums.ParseMode.HTML)
+
+
 
     normalized = _normalize(arg)
     exact = await get_series_by_name(normalized)
@@ -2095,13 +2348,20 @@ async def cmd_seriesdel(client: Client, message: Message):
     await message.reply_text(f"✅ Series <b>{match['name']}</b> deleted (soft).", parse_mode=enums.ParseMode.HTML)
 
 
+
+
+
 # ═════════════════════════════════════════════════════════════════════════════
 # ─── STARTUP: Ensure DB indexes ──────────────────────────────────────────────
 # ═════════════════════════════════════════════════════════════════════════════
 
+
+
 async def _startup():
     await _ensure_indexes()
     logger.info("Series DB indexes ensured.")
+
+
 
 # Schedule index creation when the module is loaded
 import asyncio as _asyncio
@@ -2133,3 +2393,4 @@ async def handle_series_getall(client: Client, query: CallbackQuery):
     except Exception as e:
         logger.error(f"Error in handle_series_getall: {e}")
         await query.answer("⚠️ An error occurred.", show_alert=True)
+
