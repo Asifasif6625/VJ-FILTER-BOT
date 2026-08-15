@@ -1580,18 +1580,72 @@ async def handle_send_fsall(client: Client, query: CallbackQuery):
 
 @Client.on_callback_query(filters.regex(r"^sr#"), group=1)
 async def series_user_nav(client: Client, query: CallbackQuery):
-    if query.message.reply_to_message and query.from_user.id != query.message.reply_to_message.from_user.id:
-        from Script import script
-        return await query.answer(script.ALRT_TXT.format(query.from_user.first_name), show_alert=True)
-        
+    from utils import temp
+    import logging
+    log = logging.getLogger(__name__)
+
     parts = query.data.split("#")
     
     if len(parts) < 2: return await query.answer()
 
-    sid = parts[1]
-    if sid == "close":
+    key = parts[1]
+    if key == "close":
         return await query.message.delete()
         
+    req = getattr(temp, "SERIES_STATE", {}).get(key)
+    if not req:
+        return await query.answer("⚠️ Request expired. Please search again.", show_alert=True)
+        
+    log.info(f"[SERIES CALLBACK] callback={query.data} click_user={query.from_user.id} owner_user={req['user']}")
+    if query.from_user.id != req["user"]:
+        log.info("[SERIES CALLBACK] ownership=DENIED")
+        return await query.answer("⚠️ This search belongs to another user.", show_alert=True)
+    log.info("[SERIES CALLBACK] ownership=ALLOWED")
+        
+    sid = req["sid"]
+    
+    # Try Again Flow / Force Sub verification - check subscription before DB lookups
+    if query.message.chat.type == enums.ChatType.PRIVATE and len(parts) >= 8 and parts[2] == "l" and parts[4] == "s" and parts[6] == "q":
+        from utils import is_subscribed
+        from info import AUTH_CHANNEL
+        if AUTH_CHANNEL:
+            is_try_again = query.message.text and "Join Request" in query.message.text
+            
+            if not await is_subscribed(client, query):
+                if is_try_again:
+                    log.info(f"[TRY AGAIN] user_id={query.from_user.id} membership=NOT_JOINED")
+                    log.info("[TRY AGAIN] alert_sent=NOT_JOINED")
+                    return await query.answer("⚠️ Please join the channel first.", show_alert=True)
+                
+                try:
+                    invite_link = await client.create_chat_invite_link(int(AUTH_CHANNEL), creates_join_request=True)
+                except Exception as e:
+                    log.error(f"Failed to create invite link: {e}")
+                    await query.answer("Make sure Bot is admin in Forcesub channel", show_alert=True)
+                    return
+                
+                text = (
+                    "📢 **Channel Join Request**\n\n"
+                    "ഫയലുകൾ ലഭിക്കുന്നതിന് മുമ്പ് ഞങ്ങളുടെ ചാനലിലേക്ക് Join Request അയയ്ക്കുക.\n\n"
+                    "Request അയച്ച ശേഷം താഴെയുള്ള Try Again ബട്ടൺ ക്ലിക്ക് ചെയ്യുക.\n\n"
+                    "Please send a Join Request to our channel before getting the files.\n\n"
+                    "After sending the request, click Try Again below."
+                )
+                btn = [
+                    [InlineKeyboardButton("📢 Send Join Request", url=invite_link.invite_link)],
+                    [InlineKeyboardButton("🔄 Try Again", callback_data=query.data)]
+                ]
+                await client.send_message(
+                    chat_id=query.from_user.id,
+                    text=text,
+                    reply_markup=InlineKeyboardMarkup(btn),
+                    parse_mode=enums.ParseMode.MARKDOWN
+                )
+                return await query.answer("Please send a Join Request first.", show_alert=True)
+            else:
+                if is_try_again:
+                    log.info(f"[TRY AGAIN] user_id={query.from_user.id} membership=JOINED")
+
     full_id = await _get_full_id(sid)
     if not full_id:
         return await query.answer("Series context expired.", show_alert=True)
@@ -1604,52 +1658,18 @@ async def series_user_nav(client: Client, query: CallbackQuery):
     season = None
     qual = None
     
-    # â”€â”€ Send file (Quality selected) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    # ── Send file (Quality selected) ──────────────────────────────────
     if len(parts) >= 8 and parts[2] == "l" and parts[4] == "s" and parts[6] == "q":
         lang    = parts[3]
         season  = int(parts[5])
         qual    = parts[7]
         
-        logger.info(f"[PM SERIES] QUALITY CALLBACK RECEIVED: {query.data}")
-        logger.info(f"[PM SERIES] USER ID: {query.from_user.id}")
-        logger.info(f"[PM SERIES] FULL ID: {full_id}")
-        logger.info(f"[PM SERIES] LANGUAGE: {lang}")
-        logger.info(f"[PM SERIES] SEASON: {season}")
-        logger.info(f"[PM SERIES] QUALITY: {qual}")
-        
-        if query.message.chat.type == enums.ChatType.PRIVATE:
-            from utils import is_subscribed
-            from info import AUTH_CHANNEL
-            if AUTH_CHANNEL and not await is_subscribed(client, query):
-                is_try_again = query.message.text and "Join Request" in query.message.text
-                if is_try_again:
-                    return await query.answer("âš ï¸ à´†à´¦àµà´¯à´‚ à´šà´¾à´¨à´²à´¿à´²àµ‡à´•àµà´•àµ Join Request à´…à´¯à´¯àµà´•àµà´•àµà´•.", show_alert=True)
-                
-                try:
-                    invite_link = await client.create_chat_invite_link(int(AUTH_CHANNEL), creates_join_request=True)
-                except Exception as e:
-                    logger.error(f"Failed to create invite link: {e}")
-                    await query.answer("Make sure Bot is admin in Forcesub channel", show_alert=True)
-                    return
-                
-                text = (
-                    "ðŸ“¢ **Channel Join Request**\n\n"
-                    "à´«à´¯à´²àµà´•àµ¾ à´²à´­à´¿à´•àµà´•àµà´¨àµà´¨à´¤à´¿à´¨àµ à´®àµà´®àµà´ªàµ à´žà´™àµà´™à´³àµà´Ÿàµ† à´šà´¾à´¨à´²à´¿à´²àµ‡à´•àµà´•àµ Join Request à´…à´¯à´¯àµà´•àµà´•àµà´•.\n\n"
-                    "Request à´…à´¯à´šàµà´š à´¶àµ‡à´·à´‚ à´¤à´¾à´´àµ†à´¯àµà´³àµà´³ Try Again à´¬à´Ÿàµà´Ÿàµº à´•àµà´²à´¿à´•àµà´•àµ à´šàµ†à´¯àµà´¯àµà´•.\n\n"
-                    "Please send a Join Request to our channel before getting the files.\n\n"
-                    "After sending the request, click Try Again below."
-                )
-                btn = [
-                    [InlineKeyboardButton("ðŸ“¢ Send Join Request", url=invite_link.invite_link)],
-                    [InlineKeyboardButton("ðŸ”„ Try Again", callback_data=query.data)]
-                ]
-                await client.send_message(
-                    chat_id=query.from_user.id,
-                    text=text,
-                    reply_markup=InlineKeyboardMarkup(btn),
-                    parse_mode=enums.ParseMode.MARKDOWN
-                )
-                return await query.answer("Please send a Join Request first.", show_alert=True)
+        log.info(f"[PM SERIES] QUALITY CALLBACK RECEIVED: {query.data}")
+        log.info(f"[PM SERIES] USER ID: {query.from_user.id}")
+        log.info(f"[PM SERIES] FULL ID: {full_id}")
+        log.info(f"[PM SERIES] LANGUAGE: {lang}")
+        log.info(f"[PM SERIES] SEASON: {season}")
+        log.info(f"[PM SERIES] QUALITY: {qual}")
         
         rating = series.get("rating", "N/A")
         if len(parts) >= 10 and parts[8] == "e":
@@ -1661,7 +1681,7 @@ async def series_user_nav(client: Client, query: CallbackQuery):
                 if f.get("is_batch"):
                     try:
                         file_path = await client.download_media(f["file_id"])
-                        with open(file_path, "r") as json_file:
+                        with open(file_path, "r", encoding="utf-8") as json_file:
                             batch_files = json.loads(json_file.read())
                         os.remove(file_path)
                         for bf in batch_files:
@@ -1671,7 +1691,7 @@ async def series_user_nav(client: Client, query: CallbackQuery):
                             bf["total_episodes"] = f.get("total_episodes", len(batch_files))
                             files.append(bf)
                     except Exception as e:
-                        logger.error(f"Failed to fetch JSON batch: {e}")
+                        log.error(f"Failed to fetch JSON batch: {e}")
                 else:
                     f["is_series"] = True
                     f["series_rating"] = rating
@@ -1689,7 +1709,7 @@ async def series_user_nav(client: Client, query: CallbackQuery):
                     if f.get("is_batch"):
                         try:
                             file_path = await client.download_media(f["file_id"])
-                            with open(file_path, "r") as json_file:
+                            with open(file_path, "r", encoding="utf-8") as json_file:
                                 batch_files = json.loads(json_file.read())
                             os.remove(file_path)
                             for bf in batch_files:
@@ -1700,7 +1720,7 @@ async def series_user_nav(client: Client, query: CallbackQuery):
                                 bf["total_episodes"] = f.get("total_episodes", len(batch_files))
                                 files.append(bf)
                         except Exception as e:
-                            logger.error(f"Failed to fetch JSON batch: {e}")
+                            log.error(f"Failed to fetch JSON batch: {e}")
                     else:
                         f["is_series"] = True
                         f["series_rating"] = rating
@@ -1710,8 +1730,8 @@ async def series_user_nav(client: Client, query: CallbackQuery):
                         files.append(f)
 
         if files:
-            logger.info(f"[PM SERIES] DB MATCH COUNT: {len(files)}")
-            logger.info(f"[PM SERIES] FILE COUNT: {len(files)}")
+            log.info(f"[PM SERIES] DB MATCH COUNT: {len(files)}")
+            log.info(f"[PM SERIES] FILE COUNT: {len(files)}")
             if query.message.chat.type == enums.ChatType.PRIVATE:
                 await query.answer()
                 if query.message.text and "Channel Join Required" in query.message.text:
@@ -1721,7 +1741,7 @@ async def series_user_nav(client: Client, query: CallbackQuery):
                         pass
                 from plugins.commands import send_series_files_to_user
                 await send_series_files_to_user(client, query.from_user.id, files, query=query)
-                logger.info(f"[PM SERIES] SEND COMPLETED")
+                log.info(f"[PM SERIES] SEND COMPLETED")
                 return
             else:
                 from utils import temp as _temp
@@ -1742,11 +1762,9 @@ async def series_user_nav(client: Client, query: CallbackQuery):
                 
                 return await query.answer(url=start_url)
         elif files is not None:
-            logger.info("[PM SERIES] DB MATCH COUNT: 0")
+            log.info("[PM SERIES] DB MATCH COUNT: 0")
             return await query.answer("⚠️ File not found. It may have been removed.", show_alert=True)
 
-
-        
     # Navigation mapping
     if len(parts) >= 4 and parts[2] == "l":
         lang = parts[3]
@@ -1762,7 +1780,6 @@ async def series_user_nav(client: Client, query: CallbackQuery):
         return await query.answer()
     
     return await query.answer(text, show_alert=True)
-
 
 
 # â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
