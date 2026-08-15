@@ -2054,6 +2054,35 @@ async def series_user_nav(client: Client, query: CallbackQuery):
             return await query.answer(url=start_url)
             
         log.info(f"[REQUEST KEY TRACE]\nstage=PM\nkey={key}")
+
+        # ── 10-Second Cooldown Protection (PM Series Quality Button) ──
+        import time, math
+        now = time.time()
+
+        if not hasattr(temp, "SERIES_PM_QUALITY_COOLDOWNS"):
+            temp.SERIES_PM_QUALITY_COOLDOWNS = {}
+
+        # Clean up expired entries older than 60s
+        for k, t in list(temp.SERIES_PM_QUALITY_COOLDOWNS.items()):
+            if now - t > 60:
+                temp.SERIES_PM_QUALITY_COOLDOWNS.pop(k, None)
+
+        cooldown_key = (query.from_user.id, key, lang, season, qual)
+        last_click_time = temp.SERIES_PM_QUALITY_COOLDOWNS.get(cooldown_key)
+
+        if last_click_time is not None:
+            elapsed = now - last_click_time
+            if elapsed < 10:
+                remaining = math.ceil(10 - elapsed)
+                log.info(f"[SERIES PM QUALITY]\nuser_id={query.from_user.id}\nrequest={key}\nquality={qual}\naction=COOLDOWN_BLOCKED\nremaining={remaining}")
+                alert_text = f"⏳ Please wait {remaining} seconds." if remaining > 1 else f"⏳ Please wait {remaining} second."
+                return await query.answer(alert_text, show_alert=True)
+            else:
+                log.info(f"[SERIES PM QUALITY]\nuser_id={query.from_user.id}\nrequest={key}\nquality={qual}\naction=COOLDOWN_EXPIRED")
+
+        temp.SERIES_PM_QUALITY_COOLDOWNS[cooldown_key] = now
+        log.info(f"[SERIES PM QUALITY]\nuser_id={query.from_user.id}\nrequest={key}\nquality={qual}\naction=ACCEPTED\ncooldown=10")
+
         if len(parts) >= 10 and parts[8] == "e":
             ep      = int(parts[9])
             files = []
