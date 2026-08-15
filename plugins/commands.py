@@ -192,22 +192,29 @@ async def start(client, message):
                         if f.get("is_batch"):
                             try:
                                 file_path = await client.download_media(f["file_id"])
-                                with open(file_path, "r") as json_file:
+                                with open(file_path, "r", encoding="utf-8") as json_file:
                                     batch_files = json.loads(json_file.read())
                                 os.remove(file_path)
                                 for bf in batch_files:
                                     bf["is_series"] = True
+                                    bf["series_id"] = full_id
                                     bf["series_rating"] = rating
                                     bf["language"] = lang
+                                    bf["season"] = season
+                                    bf["quality"] = qual
                                     bf["episode_index"] = bf.get("episode", i)
                                     bf["total_episodes"] = f.get("total_episodes", len(batch_files))
+                                    log.info(f"[SERIES BATCH]\nseries_id={full_id}\nepisode={bf.get('episode', i)}\nlanguage={lang}\nquality={qual}")
                                     files.append(bf)
                             except Exception as e:
                                 log.error(f"Failed to fetch JSON batch: {e}")
                         else:
                             f["is_series"] = True
+                            f["series_id"] = full_id
                             f["series_rating"] = rating
                             f["language"] = lang
+                            f["season"] = season
+                            f["quality"] = qual
                             f["episode_index"] = i
                             f["total_episodes"] = len(episodes)
                             files.append(f)
@@ -1554,13 +1561,128 @@ async def send_series_files_to_user(client, user_id, files, query=None):
     import logging
     import asyncio
     import html
+    import re
     
     log = logging.getLogger(__name__)
-    semaphore = asyncio.Semaphore(3)
+    if not files:
+        return
+        
+    async def delayed_delete(m, delay):
+        await asyncio.sleep(delay)
+        try:
+            await m.delete()
+        except Exception:
+            pass
+
+    async def _send_single_file(file_id_str, f_caption):
+        log.info(f"[FILE SEND] request_id={file_id_str}")
+        log.info(f"[FILE SEND] file_id={file_id_str}")
+        while True:
+            try:
+                msg = await client.send_cached_media(
+                    chat_id=user_id,
+                    file_id=file_id_str,
+                    caption=f_caption,
+                    protect_content=False,
+                )
+                log.info(f"[FILE SEND] SUCCESS request_id={file_id_str}")
+                asyncio.create_task(delayed_delete(msg, 240))
+                return msg
+            except FloodWait as e:
+                log.warning(f"[FILE SEND] FloodWait for {e.value}s on {file_id_str}")
+                await asyncio.sleep(e.value + 1)
+            except Exception as e:
+                log.error(f"[FILE SEND] ERROR: {e}")
+                return None
+
+    def _get_episode_num(f):
+        ep = f.get("episode")
+        if isinstance(ep, int) and ep > 0:
+            return ep
+        try:
+            if ep is not None and str(ep).isdigit() and int(ep) > 0:
+                return int(ep)
+        except Exception:
+            pass
+
+        ep_idx = f.get("episode_index")
+        if isinstance(ep_idx, int) and ep_idx > 0:
+            return ep_idx
+        try:
+            if ep_idx is not None and str(ep_idx).isdigit() and int(ep_idx) > 0:
+                return int(ep_idx)
+        except Exception:
+            pass
+
+        fname = f.get("file_name", "")
+        m = re.findall(r"(?:e|ep|episode)[\s._-]*(\d+)", fname, re.IGNORECASE)
+        if m:
+            return int(m[0])
+        m2 = re.findall(r"\b(\d+)\b", fname)
+        if m2:
+            return int(m2[-1])
+        return 99999
+
+    # 1. Sort files numerically by episode number
+    sorted_files = sorted(files, key=_get_episode_num)
     
-    # Pre-process all file information to avoid unnecessary work during sending
-    prepared_files = []
-    for idx, file in enumerate(files, start=1):
+    # 2. Deduplicate exact duplicate records (same file_id)
+    seen_ids = set()
+    ordered_files = []
+    for f in sorted_files:
+        fid = f.get("file_id")
+        if fid:
+            if fid in seen_ids:
+                continue
+            seen_ids.add(fid)
+        ordered_files.append(f)
+        
+    sorted_order = [_get_episode_num(f) for f in ordered_files]
+    log.info(f"[SERIES DELIVERY]\naction=FILES_SORTED\norder={sorted_order}")
+
+    # 3. Extract common Series metadata context from first file
+    first_file = ordered_files[0] if ordered_files else {}
+    is_series = any(f.get("is_series") for f in ordered_files)
+    
+    series_id = first_file.get("series_id", "")
+    season = first_file.get("season", 0)
+    language = first_file.get("language", "")
+    quality = first_file.get("quality", "")
+
+    # 4. Send metadata ONCE before sending files
+    if is_series or (language and language != "Unknown" and quality):
+        if str(season).isdigit():
+            s_num = int(season)
+            series_tag = f"#Series {s_num:02d}" if s_num > 0 else "#Series 01"
+        else:
+            series_tag = f"#{season}"
+            
+        lang_clean = str(language).strip().replace(" ", "_")
+        lang_tag = f"#{lang_clean}" if not lang_clean.startswith("#") else lang_clean
+        
+        qual_clean = str(quality).strip().replace(" ", "_")
+        qual_tag = f"#{qual_clean}" if not qual_clean.startswith("#") else qual_clean
+        
+        metadata_text = f"{series_tag}\n{lang_tag}\n{qual_tag}"
+        
+        log.info(f"[SERIES DELIVERY]\nrequest_id={first_file.get('file_id', '')}\nseries_id={series_id}\nseason={season}\nlanguage={language}\nquality={quality}\ntotal_files={len(ordered_files)}")
+        log.info(f"[SERIES DELIVERY]\naction=METADATA_SENT\nmetadata={metadata_text.replace(chr(10), ' ')}")
+        
+        try:
+            meta_msg = await client.send_message(
+                chat_id=user_id,
+                text=metadata_text,
+                protect_content=False,
+            )
+            asyncio.create_task(delayed_delete(meta_msg, 240))
+        except Exception as ex:
+            log.warning(f"Failed to send metadata message: {ex}")
+
+    # 5. Sequentially send files in exact sorted order
+    total_eps = len(ordered_files)
+    sent_messages = []
+    
+    for idx, file in enumerate(ordered_files, start=1):
         file_id_str = file.get("file_id")
         if not file_id_str:
             continue
@@ -1574,117 +1696,43 @@ async def send_series_files_to_user(client, user_id, files, query=None):
         file_size = get_size(raw_size) if raw_size else "Unknown Size"
         
         bot_uname = temp.U_NAME if hasattr(temp, "U_NAME") and temp.U_NAME else "BotUsername"
-        language = file.get("language", "Unknown")
+        lang_str = file.get("language", "Unknown")
         rating = file.get("series_rating", "")
-        file_number = file.get("episode_index", "?")
-        total_episodes = file.get("total_episodes", "?")
-        season = file.get("season", 0)
-        quality = file.get("quality", "")
-        series_id = file.get("series_id", "")
-        is_series = file.get("is_series", False)
-
+        ep_num = _get_episode_num(file)
+        if ep_num == 99999:
+            ep_num = idx
+            
         f_caption = (
             f"⦿ <i>File name:</i> <code>{file_name}</code>\n"
             f"⦿ <i>Size:</i> {file_size}\n"
-            f"⦿ <i>Language:</i> {language}\n"
+            f"⦿ <i>Language:</i> {lang_str}\n"
         )
         if rating and str(rating).lower() not in ["skip", "n/a", ""]:
             f_caption += f"⦿ <i>Rating:</i> ⭐ {rating}\n"
             
         f_caption += (
-            f"⦿ <i>File:</i> {file_number} / {total_episodes}\n\n"
+            f"⦿ <i>File:</i> {idx} / {total_eps}\n\n"
             f"@{bot_uname}"
         )
-
-        metadata_text = ""
-        metadata_info = {}
-        if is_series or (language and language != "Unknown" and quality):
-            if str(season).isdigit():
-                s_num = int(season)
-                series_tag = f"#Series {s_num:02d}" if s_num > 0 else "#Series 01"
-            else:
-                series_tag = f"#{season}"
-                
-            lang_clean = str(language).strip().replace(" ", "_")
-            lang_tag = f"#{lang_clean}" if not lang_clean.startswith("#") else lang_clean
-            
-            qual_clean = str(quality).strip().replace(" ", "_")
-            qual_tag = f"#{qual_clean}" if not qual_clean.startswith("#") else qual_clean
-            
-            metadata_text = f"{series_tag}\n{lang_tag}\n{qual_tag}"
-            metadata_info = {
-                "series_id": series_id,
-                "series_number": series_tag,
-                "language": lang_tag,
-                "quality": qual_tag
-            }
-
-        prepared_files.append((idx, file_id_str, f_caption, metadata_text, metadata_info))
         
-    total_files = len(prepared_files)
-    
-    async def delayed_delete(m, delay):
-        await asyncio.sleep(delay)
-        try:
-            await m.delete()
-        except Exception:
-            pass
+        msg = await _send_single_file(file_id_str, f_caption)
+        if msg:
+            sent_messages.append(msg)
+            log.info(f"[SERIES DELIVERY]\naction=FILE_SENT\nepisode={ep_num}")
+            await asyncio.sleep(0.3)
 
-    async def send_one(idx, file_id_str, f_caption, metadata_text, metadata_info):
-        async with semaphore:
-            # 1. Send metadata message immediately before file if metadata exists
-            if metadata_text:
-                log.info(f"[SERIES FILE DELIVERY]\nseries_id={metadata_info.get('series_id', '')}\nseries_number={metadata_info.get('series_number', '')}\nlanguage={metadata_info.get('language', '')}\nquality={metadata_info.get('quality', '')}")
-                try:
-                    meta_msg = await client.send_message(
-                        chat_id=user_id,
-                        text=metadata_text,
-                        protect_content=False,
-                    )
-                    log.info(f"[SERIES FILE DELIVERY]\naction=METADATA_SENT")
-                    asyncio.create_task(delayed_delete(meta_msg, 240))
-                except Exception as ex:
-                    log.warning(f"Failed to send metadata message: {ex}")
+    log.info(f"[SERIES DELIVERY]\naction=COMPLETED\ntotal_files={len(sent_messages)}")
 
-            # 2. Send actual file
-            log.info(f"[FILE SEND] request_id={file_id_str}")
-            log.info(f"[FILE SEND] file_id={file_id_str}")
-            log.info(f"[TRY AGAIN SEND] file_id={file_id_str} source=send_series_files_to_user")
-            while True:
-                try:
-                    msg = await client.send_cached_media(
-                        chat_id=user_id,
-                        file_id=file_id_str,
-                        caption=f_caption,
-                        protect_content=False,
-                    )
-                    log.info(f"[SERIES FILE DELIVERY]\naction=FILE_SENT")
-                    log.info(f"[FILE SEND] SUCCESS request_id={file_id_str}")
-                    asyncio.create_task(delayed_delete(msg, 240))
-                    return msg
-                except FloodWait as e:
-                    log.warning(f"[FILE SEND] FloodWait for {e.value}s on {file_id_str}")
-                    await asyncio.sleep(e.value + 1)
-                except Exception as e:
-                    log.error(f"[FILE SEND] ERROR: {e}")
-                    return None
-
-    log.info(f"[QUALITY PM] STARTING CONCURRENT SEND FOR {total_files} FILES")
-    
-    if prepared_files:
-        tasks = [send_one(idx, file_id, caption, meta_txt, meta_inf) for idx, file_id, caption, meta_txt, meta_inf in prepared_files]
-        sent_messages = await asyncio.gather(*tasks)
-        
-        valid_msgs = [m for m in sent_messages if m is not None]
-        if valid_msgs:
-            k = await client.send_message(
-                chat_id=user_id,
-                text=(
-                    "<blockquote><b><u>❗️❗️❗️IMPORTANT❗️️❗️❗️</u></b>\n\n"
-                    "ᴛʜɪs ᴍᴇssᴀɢᴇ ᴡɪʟʟ ʙᴇ ᴅᴇʟᴇᴛᴇᴅ ɪɴ <b><u>4 mins</u> 🫥 <i></b>"
-                    "(ᴅᴜᴇ ᴛᴏ ᴄᴏᴘʏʀɪɢʜᴛ ɪssᴜᴇs)</i>.\n\n"
-                    "<b><i>ᴘʟᴇᴀsᴇ ғᴏʀᴡᴀʀᴅ ᴛʜᴇsᴇ ғɪʟᴇs ᴛᴏ sᴏᴍᴇᴡʜᴇʀᴇ ᴇʟsᴇ ᴀɴᴅ sᴛᴀʀᴛ ᴅᴏᴡɴʟᴏᴀᴅɪɴɢ ᴛʜᴇʀᴇ</b></i></blockquote>"
-                ),
-                parse_mode=enums.ParseMode.HTML
-            )
-            asyncio.create_task(delayed_delete(k, 240))
+    # 6. Send final delete notification
+    if sent_messages:
+        k = await client.send_message(
+            chat_id=user_id,
+            text=(
+                "<blockquote><b><u>❗️❗️❗️IMPORTANT❗️️❗️❗️</u></b>\n\n"
+                "ᴛʜɪs ᴍᴇssᴀɢᴇ ᴡɪʟʟ ʙᴇ ᴅᴇʟᴇᴛᴇᴅ ɪɴ <b><u>4 mins</u> 🫥 <i></b>"
+                "(ᴅᴜᴇ ᴛᴏ ᴄᴏᴘʏʀɪɢʜᴛ ɪssᴜᴇs)</i>.\n\n"
+                "<b><i>ᴘʟᴇᴀsᴇ ғᴏʀᴡᴀʀᴅ ᴛʜᴇsᴇ ғɪʟᴇs ᴛᴏ sᴏᴍᴇᴡʜᴇʀᴇ ᴇʟsᴇ ᴀɴᴅ sᴛᴀʀᴛ ᴅᴏᴡɴʟᴏᴀᴅɪɴɢ ᴛʜᴇʀᴇ</b></i></blockquote>"
+            ),
+            parse_mode=enums.ParseMode.HTML
+        )
+        asyncio.create_task(delayed_delete(k, 240))
