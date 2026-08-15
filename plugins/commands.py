@@ -125,7 +125,7 @@ async def start(client, message):
         req_user = message.from_user.id
         user_verified = (stored_user == req_user)
         
-        log.info(f"\n[ALL START]\nUUID RECEIVED: {file_id}\nREQUEST FOUND: {req_found}\nSTORED USER: {stored_user}\nREQUEST USER: {req_user}\nUSER VERIFIED: {user_verified}")
+        log.info(f"[SERIES PM START]\nrequest_key={file_id}\nuser_id={message.from_user.id}\naction=REQUEST_RECEIVED")
         
         if not data_obj:
             log.warning(f"[ALL START] GETALL NOT FOUND uuid={file_id}")
@@ -136,6 +136,11 @@ async def start(client, message):
             if message.from_user.id != data_obj["user"]:
                 await message.reply("<b><i>⚠️ This link is not for you!</b></i>")
                 return
+                
+            if data_obj.get("delivery_status") == "completed" or data_obj.get("state") == "COMPLETED":
+                return await message.reply("✅ Files already sent.")
+            elif data_obj.get("delivery_status") == "sending" or data_obj.get("state") == "SENDING":
+                return await message.reply("⏳ Files are already being sent.")
             
             if "query" in data_obj:
                 from utils import is_subscribed
@@ -166,6 +171,7 @@ async def start(client, message):
                     )
                     return
                 
+                data_obj["delivery_status"] = "sending"
                 from database.series_db import list_quality_episodes, get_series_files
                 import json, os
                 
@@ -207,7 +213,10 @@ async def start(client, message):
                             files.append(f)
                             
                 log.info(f"[ALL START] EXPANDED FILES: {len(files)}")
+                for f in files:
+                    log.info(f"[FILE SEND]\nsource=series_group_pm\nuser_id={message.from_user.id}\nfile_id={f.get('file_id')}\nfile_name={f.get('file_name', 'Unknown')}\nrequest_key={file_id}")
                 await send_series_files_to_user(client, message.from_user.id, files)
+                data_obj["delivery_status"] = "completed"
                 log.info(f"[ALL START] Existing PM Series send function completed")
         return
     # --- END SERIES GROUP TO PM FLOW ---

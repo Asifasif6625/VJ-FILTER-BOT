@@ -1474,7 +1474,7 @@ async def _resolve_nav_step(user_id: int, full_id: str, sid: str, series: dict, 
         langs = await list_series_languages(full_id)
         if not langs: langs = series.get("languages", [])
         if not langs: return "⚠️ No files yet.", None
-        return card + "\n\n🌐 <b>Select Language:</b>", _user_lang_keyboard(sid, langs)
+        return card + "\n\n🌐  <b>Select Language:</b>", _user_lang_keyboard(sid, langs)
         
     if season is None:
         seasons = await list_series_seasons(full_id, lang)
@@ -1483,7 +1483,7 @@ async def _resolve_nav_step(user_id: int, full_id: str, sid: str, series: dict, 
         if seasons == [0]:
             season = 0
         else:
-            return card + f"\n\n🌐 <b>{lang}</b>\n📁 <b>Select Season:</b>", _user_season_keyboard(sid, lang, seasons)
+            return card + f"\n\n🌐  <b>{lang}</b>\n📁  <b>Select Season:</b>", _user_season_keyboard(sid, lang, seasons)
         
     if qual is None:
         quals = await list_season_qualities(full_id, lang, season)
@@ -1492,7 +1492,7 @@ async def _resolve_nav_step(user_id: int, full_id: str, sid: str, series: dict, 
         season_str = f"Season {season}" if season > 0 else "Direct Episodes"
         rating = series.get("rating", "N/A")
         kb = await _user_quality_keyboard(user_id, full_id, sid, lang, season, quals, rating, is_private=is_private)
-        return card + f"\n\n🌐 <b>{lang}</b>\n📁 <b>{season_str}</b>\n🎞️ <b>Select Quality:</b>", kb
+        return card + f"\n\n🌐  <b>{lang}</b>\n📁  <b>{season_str}</b>\n🎞️ <b>Select Quality:</b>", kb
         
     return "⚠️ Invalid step.", None
 
@@ -1607,6 +1607,7 @@ async def series_user_nav(client: Client, query: CallbackQuery):
     log.info(f"[SERIES CALLBACK] callback={query.data} click_user={query.from_user.id} owner_user={req['user']}")
     if query.from_user.id != req["user"]:
         log.info("[SERIES CALLBACK] ownership=DENIED")
+        log.info("[SERIES GROUP QUALITY]\naction=OWNERSHIP_DENIED")
         return await query.answer("⚠️ This is not your button.", show_alert=True)
     log.info("[SERIES CALLBACK] ownership=ALLOWED")
         
@@ -1663,16 +1664,19 @@ async def series_user_nav(client: Client, query: CallbackQuery):
         season  = int(parts[5])
         qual    = parts[7]
         
-        log.info(f"[SERIES QUALITY CLICK]\nuser_id={query.from_user.id}\ncallback_data={query.data}\nseries_id={full_id}\nlanguage={lang}\nseason={season}\nquality={qual}")
-        
         rating = series.get("rating", "N/A")
         
         if query.message.chat.type != enums.ChatType.PRIVATE:
             from utils import temp as _temp
             import uuid as _uuid
+            from database.series_db import save_temp_request
+            
+            log.info(f"[SERIES GROUP QUALITY]\nuser_id={query.from_user.id}\nsid={sid}\nfull_id={full_id}\nlanguage={lang}\nseason={season}\nquality={qual}\nchat_type=GROUP")
+            
             key_pm = str(_uuid.uuid4())[:8]
-            _temp.GETALL[key_pm] = {
+            req_data = {
                 "user": req["user"],
+                "source": "series_group",
                 "query": {
                     "full_id": full_id,
                     "lang": lang,
@@ -1681,9 +1685,17 @@ async def series_user_nav(client: Client, query: CallbackQuery):
                     "rating": rating
                 }
             }
-            start_url = f"https://telegram.me/{temp.U_NAME}?start=all_{key_pm}"
+            _temp.GETALL[key_pm] = req_data
+            try:
+                await save_temp_request(key_pm, req_data)
+            except Exception as ex:
+                log.warning(f"Could not save temp request to DB: {ex}")
+                
+            log.info(f"[SERIES GROUP QUALITY]\nrequest_key={key_pm}\naction=REQUEST_SAVED")
+            
+            start_url = f"https://t.me/{temp.U_NAME}?start=all_{key_pm}"
             log.info(f"[REQUEST KEY TRACE]\nstage=GROUP_QUALITY\nkey={key_pm}")
-            log.info(f"[SERIES QUALITY PM]\nrequest_key={key_pm}\naction=OPEN_PM\nclick_user={query.from_user.id}\nowner_user={req['user']}")
+            log.info(f"[SERIES GROUP QUALITY]\nrequest_key={key_pm}\naction=OPEN_PM")
             return await query.answer(url=start_url)
             
         log.info(f"[REQUEST KEY TRACE]\nstage=PM\nkey={key}")
