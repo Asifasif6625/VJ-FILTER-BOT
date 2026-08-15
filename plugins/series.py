@@ -426,6 +426,7 @@ async def cmd_seriesfil(client: Client, message: Message):
 
     uid = message.from_user.id
     temp.SERIES_WIZARD[uid] = {
+        "mode": "add",
         "state": S_NAME,
         "name": "", "year": "", "genre": "", "description": "",
         "languages": [], "seasons": [], "qualities": [],
@@ -456,7 +457,7 @@ async def cb_edser(client: Client, query: CallbackQuery):
     else:
         is_admin = query.from_user.id in ADMINS
     if not is_admin:
-        return await query.answer("âŒ You are not authorized.", show_alert=True)
+        return await query.answer("❌ You are not authorized.", show_alert=True)
     
     uid = query.from_user.id
     from utils import temp
@@ -468,7 +469,8 @@ async def cb_edser(client: Client, query: CallbackQuery):
         return await query.answer("Series not found.", show_alert=True)
         
     temp.SERIES_WIZARD[uid] = {
-        "state": 10, # S_DONE
+        "mode": "edit",
+        "state": S_DONE,
         "name": exact["name"],
         "year": exact.get("year", ""),
         "genre": exact.get("genre", ""),
@@ -480,23 +482,24 @@ async def cb_edser(client: Client, query: CallbackQuery):
         "series_id": str(exact["_id"]),
         "batch_langs": [], "batch_seasons": [], "batch_qualities": [],
         "batch_data": None,
-        "from_viewseries": True # Track that we came from /viewseries
+        "from_viewseries": True
     }
     
     wiz = temp.SERIES_WIZARD[uid]
+    logger.info(f"[SERIES EDIT]\nuser_id={uid}\nseries_id={series_id}\naction=OPEN")
     
-    # We will show the editing UI directly
     await query.message.edit_text(
-        f"âœï¸ <b>Edit Series: {wiz['name']}</b>\n\nChoose an option to edit:",
+        _series_card(wiz) + "\n\n⚙️ <b>Edit Series Configuration</b>\nChoose an option to edit:",
         reply_markup=_config_menu_keyboard(wiz.get("series_id"), True),
         parse_mode=enums.ParseMode.HTML,
     )
     await query.answer()
 
+
 @Client.on_message(filters.command(["ed_series"]), group=1)
 async def cmd_ed_series(client: Client, message: Message):
     if not _is_admin(message.from_user.id):
-        return await message.reply_text("âŒ You are not authorized to use this command.")
+        return await message.reply_text("❌ You are not authorized to use this command.")
 
     args = message.text.split(None, 1)
     if len(args) < 2:
@@ -521,10 +524,11 @@ async def cmd_ed_series(client: Client, message: Message):
                 exact = matches[0]
 
     if not exact:
-        return await message.reply_text(f"âŒ No series found matching '<b>{arg}</b>'.", parse_mode=enums.ParseMode.HTML)
+        return await message.reply_text(f"❌ No series found matching '<b>{arg}</b>'.", parse_mode=enums.ParseMode.HTML)
 
     uid = message.from_user.id
     temp.SERIES_WIZARD[uid] = {
+        "mode": "edit",
         "state": S_DONE,
         "name": exact["name"],
         "year": exact.get("year", ""),
@@ -535,22 +539,23 @@ async def cmd_ed_series(client: Client, message: Message):
         "seasons": exact.get("seasons", []),
         "qualities": exact.get("qualities", []),
         "series_id": str(exact["_id"]),
-        # batch session
         "batch_langs": [], "batch_seasons": [], "batch_qualities": [],
         "batch_data": None,
+        "from_viewseries": False
     }
     
     wiz = temp.SERIES_WIZARD[uid]
+    logger.info(f"[SERIES EDIT]\nuser_id={uid}\nseries_id={wiz['series_id']}\naction=OPEN")
     await message.reply_text(
-        _series_card(wiz) + "\n\nâš™ï¸ <b>Series Configuration</b>\nChoose an option to edit or click Save:",
+        _series_card(wiz) + "\n\n⚙️ <b>Series Configuration</b>\nChoose an option to edit or click Save:",
         reply_markup=_config_menu_keyboard(wiz.get("series_id"), wiz.get("from_viewseries", False)),
         parse_mode=enums.ParseMode.HTML,
     )
 
 
-# ═════════════════════════════════════════════════════════════════════════════
-# ─── /cancel —” ABORT WIZARD ──────────────────────────────────────────────────
-# ═════════════════════════════════════════════════════════════════════════════
+# ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ 
+# ─── /cancel — ABORT WIZARD ──────────────────────────────────────────────────
+# ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ 
 
 @Client.on_message(filters.command("cancel") & filters.private, group=1)
 async def cmd_cancel(client: Client, message: Message):
@@ -566,17 +571,17 @@ async def cmd_cancel(client: Client, message: Message):
         cancelled = True
         
     if cancelled:
-        await message.reply_text("âŒ Action cancelled.")
+        await message.reply_text("❌ Action cancelled.")
     else:
         await message.reply_text("No active wizard or session to cancel.")
 
 
-# ═════════════════════════════════════════════════════════════════════════════
-# ─── TEXT HANDLER —” WIZARD STEPS ─────────────────────────────────────────────
-# ═════════════════════════════════════════════════════════════════════════════
+# ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ 
+# ─── TEXT HANDLER — WIZARD STEPS ─────────────────────────────────────────────
+# ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ 
 
 @Client.on_message(filters.private & (filters.text | filters.photo) & ~filters.command(
-    ["seriesfil", "sbatch", "cancel", "start", "help", "settings",
+    ["seriesfil", "sbatch", "slink", "cancel", "start", "help", "settings",
      "connect", "disconnect", "connections", "stats", "users", "chats",
      "broadcast", "ban", "unban", "leave", "disable", "logs",
      "delete", "deletefiles", "batch", "link", "pbatch", "plink",
@@ -601,7 +606,7 @@ async def wizard_text_handler(client: Client, message: Message):
             try:
                 await save_series_thumbnail(message.photo.file_id)
             except Exception as e:
-                return await message.reply_text(f"âŒ Failed to save thumbnail: {e}")
+                return await message.reply_text(f"❌ Failed to save thumbnail: {e}")
                 
             del temp.SETTING_SERIES_THUMB[uid]
             
@@ -630,10 +635,7 @@ async def wizard_text_handler(client: Client, message: Message):
             return await message.reply_text("⚠️ Please send a PHOTO to set as thumbnail, or /cancel to abort.")
 
     if uid not in temp.SERIES_WIZARD:
-        return  # not in wizard —” let other handlers process
-
-    if not message.reply_to_message:
-        pass  # We process all text to prevent auto_filter from running
+        return
 
     wiz = temp.SERIES_WIZARD[uid]
     state = wiz["state"]
@@ -655,7 +657,7 @@ async def wizard_text_handler(client: Client, message: Message):
         if existing:
             del temp.SERIES_WIZARD[uid]
             series_id = str(existing["_id"])
-            btn = [[InlineKeyboardButton("âœï¸ Edit Existing Series", callback_data=f"edser#{series_id}")]]
+            btn = [[InlineKeyboardButton("✏️ Edit Existing Series", callback_data=f"edser#{series_id}")]]
             return await message.reply_text(
                 f"⚠️ <b>Series Already Saved</b>\n\n"
                 f"<b>{existing['name']}</b> is already added.\n\n"
@@ -679,7 +681,7 @@ async def wizard_text_handler(client: Client, message: Message):
         wiz["year"] = text
         wiz["state"] = S_GENRE
         await message.reply_text(
-            f"✅ Year: <b>{text}</b>\n\nPlease send the <b>genre</b> (e.g. Action, Drama).",
+            f"📅 Year: <b>{text}</b>\n\nPlease send the <b>genre</b> (e.g. Action, Drama) or send /skip.",
             reply_to_message_id=message.id,
             reply_markup=ForceReply(selective=True),
             parse_mode=enums.ParseMode.HTML,
@@ -687,11 +689,13 @@ async def wizard_text_handler(client: Client, message: Message):
 
     # ── Genre ─────────────────────────────────────────────────────────────────
     elif state == S_GENRE:
-        if not text: return
-        wiz["genre"] = text
+        if text.lower() == "/skip":
+            wiz["genre"] = "N/A"
+        else:
+            wiz["genre"] = text
         wiz["state"] = S_RATING
         await message.reply_text(
-            f"✅ Genre: <b>{text}</b>\n\nPlease send the <b>Rating</b> (or send <code>skip</code>).",
+            f"🎭 Genre: <b>{wiz['genre']}</b>\n\nPlease send the <b>rating</b> (e.g. 8.5/10) or send /skip.",
             reply_to_message_id=message.id,
             reply_markup=ForceReply(selective=True),
             parse_mode=enums.ParseMode.HTML,
@@ -699,11 +703,13 @@ async def wizard_text_handler(client: Client, message: Message):
 
     # ── Rating ────────────────────────────────────────────────────────────────
     elif state == S_RATING:
-        if not text: return
-        wiz["rating"] = "" if text.lower() == "skip" else text
+        if text.lower() == "/skip":
+            wiz["rating"] = ""
+        else:
+            wiz["rating"] = text
         wiz["state"] = S_DESC
         await message.reply_text(
-            f"✅ Rating: <b>{wiz.get('rating') or 'Skipped'}</b>\n\nPlease send a short <b>description</b> (or send <code>skip</code>).",
+            f"⭐ Rating: <b>{wiz.get('rating', 'N/A')}</b>\n\nPlease send a short <b>description / story line</b> or send /skip.",
             reply_to_message_id=message.id,
             reply_markup=ForceReply(selective=True),
             parse_mode=enums.ParseMode.HTML,
@@ -711,13 +717,14 @@ async def wizard_text_handler(client: Client, message: Message):
 
     # ── Description ───────────────────────────────────────────────────────────
     elif state == S_DESC:
-        if not text: return
-        wiz["description"] = "" if text.lower() == "skip" else text
+        if text.lower() == "/skip":
+            wiz["description"] = ""
+        else:
+            wiz["description"] = text
         wiz["state"] = S_POSTER
         await message.reply_text(
-            f"✅ Description saved.\n\nNow, <b>send a poster photo</b> (or send an IMDb/TMDB image URL).\n\n<i>Type 'skip' to skip poster.</i>",
+            f"📝 Description saved.\n\nNow send a <b>poster / banner image</b> or send /skip.",
             reply_to_message_id=message.id,
-            reply_markup=ForceReply(selective=True),
             parse_mode=enums.ParseMode.HTML,
         )
 
@@ -725,54 +732,36 @@ async def wizard_text_handler(client: Client, message: Message):
     elif state == S_POSTER:
         if message.photo:
             wiz["poster"] = message.photo.file_id
-        elif text.lower() == "skip":
+        elif text.lower() == "/skip":
             wiz["poster"] = ""
         else:
-            return await message.reply_text("⚠️ Please send a photo, or type `skip`.")
+            return await message.reply_text("Please send a photo or /skip.")
 
-        wiz["state"] = S_LANGS
-
-        # Show config menu
-        card = (
-            f"✅ <b>Series Info Saved</b>\n\n"
-            f"🎬 <b>{wiz['name']}</b>\n"
-            f"📅 {wiz['year']}  🎭 {wiz['genre']}\n"
-            f"⭐ {wiz.get('rating', 'N/A')}\n\n"
-            f"Now configure languages, seasons, and quality."
+        wiz["state"] = S_DONE
+        await message.reply_text(
+            _series_card(wiz) + "\n\n⚙️ <b>Series Configuration</b>\nChoose an option to edit or click Save:",
+            reply_markup=_config_menu_keyboard(wiz.get("series_id"), wiz.get("from_viewseries", False)),
+            parse_mode=enums.ParseMode.HTML,
         )
-        if wiz.get("poster"):
-            await message.reply_photo(
-                photo=wiz["poster"],
-                caption=card,
-                reply_markup=_config_menu_keyboard(),
-                parse_mode=enums.ParseMode.HTML,
-            )
-        else:
-            await message.reply_text(
-                card,
-                reply_markup=_config_menu_keyboard(),
-                parse_mode=enums.ParseMode.HTML,
-            )
 
 
-# ═════════════════════════════════════════════════════════════════════════════
-# ─── WIZARD CALLBACK QUERIES (sw#...) ────────────────────────────────────────
-# ═════════════════════════════════════════════════════════════════════════════
+# ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ 
+# ─── CALLBACK HANDLER — WIZARD BUTTONS ───────────────────────────────────────
+# ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ 
 
 @Client.on_callback_query(filters.regex(r"^sw#"), group=1)
 async def wizard_callback(client: Client, query: CallbackQuery):
     uid = query.from_user.id
     if not _is_admin(uid):
-        return await query.answer("âŒ Not authorized.", show_alert=True)
+        return await query.answer("❌ Not authorized.", show_alert=True)
 
-    data = query.data  # e.g.  sw#lang#Malayalam  or  sw#save
+    data = query.data
     parts = data.split("#")
-    # parts[0] = "sw", parts[1] = action, parts[2..] = values
 
     if uid not in temp.SERIES_WIZARD:
         return await query.answer("No active wizard. Run /seriesfil first.", show_alert=True)
 
-    wiz  = temp.SERIES_WIZARD[uid]
+    wiz = temp.SERIES_WIZARD[uid]
     action = parts[1] if len(parts) > 1 else ""
 
     if not action:
@@ -818,7 +807,7 @@ async def wizard_callback(client: Client, query: CallbackQuery):
     if action == "back_to_menu":
         wiz["state"] = S_DONE
         return await query.message.edit_text(
-            _series_card(wiz) + "\n\nâš™ï¸ <b>Series Configuration</b>\nChoose an option to edit or click Save:",
+            _series_card(wiz) + "\n\n⚙️ <b>Series Configuration</b>\nChoose an option to edit or click Save:",
             reply_markup=_config_menu_keyboard(wiz.get("series_id"), wiz.get("from_viewseries", False)),
             parse_mode=enums.ParseMode.HTML,
         )
@@ -828,13 +817,13 @@ async def wizard_callback(client: Client, query: CallbackQuery):
         if wiz.get("name"):
             wiz["state"] = S_DONE
             await query.message.edit_text(
-                _series_card(wiz) + "\n\nâš™ï¸ <b>Series Configuration</b>\nChoose an option to edit or click Save:",
+                _series_card(wiz) + "\n\n⚙️ <b>Series Configuration</b>\nChoose an option to edit or click Save:",
                 reply_markup=_config_menu_keyboard(wiz.get("series_id"), wiz.get("from_viewseries", False)),
                 parse_mode=enums.ParseMode.HTML,
             )
         else:
             del temp.SERIES_WIZARD[uid]
-            await query.message.edit_text("âŒ Series wizard cancelled.")
+            await query.message.edit_text("❌ Series wizard cancelled.")
         return await query.answer()
 
     # ── Config Menu shortcuts ─────────────────────────────────────────────────
@@ -842,20 +831,23 @@ async def wizard_callback(client: Client, query: CallbackQuery):
         sub = parts[2] if len(parts) > 2 else ""
         if sub == "lang":
             wiz["state"] = S_LANGS
+            logger.info(f"[SERIES EDIT]\nuser_id={uid}\nseries_id={wiz.get('series_id')}\naction=LANGUAGE")
             await query.message.edit_text(
-                "🌐 <b>Select Languages</b>\n\nTap to toggle, then press Submit.",
+                "🌐 <b>Select Languages</b>\n\nTap to toggle, then press Submit.",
                 reply_markup=_lang_keyboard(wiz["languages"]),
                 parse_mode=enums.ParseMode.HTML,
             )
         elif sub == "season":
             wiz["state"] = S_SEASONS
+            logger.info(f"[SERIES EDIT]\nuser_id={uid}\nseries_id={wiz.get('series_id')}\naction=SEASON")
             await query.message.edit_text(
-                "📁 <b>Select Seasons</b>\n\nTap to toggle, then press Submit.",
+                "📁 <b>Select Seasons</b>\n\nTap to toggle, then press Submit.",
                 reply_markup=_season_keyboard(MAX_SEASONS, wiz["seasons"]),
                 parse_mode=enums.ParseMode.HTML,
             )
         elif sub == "quality":
             wiz["state"] = S_QUALITY
+            logger.info(f"[SERIES EDIT]\nuser_id={uid}\nseries_id={wiz.get('series_id')}\naction=QUALITY")
             await query.message.edit_text(
                 "🎞️ <b>Select Quality Options</b>\n\nTap to toggle, then press Submit.",
                 reply_markup=_quality_keyboard(wiz["qualities"]),
@@ -866,8 +858,9 @@ async def wizard_callback(client: Client, query: CallbackQuery):
             wiz["batch_langs"] = []
             wiz["batch_seasons"] = []
             wiz["batch_qualities"] = []
+            logger.info(f"[SERIES EDIT]\nuser_id={uid}\nseries_id={wiz.get('series_id')}\naction=ADD_FILES")
             await query.message.edit_text(
-                "📁¦ <b>Add Episode Batch</b>\n\nSelect <b>languages</b> for this batch:",
+                "📂 <b>Add Episode Batch</b>\n\nSelect <b>languages</b> for this batch:",
                 reply_markup=_lang_keyboard(wiz["batch_langs"]),
                 parse_mode=enums.ParseMode.HTML,
             )
@@ -884,30 +877,32 @@ async def wizard_callback(client: Client, query: CallbackQuery):
                 wiz["languages"] = list(set(wiz["languages"] + target_list))
                 wiz["state"] = S_BATCH_SEASON
                 await query.message.edit_text(
-                    f"📁¦ Batch —” <b>{wiz['name']}</b>\n🌐 Languages: <b>{', '.join(target_list)}</b>\n\nSelect <b>seasons</b>:",
+                    f"📂 Batch — <b>{wiz['name']}</b>\n🌐 Languages: <b>{', '.join(target_list)}</b>\n\nSelect <b>seasons</b>:",
                     reply_markup=_season_keyboard(MAX_SEASONS, wiz["batch_seasons"]),
                     parse_mode=enums.ParseMode.HTML,
                 )
             else:
+                if wiz.get("series_id"):
+                    await update_series(wiz["series_id"], {"languages": wiz["languages"]})
+                    logger.info(f"[SERIES EDIT]\nuser_id={uid}\nseries_id={wiz['series_id']}\naction=UPDATE_SUCCESS")
                 await query.message.edit_text(
-                    f"✅ <b>Languages saved:</b>\n" + "\n".join(f"—¢ {l}" for l in wiz["languages"]) +
+                    f"✅ <b>Languages saved:</b>\n" + "\n".join(f"• {l}" for l in wiz["languages"]) +
                     "\n\nNow configure seasons, quality, or add batch files.",
-                    reply_markup=_config_menu_keyboard(),
+                    reply_markup=_config_menu_keyboard(wiz.get("series_id"), wiz.get("from_viewseries", False)),
                     parse_mode=enums.ParseMode.HTML,
                 )
         elif val == "back":
-            if wiz["state"] == S_BATCH_LANG or wiz["state"] == S_LANGS:
-                await query.message.edit_text(
-                    f"âš™ï¸ <b>Series Configuration</b>\n\n"
-                    f"🎬 <b>{wiz.get('name', 'Unknown')}</b>\n\n"
-                    f"Select an option to configure or batch files.",
-                    reply_markup=_config_menu_keyboard(),
-                    parse_mode=enums.ParseMode.HTML,
-                )
+            await query.message.edit_text(
+                _series_card(wiz) + "\n\n⚙️ <b>Series Configuration</b>\nChoose an option to edit or click Save:",
+                reply_markup=_config_menu_keyboard(wiz.get("series_id"), wiz.get("from_viewseries", False)),
+                parse_mode=enums.ParseMode.HTML,
+            )
         else:
             lang = val
-            target_list.clear()
-            target_list.append(lang)
+            if lang in target_list:
+                target_list.remove(lang)
+            else:
+                target_list.append(lang)
             try:
                 await query.message.edit_reply_markup(_lang_keyboard(target_list))
             except MessageNotModified:
@@ -924,18 +919,21 @@ async def wizard_callback(client: Client, query: CallbackQuery):
                 wiz["state"] = S_BATCH_QUAL
                 used_qualities = await _get_used_qualities(wiz)
                 await query.message.edit_text(
-                    f"📁¦ Batch —” <b>{wiz['name']}</b>\n"
-                    f"🌐 {', '.join(wiz['batch_langs'])} Â· 📁 Seasons {', '.join(str(s) for s in sorted(target_list)) if target_list else 'None'}\n\n"
+                    f"📂 Batch — <b>{wiz['name']}</b>\n"
+                    f"🌐 {', '.join(wiz['batch_langs'])} · 📁 Seasons {', '.join(str(s) for s in sorted(target_list)) if target_list else 'None'}\n\n"
                     "Select <b>qualities</b>:\n"
                     "<i>✅ = already saved to series  |  🟢 = selected for this batch</i>",
                     reply_markup=_quality_keyboard(wiz["batch_qualities"], used_qualities),
                     parse_mode=enums.ParseMode.HTML,
                 )
             else:
+                if wiz.get("series_id"):
+                    await update_series(wiz["series_id"], {"seasons": wiz["seasons"]})
+                    logger.info(f"[SERIES EDIT]\nuser_id={uid}\nseries_id={wiz['series_id']}\naction=UPDATE_SUCCESS")
                 await query.message.edit_text(
-                    "✅ <b>Seasons saved:</b>\n" + ("\n".join(f"—¢ Season {s}" for s in sorted(wiz["seasons"])) if wiz["seasons"] else "None") +
+                    "✅ <b>Seasons saved:</b>\n" + ("\n".join(f"• Season {s}" for s in sorted(wiz["seasons"])) if wiz["seasons"] else "None") +
                     "\n\nNow configure quality or add batch files.",
-                    reply_markup=_config_menu_keyboard(),
+                    reply_markup=_config_menu_keyboard(wiz.get("series_id"), wiz.get("from_viewseries", False)),
                     parse_mode=enums.ParseMode.HTML,
                 )
         elif val == "skip":
@@ -944,8 +942,8 @@ async def wizard_callback(client: Client, query: CallbackQuery):
                 wiz["state"] = S_BATCH_QUAL
                 used_qualities = await _get_used_qualities(wiz)
                 await query.message.edit_text(
-                    f"📁¦ Batch —” <b>{wiz['name']}</b>\n"
-                    f"🌐 {', '.join(wiz['batch_langs'])} Â· 📁 Season None\n\n"
+                    f"📂 Batch — <b>{wiz['name']}</b>\n"
+                    f"🌐 {', '.join(wiz['batch_langs'])} · 📁 Season None\n\n"
                     "Select <b>qualities</b>:\n"
                     "<i>✅ = already saved to series  |  🟢 = selected for this batch</i>",
                     reply_markup=_quality_keyboard(wiz["batch_qualities"], used_qualities),
@@ -953,30 +951,34 @@ async def wizard_callback(client: Client, query: CallbackQuery):
                 )
             else:
                 wiz["seasons"] = []
+                if wiz.get("series_id"):
+                    await update_series(wiz["series_id"], {"seasons": wiz["seasons"]})
+                    logger.info(f"[SERIES EDIT]\nuser_id={uid}\nseries_id={wiz['series_id']}\naction=UPDATE_SUCCESS")
                 await query.message.edit_text(
                     "✅ <b>Seasons skipped.</b>\n\nNow configure quality or add batch files.",
-                    reply_markup=_config_menu_keyboard(),
+                    reply_markup=_config_menu_keyboard(wiz.get("series_id"), wiz.get("from_viewseries", False)),
                     parse_mode=enums.ParseMode.HTML,
                 )
         elif val == "back":
             if wiz["state"] == S_BATCH_SEASON:
                 wiz["state"] = S_BATCH_LANG
                 await query.message.edit_text(
-                    f"📁¦ Batch —” <b>{wiz['name']}</b>\n\nSelect <b>languages</b>:",
+                    f"📂 Batch — <b>{wiz['name']}</b>\n\nSelect <b>languages</b>:",
                     reply_markup=_lang_keyboard(wiz["batch_langs"]),
                     parse_mode=enums.ParseMode.HTML,
                 )
-            elif wiz["state"] == S_SEASONS:
-                wiz["state"] = S_LANGS
+            else:
                 await query.message.edit_text(
-                    f"Editing <b>{wiz['name']}</b>\n\nSelect <b>languages</b>:",
-                    reply_markup=_lang_keyboard(wiz["languages"]),
+                    _series_card(wiz) + "\n\n⚙️ <b>Series Configuration</b>\nChoose an option to edit or click Save:",
+                    reply_markup=_config_menu_keyboard(wiz.get("series_id"), wiz.get("from_viewseries", False)),
                     parse_mode=enums.ParseMode.HTML,
                 )
         else:
             n = int(val)
-            target_list.clear()
-            target_list.append(n)
+            if n in target_list:
+                target_list.remove(n)
+            else:
+                target_list.append(n)
             try:
                 await query.message.edit_reply_markup(_season_keyboard(MAX_SEASONS, target_list))
             except MessageNotModified:
@@ -994,7 +996,7 @@ async def wizard_callback(client: Client, query: CallbackQuery):
                 wiz["qualities"] = list(set(wiz["qualities"] + target_list))
                 wiz["state"] = S_BATCH_WAIT
                 await query.message.edit_text(
-                    f"📁¦ <b>Add Episode Batch</b>\n\n"
+                    f"📂 <b>Add Episode Batch</b>\n\n"
                     f"<b>Series:</b> {wiz['name']}\n"
                     f"<b>Languages:</b> {', '.join(wiz['batch_langs'])}\n"
                     f"<b>Seasons:</b> {', '.join(str(s) for s in sorted(wiz['batch_seasons'])) if wiz['batch_seasons'] and wiz['batch_seasons'] != [0] else 'None'}\n"
@@ -1006,32 +1008,35 @@ async def wizard_callback(client: Client, query: CallbackQuery):
                     parse_mode=enums.ParseMode.HTML,
                 )
             else:
+                if wiz.get("series_id"):
+                    await update_series(wiz["series_id"], {"qualities": wiz["qualities"]})
+                    logger.info(f"[SERIES EDIT]\nuser_id={uid}\nseries_id={wiz['series_id']}\naction=UPDATE_SUCCESS")
                 await query.message.edit_text(
-                    "✅ <b>Quality options saved:</b>\n" + "\n".join(f"—¢ {q}" for q in wiz["qualities"]) +
+                    "✅ <b>Quality options saved:</b>\n" + "\n".join(f"• {q}" for q in wiz["qualities"]) +
                     "\n\nNow add batch files or save the series.",
-                    reply_markup=_config_menu_keyboard(),
+                    reply_markup=_config_menu_keyboard(wiz.get("series_id"), wiz.get("from_viewseries", False)),
                     parse_mode=enums.ParseMode.HTML,
                 )
         elif val == "back":
             if wiz["state"] == S_BATCH_QUAL:
                 wiz["state"] = S_BATCH_SEASON
                 await query.message.edit_text(
-                    f"📁¦ Batch —” <b>{wiz['name']}</b>\n🌐 Languages: <b>{', '.join(wiz['batch_langs'])}</b>\n\nSelect <b>seasons</b>:",
+                    f"📂 Batch — <b>{wiz['name']}</b>\n🌐 Languages: <b>{', '.join(wiz['batch_langs'])}</b>\n\nSelect <b>seasons</b>:",
                     reply_markup=_season_keyboard(MAX_SEASONS, wiz["batch_seasons"]),
                     parse_mode=enums.ParseMode.HTML,
                 )
-            elif wiz["state"] == S_QUALITIES:
-                wiz["state"] = S_SEASONS
+            else:
                 await query.message.edit_text(
-                    f"Editing <b>{wiz['name']}</b>\n🌐 Languages: <b>{', '.join(wiz['languages'])}</b>\n\nSelect <b>seasons</b>:",
-                    reply_markup=_season_keyboard(MAX_SEASONS, wiz["seasons"]),
+                    _series_card(wiz) + "\n\n⚙️ <b>Series Configuration</b>\nChoose an option to edit or click Save:",
+                    reply_markup=_config_menu_keyboard(wiz.get("series_id"), wiz.get("from_viewseries", False)),
                     parse_mode=enums.ParseMode.HTML,
                 )
         else:
             q = val
-            target_list.clear()
-            target_list.append(q)
-            # In batch mode show already-saved series qualities with ✅
+            if q in target_list:
+                target_list.remove(q)
+            else:
+                target_list.append(q)
             if wiz["state"] == S_BATCH_QUAL:
                 used_qualities = await _get_used_qualities(wiz)
             else:
@@ -1051,10 +1056,10 @@ async def wizard_callback(client: Client, query: CallbackQuery):
         choice = parts[2] if len(parts) > 2 else "no"
         if choice == "no":
             wiz["batch_data"] = None
-            wiz["state"] = S_BATCH_LANG  # restart batch flow
+            wiz["state"] = S_BATCH_LANG
             await query.message.edit_text(
                 "Batch cancelled. Use the menu to try again.",
-                reply_markup=_config_menu_keyboard(),
+                reply_markup=_config_menu_keyboard(wiz.get("series_id"), wiz.get("from_viewseries", False)),
             )
             return await query.answer("Batch cancelled.")
 
@@ -1063,7 +1068,6 @@ async def wizard_callback(client: Client, query: CallbackQuery):
             if not bd:
                 return await query.answer("⚠️ No batch data found.", show_alert=True)
 
-            # Ensure series is saved first
             if not wiz.get("series_id"):
                 series_id = await create_series({
                     "name": wiz["name"],
@@ -1089,14 +1093,12 @@ async def wizard_callback(client: Client, query: CallbackQuery):
                     "poster": wiz.get("poster", ""),
                 })
 
-            # Process batch files —” use ep_ prefix to avoid overwriting outer vars
             await query.message.edit_text(
-                f"â³ Processing batch... saving {bd['total_files']} files."
+                f"⏳ Processing batch... saving {bd['total_files']} files."
             )
             inserted = 0
             duplicates = 0
 
-            # Ensure seasons_to_add always has at least one value
             seasons_to_add = wiz.get("batch_seasons") or [0]
             if not seasons_to_add:
                 seasons_to_add = [0]
@@ -1162,7 +1164,6 @@ async def wizard_callback(client: Client, query: CallbackQuery):
                             logger.warning(f"add_series_file error for batch: {e}")
                             duplicates += len(outlist)
 
-            # Save batch record
             for lang in wiz["batch_langs"]:
                 for season in seasons_to_add:
                     for quality in wiz["batch_qualities"]:
@@ -1178,18 +1179,19 @@ async def wizard_callback(client: Client, query: CallbackQuery):
                         })
 
             wiz["batch_data"] = None
-            wiz["state"] = S_BATCH_LANG
+            wiz["state"] = S_DONE
+            logger.info(f"[SERIES EDIT]\nuser_id={uid}\nseries_id={series_id}\naction=UPDATE_SUCCESS")
 
             await query.message.edit_text(
                 f"✅ <b>Batch saved successfully!</b>\n\n"
                 f"📺 {wiz['name']}\n"
-                f"🌐 Languages: {', '.join(wiz['batch_langs'])}\n"
-                f"📁 Seasons: {', '.join(str(s) for s in wiz['batch_seasons']) if wiz['batch_seasons'] and wiz['batch_seasons'] != [0] else 'None'}\n"
+                f"🌐 Languages: {', '.join(wiz['batch_langs'])}\n"
+                f"📁 Seasons: {', '.join(str(s) for s in wiz['batch_seasons']) if wiz['batch_seasons'] and wiz['batch_seasons'] != [0] else 'None'}\n"
                 f"🎞️ Qualities: {', '.join(wiz['batch_qualities'])}\n\n"
                 f"✅ {inserted} files added.\n"
                 f"⚠️ {duplicates} duplicates skipped.\n\n"
                 "Add more batches or save the series.",
-                reply_markup=_config_menu_keyboard(),
+                reply_markup=_config_menu_keyboard(wiz.get("series_id"), wiz.get("from_viewseries", False)),
                 parse_mode=enums.ParseMode.HTML,
             )
             return await query.answer("Batch saved!")
@@ -1202,7 +1204,6 @@ async def wizard_callback(client: Client, query: CallbackQuery):
             return await query.answer("⚠️ Add at least one language.", show_alert=True)
 
         if wiz.get("series_id"):
-            # Update if already saved (happens after batch)
             await update_series(wiz["series_id"], {
                 "name": wiz["name"],
                 "year": wiz["year"],
@@ -1215,6 +1216,7 @@ async def wizard_callback(client: Client, query: CallbackQuery):
                 "qualities": wiz["qualities"],
             })
             series_id = wiz["series_id"]
+            logger.info(f"[SERIES EDIT]\nuser_id={uid}\nseries_id={series_id}\naction=UPDATE_SUCCESS")
         else:
             series_id = await create_series({
                 "name": wiz["name"],
@@ -1235,12 +1237,6 @@ async def wizard_callback(client: Client, query: CallbackQuery):
             f"🎉 <b>Series saved!</b>\n\n"
             f"📺 <b>{wiz['name']}</b>\n"
             f"📅 {wiz['year']}  🎭 {wiz['genre']}\n"
-            f"🌐 Languages: {', '.join(wiz['languages'])}\n"
-            f"📁 Seasons: {', '.join(str(s) for s in sorted(wiz['seasons']))}\n"
-            f"🎞️ Qualities: {', '.join(wiz['qualities'])}\n\n"
-            f"🎉 <b>Series saved!</b>\n\n"
-            f"📺 <b>{wiz['name']}</b>\n"
-            f"📅 {wiz['year']}  🎭 {wiz['genre']}\n"
             f"🌐 Languages: {', '.join(wiz['languages'])}\n"
             f"📁 Seasons: {', '.join(str(s) for s in sorted(wiz['seasons']))}\n"
             f"🎞 Qualities: {', '.join(wiz['qualities'])}\n\n"
@@ -1248,6 +1244,7 @@ async def wizard_callback(client: Client, query: CallbackQuery):
             parse_mode=enums.ParseMode.HTML,
         )
         return await query.answer("✅ Series saved!")
+
 
 @Client.on_callback_query(filters.regex(r"^send_fsall#"))
 async def handle_send_fsall(client: Client, query: CallbackQuery):
@@ -1433,6 +1430,150 @@ async def cmd_sbatch(client: Client, message: Message):
         f"<b>Episodes:</b>\n{ep_preview}\n\n"
         "Save this batch?",
         reply_markup=_batch_confirm_keyboard(),
+        parse_mode=enums.ParseMode.HTML,
+    )
+
+
+# ──────────────────────────────────────────────────────────────────
+# ─── /slink — SINGLE SERIES FILE IMPORTER ─────────────────────────
+# ──────────────────────────────────────────────────────────────────
+
+@Client.on_message(filters.command("slink") & filters.private, group=1)
+async def cmd_slink(client: Client, message: Message):
+    uid = message.from_user.id
+    if not _is_admin(uid):
+        return await message.reply_text("❌ You are not authorized to use this command.")
+
+    if uid not in temp.SERIES_WIZARD:
+        return await message.reply_text(
+            "⚠️ Run <code>/seriesfil</code> or edit a series from <code>/viewseries</code> first "
+            "before adding a single link.",
+            parse_mode=enums.ParseMode.HTML,
+        )
+
+    wiz = temp.SERIES_WIZARD[uid]
+    
+    args = message.text.split(None, 1)
+    if len(args) < 2:
+        return await message.reply_text(
+            "Usage: <code>/slink TELEGRAM_MESSAGE_LINK</code>\n\n"
+            "Example:\n<code>/slink https://t.me/c/123456/1001</code>",
+            parse_mode=enums.ParseMode.HTML,
+        )
+
+    link = args[1].strip().strip('"').strip("'")
+    chat_id, msg_id = _parse_tg_link(link)
+    if not chat_id or not msg_id:
+        return await message.reply_text(
+            "❌ <b>Invalid Telegram link.</b>\n\n"
+            "Accepted formats:\n"
+            "• <code>https://t.me/channelname/12345</code>\n"
+            "• <code>https://t.me/c/1234567890/12345</code>",
+            parse_mode=enums.ParseMode.HTML,
+        )
+
+    processing_msg = await message.reply_text("⏳ Processing single file link...")
+
+    try:
+        msg = await client.get_messages(chat_id, msg_id)
+    except Exception as e:
+        await processing_msg.edit_text(
+            f"❌ <b>Cannot read message from channel.</b>\n\n"
+            f"Make sure the bot is an <b>admin</b> in the source channel.\n\n"
+            f"<code>{e}</code>",
+            parse_mode=enums.ParseMode.HTML,
+        )
+        return
+
+    if not msg or not msg.media:
+        return await processing_msg.edit_text("❌ Message does not contain any file/media.")
+
+    file_type = msg.media
+    media = getattr(msg, file_type.value, None)
+    if not media:
+        return await processing_msg.edit_text("❌ Could not extract media from message.")
+
+    file_id = getattr(media, "file_id", "")
+    file_name = getattr(media, "file_name", None) or f"file_{msg.id}"
+    file_size = getattr(media, "file_size", 0) or 0
+    ep_num = _extract_episode_number(file_name) or 1
+
+    # Ensure series is saved or updated
+    if not wiz.get("series_id"):
+        series_id = await create_series({
+            "name": wiz["name"],
+            "year": wiz.get("year", ""),
+            "genre": wiz.get("genre", ""),
+            "rating": wiz.get("rating", ""),
+            "description": wiz.get("description", ""),
+            "poster": wiz.get("poster", ""),
+            "languages": wiz.get("languages", []),
+            "seasons": wiz.get("seasons", []),
+            "qualities": wiz.get("qualities", []),
+            "created_by": uid,
+        })
+        wiz["series_id"] = series_id
+        _register_short_id(series_id)
+    else:
+        series_id = wiz["series_id"]
+
+    langs = wiz.get("batch_langs") or wiz.get("languages") or ["Unknown"]
+    seasons = wiz.get("batch_seasons") or wiz.get("seasons") or [0]
+    qualities = wiz.get("batch_qualities") or wiz.get("qualities") or ["Default"]
+
+    inserted = 0
+    duplicates = 0
+    for lang in langs:
+        for season in seasons:
+            for quality in qualities:
+                try:
+                    status, reason = await add_series_file({
+                        "series_id": series_id,
+                        "language": lang,
+                        "season": season,
+                        "episode": ep_num,
+                        "quality": quality,
+                        "chat_id": chat_id,
+                        "message_id": msg_id,
+                        "file_id": file_id,
+                        "file_name": file_name,
+                        "file_size": file_size,
+                        "is_batch": False,
+                        "total_episodes": 1
+                    })
+                    if status:
+                        inserted += 1
+                    else:
+                        duplicates += 1
+                    logger.info(f"[SERIES SLINK]\nuser_id={uid}\nseries_id={series_id}\nlanguage={lang}\nseason={season}\nquality={quality}\naction=LINK_SAVED")
+                except Exception as ex:
+                    logger.warning(f"add_series_file error for slink: {ex}")
+                    duplicates += 1
+
+    all_langs = list(set(wiz.get("languages", []) + langs))
+    all_seasons = list(set(wiz.get("seasons", []) + seasons))
+    all_quals = list(set(wiz.get("qualities", []) + qualities))
+    wiz["languages"] = all_langs
+    wiz["seasons"] = all_seasons
+    wiz["qualities"] = all_quals
+
+    await update_series(series_id, {
+        "languages": all_langs,
+        "seasons": all_seasons,
+        "qualities": all_quals,
+    })
+
+    wiz["state"] = S_DONE
+
+    await processing_msg.edit_text(
+        f"✅ <b>Single file link added successfully!</b>\n\n"
+        f"📺 <b>Series:</b> {wiz['name']}\n"
+        f"📁 <b>File:</b> {file_name}\n"
+        f"🌐 <b>Language(s):</b> {', '.join(langs)}\n"
+        f"📁 <b>Season(s):</b> {', '.join(str(s) for s in seasons) if seasons != [0] else 'None'}\n"
+        f"🎞 <b>Quality(s):</b> {', '.join(qualities)}\n\n"
+        f"✅ Added: {inserted} | ⚠️ Duplicates: {duplicates}",
+        reply_markup=_config_menu_keyboard(wiz.get("series_id"), wiz.get("from_viewseries", False)),
         parse_mode=enums.ParseMode.HTML,
     )
 
@@ -1721,7 +1862,11 @@ async def series_user_nav(client: Client, query: CallbackQuery):
                         log.error(f"Failed to fetch JSON batch: {e}")
                 else:
                     f["is_series"] = True
+                    f["series_id"] = full_id
                     f["series_rating"] = rating
+                    f["language"] = lang
+                    f["season"] = season
+                    f["quality"] = qual
                     f["episode_index"] = 1
                     f["total_episodes"] = 1
                     files.append(f)
@@ -1750,8 +1895,11 @@ async def series_user_nav(client: Client, query: CallbackQuery):
                             log.error(f"Failed to fetch JSON batch: {e}")
                     else:
                         f["is_series"] = True
+                        f["series_id"] = full_id
                         f["series_rating"] = rating
                         f["language"] = lang
+                        f["season"] = season
+                        f["quality"] = qual
                         f["episode_index"] = i
                         f["total_episodes"] = total_eps
                         files.append(f)
