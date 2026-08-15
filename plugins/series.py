@@ -143,6 +143,8 @@ _SERIES_ID_MAP: dict[str, str] = {}
 
 async def _get_full_id(short_id: str) -> str | None:
     """Resolve a short_id back to full ObjectId string."""
+    if len(short_id) == 24:
+        return short_id
     if short_id in _SERIES_ID_MAP:
         return _SERIES_ID_MAP[short_id]
     # Fallback: search DB for series whose _id ends in short_id
@@ -287,16 +289,28 @@ def _quality_keyboard(
     return InlineKeyboardMarkup(rows)
 
 
-def _config_menu_keyboard(series_id: str = None) -> InlineKeyboardMarkup:
+def _config_menu_keyboard(series_id: str = None, from_viewseries: bool = False) -> InlineKeyboardMarkup:
     buttons = [
-        [InlineKeyboardButton("📦 Add Files (Batch)", callback_data="sw#menu#batch")]
+        [
+            InlineKeyboardButton("🌐 Language", callback_data="sw#menu#lang"),
+            InlineKeyboardButton("📺 Season", callback_data="sw#menu#season")
+        ],
+        [
+            InlineKeyboardButton("🎞️ Quality", callback_data="sw#menu#quality"),
+            InlineKeyboardButton("📁 Add Files", callback_data="sw#menu#batch")
+        ]
     ]
     if series_id:
         buttons.append([InlineKeyboardButton("🗑 Delete Series", callback_data=f"sw#del_series#{series_id}")])
-    buttons.append([
-        InlineKeyboardButton("🟢 Save Series", callback_data="sw#save"),
+    
+    save_row = [
+        InlineKeyboardButton("🟢 Save", callback_data="sw#save"),
         InlineKeyboardButton("🔴 Cancel", callback_data="sw#cancel")
-    ])
+    ]
+    if from_viewseries:
+        save_row.append(InlineKeyboardButton("⬅️ Back", callback_data="sw#vser_back"))
+        
+    buttons.append(save_row)
     return InlineKeyboardMarkup(buttons)
 
 
@@ -452,18 +466,26 @@ async def cmd_seriesfil(client: Client, message: Message):
 @Client.on_callback_query(filters.regex(r"^edser#"), group=1)
 async def cb_edser(client: Client, query: CallbackQuery):
     logger.info("[VIEW SERIES EDIT] callback=%s", query.data)
-    if not _is_admin(query.from_user.id):
+    is_admin = False
+    if query.message and query.message.chat.type in [enums.ChatType.GROUP, enums.ChatType.SUPERGROUP]:
+        admin_list = await client.get_chat_members(query.message.chat.id, filter=enums.ChatMembersFilter.ADMINISTRATORS)
+        is_admin = any(admin.user.id == query.from_user.id for admin in admin_list if admin.user)
+    else:
+        is_admin = query.from_user.id in ADMINS
+    if not is_admin:
         return await query.answer("❌ You are not authorized.", show_alert=True)
     
-    series_id = query.data.split("#")[1]
+    uid = query.from_user.id
+    from utils import temp
     from database.series_db import get_series
+    
+    series_id = query.data.split("#")[1]
     exact = await get_series(series_id)
     if not exact:
         return await query.answer("Series not found.", show_alert=True)
         
-    uid = query.from_user.id
     temp.SERIES_WIZARD[uid] = {
-        "state": S_DONE,
+        "state": 10, # S_DONE
         "name": exact["name"],
         "year": exact.get("year", ""),
         "genre": exact.get("genre", ""),
@@ -475,14 +497,18 @@ async def cb_edser(client: Client, query: CallbackQuery):
         "series_id": str(exact["_id"]),
         "batch_langs": [], "batch_seasons": [], "batch_qualities": [],
         "batch_data": None,
+        "from_viewseries": True # Track that we came from /viewseries
     }
     
     wiz = temp.SERIES_WIZARD[uid]
+    
+    # We will show the editing UI directly
     await query.message.edit_text(
-        _series_card(wiz) + "\n\n⚙️ <b>Series Configuration</b>\nChoose an option to edit or click Save:",
-        reply_markup=_config_menu_keyboard(wiz.get("series_id")),
+        f"✏️ <b>Edit Series: {wiz['name']}</b>\n\nChoose an option to edit:",
+        reply_markup=_config_menu_keyboard(wiz.get("series_id"), True),
         parse_mode=enums.ParseMode.HTML,
     )
+    await query.answer()
 
 @Client.on_message(filters.command(["ed_series"]), group=1)
 async def cmd_ed_series(client: Client, message: Message):
@@ -534,7 +560,7 @@ async def cmd_ed_series(client: Client, message: Message):
     wiz = temp.SERIES_WIZARD[uid]
     await message.reply_text(
         _series_card(wiz) + "\n\n⚙️ <b>Series Configuration</b>\nChoose an option to edit or click Save:",
-        reply_markup=_config_menu_keyboard(wiz.get("series_id")),
+        reply_markup=_config_menu_keyboard(wiz.get("series_id"), wiz.get("from_viewseries", False)),
         parse_mode=enums.ParseMode.HTML,
     )
 
@@ -790,11 +816,27 @@ async def wizard_callback(client: Client, query: CallbackQuery):
             del temp.SERIES_WIZARD[uid]
         return await query.message.edit_text("✅ Series deleted successfully.")
         
+    if action == "vser_back":
+        if uid in temp.SERIES_WIZARD:
+            del temp.SERIES_WIZARD[uid]
+        from database.series_db import list_all_series
+        all_series = await list_all_series()
+        seen = set()
+        unique_series = []
+        for s in all_series:
+            name = s.get("name", "").strip()
+            name_lower = name.lower()
+            if name_lower not in seen:
+                seen.add(name_lower)
+                unique_series.append(s)
+        unique_series.sort(key=lambda x: x.get("name", "").lower())
+        return await send_series_list(query, unique_series, page=0)
+        
     if action == "back_to_menu":
         wiz["state"] = S_DONE
         return await query.message.edit_text(
             _series_card(wiz) + "\n\n⚙️ <b>Series Configuration</b>\nChoose an option to edit or click Save:",
-            reply_markup=_config_menu_keyboard(wiz.get("series_id")),
+            reply_markup=_config_menu_keyboard(wiz.get("series_id"), wiz.get("from_viewseries", False)),
             parse_mode=enums.ParseMode.HTML,
         )
 
@@ -804,7 +846,7 @@ async def wizard_callback(client: Client, query: CallbackQuery):
             wiz["state"] = S_DONE
             await query.message.edit_text(
                 _series_card(wiz) + "\n\n⚙️ <b>Series Configuration</b>\nChoose an option to edit or click Save:",
-                reply_markup=_config_menu_keyboard(wiz.get("series_id")),
+                reply_markup=_config_menu_keyboard(wiz.get("series_id"), wiz.get("from_viewseries", False)),
                 parse_mode=enums.ParseMode.HTML,
             )
         else:
@@ -1450,7 +1492,7 @@ async def _resolve_nav_step(user_id: int, full_id: str, sid: str, series: dict, 
 def _user_suggestions_keyboard(matches: list[dict]) -> InlineKeyboardMarkup:
     rows = []
     for m in matches:
-        sid = _series_short_id(str(m["_id"]))
+        sid = str(m["_id"])
         rows.append([InlineKeyboardButton(m["name"], callback_data=f"sr#{sid}")])
     return InlineKeyboardMarkup(rows)
 
@@ -1473,7 +1515,7 @@ async def process_series_search(client: Client, message: Message, txt: str, repl
         series = unique_matches[0]
         series_id = str(series["_id"])
         _register_short_id(series_id)
-        sid = _series_short_id(series_id)
+        sid = series_id
 
         is_private = (message.chat.type == enums.ChatType.PRIVATE)
         text, rm = await _resolve_nav_step(message.from_user.id, series_id, sid, series, is_private=is_private)
@@ -1775,14 +1817,18 @@ async def cb_vser_page(client: Client, query: CallbackQuery):
     unique_series.sort(key=lambda x: x.get("name", "").lower())
     await send_series_list(query, unique_series, page=page)
 
+import logging
+logger = logging.getLogger(__name__)
+logger.info("[VIEWSERIES] handler registered")
 
 @Client.on_message(filters.command(["serieslist", "viewseries"]), group=1)
 async def cmd_serieslist(client: Client, message: Message):
-    logger.info("[VIEWSERIES] COMMAND TRIGGERED")
-    await message.reply_text("🛠 /viewseries handler reached")
-    
-    is_admin = _is_admin(message.from_user.id)
-    logger.info("[VIEWSERIES] user_id=%s is_admin=%s", message.from_user.id, is_admin)
+    is_admin = False
+    if message.chat.type in [enums.ChatType.GROUP, enums.ChatType.SUPERGROUP]:
+        admin_list = await client.get_chat_members(message.chat.id, filter=enums.ChatMembersFilter.ADMINISTRATORS)
+        is_admin = any(admin.user.id == message.from_user.id for admin in admin_list if admin.user)
+    else:
+        is_admin = message.from_user.id in ADMINS
     
     if not is_admin:
         return await message.reply_text("❌ You are not authorized to use this command.")
@@ -1814,7 +1860,13 @@ async def cmd_serieslist(client: Client, message: Message):
 
 @Client.on_message(filters.command(["seriesdel", "delseries"]) & (filters.private | filters.group), group=1)
 async def cmd_seriesdel(client: Client, message: Message):
-    if not _is_admin(message.from_user.id):
+    is_admin = False
+    if message.chat.type in [enums.ChatType.GROUP, enums.ChatType.SUPERGROUP]:
+        admin_list = await client.get_chat_members(message.chat.id, filter=enums.ChatMembersFilter.ADMINISTRATORS)
+        is_admin = any(admin.user.id == message.from_user.id for admin in admin_list if admin.user)
+    else:
+        is_admin = message.from_user.id in ADMINS
+    if not is_admin:
         return await message.reply_text("❌ Not authorized.")
 
     args = message.text.split(None, 1)
