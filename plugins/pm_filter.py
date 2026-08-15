@@ -1590,114 +1590,142 @@ async def cb_handler(client: Client, query: CallbackQuery):
         await query.answer(url=f"https://telegram.me/{temp.U_NAME}?start=file_{file_id}")
     
     elif query.data.startswith("checksub"):
-        ident, kk, file_id = query.data.split("#")
-        import logging
-        log = logging.getLogger(__name__)
-        
-        req_id = file_id
-        
-        if kk == "movie":
-            if not hasattr(temp, "GROUP_MOVIE_REQS"):
-                temp.GROUP_MOVIE_REQS = {}
-            req = temp.GROUP_MOVIE_REQS.get(req_id)
-            if not req:
-                return await query.answer("Request expired.", show_alert=True)
-            if query.from_user.id != req["user"]:
-                return await query.answer("⚠️ This request is not for you.", show_alert=True)
-                
-            if req.get("state") in ["SENDING", "COMPLETED"]:
-                return await query.answer("⚠️ This request is already being processed.", show_alert=True)
-                
-            if AUTH_CHANNEL and not await is_subscribed(client, query):
-                return await query.answer("⚠️ ആദ്യം ചാനലിലേക്ക് Join Request അയയ്ക്കുക.", show_alert=True)
-                
-            req["state"] = "SENDING"
-            cmd = req["cmd"]
+        try:
+            ident, kk, file_id = query.data.split("#")
+            import logging
+            log = logging.getLogger(__name__)
             
-            from plugins.commands import start
-            class MockMsg:
-                def __init__(self, q, c):
-                    self.message = q.message
-                    self.chat = q.message.chat
-                    self.from_user = q.from_user
-                    self.text = f"/start {c}"
-                    self.command = ["start", c]
-                    self.id = q.message.id
-                    self.date = q.message.date
-                def __getattr__(self, name):
-                    return getattr(self.message, name)
-                async def reply(self, text, *args, **kwargs):
-                    kwargs.pop("reply_to_message_id", None)
-                    return await self.message._client.send_message(self.chat.id, text, *args, **kwargs)
-                async def reply_text(self, text, *args, **kwargs):
-                    kwargs.pop("reply_to_message_id", None)
-                    return await self.message._client.send_message(self.chat.id, text, *args, **kwargs)
-                async def reply_photo(self, photo, *args, **kwargs):
-                    kwargs.pop("reply_to_message_id", None)
-                    return await self.message._client.send_photo(self.chat.id, photo, *args, **kwargs)
-                    
-            await query.answer()
-            try:
-                await query.message.delete()
-            except:
-                pass
-                
-            res = await start(client, MockMsg(query, cmd))
-            req["state"] = "COMPLETED"
-            if req_id in temp.GROUP_MOVIE_REQS:
-                del temp.GROUP_MOVIE_REQS[req_id]
-            return res
+            req_id = file_id
+            log.info(f"[FORCE SUB] TRY AGAIN\n[FORCE SUB] REQUEST ID = {req_id}")
             
-        elif kk == "all":
-            req = temp.GETALL.get(req_id)
-            if not req:
-                return await query.answer("Request expired.", show_alert=True)
-            if isinstance(req, dict) and "user" in req:
+            if kk == "movie":
+                if not hasattr(temp, "GROUP_MOVIE_REQS"):
+                    temp.GROUP_MOVIE_REQS = {}
+                req = temp.GROUP_MOVIE_REQS.get(req_id)
+                if not req:
+                    await query.answer("⚠️ Request expired.", show_alert=True)
+                    return
                 if query.from_user.id != req["user"]:
-                    return await query.answer("⚠️ This request is not for you.", show_alert=True)
+                    await query.answer("⚠️ This request is not for you.", show_alert=True)
+                    return
                     
-            if isinstance(req, dict) and req.get("state") in ["SENDING", "COMPLETED"]:
-                return await query.answer("⚠️ This request is already being processed.", show_alert=True)
-                
-            if AUTH_CHANNEL and not await is_subscribed(client, query):
-                return await query.answer("⚠️ ആദ്യം ചാനലിലേക്ക് Join Request അയയ്ക്കുക.", show_alert=True)
-                
-            if isinstance(req, dict):
+                if req.get("state") in ["SENDING", "COMPLETED"]:
+                    await query.answer("⚠️ This request is already being processed.", show_alert=True)
+                    return
+                    
+                log.info("[FORCE SUB] CHECK START")
+                if AUTH_CHANNEL and not await is_subscribed(client, query):
+                    log.info("[FORCE SUB] RETRY RESULT = FAIL\n[FORCE SUB] SHOW ALERT\n[FORCE SUB] NO FILE SENT")
+                    await query.answer("⚠️ ആദ്യം ചാനലിലേക്ക് Join Request അയയ്ക്കുക.", show_alert=True)
+                    return
+                    
+                log.info("[FORCE SUB] RETRY RESULT = PASS\n[FORCE SUB] VERIFIED\n[FORCE SUB] DELETE SUB MESSAGE\n[FORCE SUB] SEND ORIGINAL FILES")
                 req["state"] = "SENDING"
+                cmd = req["cmd"]
                 
-            from plugins.commands import start
-            class MockMsg2:
-                def __init__(self, q, k, fid):
-                    self.message = q.message
-                    self.chat = q.message.chat
-                    self.from_user = q.from_user
-                    self.text = f"/start {k}_{fid}"
-                    self.command = ["start", f"{k}_{fid}"]
-                    self.id = q.message.id
-                    self.date = q.message.date
-                def __getattr__(self, name):
-                    return getattr(self.message, name)
-                async def reply(self, text, *args, **kwargs):
-                    from pyrogram.client import Client
-                    kwargs.pop("reply_to_message_id", None)
-                    return await self.message._client.send_message(self.chat.id, text, *args, **kwargs)
-                async def reply_text(self, text, *args, **kwargs):
-                    kwargs.pop("reply_to_message_id", None)
-                    return await self.message._client.send_message(self.chat.id, text, *args, **kwargs)
-                async def reply_photo(self, photo, *args, **kwargs):
-                    kwargs.pop("reply_to_message_id", None)
-                    return await self.message._client.send_photo(self.chat.id, photo, *args, **kwargs)
+                from plugins.commands import start
+                class MockMsg:
+                    def __init__(self, q, c):
+                        self.message = q.message
+                        self.chat = q.message.chat
+                        self.from_user = q.from_user
+                        self.text = f"/start {c}"
+                        self.command = ["start", c]
+                        self.id = q.message.id
+                        self.date = q.message.date
+                    def __getattr__(self, name):
+                        return getattr(self.message, name)
+                    async def reply(self, text, *args, **kwargs):
+                        kwargs.pop("reply_to_message_id", None)
+                        return await self.message._client.send_message(self.chat.id, text, *args, **kwargs)
+                    async def reply_text(self, text, *args, **kwargs):
+                        kwargs.pop("reply_to_message_id", None)
+                        return await self.message._client.send_message(self.chat.id, text, *args, **kwargs)
+                    async def reply_photo(self, photo, *args, **kwargs):
+                        kwargs.pop("reply_to_message_id", None)
+                        return await self.message._client.send_photo(self.chat.id, photo, *args, **kwargs)
+                        
+                await query.answer()
+                
+                try:
+                    await query.message.delete()
+                except Exception as e:
+                    log.warning("[FORCE SUB] Could not delete message: %s", e)
                     
-            await query.answer()
+                res = await start(client, MockMsg(query, cmd))
+                
+                req["state"] = "COMPLETED"
+                temp.GROUP_MOVIE_REQS.pop(req_id, None)
+                return res
+                
+            elif kk == "all":
+                req = temp.GETALL.get(req_id)
+                if not req:
+                    await query.answer("⚠️ Request expired.", show_alert=True)
+                    return
+                if isinstance(req, dict) and "user" in req:
+                    if query.from_user.id != req["user"]:
+                        await query.answer("⚠️ This request is not for you.", show_alert=True)
+                        return
+                        
+                if isinstance(req, dict) and req.get("state") in ["SENDING", "COMPLETED"]:
+                    await query.answer("⚠️ This request is already being processed.", show_alert=True)
+                    return
+                    
+                log.info("[FORCE SUB] CHECK START")
+                if AUTH_CHANNEL and not await is_subscribed(client, query):
+                    log.info("[FORCE SUB] RETRY RESULT = FAIL\n[FORCE SUB] SHOW ALERT\n[FORCE SUB] NO FILE SENT")
+                    await query.answer("⚠️ ആദ്യം ചാനലിലേക്ക് Join Request അയയ്ക്കുക.", show_alert=True)
+                    return
+                    
+                log.info("[FORCE SUB] RETRY RESULT = PASS\n[FORCE SUB] VERIFIED\n[FORCE SUB] DELETE SUB MESSAGE\n[FORCE SUB] SEND ORIGINAL FILES")
+                if isinstance(req, dict):
+                    req["state"] = "SENDING"
+                    
+                from plugins.commands import start
+                class MockMsg2:
+                    def __init__(self, q, k, fid):
+                        self.message = q.message
+                        self.chat = q.message.chat
+                        self.from_user = q.from_user
+                        self.text = f"/start {k}_{fid}"
+                        self.command = ["start", f"{k}_{fid}"]
+                        self.id = q.message.id
+                        self.date = q.message.date
+                    def __getattr__(self, name):
+                        return getattr(self.message, name)
+                    async def reply(self, text, *args, **kwargs):
+                        from pyrogram.client import Client
+                        kwargs.pop("reply_to_message_id", None)
+                        return await self.message._client.send_message(self.chat.id, text, *args, **kwargs)
+                    async def reply_text(self, text, *args, **kwargs):
+                        kwargs.pop("reply_to_message_id", None)
+                        return await self.message._client.send_message(self.chat.id, text, *args, **kwargs)
+                    async def reply_photo(self, photo, *args, **kwargs):
+                        kwargs.pop("reply_to_message_id", None)
+                        return await self.message._client.send_photo(self.chat.id, photo, *args, **kwargs)
+                        
+                await query.answer()
+                
+                try:
+                    await query.message.delete()
+                except Exception as e:
+                    log.warning("[FORCE SUB] Could not delete message: %s", e)
+                    
+                res = await start(client, MockMsg2(query, kk, req_id))
+                
+                if isinstance(req, dict):
+                    req["state"] = "COMPLETED"
+                    temp.GETALL.pop(req_id, None)
+                return res
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).exception("[FORCE SUB] ERROR: %s", e)
             try:
-                await query.message.delete()
+                await query.answer("⚠️ Verification failed. Please try again.", show_alert=True)
             except:
                 pass
-                
-            res = await start(client, MockMsg2(query, kk, req_id))
-            if isinstance(req, dict):
-                req["state"] = "COMPLETED"
-            return res
+            return
     
     elif query.data == "pages":
         await query.answer()
