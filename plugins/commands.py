@@ -682,7 +682,8 @@ async def start(client, message):
     log = logging.getLogger(__name__)
     
     try:
-        log.info(f"[NORMAL FILE] Sending\nuser_id={message.from_user.id}\nfile_id={file_id}")
+        log.info(f"[FILE SEND] request_id={file_id}")
+        log.info(f"[FILE SEND] file_id={file_id}")
         msg = await client.send_cached_media(
             chat_id=message.from_user.id,
             file_id=file_id,
@@ -690,9 +691,9 @@ async def start(client, message):
             protect_content=True if pre == 'filep' else False,
             reply_markup=reply_markup
         )
-        log.info("[NORMAL FILE] SENT SUCCESSFULLY")
+        log.info(f"[FILE SEND] SUCCESS request_id={file_id}")
     except Exception as e:
-        log.error(f"[NORMAL FILE] SEND ERROR\nuser_id={message.from_user.id}\nfile_id={file_id}\nerror={e}")
+        log.error(f"[FILE SEND] ERROR: {e}")
         return await message.reply("Error sending file.")
         
     btn = [[InlineKeyboardButton("✅ ɢᴇᴛ ғɪʟᴇ ᴀɢᴀɪɴ ✅", callback_data=f'del#{file_id}')]]
@@ -1506,7 +1507,12 @@ async def total_requests(client, message):
         )
 
 @Client.on_message(filters.command("purgerequests") & filters.private & filters.user(ADMINS))
-async def purge_requests(client, message):   
+async def purge_requests(client, message):
+    import logging
+    log = logging.getLogger(__name__)
+    log.info("[PURGE REQUESTS] START")
+    log.info(f"[PURGE REQUESTS] CHANNEL = {AUTH_CHANNEL}")
+    
     if join_db().isActive():
         await join_db().delete_all_users()
         
@@ -1514,12 +1520,22 @@ async def purge_requests(client, message):
     
     try:
         if AUTH_CHANNEL:
-            await client.decline_all_chat_join_requests(int(AUTH_CHANNEL))
-            await msg.edit("Purged All Pending Join Requests from Database and Channel.", parse_mode=enums.ParseMode.MARKDOWN)
+            try:
+                await client.decline_all_chat_join_requests(int(AUTH_CHANNEL))
+                log.info("[PURGE REQUESTS] PENDING COUNT = Unknown (Bulk action)")
+                log.info("[PURGE REQUESTS] PROCESSED = All")
+                log.info("[PURGE REQUESTS] FAILED = 0")
+                await msg.edit("Purged All Pending Join Requests from Database and Channel.", parse_mode=enums.ParseMode.MARKDOWN)
+            except Exception as inner_e:
+                log.error(f"[PURGE REQUESTS] API ERROR: {inner_e}")
+                log.info("[PURGE REQUESTS] FAILED = All")
+                await msg.edit(f"Purged from Database, but failed to purge from channel. API Error:\n`{inner_e}`", parse_mode=enums.ParseMode.MARKDOWN)
         else:
+            log.info("[PURGE REQUESTS] CHANNEL = None")
             await msg.edit("Purged All Requests from Database (No AUTH_CHANNEL set).", parse_mode=enums.ParseMode.MARKDOWN)
     except Exception as e:
-        await msg.edit(f"Purged from Database, but failed to purge from channel: {e}", parse_mode=enums.ParseMode.MARKDOWN)
+        log.error(f"[PURGE REQUESTS] ERROR: {e}")
+        await msg.edit(f"An unexpected error occurred:\n`{e}`", parse_mode=enums.ParseMode.MARKDOWN)
 
 async def send_series_files_to_user(client, user_id, files, query=None):
     from utils import get_size
@@ -1577,7 +1593,8 @@ async def send_series_files_to_user(client, user_id, files, query=None):
 
     async def send_one(idx, file_id_str, f_caption):
         async with semaphore:
-            log.info(f"[SERIES FILE] Sending\nfile_id={file_id_str}")
+            log.info(f"[FILE SEND] request_id={file_id_str}")
+            log.info(f"[FILE SEND] file_id={file_id_str}")
             while True:
                 try:
                     msg = await client.send_cached_media(
@@ -1586,14 +1603,14 @@ async def send_series_files_to_user(client, user_id, files, query=None):
                         caption=f_caption,
                         protect_content=False,
                     )
-                    log.info(f"[SERIES FILE] SENT")
+                    log.info(f"[FILE SEND] SUCCESS request_id={file_id_str}")
                     asyncio.create_task(delayed_delete(msg, 240))
                     return msg
                 except FloodWait as e:
-                    log.warning(f"[SERIES FILE] FloodWait for {e.value}s on {file_id_str}")
+                    log.warning(f"[FILE SEND] FloodWait for {e.value}s on {file_id_str}")
                     await asyncio.sleep(e.value + 1)
                 except Exception as e:
-                    log.error(f"[SERIES FILE] ERROR: {e}")
+                    log.error(f"[FILE SEND] ERROR: {e}")
                     return None
 
     log.info(f"[QUALITY PM] STARTING CONCURRENT SEND FOR {total_files} FILES")

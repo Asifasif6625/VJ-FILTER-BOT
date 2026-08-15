@@ -385,9 +385,7 @@ async def _user_quality_keyboard(user_id: int, full_id: str, sid: str, lang: str
                         "rating": rating
                     }
                 })
-                start_url = f"https://t.me/{temp.U_NAME}?start=all_{key}"
-                log.info(f"\n[GROUP QUALITY]\nUUID CREATED: {key}\nREQUEST SAVED: True\nUSER: {user_id}\nBUTTON URL: {start_url}")
-                row.append(InlineKeyboardButton(q, url=start_url))
+                row.append(InlineKeyboardButton(q, callback_data=f"send_fsall#{key}"))
         rows.append(row)
     rows.append([
         InlineKeyboardButton("⬅️ Back", callback_data=f"sr#{sid}#home" if season == 0 else f"sr#{sid}#l#{lang}"),
@@ -1563,6 +1561,23 @@ async def process_series_search(client: Client, message: Message, txt: str, repl
 
 # series_search_handler removed to prevent competing with auto_filter
 
+
+@Client.on_callback_query(filters.regex(r"^send_fsall#"))
+async def handle_send_fsall(client: Client, query: CallbackQuery):
+    key = query.data.split("#")[1]
+    
+    # Ownership validation
+    if query.message.reply_to_message and query.from_user.id != query.message.reply_to_message.from_user.id:
+        return await query.answer("⚠️ This search belongs to another user.", show_alert=True)
+    elif not query.message.reply_to_message:
+        from database.series_db import get_temp_request
+        req = await get_temp_request(key)
+        if req and req.get("user") and query.from_user.id != req.get("user"):
+            return await query.answer("⚠️ This search belongs to another user.", show_alert=True)
+            
+    from utils import temp
+    start_url = f"https://t.me/{temp.U_NAME}?start=all_{key}"
+    await query.answer(url=start_url)
 
 @Client.on_callback_query(filters.regex(r"^sr#"), group=1)
 async def series_user_nav(client: Client, query: CallbackQuery):
