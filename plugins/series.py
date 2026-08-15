@@ -2066,15 +2066,29 @@ async def series_user_nav(client: Client, query: CallbackQuery):
                         with open(file_path, "r", encoding="utf-8") as json_file:
                             batch_files = json.loads(json_file.read())
                         os.remove(file_path)
-                        for bf in batch_files:
+                        
+                        def _get_batch_ep(bf, fallback):
+                            if "episode" in bf and str(bf["episode"]).isdigit() and int(bf["episode"]) > 0:
+                                return int(bf["episode"])
+                            if "episode_index" in bf and str(bf["episode_index"]).isdigit() and int(bf["episode_index"]) > 0:
+                                return int(bf["episode_index"])
+                            extracted = _extract_episode_number(bf.get("file_name", ""))
+                            if extracted is not None:
+                                return extracted
+                            return fallback
+
+                        batch_files_sorted = sorted(batch_files, key=lambda b: _get_batch_ep(b, 99999))
+                        for b_idx, bf in enumerate(batch_files_sorted, start=1):
+                            bf_ep = _get_batch_ep(bf, b_idx)
                             bf["is_series"] = True
                             bf["series_id"] = full_id
                             bf["series_rating"] = rating
                             bf["language"] = lang
                             bf["season"] = season
                             bf["quality"] = qual
-                            bf["episode_index"] = bf.get("episode", 1)
-                            bf["total_episodes"] = f.get("total_episodes", len(batch_files))
+                            bf["episode"] = bf_ep
+                            bf["episode_index"] = bf_ep
+                            bf["total_episodes"] = f.get("total_episodes", len(batch_files_sorted))
                             files.append(bf)
                     except Exception as e:
                         log.error(f"Failed to fetch JSON batch: {e}")
@@ -2085,15 +2099,22 @@ async def series_user_nav(client: Client, query: CallbackQuery):
                     f["language"] = lang
                     f["season"] = season
                     f["quality"] = qual
-                    f["episode_index"] = 1
+                    f["episode"] = ep
+                    f["episode_index"] = ep
                     f["total_episodes"] = 1
                     files.append(f)
         else:
             files = []
             episodes = await list_quality_episodes(full_id, lang, season, qual)
-            total_eps = len(episodes)
+            sorted_episodes = sorted([
+                int(e) for e in episodes 
+                if (isinstance(e, int) or (isinstance(e, str) and str(e).isdigit())) and int(e) > 0
+            ])
+            other_eps = [e for e in episodes if e not in sorted_episodes]
+            all_eps = sorted_episodes + other_eps
+            total_eps = len(all_eps)
             import json, os
-            for i, ep in enumerate(episodes, start=1):
+            for i, ep in enumerate(all_eps, start=1):
                 ep_files = await get_series_files(full_id, lang, season, ep, qual)
                 for f in ep_files:
                     if f.get("is_batch"):
@@ -2102,15 +2123,29 @@ async def series_user_nav(client: Client, query: CallbackQuery):
                             with open(file_path, "r", encoding="utf-8") as json_file:
                                 batch_files = json.loads(json_file.read())
                             os.remove(file_path)
-                            for bf in batch_files:
+                            
+                            def _get_batch_ep(bf, fallback):
+                                if "episode" in bf and str(bf["episode"]).isdigit() and int(bf["episode"]) > 0:
+                                    return int(bf["episode"])
+                                if "episode_index" in bf and str(bf["episode_index"]).isdigit() and int(bf["episode_index"]) > 0:
+                                    return int(bf["episode_index"])
+                                extracted = _extract_episode_number(bf.get("file_name", ""))
+                                if extracted is not None:
+                                    return extracted
+                                return fallback
+
+                            batch_files_sorted = sorted(batch_files, key=lambda b: _get_batch_ep(b, 99999))
+                            for b_idx, bf in enumerate(batch_files_sorted, start=1):
+                                bf_ep = _get_batch_ep(bf, b_idx)
                                 bf["is_series"] = True
                                 bf["series_id"] = full_id
                                 bf["series_rating"] = rating
                                 bf["language"] = lang
                                 bf["season"] = season
                                 bf["quality"] = qual
-                                bf["episode_index"] = bf.get("episode", i)
-                                bf["total_episodes"] = f.get("total_episodes", len(batch_files))
+                                bf["episode"] = bf_ep
+                                bf["episode_index"] = bf_ep
+                                bf["total_episodes"] = f.get("total_episodes", len(batch_files_sorted))
                                 files.append(bf)
                         except Exception as e:
                             log.error(f"Failed to fetch JSON batch: {e}")
@@ -2121,7 +2156,8 @@ async def series_user_nav(client: Client, query: CallbackQuery):
                         f["language"] = lang
                         f["season"] = season
                         f["quality"] = qual
-                        f["episode_index"] = i
+                        f["episode"] = ep if (isinstance(ep, int) and ep > 0) else i
+                        f["episode_index"] = ep if (isinstance(ep, int) and ep > 0) else i
                         f["total_episodes"] = total_eps
                         files.append(f)
 
