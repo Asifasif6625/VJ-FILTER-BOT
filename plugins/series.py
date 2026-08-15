@@ -386,7 +386,7 @@ async def _user_quality_keyboard(user_id: int, full_id: str, sid: str, lang: str
 # ─── GLOBAL THUMBNAIL COMMANDS ───────────────────────────────────────────────
 # ═════════════════════════════════════════════════════════════════════════════
 
-@Client.on_message(filters.command("thumpseries") & filters.private, group=1)
+@Client.on_message(filters.command("thumpseries"), group=1)
 async def cmd_thumpseries(client: Client, message: Message):
     if not _is_admin(message.from_user.id):
         return await message.reply_text("❌ You are not authorized to use this command.")
@@ -449,8 +449,9 @@ async def cmd_seriesfil(client: Client, message: Message):
 # ─── /ed_series — EDIT WIZARD ────────────────────────────────────────────────
 # ═════════════════════════════════════════════════════════════════════════════
 
-@Client.on_callback_query(filters.regex(r"^edser#") & (filters.private | filters.group), group=1)
+@Client.on_callback_query(filters.regex(r"^edser#"), group=1)
 async def cb_edser(client: Client, query: CallbackQuery):
+    logger.info("[VIEW SERIES EDIT] callback=%s", query.data)
     if not _is_admin(query.from_user.id):
         return await query.answer("❌ You are not authorized.", show_alert=True)
     
@@ -483,7 +484,7 @@ async def cb_edser(client: Client, query: CallbackQuery):
         parse_mode=enums.ParseMode.HTML,
     )
 
-@Client.on_message(filters.command(["ed_series"]) & (filters.private | filters.group), group=1)
+@Client.on_message(filters.command(["ed_series"]), group=1)
 async def cmd_ed_series(client: Client, message: Message):
     if not _is_admin(message.from_user.id):
         return await message.reply_text("❌ You are not authorized to use this command.")
@@ -588,7 +589,11 @@ async def wizard_text_handler(client: Client, message: Message):
         thumb_state = temp.SETTING_SERIES_THUMB.get(uid)
         if message.photo:
             from database.series_db import save_series_thumbnail
-            await save_series_thumbnail(message.photo.file_id)
+            try:
+                await save_series_thumbnail(message.photo.file_id)
+            except Exception as e:
+                return await message.reply_text(f"❌ Failed to save thumbnail: {e}")
+                
             del temp.SETTING_SERIES_THUMB[uid]
             
             cmd_msg_id = thumb_state.get("command_msg_id") if isinstance(thumb_state, dict) else None
@@ -1455,8 +1460,17 @@ async def process_series_search(client: Client, message: Message, txt: str, repl
     if not matches:
         return False
 
-    if len(matches) == 1:
-        series = matches[0]
+    seen = set()
+    unique_matches = []
+    for m in matches:
+        name = m.get("name", "").strip()
+        name_lower = name.lower()
+        if name_lower not in seen:
+            seen.add(name_lower)
+            unique_matches.append(m)
+
+    if len(unique_matches) == 1:
+        series = unique_matches[0]
         series_id = str(series["_id"])
         _register_short_id(series_id)
         sid = _series_short_id(series_id)
@@ -1468,11 +1482,11 @@ async def process_series_search(client: Client, message: Message, txt: str, repl
         from database.series_db import get_series_thumbnail
         poster = await get_series_thumbnail()
         
-        for m in matches:
+        for m in unique_matches:
             _register_short_id(str(m["_id"]))
             
         text = "Choose the series/movie you want to view"
-        rm = _user_suggestions_keyboard(matches)
+        rm = _user_suggestions_keyboard(unique_matches)
 
     if rm:
         if reply_msg:
@@ -1740,7 +1754,7 @@ async def send_series_list(message_or_query, unique_series, page=0):
         await message_or_query.message.edit_text(text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
 
 
-@Client.on_callback_query(filters.regex(r"^vser#") & (filters.private | filters.group), group=1)
+@Client.on_callback_query(filters.regex(r"^vser#"), group=1)
 async def cb_vser_page(client: Client, query: CallbackQuery):
     if not _is_admin(query.from_user.id):
         return await query.answer("❌ You are not authorized.", show_alert=True)
@@ -1762,16 +1776,24 @@ async def cb_vser_page(client: Client, query: CallbackQuery):
     await send_series_list(query, unique_series, page=page)
 
 
-@Client.on_message(filters.command(["serieslist", "viewseries"]) & (filters.private | filters.group), group=1)
+@Client.on_message(filters.command(["serieslist", "viewseries"]), group=1)
 async def cmd_serieslist(client: Client, message: Message):
-    if not _is_admin(message.from_user.id):
+    logger.info("[VIEWSERIES] COMMAND TRIGGERED")
+    await message.reply_text("🛠 /viewseries handler reached")
+    
+    is_admin = _is_admin(message.from_user.id)
+    logger.info("[VIEWSERIES] user_id=%s is_admin=%s", message.from_user.id, is_admin)
+    
+    if not is_admin:
         return await message.reply_text("❌ You are not authorized to use this command.")
 
     from database.series_db import list_all_series
     all_series = await list_all_series()
     
+    logger.info("[VIEWSERIES] fetched series count=%s", len(all_series))
+    
     if not all_series:
-        return await message.reply_text("No series added yet.")
+        return await message.reply_text("No Series have been added yet.")
 
     seen = set()
     unique_series = []
