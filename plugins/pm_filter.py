@@ -1596,7 +1596,8 @@ async def cb_handler(client: Client, query: CallbackQuery):
             log = logging.getLogger(__name__)
             
             req_id = file_id
-            log.info(f"[FORCE SUB] TRY AGAIN\n[FORCE SUB] REQUEST ID = {req_id}")
+            log.info(f"[TRY AGAIN] clicked user_id={query.from_user.id}")
+            log.info(f"[TRY AGAIN] requested_file_id={req_id}")
             
             if kk == "movie":
                 if not hasattr(temp, "GROUP_MOVIE_REQS"):
@@ -1613,13 +1614,15 @@ async def cb_handler(client: Client, query: CallbackQuery):
                     await query.answer("⚠️ This request is already being processed.", show_alert=True)
                     return
                     
-                log.info("[FORCE SUB] CHECK START")
-                if AUTH_CHANNEL and not await is_subscribed(client, query):
-                    log.info("[FORCE SUB] RETRY RESULT = FAIL\n[FORCE SUB] SHOW ALERT\n[FORCE SUB] NO FILE SENT")
-                    await query.answer("⚠️ ആദ്യം ചാനലിലേക്ക് Join Request അയയ്ക്കുക.", show_alert=True)
+                first_check = not await is_subscribed(client, query) if AUTH_CHANNEL else False
+                log.info(f"[TRY AGAIN] first_check={first_check}")
+                
+                if AUTH_CHANNEL and first_check:
+                    log.info(f"[TRY AGAIN] membership_failed -> alert")
+                    await query.answer("⚠️ Please send a Join Request first.", show_alert=True)
                     return
                     
-                log.info("[FORCE SUB] RETRY RESULT = PASS\n[FORCE SUB] VERIFIED\n[FORCE SUB] DELETE SUB MESSAGE\n[FORCE SUB] SEND ORIGINAL FILES")
+                log.info(f"[TRY AGAIN] membership_success")
                 req["state"] = "SENDING"
                 cmd = req["cmd"]
                 
@@ -1650,7 +1653,7 @@ async def cb_handler(client: Client, query: CallbackQuery):
                 try:
                     await query.message.delete()
                 except Exception as e:
-                    log.warning("[FORCE SUB] Could not delete message: %s", e)
+                    pass
                     
                 res = await start(client, MockMsg(query, cmd))
                 
@@ -1672,13 +1675,15 @@ async def cb_handler(client: Client, query: CallbackQuery):
                     await query.answer("⚠️ This request is already being processed.", show_alert=True)
                     return
                     
-                log.info("[FORCE SUB] CHECK START")
-                if AUTH_CHANNEL and not await is_subscribed(client, query):
-                    log.info("[FORCE SUB] RETRY RESULT = FAIL\n[FORCE SUB] SHOW ALERT\n[FORCE SUB] NO FILE SENT")
-                    await query.answer("⚠️ ആദ്യം ചാനലിലേക്ക് Join Request അയയ്ക്കുക.", show_alert=True)
+                first_check = not await is_subscribed(client, query) if AUTH_CHANNEL else False
+                log.info(f"[TRY AGAIN] first_check={first_check}")
+                
+                if AUTH_CHANNEL and first_check:
+                    log.info(f"[TRY AGAIN] membership_failed -> alert")
+                    await query.answer("⚠️ Please send a Join Request first.", show_alert=True)
                     return
                     
-                log.info("[FORCE SUB] RETRY RESULT = PASS\n[FORCE SUB] VERIFIED\n[FORCE SUB] DELETE SUB MESSAGE\n[FORCE SUB] SEND ORIGINAL FILES")
+                log.info(f"[TRY AGAIN] membership_success")
                 if isinstance(req, dict):
                     req["state"] = "SENDING"
                     
@@ -1710,7 +1715,7 @@ async def cb_handler(client: Client, query: CallbackQuery):
                 try:
                     await query.message.delete()
                 except Exception as e:
-                    log.warning("[FORCE SUB] Could not delete message: %s", e)
+                    pass
                     
                 res = await start(client, MockMsg2(query, kk, req_id))
                 

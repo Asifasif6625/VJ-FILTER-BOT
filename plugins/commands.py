@@ -530,6 +530,7 @@ async def start(client, message):
                     
                 try:
                     log.info(f"[NORMAL FILE] Sending\nuser_id={message.from_user.id}\nfile_id={file_id_str}")
+                    log.info(f"[TRY AGAIN SEND] file_id={file_id_str} source=normal_file")
                     msg = await client.send_cached_media(
                         chat_id=message.from_user.id,
                         file_id=file_id_str,
@@ -1595,6 +1596,7 @@ async def send_series_files_to_user(client, user_id, files, query=None):
         async with semaphore:
             log.info(f"[FILE SEND] request_id={file_id_str}")
             log.info(f"[FILE SEND] file_id={file_id_str}")
+            log.info(f"[TRY AGAIN SEND] file_id={file_id_str} source=send_series_files_to_user")
             while True:
                 try:
                     msg = await client.send_cached_media(
