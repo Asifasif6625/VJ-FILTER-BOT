@@ -2795,25 +2795,21 @@ async def auto_filter(client, name, msg, reply_msg=None, ai_search=True, spoll=F
             search = search.replace("-", " ")
             search = search.replace(":", "")
             search = search.replace(".", "")
+            
+            # --- START SERIES ROUTING ---
+            try:
+                from plugins.series import process_series_search
+                is_series = await process_series_search(client, message, name, reply_msg)
+                if is_series:
+                    return
+            except Exception as e:
+                import logging
+                logging.getLogger(__name__).warning(f"Series routing failed: {e}")
+            # --- END SERIES ROUTING ---
+
             files, offset, total_results = await get_search_results(message.chat.id ,search, offset=0, filter=True)
             settings = await get_settings(message.chat.id)
             if not files:
-                try:
-                    from plugins.series import process_series_search
-                    from database.series_db import search_series, _normalize
-                    series_matches = await search_series(_normalize(name))
-                    if not series_matches:
-                        series_matches = await search_series(name)
-                    if series_matches:
-                        if hasattr(msg, "text") and msg.text and name == msg.text:
-                            return
-                        else:
-                            is_series = await process_series_search(client, message, name, reply_msg)
-                            if is_series:
-                                return
-                except Exception as e:
-                    pass
-                    
                 no_db_btn = InlineKeyboardMarkup([[InlineKeyboardButton("🦨Reason", callback_data="not_in_db_reason")]])
                 imdb = await get_poster(search, bulk=False) if NOFILEREQ else None
                 if imdb:
