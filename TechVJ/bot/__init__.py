@@ -18,7 +18,7 @@ class TechVJXBot(Client):
             api_hash=API_HASH,
             bot_token=BOT_TOKEN,
             workers=150,
-            plugins={"root": "plugins"},
+            plugins={"root": "plugins", "exclude": ["clone"]},
             sleep_threshold=5,
         )
 
