@@ -1854,7 +1854,11 @@ async def series_user_nav(client: Client, query: CallbackQuery):
                         os.remove(file_path)
                         for bf in batch_files:
                             bf["is_series"] = True
+                            bf["series_id"] = full_id
                             bf["series_rating"] = rating
+                            bf["language"] = lang
+                            bf["season"] = season
+                            bf["quality"] = qual
                             bf["episode_index"] = bf.get("episode", 1)
                             bf["total_episodes"] = f.get("total_episodes", len(batch_files))
                             files.append(bf)
@@ -1886,8 +1890,11 @@ async def series_user_nav(client: Client, query: CallbackQuery):
                             os.remove(file_path)
                             for bf in batch_files:
                                 bf["is_series"] = True
+                                bf["series_id"] = full_id
                                 bf["series_rating"] = rating
                                 bf["language"] = lang
+                                bf["season"] = season
+                                bf["quality"] = qual
                                 bf["episode_index"] = bf.get("episode", i)
                                 bf["total_episodes"] = f.get("total_episodes", len(batch_files))
                                 files.append(bf)
