@@ -325,9 +325,14 @@ async def advantage_spoll_choker(bot, query):
 async def years_cb_handler(client: Client, query: CallbackQuery):
 
     try:
-        if int(query.from_user.id) not in [query.message.reply_to_message.from_user.id, 0]:
+        if query.message.reply_to_message:
+            req_user = query.message.reply_to_message.from_user.id if query.message.reply_to_message.from_user else 0
+        else:
+            return await query.answer("⚠️ Search Context Missing. Please search again.", show_alert=True)
+            
+        if req_user != 0 and int(query.from_user.id) != req_user:
             return await query.answer(
-                f"⚠️ ʜᴇʟʟᴏ{query.from_user.first_name},\nᴛʜɪꜱ ɪꜱ ɴᴏᴛ ʏᴏᴜʀ ᴍᴏᴠɪᴇ ʀᴇQᴜᴇꜱᴛ,\nʀᴇQᴜᴇꜱᴛ ʏᴏᴜʀ'ꜱ...",
+                f"⚠️ ʜᴇʟʟᴏ {query.from_user.first_name},\nᴛʜɪꜱ ɪꜱ ɴᴏᴛ ʏᴏᴜʀ ᴍᴏᴠɪᴇ ʀᴇQᴜᴇꜱᴛ,\nʀᴇQᴜᴇꜱᴛ ʏᴏᴜʀ'ꜱ...",
                 show_alert=True,
             )
     except:
@@ -392,9 +397,14 @@ async def filter_yearss_cb_handler(client: Client, query: CallbackQuery):
     chat_id = query.message.chat.id
     message = query.message
     try:
-        if int(req) not in [query.message.reply_to_message.from_user.id, 0]:
+        if query.message.reply_to_message:
+            req_user = query.message.reply_to_message.from_user.id if query.message.reply_to_message.from_user else 0
+        else:
+            return await query.answer("⚠️ Search Context Missing. Please search again.", show_alert=True)
+            
+        if req_user != 0 and int(req) != req_user:
             return await query.answer(
-                f"⚠️ ʜᴇʟʟᴏ{query.from_user.first_name},\nᴛʜɪꜱ ɪꜱ ɴᴏᴛ ʏᴏᴜʀ ᴍᴏᴠɪᴇ ʀᴇQᴜᴇꜱᴛ,\nʀᴇQᴜᴇꜱᴛ ʏᴏᴜʀ'ꜱ...",
+                f"⚠️ ʜᴇʟʟᴏ {query.from_user.first_name},\nᴛʜɪꜱ ɪꜱ ɴᴏᴛ ʏᴏᴜʀ ᴍᴏᴠɪᴇ ʀᴇQᴜᴇꜱᴛ,\nʀᴇQᴜᴇꜱᴛ ʏᴏᴜʀ'ꜱ...",
                 show_alert=True,
             )
     except:
@@ -495,9 +505,14 @@ async def filter_yearss_cb_handler(client: Client, query: CallbackQuery):
 async def episodes_cb_handler(client: Client, query: CallbackQuery):
 
     try:
-        if int(query.from_user.id) not in [query.message.reply_to_message.from_user.id, 0]:
+        if query.message.reply_to_message:
+            req_user = query.message.reply_to_message.from_user.id if query.message.reply_to_message.from_user else 0
+        else:
+            return await query.answer("⚠️ Search Context Missing. Please search again.", show_alert=True)
+            
+        if req_user != 0 and int(query.from_user.id) != req_user:
             return await query.answer(
-                f"⚠️ ʜᴇʟʟᴏ{query.from_user.first_name},\nᴛʜɪꜱ ɪꜱ ɴᴏᴛ ʏᴏᴜʀ ᴍᴏᴠɪᴇ ʀᴇQᴜᴇꜱᴛ,\nʀᴇQᴜᴇꜱᴛ ʏᴏᴜʀ'ꜱ...",
+                f"⚠️ ʜᴇʟʟᴏ {query.from_user.first_name},\nᴛʜɪꜱ ɪꜱ ɴᴏᴛ ʏᴏᴜʀ ᴍᴏᴠɪᴇ ʀᴇQᴜᴇꜱᴛ,\nʀᴇQᴜᴇꜱᴛ ʏᴏᴜʀ'ꜱ...",
                 show_alert=True,
             )
     except:
@@ -560,9 +575,14 @@ async def filter_episodes_cb_handler(client: Client, query: CallbackQuery):
     chat_id = query.message.chat.id
     message = query.message
     try:
-        if int(req) not in [query.message.reply_to_message.from_user.id, 0]:
+        if query.message.reply_to_message:
+            req_user = query.message.reply_to_message.from_user.id if query.message.reply_to_message.from_user else 0
+        else:
+            return await query.answer("⚠️ Search Context Missing. Please search again.", show_alert=True)
+            
+        if req_user != 0 and int(req) != req_user:
             return await query.answer(
-                f"⚠️ ʜᴇʟʟᴏ{query.from_user.first_name},\nᴛʜɪꜱ ɪꜱ ɴᴏᴛ ʏᴏᴜʀ ᴍᴏᴠɪᴇ ʀᴇQᴜᴇꜱᴛ,\nʀᴇQᴜᴇꜱᴛ ʏᴏᴜʀ'ꜱ...",
+                f"⚠️ ʜᴇʟʟᴏ {query.from_user.first_name},\nᴛʜɪꜱ ɪꜱ ɴᴏᴛ ʏᴏᴜʀ ᴍᴏᴠɪᴇ ʀᴇQᴜᴇꜱᴛ,\nʀᴇQᴜᴇꜱᴛ ʏᴏᴜʀ'ꜱ...",
                 show_alert=True,
             )
     except:
@@ -665,9 +685,14 @@ async def filter_episodes_cb_handler(client: Client, query: CallbackQuery):
 async def languages_cb_handler(client: Client, query: CallbackQuery):
 
     try:
-        if int(query.from_user.id) not in [query.message.reply_to_message.from_user.id, 0]:
+        if query.message.reply_to_message:
+            req_user = query.message.reply_to_message.from_user.id if query.message.reply_to_message.from_user else 0
+        else:
+            return await query.answer("⚠️ Search Context Missing. Please search again.", show_alert=True)
+            
+        if req_user != 0 and int(query.from_user.id) != req_user:
             return await query.answer(
-                f"⚠️ ʜᴇʟʟᴏ{query.from_user.first_name},\nᴛʜɪꜱ ɪꜱ ɴᴏᴛ ʏᴏᴜʀ ᴍᴏᴠɪᴇ ʀᴇQᴜᴇꜱᴛ,\nʀᴇQᴜᴇꜱᴛ ʏᴏᴜʀ'ꜱ...",
+                f"⚠️ ʜᴇʟʟᴏ {query.from_user.first_name},\nᴛʜɪꜱ ɪꜱ ɴᴏᴛ ʏᴏᴜʀ ᴍᴏᴠɪᴇ ʀᴇQᴜᴇꜱᴛ,\nʀᴇQᴜᴇꜱᴛ ʏᴏᴜʀ'ꜱ...",
                 show_alert=True,
             )
     except:
@@ -732,9 +757,14 @@ async def filter_languages_cb_handler(client: Client, query: CallbackQuery):
     chat_id = query.message.chat.id
     message = query.message
     try:
-        if int(req) not in [query.message.reply_to_message.from_user.id, 0]:
+        if query.message.reply_to_message:
+            req_user = query.message.reply_to_message.from_user.id if query.message.reply_to_message.from_user else 0
+        else:
+            return await query.answer("⚠️ Search Context Missing. Please search again.", show_alert=True)
+            
+        if req_user != 0 and int(req) != req_user:
             return await query.answer(
-                f"⚠️ ʜᴇʟʟᴏ{query.from_user.first_name},\nᴛʜɪꜱ ɪꜱ ɴᴏᴛ ʏᴏᴜʀ ᴍᴏᴠɪᴇ ʀᴇQᴜᴇꜱᴛ,\nʀᴇQᴜᴇꜱᴛ ʏᴏᴜʀ'ꜱ...",
+                f"⚠️ ʜᴇʟʟᴏ {query.from_user.first_name},\nᴛʜɪꜱ ɪꜱ ɴᴏᴛ ʏᴏᴜʀ ᴍᴏᴠɪᴇ ʀᴇQᴜᴇꜱᴛ,\nʀᴇQᴜᴇꜱᴛ ʏᴏᴜʀ'ꜱ...",
                 show_alert=True,
             )
     except:
@@ -835,9 +865,14 @@ async def filter_languages_cb_handler(client: Client, query: CallbackQuery):
 async def seasons_cb_handler(client: Client, query: CallbackQuery):
 
     try:
-        if int(query.from_user.id) not in [query.message.reply_to_message.from_user.id, 0]:
+        if query.message.reply_to_message:
+            req_user = query.message.reply_to_message.from_user.id if query.message.reply_to_message.from_user else 0
+        else:
+            return await query.answer("⚠️ Search Context Missing. Please search again.", show_alert=True)
+            
+        if req_user != 0 and int(query.from_user.id) != req_user:
             return await query.answer(
-                f"⚠️ ʜᴇʟʟᴏ{query.from_user.first_name},\nᴛʜɪꜱ ɪꜱ ɴᴏᴛ ʏᴏᴜʀ ᴍᴏᴠɪᴇ ʀᴇQᴜᴇꜱᴛ,\nʀᴇQᴜᴇꜱᴛ ʏᴏᴜʀ'ꜱ...",
+                f"⚠️ ʜᴇʟʟᴏ {query.from_user.first_name},\nᴛʜɪꜱ ɪꜱ ɴᴏᴛ ʏᴏᴜʀ ᴍᴏᴠɪᴇ ʀᴇQᴜᴇꜱᴛ,\nʀᴇQᴜᴇꜱᴛ ʏᴏᴜʀ'ꜱ...",
                 show_alert=True,
             )
     except:
@@ -910,9 +945,14 @@ async def filter_seasons_cb_handler(client: Client, query: CallbackQuery):
     chat_id = query.message.chat.id
     message = query.message
     try:
-        if int(req) not in [query.message.reply_to_message.from_user.id, 0]:
+        if query.message.reply_to_message:
+            req_user = query.message.reply_to_message.from_user.id if query.message.reply_to_message.from_user else 0
+        else:
+            return await query.answer("⚠️ Search Context Missing. Please search again.", show_alert=True)
+            
+        if req_user != 0 and int(req) != req_user:
             return await query.answer(
-                f"⚠️ ʜᴇʟʟᴏ{query.from_user.first_name},\nᴛʜɪꜱ ɪꜱ ɴᴏᴛ ʏᴏᴜʀ ᴍᴏᴠɪᴇ ʀᴇQᴜᴇꜱᴛ,\nʀᴇQᴜᴇꜱᴛ ʏᴏᴜʀ'ꜱ...",
+                f"⚠️ ʜᴇʟʟᴏ {query.from_user.first_name},\nᴛʜɪꜱ ɪꜱ ɴᴏᴛ ʏᴏᴜʀ ᴍᴏᴠɪᴇ ʀᴇQᴜᴇꜱᴛ,\nʀᴇQᴜᴇꜱᴛ ʏᴏᴜʀ'ꜱ...",
                 show_alert=True,
             )
     except:
@@ -1011,10 +1051,15 @@ async def filter_seasons_cb_handler(client: Client, query: CallbackQuery):
 async def qualities_cb_handler(client: Client, query: CallbackQuery):
 
     try:
-        if int(query.from_user.id) not in [query.message.reply_to_message.from_user.id, 0]:
+        if query.message.reply_to_message:
+            req_user = query.message.reply_to_message.from_user.id if query.message.reply_to_message.from_user else 0
+        else:
+            return await query.answer("⚠️ Search Context Missing. Please search again.", show_alert=True)
+            
+        if req_user != 0 and int(query.from_user.id) != req_user:
             return await query.answer(
-                f"⚠️ ʜᴇʟʟᴏ{query.from_user.first_name},\nᴛʜɪꜱ ɪꜱ ɴᴏᴛ ʏᴏᴜʀ ᴍᴏᴠɪᴇ ʀᴇQᴜᴇꜱᴛ,\nʀᴇQᴜᴇꜱᴛ ʏᴏᴜʀ'ꜱ...",
-                show_alert=False,
+                f"⚠️ ʜᴇʟʟᴏ {query.from_user.first_name},\nᴛʜɪꜱ ɪꜱ ɴᴏᴛ ʏᴏᴜʀ ᴍᴏᴠɪᴇ ʀᴇQᴜᴇꜱᴛ,\nʀᴇQᴜᴇꜱᴛ ʏᴏᴜʀ'ꜱ...",
+                show_alert=True,
             )
     except:
         pass
@@ -1074,10 +1119,15 @@ async def filter_qualities_cb_handler(client: Client, query: CallbackQuery):
     chat_id = query.message.chat.id
     message = query.message
     try:
-        if int(req) not in [query.message.reply_to_message.from_user.id, 0]:
+        if query.message.reply_to_message:
+            req_user = query.message.reply_to_message.from_user.id if query.message.reply_to_message.from_user else 0
+        else:
+            return await query.answer("⚠️ Search Context Missing. Please search again.", show_alert=True)
+            
+        if req_user != 0 and int(req) != req_user:
             return await query.answer(
-                f"⚠️ ʜᴇʟʟᴏ{query.from_user.first_name},\nᴛʜɪꜱ ɪꜱ ɴᴏᴛ ʏᴏᴜʀ ᴍᴏᴠɪᴇ ʀᴇQᴜᴇꜱᴛ,\nʀᴇQᴜᴇꜱᴛ ʏᴏᴜʀ'ꜱ...",
-                show_alert=False,
+                f"⚠️ ʜᴇʟʟᴏ {query.from_user.first_name},\nᴛʜɪꜱ ɪꜱ ɴᴏᴛ ʏᴏᴜʀ ᴍᴏᴠɪᴇ ʀᴇQᴜᴇꜱᴛ,\nʀᴇQᴜᴇꜱᴛ ʏᴏᴜʀ'ꜱ...",
+                show_alert=True,
             )
     except:
         pass
@@ -1409,13 +1459,20 @@ async def cb_handler(client: Client, query: CallbackQuery):
             alert = alerts[int(i)]
             alert = alert.replace("\\n", "\n").replace("\\t", "\t")
             await query.answer(alert, show_alert=True)
+            
+    elif query.data.startswith("sr#"):
+        from plugins.series import series_user_nav
+        return await series_user_nav(client, query)
         
-    if query.data.startswith("file"):
+    elif query.data.startswith("file"):
         clicked = query.from_user.id
         try:
-            typed = query.message.reply_to_message.from_user.id
+            if query.message.reply_to_message:
+                typed = query.message.reply_to_message.from_user.id if query.message.reply_to_message.from_user else 0
+            else:
+                typed = 0
         except:
-            typed = query.from_user.id
+            typed = 0
         ident, file_id = query.data.split("#")
         files_ = await get_file_details(file_id)
         if not files_:
@@ -1492,6 +1549,21 @@ async def cb_handler(client: Client, query: CallbackQuery):
             
     elif query.data.startswith("sendfiles"):
         clicked = query.from_user.id
+        
+        try:
+            if query.message.reply_to_message:
+                req_user = query.message.reply_to_message.from_user.id if query.message.reply_to_message.from_user else 0
+            else:
+                return await query.answer("⚠️ Search Context Missing. Please search again.", show_alert=True)
+                
+            if req_user != 0 and clicked != req_user:
+                return await query.answer(
+                    f"⚠️ ʜᴇʟʟᴏ {query.from_user.first_name},\nᴛʜɪꜱ ɪꜱ ɴᴏᴛ ʏᴏᴜʀ ᴍᴏᴠɪᴇ ʀᴇQᴜᴇꜱᴛ,\nʀᴇQᴜᴇꜱᴛ ʏᴏᴜʀ'ꜱ...",
+                    show_alert=True,
+                )
+        except:
+            pass
+
         ident, key = query.data.split("#")
         settings = await get_settings(query.message.chat.id)
         pre = 'allfilesp' if settings['file_secure'] else 'allfiles'
@@ -1591,7 +1663,7 @@ async def cb_handler(client: Client, query: CallbackQuery):
     
     elif query.data.startswith("checksub"):
         try:
-            ident, kk, file_id = query.data.split("#")
+            ident, kk, file_id = query.data.split("#", 2)
             import logging
             log = logging.getLogger(__name__)
             
@@ -1661,6 +1733,7 @@ async def cb_handler(client: Client, query: CallbackQuery):
                 return res
                 
             elif kk == "all":
+                log.info(f"[TRY AGAIN START]\nuser_id={query.from_user.id}\ncallback_data={query.data}\nrequest_key={req_id}")
                 req = temp.GETALL.get(req_id)
                 if not req:
                     await query.answer("⚠️ Request expired.", show_alert=True)
@@ -1676,12 +1749,13 @@ async def cb_handler(client: Client, query: CallbackQuery):
                     
                 first_check = not await is_subscribed(client, query) if AUTH_CHANNEL else False
                 if AUTH_CHANNEL and first_check:
-                    log.info(f"[TRY AGAIN] user_id={query.from_user.id} membership=NOT_JOINED")
-                    log.info("[TRY AGAIN] alert_sent=NOT_JOINED")
+                    log.info(f"[TRY AGAIN MEMBERSHIP]\nstatus=NOT_JOINED\nalert=SHOW_ALERT")
                     await query.answer("⚠️ Please send a Join Request first.", show_alert=True)
                     return
                     
-                log.info(f"[TRY AGAIN] user_id={query.from_user.id} membership=JOINED")
+                log.info(f"[TRY AGAIN MEMBERSHIP]\nstatus=JOINED")
+                log.info(f"[TRY AGAIN DELIVERY]\nsource=getall_try_again\nrequest_key={req_id}\nfile_id={req_id}")
+                log.info(f"[TRY AGAIN DELIVERY END]")
                 if isinstance(req, dict):
                     req["state"] = "SENDING"
                     
@@ -1720,6 +1794,51 @@ async def cb_handler(client: Client, query: CallbackQuery):
                 if isinstance(req, dict):
                     req["state"] = "COMPLETED"
                     temp.GETALL.pop(req_id, None)
+                return res
+                
+            elif kk == "series":
+                cb_parts = file_id.split("#")
+                key = cb_parts[1] if len(cb_parts) > 1 else file_id
+                
+                req = getattr(temp, "SERIES_STATE", {}).get(key)
+                
+                # Check delivery status
+                if req and isinstance(req, dict):
+                    if req.get("delivery_status") == "completed":
+                        log.info(f"[TRY AGAIN]\nkey={key}\naction=ALREADY_COMPLETED")
+                        return await query.answer("✅ Files already sent.", show_alert=True)
+                    elif req.get("delivery_status") == "sending":
+                        return await query.answer("⏳ Files are already being sent.", show_alert=True)
+                
+                # Check channel membership
+                first_check = not await is_subscribed(client, query) if AUTH_CHANNEL else False
+                if AUTH_CHANNEL and first_check:
+                    log.info(f"[TRY AGAIN]\nkey={key}\nuser_id={query.from_user.id}\nmembership=NOT_JOINED")
+                    return await query.answer("⚠️ Please join the channel first.", show_alert=True)
+                
+                log.info(f"[TRY AGAIN]\nkey={key}\nuser_id={query.from_user.id}\nmembership=JOINED")
+                
+                if req and isinstance(req, dict):
+                    req["delivery_status"] = "sending"
+                
+                await query.answer()
+                
+                # Delete ONLY the Join Channel Request / Try Again message
+                log.info(f"[TRY AGAIN]\nkey={key}\naction=DELETE_JOIN_MESSAGE")
+                try:
+                    await query.message.delete()
+                except Exception as e:
+                    log.warning(f"[TRY AGAIN] Failed to delete join request message: {e}")
+                
+                # Send original requested Series files
+                log.info(f"[TRY AGAIN]\nkey={key}\naction=DELIVER_ORIGINAL_FILES")
+                query.data = file_id
+                from plugins.series import series_user_nav
+                res = await series_user_nav(client, query)
+                
+                if req and isinstance(req, dict):
+                    req["delivery_status"] = "completed"
+                log.info(f"[TRY AGAIN]\nkey={key}\naction=COMPLETED")
                 return res
         except Exception as e:
             import logging
