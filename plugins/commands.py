@@ -120,11 +120,6 @@ async def start(client, message):
             from database.series_db import get_temp_request
             data_obj = await get_temp_request(file_id)
             
-        req_found = bool(data_obj)
-        stored_user = data_obj.get("user", "Unknown") if isinstance(data_obj, dict) else "Unknown"
-        req_user = message.from_user.id
-        user_verified = (stored_user == req_user)
-        
         log.info(f"[SERIES PM START]\nrequest_key={file_id}\nuser_id={message.from_user.id}\naction=REQUEST_RECEIVED")
         
         if not data_obj:
@@ -142,7 +137,7 @@ async def start(client, message):
             elif data_obj.get("delivery_status") == "sending" or data_obj.get("state") == "SENDING":
                 return await message.reply("⏳ Files are already being sent.")
             
-            if "query" in data_obj:
+            if data_obj.get("type") == "series" or "query" in data_obj:
                 from utils import is_subscribed
                 if AUTH_CHANNEL and not await is_subscribed(client, message):
                     try:
@@ -172,18 +167,19 @@ async def start(client, message):
                     return
                 
                 data_obj["delivery_status"] = "sending"
+                data_obj["state"] = "SENDING"
                 from database.series_db import list_quality_episodes, get_series_files
                 from plugins.series import _extract_episode_number
                 import json, os
                 
-                query = data_obj["query"]
-                full_id = query["full_id"]
-                lang = query["lang"]
-                season = query["season"]
-                qual = query["qual"]
-                rating = query.get("rating", "N/A")
+                query_info = data_obj["query"]
+                full_id = query_info["full_id"]
+                lang = query_info["lang"]
+                season = query_info["season"]
+                qual = query_info["qual"]
+                rating = query_info.get("rating", "N/A")
                 
-                log.info(f"[ALL START] Calling existing PM Series file-send function")
+                log.info(f"[REQUEST FLOW]\nrequest_key={file_id}\nuser_id={message.from_user.id}\ntype=SERIES\nseries_id={full_id}\nlanguage={lang}\nseason={season}\nquality={qual}")
                 
                 files = []
                 episodes = await list_quality_episodes(full_id, lang, season, qual)
@@ -242,12 +238,16 @@ async def start(client, message):
                             f["total_episodes"] = len(all_eps)
                             files.append(f)
                             
-                log.info(f"[ALL START] EXPANDED FILES: {len(files)}")
+                log.info(f"[DELIVERY]\nrequest_key={file_id}\ntype=SERIES\nseries_id={full_id}\nquality={qual}\nfile_count={len(files)}")
                 for f in files:
                     log.info(f"[FILE SEND]\nsource=series_group_pm\nuser_id={message.from_user.id}\nfile_id={f.get('file_id')}\nfile_name={f.get('file_name', 'Unknown')}\nrequest_key={file_id}")
                 await send_series_files_to_user(client, message.from_user.id, files)
                 data_obj["delivery_status"] = "completed"
-                log.info(f"[ALL START] Existing PM Series send function completed")
+                data_obj["state"] = "COMPLETED"
+                log.info(f"[DELIVERY]\nrequest_key={file_id}\naction=COMPLETED")
+            else:
+                log.error(f"[DELIVERY ERROR]\nrequest_key={file_id}\nexpected_type=SERIES\nactual_type={type(data_obj)}")
+                await message.reply("⚠️ Invalid series request context.")
         return
     # --- END SERIES GROUP TO PM FLOW ---
     
