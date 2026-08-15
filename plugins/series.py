@@ -394,12 +394,15 @@ async def cmd_thumpseries(client: Client, message: Message):
     if not hasattr(temp, "SETTING_SERIES_THUMB"):
         temp.SETTING_SERIES_THUMB = {}
         
-    temp.SETTING_SERIES_THUMB[message.from_user.id] = True
-    await message.reply_text(
+    prompt = await message.reply_text(
         "Send me the image you want to use for Series Search.",
         reply_to_message_id=message.id,
         reply_markup=ForceReply(selective=True)
     )
+    temp.SETTING_SERIES_THUMB[message.from_user.id] = {
+        "command_msg_id": message.id,
+        "prompt_msg_id": prompt.id
+    }
 
 @Client.on_message(filters.command("delthumbseries") & filters.private, group=1)
 async def cmd_delthumbseries(client: Client, message: Message):
@@ -574,17 +577,41 @@ async def cmd_cancel(client: Client, message: Message):
      "del_caption", "json", "short", "carbon", "tts", "tr", "telegraph",
      "font", "pin", "unpin", "purge", "whois", "share", "audiobook",
      "stickerid", "video", "mp4", "covid", "stream", "index",
-     "setskip", "deleteall", "channel"]
+     "setskip", "deleteall", "channel",
+     "viewseries", "serieslist", "delseries", "seriesdel",
+     "thumpseries", "delthumbseries", "ed_series"]
 ), group=1)
 async def wizard_text_handler(client: Client, message: Message):
     uid = message.from_user.id
     
     if hasattr(temp, "SETTING_SERIES_THUMB") and temp.SETTING_SERIES_THUMB.get(uid):
+        thumb_state = temp.SETTING_SERIES_THUMB.get(uid)
         if message.photo:
             from database.series_db import save_series_thumbnail
             await save_series_thumbnail(message.photo.file_id)
             del temp.SETTING_SERIES_THUMB[uid]
-            return await message.reply_text("✅ Series search thumbnail updated successfully.")
+            
+            cmd_msg_id = thumb_state.get("command_msg_id") if isinstance(thumb_state, dict) else None
+            prompt_msg_id = thumb_state.get("prompt_msg_id") if isinstance(thumb_state, dict) else None
+            
+            try:
+                await client.delete_messages(message.chat.id, [
+                    m_id for m_id in [cmd_msg_id, prompt_msg_id, message.id] if m_id
+                ])
+            except Exception:
+                pass
+                
+            success_msg = await message.reply_text("✅ Series thumbnail updated successfully!")
+            
+            import asyncio
+            async def del_success(m):
+                await asyncio.sleep(5)
+                try:
+                    await m.delete()
+                except Exception:
+                    pass
+            asyncio.create_task(del_success(success_msg))
+            return
         else:
             return await message.reply_text("⚠️ Please send a PHOTO to set as thumbnail, or /cancel to abort.")
 
