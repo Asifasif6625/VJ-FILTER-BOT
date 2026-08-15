@@ -173,6 +173,7 @@ async def start(client, message):
                 
                 data_obj["delivery_status"] = "sending"
                 from database.series_db import list_quality_episodes, get_series_files
+                from plugins.series import _extract_episode_number
                 import json, os
                 
                 query = data_obj["query"]
@@ -186,7 +187,14 @@ async def start(client, message):
                 
                 files = []
                 episodes = await list_quality_episodes(full_id, lang, season, qual)
-                for i, ep in enumerate(episodes, start=1):
+                sorted_episodes = sorted([
+                    int(e) for e in episodes 
+                    if (isinstance(e, int) or (isinstance(e, str) and str(e).isdigit())) and int(e) > 0
+                ])
+                other_eps = [e for e in episodes if e not in sorted_episodes]
+                all_eps = sorted_episodes + other_eps
+
+                for i, ep in enumerate(all_eps, start=1):
                     ep_files = await get_series_files(full_id, lang, season, ep, qual)
                     for f in ep_files:
                         if f.get("is_batch"):
@@ -195,16 +203,30 @@ async def start(client, message):
                                 with open(file_path, "r", encoding="utf-8") as json_file:
                                     batch_files = json.loads(json_file.read())
                                 os.remove(file_path)
-                                for bf in batch_files:
+                                
+                                def _get_batch_ep(bf, fallback):
+                                    if "episode" in bf and str(bf["episode"]).isdigit() and int(bf["episode"]) > 0:
+                                        return int(bf["episode"])
+                                    if "episode_index" in bf and str(bf["episode_index"]).isdigit() and int(bf["episode_index"]) > 0:
+                                        return int(bf["episode_index"])
+                                    extracted = _extract_episode_number(bf.get("file_name", ""))
+                                    if extracted is not None:
+                                        return extracted
+                                    return fallback
+                                
+                                batch_files_sorted = sorted(batch_files, key=lambda b: _get_batch_ep(b, 99999))
+                                for b_idx, bf in enumerate(batch_files_sorted, start=1):
+                                    bf_ep = _get_batch_ep(bf, b_idx)
                                     bf["is_series"] = True
                                     bf["series_id"] = full_id
                                     bf["series_rating"] = rating
                                     bf["language"] = lang
                                     bf["season"] = season
                                     bf["quality"] = qual
-                                    bf["episode_index"] = bf.get("episode", i)
-                                    bf["total_episodes"] = f.get("total_episodes", len(batch_files))
-                                    log.info(f"[SERIES BATCH]\nseries_id={full_id}\nepisode={bf.get('episode', i)}\nlanguage={lang}\nquality={qual}")
+                                    bf["episode"] = bf_ep
+                                    bf["episode_index"] = bf_ep
+                                    bf["total_episodes"] = f.get("total_episodes", len(batch_files_sorted))
+                                    log.info(f"[SERIES BATCH]\nseries_id={full_id}\nepisode={bf_ep}\nlanguage={lang}\nquality={qual}")
                                     files.append(bf)
                             except Exception as e:
                                 log.error(f"Failed to fetch JSON batch: {e}")
@@ -215,8 +237,9 @@ async def start(client, message):
                             f["language"] = lang
                             f["season"] = season
                             f["quality"] = qual
-                            f["episode_index"] = i
-                            f["total_episodes"] = len(episodes)
+                            f["episode"] = ep if (isinstance(ep, int) and ep > 0) else i
+                            f["episode_index"] = ep if (isinstance(ep, int) and ep > 0) else i
+                            f["total_episodes"] = len(all_eps)
                             files.append(f)
                             
                 log.info(f"[ALL START] EXPANDED FILES: {len(files)}")
@@ -1614,13 +1637,11 @@ async def send_series_files_to_user(client, user_id, files, query=None):
         except Exception:
             pass
 
+        from plugins.series import _extract_episode_number
         fname = f.get("file_name", "")
-        m = re.findall(r"(?:e|ep|episode)[\s._-]*(\d+)", fname, re.IGNORECASE)
-        if m:
-            return int(m[0])
-        m2 = re.findall(r"\b(\d+)\b", fname)
-        if m2:
-            return int(m2[-1])
+        extracted = _extract_episode_number(fname)
+        if extracted is not None and extracted > 0:
+            return extracted
         return 99999
 
     # 1. Sort files numerically by episode number
@@ -1638,9 +1659,8 @@ async def send_series_files_to_user(client, user_id, files, query=None):
         ordered_files.append(f)
         
     sorted_order = [_get_episode_num(f) for f in ordered_files]
-    log.info(f"[SERIES DELIVERY]\naction=FILES_SORTED\norder={sorted_order}")
 
-    # 3. Extract common Series metadata context from first file
+    # 3. Extract common Series metadata context
     first_file = ordered_files[0] if ordered_files else {}
     is_series = any(f.get("is_series") for f in ordered_files)
     
@@ -1650,7 +1670,7 @@ async def send_series_files_to_user(client, user_id, files, query=None):
     quality = first_file.get("quality", "")
 
     # 4. Send metadata ONCE before sending files
-    if is_series or (language and language != "Unknown" and quality):
+    if is_series and language and quality:
         if str(season).isdigit():
             s_num = int(season)
             series_tag = f"#Series {s_num:02d}" if s_num > 0 else "#Series 01"
@@ -1666,6 +1686,7 @@ async def send_series_files_to_user(client, user_id, files, query=None):
         metadata_text = f"{series_tag}\n{lang_tag}\n{qual_tag}"
         
         log.info(f"[SERIES DELIVERY]\nrequest_id={first_file.get('file_id', '')}\nseries_id={series_id}\nseason={season}\nlanguage={language}\nquality={quality}\ntotal_files={len(ordered_files)}")
+        log.info(f"[SERIES DELIVERY]\naction=EPISODES_SORTED\norder={sorted_order}")
         log.info(f"[SERIES DELIVERY]\naction=METADATA_SENT\nmetadata={metadata_text.replace(chr(10), ' ')}")
         
         try:
