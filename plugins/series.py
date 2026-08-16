@@ -1849,11 +1849,16 @@ async def process_series_search(client: Client, message: Message, txt: str, repl
     start_time = time.time()
 
     matches = await search_series(txt)
-    logger.info(f"[SERIES ROUTING] query={txt}")
-    logger.info(f"[SERIES ROUTING] raw_matches={len(matches) if matches else 0}")
+    candidate_count = len(matches) if matches else 0
     
     if not matches:
-        logger.info("[SERIES ROUTING] decision=MOVIE_FILTER")
+        logger.info(
+            f"[SERIES SEARCH]\n"
+            f"query={txt}\n"
+            f"candidate_count={candidate_count}\n"
+            f"matched_series=0\n"
+            f"decision=MOVIE_FILTER"
+        )
         return False
 
     seen = set()
@@ -1865,7 +1870,17 @@ async def process_series_search(client: Client, message: Message, txt: str, repl
             seen.add(name_lower)
             unique_matches.append(m)
 
-    logger.info(f"[SERIES ROUTING] unique_matches={len(unique_matches)}")
+    matched_names = [m.get("name", "") for m in unique_matches]
+    decision = "SERIES_DIRECT" if len(unique_matches) == 1 else "SERIES_SUGGESTIONS"
+
+    logger.info(
+        f"[SERIES SEARCH]\n"
+        f"query={txt}\n"
+        f"candidate_count={candidate_count}\n"
+        f"matched_series={len(unique_matches)}\n"
+        f"series_names={matched_names}\n"
+        f"decision={decision}"
+    )
 
     remaining_seconds = "{:.2f}".format(time.time() - start_time)
 
