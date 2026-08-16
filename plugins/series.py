@@ -733,8 +733,12 @@ async def wizard_text_handler(client: Client, message: Message):
     if state == S_NAME:
         if not text: return
         
-        from database.series_db import get_series_by_name, _normalize
-        normalized = _normalize(text)
+        from database.series_db import get_series_by_name, _normalize, clean_series_title
+        cleaned_name = clean_series_title(text)
+        if not cleaned_name:
+            return await message.reply_text("⚠️ Invalid series name. Please send a valid series title.")
+            
+        normalized = _normalize(cleaned_name)
         existing = await get_series_by_name(normalized)
         
         if existing:
@@ -749,10 +753,10 @@ async def wizard_text_handler(client: Client, message: Message):
                 parse_mode=enums.ParseMode.HTML
             )
             
-        wiz["name"] = text
+        wiz["name"] = cleaned_name
         wiz["state"] = S_YEAR
         await message.reply_text(
-            f"✅ Series name: <b>{text}</b>\n\nPlease send the <b>year</b> (e.g. 2017).",
+            f"✅ Series name: <b>{cleaned_name}</b>\n\nPlease send the <b>year</b> (e.g. 2017).",
             reply_to_message_id=message.id,
             reply_markup=ForceReply(selective=True),
             parse_mode=enums.ParseMode.HTML,
