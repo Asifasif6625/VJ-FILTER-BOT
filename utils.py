@@ -66,14 +66,17 @@ async def pub_is_subscribed(bot, query, channel):
     return btn
 
 async def is_subscribed(bot, query):
+    user_id = query if isinstance(query, int) else getattr(getattr(query, "from_user", None), "id", getattr(query, "id", None))
+    if not user_id:
+        return False
     if REQUEST_TO_JOIN_MODE == True and join_db().isActive():
         try:
-            user = await join_db().get_user(query.from_user.id)
-            if user and user["user_id"] == query.from_user.id:
+            user = await join_db().get_user(user_id)
+            if user and user["user_id"] == user_id:
                 return True
             else:
                 try:
-                    user_data = await bot.get_chat_member(AUTH_CHANNEL, query.from_user.id)
+                    user_data = await bot.get_chat_member(AUTH_CHANNEL, user_id)
                 except UserNotParticipant:
                     pass
                 except Exception as e:
@@ -86,7 +89,7 @@ async def is_subscribed(bot, query):
             return False
     else:
         try:
-            user = await bot.get_chat_member(AUTH_CHANNEL, query.from_user.id)
+            user = await bot.get_chat_member(AUTH_CHANNEL, user_id)
         except UserNotParticipant:
             pass
         except Exception as e:
