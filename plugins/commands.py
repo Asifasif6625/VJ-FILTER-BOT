@@ -131,7 +131,14 @@ async def process_series_start(client: Client, user_id: int, req_key: str, messa
             log.info(f"[SERIES START]\nmembership=JOINED")
             
     from plugins.series import deliver_series_request
-    await deliver_series_request(client, req_key, user_id, query=None)
+    import time
+    timing_dict = {
+        "start": time.perf_counter(),
+        "received": time.perf_counter(),
+        "loaded": time.perf_counter(),
+        "membership": time.perf_counter()
+    }
+    await deliver_series_request(client, req_key, user_id, query=None, timing=timing_dict)
 
 
 

@@ -2254,42 +2254,47 @@ async def resolve_exact_series_files(
         all_eps = sorted_episodes + other_eps
         total_eps = len(all_eps)
 
-        for i, ep_val in enumerate(all_eps, start=1):
-            ep_files = await get_series_files(full_id, lang, season, ep_val, qual)
-            log.info(
-                f"[SERIES EPISODE TRACE]\n"
-                f"episode={ep_val}\n"
-                f"file_count={len(ep_files)}"
-            )
-            for f in ep_files:
-                if f.get("is_batch"):
-                    try:
-                        file_path = await client.download_media(f["file_id"])
-                        with open(file_path, "r", encoding="utf-8") as json_file:
-                            batch_files = json.loads(json_file.read())
-                        os.remove(file_path)
+        if all_eps:
+            all_ep_files = await asyncio.gather(*[
+                get_series_files(full_id, lang, season, ep_val, qual)
+                for ep_val in all_eps
+            ])
 
-                        for b_idx, bf in enumerate(batch_files, start=1):
-                            validated_doc = await _validate_and_get_batch_file(bf, b_idx)
-                            if validated_doc:
-                                validated_doc["total_episodes"] = total_eps
-                                files.append(validated_doc)
-                    except Exception as e:
-                        log.error(f"Failed to fetch JSON batch: {e}")
-                else:
-                    f_sid = str(f.get("series_id", ""))
-                    f_lang = str(f.get("language", ""))
-                    f_season = int(f.get("season", 0))
-                    f_qual = str(f.get("quality", ""))
-                    if await _match_series_id(f_sid, full_id) and f_lang == str(lang) and f_season == int(season) and f_qual == str(qual):
-                        doc = dict(f)
-                        doc["is_series"] = True
-                        doc["series_rating"] = rating
-                        doc["episode"] = ep_val if (isinstance(ep_val, int) and ep_val > 0) else i
-                        doc["episode_index"] = ep_val if (isinstance(ep_val, int) and ep_val > 0) else i
-                        doc["total_episodes"] = total_eps
-                        log.info(f"[SERIES DELIVERY ACCEPTED]\nsource=SAVED_SERIES_DATABASE\nfile_id={doc.get('file_id')}\nepisode={doc['episode']}")
-                        files.append(doc)
+            for i, (ep_val, ep_files) in enumerate(zip(all_eps, all_ep_files), start=1):
+                log.info(
+                    f"[SERIES EPISODE TRACE]\n"
+                    f"episode={ep_val}\n"
+                    f"file_count={len(ep_files)}"
+                )
+                for f in ep_files:
+                    if f.get("is_batch"):
+                        try:
+                            file_path = await client.download_media(f["file_id"])
+                            with open(file_path, "r", encoding="utf-8") as json_file:
+                                batch_files = json.loads(json_file.read())
+                            os.remove(file_path)
+
+                            for b_idx, bf in enumerate(batch_files, start=1):
+                                validated_doc = await _validate_and_get_batch_file(bf, b_idx)
+                                if validated_doc:
+                                    validated_doc["total_episodes"] = total_eps
+                                    files.append(validated_doc)
+                        except Exception as e:
+                            log.error(f"Failed to fetch JSON batch: {e}")
+                    else:
+                        f_sid = str(f.get("series_id", ""))
+                        f_lang = str(f.get("language", ""))
+                        f_season = int(f.get("season", 0))
+                        f_qual = str(f.get("quality", ""))
+                        if await _match_series_id(f_sid, full_id) and f_lang == str(lang) and f_season == int(season) and f_qual == str(qual):
+                            doc = dict(f)
+                            doc["is_series"] = True
+                            doc["series_rating"] = rating
+                            doc["episode"] = ep_val if (isinstance(ep_val, int) and ep_val > 0) else i
+                            doc["episode_index"] = ep_val if (isinstance(ep_val, int) and ep_val > 0) else i
+                            doc["total_episodes"] = total_eps
+                            log.info(f"[SERIES DELIVERY ACCEPTED]\nsource=SAVED_SERIES_DATABASE\nfile_id={doc.get('file_id')}\nepisode={doc['episode']}")
+                            files.append(doc)
 
     # If episode-loop produced no files, attempt direct query for all files in this season & quality
     if not files and (ep is None or (isinstance(ep, int) and ep <= 0)):
@@ -2395,15 +2400,18 @@ async def resolve_exact_series_files(
     return unique_files
 
 
-async def deliver_series_request(client: Client, req_key: str, user_id: int, query: CallbackQuery = None) -> bool:
+async def deliver_series_request(client: Client, req_key: str, user_id: int, query: CallbackQuery = None, timing: dict = None) -> bool:
     """
     Single unified Series file delivery engine.
     Retrieves the exact request context for `req_key`, validates membership and ownership,
     verifies file attributes, and sends ONLY the exact files associated with that request.
     """
     from utils import temp
-    import logging
+    import logging, time
     log = logging.getLogger(__name__)
+
+    t0 = timing.get("start") if timing and "start" in timing else time.perf_counter()
+    t_received = time.perf_counter()
 
     log.info(f"[SERIES DELIVERY]\naction=START\nrequest_key={req_key}")
     log.info(f"[SERIES DELIVERY]\nrequest_key={req_key}\naction=START")
@@ -2418,6 +2426,8 @@ async def deliver_series_request(client: Client, req_key: str, user_id: int, que
         if req:
             temp.SERIES_STATE[req_key] = req
             temp.GETALL[req_key] = req
+
+    t_loaded = time.perf_counter()
 
     if not req:
         log.warning(f"[SERIES DELIVERY] Request expired for key={req_key}")
@@ -2459,6 +2469,8 @@ async def deliver_series_request(client: Client, req_key: str, user_id: int, que
     req["delivery_status"] = "sending"
     req["state"] = "SENDING"
 
+    t_membership = time.perf_counter()
+
     query_ctx = req.get("query", {}) if isinstance(req.get("query"), dict) else {}
     full_id = query_ctx.get("full_id") or req.get("full_id") or req.get("series_id")
     if not full_id and req.get("sid"):
@@ -2469,6 +2481,8 @@ async def deliver_series_request(client: Client, req_key: str, user_id: int, que
     ep = req.get("episode")
     rating = query_ctx.get("rating") or req.get("rating", "N/A")
     path = req.get("path", "DIRECT" if req.get("is_direct") else "SUGGESTION")
+
+    t_resolved = time.perf_counter()
 
     log.info(
         f"[SERIES DELIVERY REQUEST]\n"
@@ -2488,6 +2502,8 @@ async def deliver_series_request(client: Client, req_key: str, user_id: int, que
     if not files:
         files = await resolve_exact_series_files(client, full_id, lang, season, qual, ep, rating, req_key=req_key, path=path)
         req["files"] = files
+
+    t_files = time.perf_counter()
 
     req_file_ids = set(req.get("file_ids") or [f.get("file_id") for f in files if f.get("file_id")])
 
@@ -2523,6 +2539,8 @@ async def deliver_series_request(client: Client, req_key: str, user_id: int, que
             f"source=EXACT_REQUEST_FILE_ID"
         )
         verified_files.append(f)
+
+    t_verified = time.perf_counter()
 
     log.info(
         f"[SERIES FINAL FILE CHECK]\n"
@@ -2584,13 +2602,29 @@ async def deliver_series_request(client: Client, req_key: str, user_id: int, que
             pass
 
     # 7. Deliver files via send_series_files_to_user
+    t_send_start = time.perf_counter()
     from plugins.commands import send_series_files_to_user
     log.info(f"[SERIES DELIVERY] Sending {len(verified_files)} verified files for key={req_key} to user_id={user_id}")
     await send_series_files_to_user(client, user_id, verified_files, query=query)
+    t_send_end = time.perf_counter()
     
     req["delivery_status"] = "completed"
     req["state"] = "COMPLETED"
     log.info(f"[SERIES DELIVERY]\naction=COMPLETED\nrequest_key={req_key}")
+
+    log.info(
+        f"[SERIES DELIVERY TIMING]\n"
+        f"request_received={t_received - t0:.3f}s\n"
+        f"request_loaded={t_loaded - t0:.3f}s\n"
+        f"membership_checked={t_membership - t0:.3f}s\n"
+        f"series_resolved={t_resolved - t0:.3f}s\n"
+        f"episodes_loaded={t_files - t_resolved:.3f}s\n"
+        f"files_loaded={t_files - t0:.3f}s\n"
+        f"files_verified={t_verified - t0:.3f}s\n"
+        f"send_started={t_send_start - t0:.3f}s\n"
+        f"send_completed={t_send_end - t0:.3f}s\n"
+        f"total_time={t_send_end - t0:.3f}s"
+    )
     return True
 
 
