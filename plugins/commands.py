@@ -53,6 +53,25 @@ async def process_series_start(client: Client, user_id: int, req_key: str, messa
             await client.send_message(user_id, msg_text)
         return
         
+    full_id = req.get("full_id") or req.get("series_id")
+    if full_id and len(str(full_id)) != 24:
+        from plugins.series import _get_full_id
+        full_id = await _get_full_id(str(full_id))
+        if full_id:
+            req["full_id"] = full_id
+            req["series_id"] = full_id
+
+    log.info(
+        f"[SERIES START TRACE]\n"
+        f"request_key={req_key}\n"
+        f"user_id={user_id}\n"
+        f"sid={req.get('sid')}\n"
+        f"full_id={full_id}\n"
+        f"language={req.get('language')}\n"
+        f"season={req.get('season')}\n"
+        f"quality={req.get('quality')}"
+    )
+
     owner = req.get("user_id", req.get("user"))
     if owner and int(owner) != int(user_id):
         log.warning(f"[SERIES START]\naction=OWNERSHIP_MISMATCH\nrequest_key={req_key}\nowner={owner}\nuser_id={user_id}")

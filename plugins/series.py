@@ -2112,6 +2112,14 @@ async def resolve_exact_series_files(
                     files.append(doc)
     else:
         episodes = await list_quality_episodes(full_id, lang, season, qual)
+        log.info(
+            f"[SERIES DB TRACE]\n"
+            f"full_id={full_id}\n"
+            f"language={lang}\n"
+            f"season={season}\n"
+            f"quality={qual}\n"
+            f"episodes={episodes}"
+        )
         sorted_episodes = sorted([
             int(e) for e in episodes 
             if (isinstance(e, int) or (isinstance(e, str) and str(e).isdigit())) and int(e) > 0
@@ -2122,6 +2130,11 @@ async def resolve_exact_series_files(
 
         for i, ep_val in enumerate(all_eps, start=1):
             ep_files = await get_series_files(full_id, lang, season, ep_val, qual)
+            log.info(
+                f"[SERIES EPISODE TRACE]\n"
+                f"episode={ep_val}\n"
+                f"file_count={len(ep_files)}"
+            )
             for f in ep_files:
                 if f.get("is_batch"):
                     try:
@@ -2188,25 +2201,29 @@ async def resolve_exact_series_files(
 
     if not unique_files:
         log.warning(
-            f"[SERIES RESOLVER ZERO]\n"
-            f"requested_full_id={full_id}\n"
+            f"[SERIES ZERO FILE DEBUG]\n"
+            f"request_key={req_key}\n"
+            f"source={path}\n"
+            f"sid={req_key}\n"
+            f"full_id={full_id}\n"
             f"language={lang}\n"
             f"season={season}\n"
             f"quality={qual}\n"
-            f"episode={ep}"
+            f"episode={ep}\n"
+            f"available_episodes={episodes if 'episodes' in locals() else None}"
         )
         try:
             from database.series_db import sfiles_col
             candidates = sfiles_col.find({"language": lang, "season": int(season), "quality": qual})
             async for c in candidates:
                 log.info(
-                    f"[SERIES CANDIDATE]\n"
-                    f"candidate_series_id={c.get('series_id')}\n"
-                    f"candidate_language={c.get('language')}\n"
-                    f"candidate_season={c.get('season')}\n"
-                    f"candidate_quality={c.get('quality')}\n"
-                    f"candidate_episode={c.get('episode')}\n"
-                    f"candidate_file_id={c.get('file_id')}"
+                    f"[SERIES DB CANDIDATES]\n"
+                    f"stored_series_id={c.get('series_id')}\n"
+                    f"stored_language={c.get('language')}\n"
+                    f"stored_season={c.get('season')}\n"
+                    f"stored_episode={c.get('episode')}\n"
+                    f"stored_quality={c.get('quality')}\n"
+                    f"stored_file_id={c.get('file_id')}"
                 )
         except Exception:
             pass
@@ -2242,6 +2259,11 @@ async def deliver_series_request(client: Client, req_key: str, user_id: int, que
         log.warning(f"[SERIES DELIVERY] Request expired for key={req_key}")
         if query:
             await query.answer("⚠️ Request expired. Please search again.", show_alert=True)
+        else:
+            try:
+                await client.send_message(user_id, "⚠️ Request expired. Please search the series again.")
+            except Exception:
+                pass
         return False
 
     # 2. Check ownership
@@ -2250,6 +2272,11 @@ async def deliver_series_request(client: Client, req_key: str, user_id: int, que
         log.warning(f"[SERIES DELIVERY] Ownership mismatch for key={req_key}: owner={owner}, actual={user_id}")
         if query:
             await query.answer("⚠️ This is not your button.", show_alert=True)
+        else:
+            try:
+                await client.send_message(user_id, "⚠️ This link is not for you!")
+            except Exception:
+                pass
         return False
 
     # 3. Check delivery status
@@ -2339,6 +2366,11 @@ async def deliver_series_request(client: Client, req_key: str, user_id: int, que
         log.info(f"[SERIES DELIVERY]\naction=FILES_FOUND\ncount=0\nrequest_key={req_key}")
         if query:
             await query.answer("⚠️ No files found for this request.", show_alert=True)
+        else:
+            try:
+                await client.send_message(user_id, "⚠️ No files found for this request.")
+            except Exception:
+                pass
         return False
 
     log.info(f"[SERIES DELIVERY]\naction=FILES_FOUND\ncount={len(verified_files)}\nrequest_key={req_key}")
@@ -2400,8 +2432,9 @@ async def series_user_nav(client: Client, query: CallbackQuery):
 
     parts = query.data.split("#")
     
-    if len(parts) < 2: return await query.answer()
-
+    if len(parts) < 2:
+        return await query.answer("⚠️ Invalid request.", show_alert=True)
+        
     key = parts[1]
     if key == "close":
         return await query.message.delete()
@@ -2430,6 +2463,11 @@ async def series_user_nav(client: Client, query: CallbackQuery):
     
     full_id = await _get_full_id(sid)
     if not full_id:
+        log.error(
+            f"[SERIES ID ERROR]\n"
+            f"sid={sid}\n"
+            f"full_id=None"
+        )
         return await query.answer("⚠️ Unable to process this Series request. Please search again.", show_alert=True)
     
     series = await get_series(full_id)
@@ -2453,6 +2491,28 @@ async def series_user_nav(client: Client, query: CallbackQuery):
             chat_type = "PRIVATE" if query.message.chat.type == enums.ChatType.PRIVATE else "GROUP"
             path_type = req.get("path", "DIRECT" if req.get("is_direct") else "SUGGESTION")
             is_direct_val = bool(req.get("is_direct", (path_type == "DIRECT")))
+
+            # Trace working suggestion vs direct test
+            if path_type == "SUGGESTION":
+                log.info(
+                    f"[SERIES SUGGESTION WORKING]\n"
+                    f"sid={sid}\n"
+                    f"full_id={full_id}\n"
+                    f"language={lang}\n"
+                    f"season={season}\n"
+                    f"quality={qual}\n"
+                    f"episodes={ep}"
+                )
+            else:
+                log.info(
+                    f"[SERIES DIRECT TEST]\n"
+                    f"sid={sid}\n"
+                    f"full_id={full_id}\n"
+                    f"language={lang}\n"
+                    f"season={season}\n"
+                    f"quality={qual}\n"
+                    f"episodes={ep}"
+                )
 
             # ── 10-Second Cooldown Protection (PM Series Quality Button) ──
             if query.message.chat.type == enums.ChatType.PRIVATE:
@@ -2484,31 +2544,44 @@ async def series_user_nav(client: Client, query: CallbackQuery):
             
             req_key = str(_uuid.uuid4())[:8]
 
+            if path_type == "DIRECT" or is_direct_val:
+                log.info(
+                    f"[SERIES DIRECT TRACE]\n"
+                    f"user_id={query.from_user.id}\n"
+                    f"sid={sid}\n"
+                    f"full_id={full_id}\n"
+                    f"language={lang}\n"
+                    f"season={season}\n"
+                    f"quality={qual}\n"
+                    f"request_key={req_key}"
+                )
+
             req_data = {
                 "request_key": req_key,
-                "user_id": query.from_user.id,
                 "user": query.from_user.id,
-                "request_type": "series",
+                "user_id": query.from_user.id,
                 "type": "series",
-                "source": "series_pm" if query.message.chat.type == enums.ChatType.PRIVATE else "series_group",
+                "request_type": "series",
+                "source": "DIRECT" if (path_type == "DIRECT" or is_direct_val) else "SUGGESTION",
                 "path": path_type,
                 "is_direct": is_direct_val,
-                "series_id": sid,
+                "sid": sid,
+                "series_id": full_id,
                 "full_id": full_id,
                 "language": lang,
-                "season": season,
+                "season": int(season),
                 "quality": qual,
-                "episode": ep,
-                "rating": rating,
+                "episode": ep if (ep is not None and ep > 0) else None,
+                "rating": series.get("rating", "N/A"),
                 "delivery_status": "pending",
                 "state": "PENDING",
                 "created_at": time.time(),
                 "query": {
                     "full_id": full_id,
                     "lang": lang,
-                    "season": season,
+                    "season": int(season),
                     "qual": qual,
-                    "rating": rating
+                    "rating": series.get("rating", "N/A")
                 }
             }
             _temp.SERIES_STATE[req_key] = req_data
