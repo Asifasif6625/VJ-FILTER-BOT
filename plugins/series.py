@@ -2291,6 +2291,44 @@ async def resolve_exact_series_files(
                         log.info(f"[SERIES DELIVERY ACCEPTED]\nsource=SAVED_SERIES_DATABASE\nfile_id={doc.get('file_id')}\nepisode={doc['episode']}")
                         files.append(doc)
 
+    # If episode-loop produced no files, attempt direct query for all files in this season & quality
+    if not files and (ep is None or (isinstance(ep, int) and ep <= 0)):
+        try:
+            from database.series_db import sfiles_col
+            direct_cursor = sfiles_col.find({
+                "series_id": _sid_query(full_id),
+                "language": lang,
+                "season": {"$in": [int(season), str(season)]},
+                "quality": qual
+            })
+            direct_files = [doc async for doc in direct_cursor]
+            for i, f in enumerate(direct_files, start=1):
+                if f.get("is_batch"):
+                    try:
+                        file_path = await client.download_media(f["file_id"])
+                        with open(file_path, "r", encoding="utf-8") as json_file:
+                            batch_files = json.loads(json_file.read())
+                        os.remove(file_path)
+
+                        for b_idx, bf in enumerate(batch_files, start=1):
+                            validated_doc = await _validate_and_get_batch_file(bf, b_idx)
+                            if validated_doc:
+                                validated_doc["total_episodes"] = len(direct_files)
+                                files.append(validated_doc)
+                    except Exception as e:
+                        log.error(f"Failed to fetch JSON batch: {e}")
+                else:
+                    doc = dict(f)
+                    doc["is_series"] = True
+                    doc["series_rating"] = rating
+                    doc["episode"] = int(f.get("episode", i)) if str(f.get("episode", "")).isdigit() else i
+                    doc["episode_index"] = doc["episode"]
+                    doc["total_episodes"] = len(direct_files)
+                    log.info(f"[SERIES DELIVERY ACCEPTED]\nsource=SAVED_SERIES_DATABASE_DIRECT\nfile_id={doc.get('file_id')}\nepisode={doc['episode']}")
+                    files.append(doc)
+        except Exception as e:
+            log.error(f"Fallback direct file query failed: {e}")
+
     # Deduplicate exact duplicate file IDs
     seen = set()
     unique_files = []
@@ -2463,7 +2501,7 @@ async def deliver_series_request(client: Client, req_key: str, user_id: int, que
         f_id = f.get("file_id")
 
         # Check matching context
-        if not await _match_series_id(f_sid, full_id) or f_lang != str(lang) or f_season != int(season) or f_qual != str(qual):
+        if not await _match_series_id(f_sid, full_id) or str(f_lang).strip().lower() != str(lang).strip().lower() or int(f_season) != int(season) or str(f_qual).strip().lower() != str(qual).strip().lower():
             log.warning(f"[SERIES DELIVERY REJECTED] reason=NOT_IN_REQUEST series_id={f_sid} season={f_season} lang={f_lang} qual={f_qual} file_id={f_id} file_name={f.get('file_name')}")
             continue
 
