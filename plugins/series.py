@@ -2349,21 +2349,7 @@ async def series_user_nav(client: Client, query: CallbackQuery):
             
             rating = series.get("rating", "N/A")
             chat_type = "PRIVATE" if query.message.chat.type == enums.ChatType.PRIVATE else "GROUP"
-            
             path_type = req.get("path", "DIRECT" if req.get("is_direct") else "SUGGESTION")
-            
-            log.info(
-                f"[SERIES QUALITY ROUTING]\n"
-                f"path={path_type}\n"
-                f"chat_type={chat_type}\n"
-                f"user_id={query.from_user.id}\n"
-                f"source_key={key}\n"
-                f"sid={sid}\n"
-                f"full_id={full_id}\n"
-                f"language={lang}\n"
-                f"season={season}\n"
-                f"quality={qual}"
-            )
             
             # ── 10-Second Cooldown Protection (PM Series Quality Button) ──
             if query.message.chat.type == enums.ChatType.PRIVATE:
@@ -2433,55 +2419,43 @@ async def series_user_nav(client: Client, query: CallbackQuery):
                 log.error(f"[SERIES GROUP QUALITY]\naction=REQUEST_SAVE_VERIFY_FAILED\nrequest_key={req_key}\nerror={ex}")
 
             log.info(
-                f"[SERIES QUALITY REQUEST]\n"
-                f"request_key={req_key}\n"
-                f"path={path_type}"
-            )
-
-            # Group Quality click -> Redirect to PM with /start all_<req_key>
-            if query.message.chat.type != enums.ChatType.PRIVATE:
-                bot_username = temp.U_NAME if (hasattr(temp, "U_NAME") and temp.U_NAME) else getattr(getattr(client, "me", None), "username", None)
-                if bot_username:
-                    bot_username = str(bot_username).lstrip("@")
-                else:
-                    bot_username = "Bot"
-
-                start_url = f"https://t.me/{bot_username}?start=all_{req_key}"
-                log.info(
-                    f"[SERIES GROUP QUALITY]\n"
-                    f"action=OPEN_PM\n"
-                    f"request_key={req_key}\n"
-                    f"start_url={start_url}"
-                )
-                try:
-                    return await query.answer(url=start_url)
-                except Exception as e:
-                    log.warning(f"[SERIES GROUP QUALITY] query.answer(url=start_url) failed: {e}. Replying with fallback button.")
-                    return await query.message.reply_text(
-                        "📩 Open bot to get your requested Series files:",
-                        reply_markup=InlineKeyboardMarkup([
-                            [InlineKeyboardButton("📂 Open Bot", url=start_url)]
-                        ])
-                    )
-                
-            # Private Chat: Answer callback immediately and route to /start all_<req_key> flow
-            await query.answer()
-            log.info(
-                f"[SERIES DIRECT QUALITY]\n"
-                f"action=ROUTED_TO_PM\n"
+                f"[SERIES QUALITY ROUTING]\n"
+                f"path={path_type}\n"
+                f"chat_type={chat_type}\n"
+                f"user_id={query.from_user.id}\n"
+                f"sid={sid}\n"
+                f"full_id={full_id}\n"
+                f"language={lang}\n"
+                f"season={season}\n"
+                f"quality={qual}\n"
                 f"request_key={req_key}"
             )
-            from plugins.commands import process_series_start
-            async def _safe_start():
-                try:
-                    await process_series_start(client, query.from_user.id, req_key)
-                except Exception as ex:
-                    log.exception(f"[SERIES START ERROR] Failed processing start for req_key={req_key}: {ex}")
-            asyncio.create_task(_safe_start())
-            return
+
+            bot_username = temp.U_NAME if (hasattr(temp, "U_NAME") and temp.U_NAME) else getattr(getattr(client, "me", None), "username", None)
+            if bot_username:
+                bot_username = str(bot_username).lstrip("@")
+            else:
+                bot_username = "Bot"
+
+            start_url = f"https://t.me/{bot_username}?start=all_{req_key}"
+            log.info(
+                f"[SERIES QUALITY ROUTING]\n"
+                f"action=OPEN_PM\n"
+                f"start_url={start_url}"
+            )
+            try:
+                return await query.answer(url=start_url)
+            except Exception as e:
+                log.warning(f"[SERIES QUALITY ROUTING] query.answer(url=start_url) failed: {e}. Replying with fallback button.")
+                return await query.message.reply_text(
+                    "📩 Open bot to get your requested Series files:",
+                    reply_markup=InlineKeyboardMarkup([
+                        [InlineKeyboardButton("📂 Open Bot", url=start_url)]
+                    ])
+                )
         except Exception as e:
-            log.error(f"[SERIES DIRECT QUALITY ERROR] {e}", exc_info=True)
-            return await query.answer("⚠️ Unable to process this Series request. Please search again.", show_alert=True)
+            log.exception(f"[SERIES QUALITY ERROR] {e}")
+            return await query.answer("⚠️ Unable to process this Series request.", show_alert=True)
 
     # Navigation mapping
     if len(parts) >= 4 and parts[2] == "l":
