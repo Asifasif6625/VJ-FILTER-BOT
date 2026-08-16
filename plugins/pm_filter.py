@@ -129,13 +129,14 @@ def is_english_only(text: str) -> bool:
     except UnicodeEncodeError:
         return False
 
-@Client.on_message(filters.group & filters.text & filters.incoming)
+@Client.on_message((filters.group | filters.supergroup) & filters.text & filters.incoming)
 async def give_filter(client, message):
     if message.chat.id != SUPPORT_CHAT_ID:
         settings = await get_settings(message.chat.id)
         chatid = message.chat.id 
-        user_id = message.from_user.id if message.from_user else 0
-        if settings['fsub'] != None:
+        user_id = message.from_user.id if message.from_user else (message.sender_chat.id if message.sender_chat else 0)
+        from info import ADMINS
+        if settings.get('fsub') is not None and user_id not in ADMINS:
             try:
                 btn = await pub_is_subscribed(client, message, settings['fsub'])
                 if btn:
@@ -144,7 +145,7 @@ async def give_filter(client, message):
                     await message.reply_photo(photo=random.choice(PICS), caption=f"👋 Hello {message.from_user.mention},\n\nPlease join the channel then click on unmute me button. 😇", reply_markup=InlineKeyboardMarkup(btn), parse_mode=enums.ParseMode.HTML)
                     return
             except Exception as e:
-                print(e)
+                logger.error(f"fsub error: {e}")
             
         manual = await manual_filters(client, message)
         if manual == False:
@@ -176,13 +177,19 @@ async def give_filter(client, message):
 @Client.on_message(filters.private & filters.text & filters.incoming)
 async def pm_text(bot, message):
     content = message.text
-    user = message.from_user.first_name
-    user_id = message.from_user.id
+    user = message.from_user.first_name if message.from_user else "User"
+    user_id = message.from_user.id if message.from_user else 0
     if content.startswith("/") or content.startswith("#"): return  # ignore commands and hashtags
     
     from utils import temp
     if user_id in temp.SERIES_WIZARD:
-        return
+        wiz = temp.SERIES_WIZARD.get(user_id)
+        # Only block normal search if wizard is actively awaiting textual input
+        if isinstance(wiz, dict) and wiz.get("state") in (
+            "WAITING_NAME", "WAITING_YEAR", "WAITING_GENRE", 
+            "WAITING_RATING", "WAITING_DESCRIPTION", "WAITING_POSTER", "WAITING_BATCH"
+        ):
+            return
         
     # ── English-only guard ──
     if not is_english_only(content):
@@ -2882,6 +2889,21 @@ async def auto_filter(client, name, msg, reply_msg=None, ai_search=True, spoll=F
         if re.findall("((^\\/|^,|^!|^\\.).*)", message.text):
             return
         if len(message.text) < 100:
+            user_id = message.from_user.id if (hasattr(message, "from_user") and message.from_user) else (message.sender_chat.id if getattr(message, "sender_chat", None) else 0)
+            from info import ADMINS
+            is_admin = user_id in ADMINS
+            is_owner = (user_id == ADMINS[0]) if (ADMINS and len(ADMINS) > 0) else False
+            chat_type = str(message.chat.type if message.chat else "UNKNOWN")
+
+            logger.info(
+                f"[SEARCH ROUTING]\n"
+                f"user_id={user_id}\n"
+                f"is_admin={is_admin}\n"
+                f"is_owner={is_owner}\n"
+                f"chat_type={chat_type}\n"
+                f"query={name}"
+            )
+
             search = EMOJI_PATTERN.sub(" ", name)
             search = search.lower()
             find = search.split(" ")
@@ -2905,9 +2927,21 @@ async def auto_filter(client, name, msg, reply_msg=None, ai_search=True, spoll=F
                 if is_series:
                     return
             except Exception as e:
-                import logging
-                logging.getLogger(__name__).warning(f"Series routing failed: {e}")
+                logger.error(
+                    f"[SEARCH ROUTING ERROR]\n"
+                    f"user_id={user_id}\n"
+                    f"chat_type={chat_type}\n"
+                    f"query={name}\n"
+                    f"exception={e}",
+                    exc_info=True
+                )
             # --- END SERIES ROUTING ---
+
+            logger.info(
+                f"[SEARCH ROUTING]\n"
+                f"stage=MOVIE\n"
+                f"decision=MOVIE_FILTER"
+            )
 
             files, offset, total_results = await get_search_results(message.chat.id ,search, offset=0, filter=True)
             settings = await get_settings(message.chat.id)
