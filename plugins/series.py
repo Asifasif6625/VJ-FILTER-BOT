@@ -751,7 +751,74 @@ async def wizard_text_handler(client: Client, message: Message):
         else:
             return await message.reply_text("⚠️ Please send a PHOTO to set as thumbnail, or /cancel to abort.")
 
+    if uid not in temp.SERIES_WIZARD:
+        return
 
+    wiz = temp.SERIES_WIZARD[uid]
+    state = wiz.get("state")
+    text = message.text.strip() if message.text else ""
+
+    # ── Series Name ──────────────────────────────────────────────────────────
+    if state == S_NAME:
+        if not text:
+            return await message.reply_text("Please enter a valid series name.")
+        
+        # Check duplicate if in add mode
+        if wiz["mode"] == "add":
+            existing = await get_series_by_name(text)
+            if existing:
+                return await message.reply_text(
+                    f"⚠️ A series named <b>{text}</b> already exists.\n"
+                    f"Please send a different name, or /cancel to abort.",
+                    parse_mode=enums.ParseMode.HTML,
+                )
+        wiz["name"] = text
+        wiz["state"] = S_YEAR
+        await message.reply_text(
+            f"✅ Name set to: <b>{text}</b>\n\n"
+            f"Now send the <b>release year</b> (e.g. <code>2023</code>) or send /skip.",
+            reply_to_message_id=message.id,
+            parse_mode=enums.ParseMode.HTML,
+        )
+
+    # ── Year ─────────────────────────────────────────────────────────────────
+    elif state == S_YEAR:
+        if text.lower() == "/skip":
+            wiz["year"] = ""
+        else:
+            wiz["year"] = text
+        wiz["state"] = S_GENRE
+        await message.reply_text(
+            f"📅 Year saved.\n\nNow send the <b>genre(s)</b> (e.g. <code>Action, Drama, Sci-Fi</code>) or send /skip.",
+            reply_to_message_id=message.id,
+            parse_mode=enums.ParseMode.HTML,
+        )
+
+    # ── Genre ────────────────────────────────────────────────────────────────
+    elif state == S_GENRE:
+        if text.lower() == "/skip":
+            wiz["genre"] = ""
+        else:
+            wiz["genre"] = text
+        wiz["state"] = S_RATING
+        await message.reply_text(
+            f"🎭 Genre saved.\n\nNow send the <b>IMDb rating</b> (e.g. <code>8.5/10</code>) or send /skip.",
+            reply_to_message_id=message.id,
+            parse_mode=enums.ParseMode.HTML,
+        )
+
+    # ── Rating ───────────────────────────────────────────────────────────────
+    elif state == S_RATING:
+        if text.lower() == "/skip":
+            wiz["rating"] = ""
+        else:
+            wiz["rating"] = text
+        wiz["state"] = S_DESC
+        await message.reply_text(
+            f"⭐ Rating saved.\n\nNow send a <b>short description</b> or send /skip.",
+            reply_to_message_id=message.id,
+            parse_mode=enums.ParseMode.HTML,
+        )
 
     # ── Description ───────────────────────────────────────────────────────────
     elif state == S_DESC:
