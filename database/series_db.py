@@ -457,6 +457,30 @@ async def get_series_files(
     return [doc async for doc in cursor]
 
 
+async def find_saved_series_file(
+    series_id: str,
+    language: str,
+    season: int,
+    quality: str,
+    file_id: str,
+    episode: int | None = None
+) -> dict | None:
+    """Find an existing saved series file record in sfiles_col matching context and file_id."""
+    query = {
+        "series_id": str(series_id),
+        "language":  language,
+        "season":    int(season),
+        "quality":   quality,
+        "file_id":   str(file_id),
+        "is_batch":  {"$ne": True}
+    }
+    if episode is not None and (isinstance(episode, int) or (isinstance(episode, str) and str(episode).isdigit())) and int(episode) > 0:
+        doc = await sfiles_col.find_one({**query, "episode": int(episode)})
+        if doc:
+            return doc
+    return await sfiles_col.find_one(query)
+
+
 async def list_series_languages(series_id: str) -> list[str]:
     """Distinct languages with at least one file saved."""
     return await sfiles_col.distinct("language", {"series_id": str(series_id)})
