@@ -22,6 +22,96 @@ join_db = JoinReqs
 
 
 
+async def process_series_start(client: Client, user_id: int, req_key: str, message: Message = None):
+    import utils
+    from utils import temp
+    from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+    import info
+    import logging
+    log = logging.getLogger(__name__)
+    AUTH_CHANNEL = getattr(info, "AUTH_CHANNEL", None)
+    
+    log.info(f"[Series START]\nrequest_key={req_key}\naction=REQUEST_RECEIVED")
+    
+    req = getattr(temp, "SERIES_STATE", {}).get(req_key)
+    if not req:
+        req = getattr(temp, "GETALL", {}).get(req_key)
+    if not req:
+        from database.series_db import get_temp_request
+        req = await get_temp_request(req_key)
+        if req:
+            temp.SERIES_STATE[req_key] = req
+            temp.GETALL[req_key] = req
+            
+    if not req:
+        log.warning(f"[Series START] Request expired for key={req_key}")
+        msg_text = "<b><i>Sorry, this request has expired. Please search the series again.</i></b>"
+        if message:
+            await message.reply(msg_text)
+        else:
+            await client.send_message(user_id, msg_text)
+        return
+        
+    owner = req.get("user_id", req.get("user"))
+    if owner and int(owner) != int(user_id):
+        msg_text = "<b><i>⚠️ This link is not for you!</i></b>"
+        if message:
+            await message.reply(msg_text)
+        else:
+            await client.send_message(user_id, msg_text)
+        return
+        
+    status = str(req.get("delivery_status", req.get("state", ""))).lower()
+    if status == "completed":
+        if message:
+            await message.reply("✅ Files already sent.")
+        return
+    if status == "sending":
+        if message:
+            await message.reply("⏳ Files are already being sent.")
+        return
+        
+    if AUTH_CHANNEL:
+        sub = await utils.is_subscribed(client, user_id)
+        if not sub:
+            log.info(f"[Series START]\nrequest_key={req_key}\nmembership=NOT_JOINED")
+            
+            # Send exactly ONE Join Request message if not already pending
+            if not req.get("join_message_id"):
+                try:
+                    invite_link = await client.create_chat_invite_link(int(AUTH_CHANNEL), creates_join_request=True)
+                    text = (
+                        "📢 **Channel Join Request**\n\n"
+                        "ഫയലുകൾ ലഭിക്കുന്നതിന് മുമ്പ് ഞങ്ങളുടെ ചാനലിലേക്ക് Join Request അയയ്ക്കുക.\n\n"
+                        "Request അയച്ച ശേഷം താഴെയുള്ള Try Again ബട്ടൺ ക്ലിക്ക് ചെയ്യുക.\n\n"
+                        "Please send a Join Request to our channel before getting the files.\n\n"
+                        "After sending the request, click Try Again below."
+                    )
+                    btn = [
+                        [InlineKeyboardButton("📢 Send Join Request", url=invite_link.invite_link)],
+                        [InlineKeyboardButton("🔄 Try Again", callback_data=f"checksub#series#{req_key}")]
+                    ]
+                    join_msg = await client.send_message(
+                        chat_id=user_id,
+                        text=text,
+                        reply_markup=InlineKeyboardMarkup(btn),
+                        parse_mode=enums.ParseMode.MARKDOWN
+                    )
+                    req["join_message_id"] = join_msg.id
+                    from database.series_db import save_temp_request
+                    await save_temp_request(req_key, req)
+                    log.info(f"[JOIN REQUEST]\nrequest_key={req_key}\naction=CREATED\nmessage_id={join_msg.id}")
+                except Exception as e:
+                    log.error(f"Failed to create join request: {e}")
+            return
+        else:
+            log.info(f"[Series START]\nrequest_key={req_key}\nmembership=JOINED")
+            
+    from plugins.series import deliver_series_request
+    await deliver_series_request(client, req_key, user_id, query=None)
+
+
+
 @Client.on_message(filters.command("start") & filters.incoming)
 async def start(client, message):
     import logging
@@ -112,62 +202,8 @@ async def start(client, message):
     # --- SERIES GROUP TO PM FLOW ---
     if data.startswith("all_"):
         file_id = data.split("_", 1)[1]
-        import logging
-        log = logging.getLogger(__name__)
-        
-        data_obj = temp.GETALL.get(file_id)
-        if not data_obj:
-            from database.series_db import get_temp_request
-            data_obj = await get_temp_request(file_id)
-            
-        log.info(f"[SERIES PM START]\nrequest_key={file_id}\nuser_id={message.from_user.id}\naction=REQUEST_RECEIVED")
-        
-        if not data_obj:
-            log.warning(f"[ALL START] GETALL NOT FOUND uuid={file_id}")
-            await message.reply("<b><i>Sorry, this request has expired. Please search the series again.</b></i>")
-            return
-            
-        if isinstance(data_obj, dict) and "user" in data_obj:
-            if message.from_user.id != data_obj["user"]:
-                await message.reply("<b><i>⚠️ This link is not for you!</b></i>")
-                return
-                
-            if data_obj.get("delivery_status") == "completed" or data_obj.get("state") == "COMPLETED":
-                return await message.reply("✅ Files already sent.")
-            elif data_obj.get("delivery_status") == "sending" or data_obj.get("state") == "SENDING":
-                return await message.reply("⏳ Files are already being sent.")
-            
-            from utils import is_subscribed
-            if AUTH_CHANNEL and not await is_subscribed(client, message):
-                try:
-                    invite_link = await client.create_chat_invite_link(int(AUTH_CHANNEL), creates_join_request=True)
-                except Exception as e:
-                    log.error(f"Failed to create invite link: {e}")
-                    await message.reply_text("Make sure Bot is admin in Forcesub channel")
-                    return
-                
-                text = (
-                    "📢 **Channel Join Request**\n\n"
-                    "ഫയലുകൾ ലഭിക്കുന്നതിന് മുമ്പ് ഞങ്ങളുടെ ചാനലിലേക്ക് Join Request അയയ്ക്കുക.\n\n"
-                    "Request അയച്ച ശേഷം താഴെയുള്ള Try Again ബട്ടൺ ക്ലിക്ക് ചെയ്യുക.\n\n"
-                    "Please send a Join Request to our channel before getting the files.\n\n"
-                    "After sending the request, click Try Again below."
-                )
-                btn = [
-                    [InlineKeyboardButton("📢 Send Join Request", url=invite_link.invite_link)],
-                    [InlineKeyboardButton("🔄 Try Again", callback_data=f"checksub#series#{file_id}")]
-                ]
-                await client.send_message(
-                    chat_id=message.from_user.id,
-                    text=text,
-                    reply_markup=InlineKeyboardMarkup(btn),
-                    parse_mode=enums.ParseMode.MARKDOWN
-                )
-                return
-            
-            from plugins.series import deliver_series_request
-            await deliver_series_request(client, file_id, message.from_user.id, query=None)
-            return
+        await process_series_start(client, message.from_user.id, file_id, message=message)
+        return
     # --- END SERIES GROUP TO PM FLOW ---
     
     # Global Force Subscribe intercepted bypassed as requested
