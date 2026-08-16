@@ -1888,6 +1888,8 @@ async def process_series_search(client: Client, message: Message, txt: str, repl
     logger = logging.getLogger(__name__)
     start_time = time.time()
 
+    user_id = message.from_user.id if (hasattr(message, "from_user") and message.from_user) else (message.sender_chat.id if getattr(message, "sender_chat", None) else 0)
+
     matches = await search_series(txt)
     candidate_count = len(matches) if matches else 0
     
@@ -1925,7 +1927,11 @@ async def process_series_search(client: Client, message: Message, txt: str, repl
     remaining_seconds = "{:.2f}".format(time.time() - start_time)
 
     if len(unique_matches) == 1:
-        logger.info("[SERIES ROUTING] decision=SERIES_DIRECT")
+        logger.info(
+            f"[SEARCH ROUTING]\n"
+            f"stage=SERIES\n"
+            f"decision=SERIES_DIRECT"
+        )
         series = unique_matches[0]
         series_id = str(series["_id"])
         _register_short_id(series_id)
@@ -1935,15 +1941,19 @@ async def process_series_search(client: Client, message: Message, txt: str, repl
         if not hasattr(temp, "SERIES_STATE"):
             temp.SERIES_STATE = {}
         key = str(uuid.uuid4())[:8]
-        temp.SERIES_STATE[key] = {"user": message.from_user.id, "sid": series_id}
+        temp.SERIES_STATE[key] = {"user": user_id, "sid": series_id}
         
         sid = series_id
 
         is_private = (message.chat.type == enums.ChatType.PRIVATE)
-        text, rm = await _resolve_nav_step(message.from_user.id, series_id, key, series, is_private=is_private, remaining_seconds=remaining_seconds)
+        text, rm = await _resolve_nav_step(user_id, series_id, key, series, is_private=is_private, remaining_seconds=remaining_seconds)
         poster = series.get("poster")
     else:
-        logger.info("[SERIES ROUTING] decision=SERIES_SUGGESTIONS")
+        logger.info(
+            f"[SEARCH ROUTING]\n"
+            f"stage=SERIES\n"
+            f"decision=SERIES_SUGGESTIONS"
+        )
         from database.series_db import get_series_thumbnail
         poster = await get_series_thumbnail()
         
@@ -1951,9 +1961,7 @@ async def process_series_search(client: Client, message: Message, txt: str, repl
             _register_short_id(str(m["_id"]))
             
         text = f"🍿 <b>Choose the series/movie you want to view:</b>\n\n⚡ <b>Result Shown in:</b> {remaining_seconds} <i>seconds</i>"
-        rm = _user_suggestions_keyboard(unique_matches, message.from_user.id)
-
-
+        rm = _user_suggestions_keyboard(unique_matches, user_id)
 
     if rm:
         if reply_msg:
