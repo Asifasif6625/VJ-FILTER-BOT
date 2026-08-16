@@ -511,7 +511,7 @@ async def cmd_seriesfil(client: Client, message: Message):
 
 
 
-@Client.on_callback_query(filters.regex(r"^edser#"), group=1)
+@Client.on_callback_query(filters.regex(r"^edser#"))
 async def cb_edser(client: Client, query: CallbackQuery):
     logger.info("[VIEW SERIES EDIT] callback=%s", query.data)
     is_admin = False
@@ -759,7 +759,7 @@ async def wizard_text_handler(client: Client, message: Message):
 # ─── CALLBACK HANDLER — WIZARD BUTTONS ───────────────────────────────────────
 # ══════════════════════════════════════════════════════════════════════════════
 
-@Client.on_callback_query(filters.regex(r"^sw#"), group=1)
+@Client.on_callback_query(filters.regex(r"^sw#"))
 async def wizard_callback(client: Client, query: CallbackQuery):
     uid = query.from_user.id
     if not _is_admin(uid):
@@ -2288,11 +2288,19 @@ async def deliver_series_request(client: Client, req_key: str, user_id: int, que
     return True
 
 
-@Client.on_callback_query(filters.regex(r"^sr#"), group=1)
+@Client.on_callback_query(filters.regex(r"^sr#"))
 async def series_user_nav(client: Client, query: CallbackQuery):
     from utils import temp
     import logging
     log = logging.getLogger(__name__)
+
+    log.info(
+        f"[SERIES CALLBACK RECEIVED]\n"
+        f"callback_data={query.data}\n"
+        f"user_id={query.from_user.id}\n"
+        f"chat_id={query.message.chat.id if query.message else 'N/A'}\n"
+        f"chat_type={query.message.chat.type if query.message else 'N/A'}"
+    )
 
     parts = query.data.split("#")
     
@@ -2314,11 +2322,9 @@ async def series_user_nav(client: Client, query: CallbackQuery):
     if not req:
         return await query.answer("⚠️ Request expired. Please search again.", show_alert=True)
         
-    log.info(f"[SERIES CALLBACK] callback={query.data} click_user={query.from_user.id} owner_user={req.get('user', req.get('user_id'))}")
     owner_id = req.get("user", req.get("user_id"))
     if owner_id and int(query.from_user.id) != int(owner_id):
         log.info("[SERIES CALLBACK] ownership=DENIED")
-        log.info("[SERIES GROUP QUALITY]\naction=OWNERSHIP_DENIED")
         return await query.answer("⚠️ This is not your button.", show_alert=True)
     log.info("[SERIES CALLBACK] ownership=ALLOWED")
         
@@ -2535,7 +2541,7 @@ async def send_series_list(message_or_query, unique_series, page=0):
 
 
 
-@Client.on_callback_query(filters.regex(r"^vser#"), group=1)
+@Client.on_callback_query(filters.regex(r"^vser#"))
 async def cb_vser_page(client: Client, query: CallbackQuery):
     if not _is_admin(query.from_user.id):
         return await query.answer("âŒ You are not authorized.", show_alert=True)
