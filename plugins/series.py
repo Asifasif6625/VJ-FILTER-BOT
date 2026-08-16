@@ -1795,12 +1795,19 @@ def _user_suggestions_keyboard(matches: list[dict], user_id: int) -> InlineKeybo
     rows = []
     import uuid
     from utils import temp
+    from database.series_db import save_temp_request
     if not hasattr(temp, "SERIES_STATE"):
         temp.SERIES_STATE = {}
     for m in matches:
         sid = str(m["_id"])
         key = str(uuid.uuid4())[:8]
-        temp.SERIES_STATE[key] = {"user": user_id, "sid": sid}
+        nav_state = {"user": user_id, "user_id": user_id, "sid": sid, "series_id": sid, "path": "SUGGESTION"}
+        temp.SERIES_STATE[key] = nav_state
+        try:
+            import asyncio
+            asyncio.create_task(save_temp_request(key, nav_state))
+        except Exception:
+            pass
         rows.append([InlineKeyboardButton(m["name"], callback_data=f"sr#{key}")])
     return InlineKeyboardMarkup(rows)
 
@@ -2343,12 +2350,14 @@ async def series_user_nav(client: Client, query: CallbackQuery):
             rating = series.get("rating", "N/A")
             chat_type = "PRIVATE" if query.message.chat.type == enums.ChatType.PRIVATE else "GROUP"
             
+            path_type = req.get("path", "DIRECT" if req.get("is_direct") else "SUGGESTION")
+            
             log.info(
-                f"[SERIES DIRECT QUALITY]\n"
+                f"[SERIES QUALITY ROUTING]\n"
+                f"path={path_type}\n"
                 f"chat_type={chat_type}\n"
                 f"user_id={query.from_user.id}\n"
-                f"callback={query.data}\n"
-                f"key={key}\n"
+                f"source_key={key}\n"
                 f"sid={sid}\n"
                 f"full_id={full_id}\n"
                 f"language={lang}\n"
@@ -2424,9 +2433,9 @@ async def series_user_nav(client: Client, query: CallbackQuery):
                 log.error(f"[SERIES GROUP QUALITY]\naction=REQUEST_SAVE_VERIFY_FAILED\nrequest_key={req_key}\nerror={ex}")
 
             log.info(
-                f"[SERIES DIRECT QUALITY]\n"
-                f"action=REQUEST_CREATED\n"
-                f"request_key={req_key}"
+                f"[SERIES QUALITY REQUEST]\n"
+                f"request_key={req_key}\n"
+                f"path={path_type}"
             )
 
             # Group Quality click -> Redirect to PM with /start all_<req_key>
@@ -2442,7 +2451,6 @@ async def series_user_nav(client: Client, query: CallbackQuery):
                     f"[SERIES GROUP QUALITY]\n"
                     f"action=OPEN_PM\n"
                     f"request_key={req_key}\n"
-                    f"bot_username={bot_username}\n"
                     f"start_url={start_url}"
                 )
                 try:
@@ -2464,7 +2472,12 @@ async def series_user_nav(client: Client, query: CallbackQuery):
                 f"request_key={req_key}"
             )
             from plugins.commands import process_series_start
-            asyncio.create_task(process_series_start(client, query.from_user.id, req_key))
+            async def _safe_start():
+                try:
+                    await process_series_start(client, query.from_user.id, req_key)
+                except Exception as ex:
+                    log.exception(f"[SERIES START ERROR] Failed processing start for req_key={req_key}: {ex}")
+            asyncio.create_task(_safe_start())
             return
         except Exception as e:
             log.error(f"[SERIES DIRECT QUALITY ERROR] {e}", exc_info=True)

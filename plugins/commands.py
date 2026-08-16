@@ -77,6 +77,7 @@ async def process_series_start(client: Client, user_id: int, req_key: str, messa
         sub = await utils.is_subscribed(client, user_id)
         if not sub:
             log.info(f"[SERIES START]\naction=MEMBERSHIP_CHECK\nresult=NOT_JOINED\nrequest_key={req_key}")
+            log.info(f"[SERIES START]\nmembership=NOT_JOINED")
             
             # Send exactly ONE Join Request message if not already pending
             if not req.get("join_message_id"):
@@ -108,6 +109,7 @@ async def process_series_start(client: Client, user_id: int, req_key: str, messa
             return
         else:
             log.info(f"[SERIES START]\naction=MEMBERSHIP_CHECK\nresult=JOINED\nrequest_key={req_key}")
+            log.info(f"[SERIES START]\nmembership=JOINED")
             
     from plugins.series import deliver_series_request
     await deliver_series_request(client, req_key, user_id, query=None)
