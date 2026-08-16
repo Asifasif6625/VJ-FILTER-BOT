@@ -1983,19 +1983,300 @@ async def process_series_search(client: Client, message: Message, txt: str, repl
 
 
 
+async def resolve_exact_series_files(
+    client: Client,
+    full_id: str,
+    lang: str,
+    season: int,
+    qual: str,
+    ep: int | None = None,
+    rating: str = "N/A"
+) -> list[dict]:
+    """
+    Resolve and return the exact list of file records corresponding to the specific Quality/Episode request.
+    This expands any JSON batches into individual file records with full series context.
+    """
+    from database.series_db import list_quality_episodes, get_series_files
+    import json, os, logging
+    log = logging.getLogger(__name__)
+
+    files = []
+    if ep is not None and (isinstance(ep, int) or (isinstance(ep, str) and str(ep).isdigit())) and int(ep) > 0:
+        ep_num = int(ep)
+        raw_ep_files = await get_series_files(full_id, lang, season, ep_num, qual)
+        for f in raw_ep_files:
+            if f.get("is_batch"):
+                try:
+                    file_path = await client.download_media(f["file_id"])
+                    with open(file_path, "r", encoding="utf-8") as json_file:
+                        batch_files = json.loads(json_file.read())
+                    os.remove(file_path)
+
+                    def _get_batch_ep(bf, fallback):
+                        if "episode" in bf and str(bf["episode"]).isdigit() and int(bf["episode"]) > 0:
+                            return int(bf["episode"])
+                        if "episode_index" in bf and str(bf["episode_index"]).isdigit() and int(bf["episode_index"]) > 0:
+                            return int(bf["episode_index"])
+                        extracted = _extract_episode_number(bf.get("file_name", ""))
+                        if extracted is not None and extracted > 0:
+                            return extracted
+                        return fallback
+
+                    batch_files_sorted = sorted(batch_files, key=lambda b: _get_batch_ep(b, 99999))
+                    for b_idx, bf in enumerate(batch_files_sorted, start=1):
+                        bf_ep = _get_batch_ep(bf, b_idx)
+                        bf["is_series"] = True
+                        bf["series_id"] = full_id
+                        bf["series_rating"] = rating
+                        bf["language"] = lang
+                        bf["season"] = season
+                        bf["quality"] = qual
+                        bf["episode"] = bf_ep
+                        bf["episode_index"] = bf_ep
+                        bf["total_episodes"] = f.get("total_episodes", len(batch_files_sorted))
+                        files.append(bf)
+                except Exception as e:
+                    log.error(f"Failed to fetch JSON batch: {e}")
+            else:
+                f["is_series"] = True
+                f["series_id"] = full_id
+                f["series_rating"] = rating
+                f["language"] = lang
+                f["season"] = season
+                f["quality"] = qual
+                f["episode"] = ep_num
+                f["episode_index"] = ep_num
+                f["total_episodes"] = 1
+                files.append(f)
+    else:
+        episodes = await list_quality_episodes(full_id, lang, season, qual)
+        sorted_episodes = sorted([
+            int(e) for e in episodes 
+            if (isinstance(e, int) or (isinstance(e, str) and str(e).isdigit())) and int(e) > 0
+        ])
+        other_eps = [e for e in episodes if e not in sorted_episodes]
+        all_eps = sorted_episodes + other_eps
+        total_eps = len(all_eps)
+
+        for i, ep_val in enumerate(all_eps, start=1):
+            ep_files = await get_series_files(full_id, lang, season, ep_val, qual)
+            for f in ep_files:
+                if f.get("is_batch"):
+                    try:
+                        file_path = await client.download_media(f["file_id"])
+                        with open(file_path, "r", encoding="utf-8") as json_file:
+                            batch_files = json.loads(json_file.read())
+                        os.remove(file_path)
+
+                        def _get_batch_ep(bf, fallback):
+                            if "episode" in bf and str(bf["episode"]).isdigit() and int(bf["episode"]) > 0:
+                                return int(bf["episode"])
+                            if "episode_index" in bf and str(bf["episode_index"]).isdigit() and int(bf["episode_index"]) > 0:
+                                return int(bf["episode_index"])
+                            extracted = _extract_episode_number(bf.get("file_name", ""))
+                            if extracted is not None and extracted > 0:
+                                return extracted
+                            return fallback
+
+                        batch_files_sorted = sorted(batch_files, key=lambda b: _get_batch_ep(b, 99999))
+                        for b_idx, bf in enumerate(batch_files_sorted, start=1):
+                            bf_ep = _get_batch_ep(bf, b_idx)
+                            bf["is_series"] = True
+                            bf["series_id"] = full_id
+                            bf["series_rating"] = rating
+                            bf["language"] = lang
+                            bf["season"] = season
+                            bf["quality"] = qual
+                            bf["episode"] = bf_ep
+                            bf["episode_index"] = bf_ep
+                            bf["total_episodes"] = f.get("total_episodes", len(batch_files_sorted))
+                            files.append(bf)
+                    except Exception as e:
+                        log.error(f"Failed to fetch JSON batch: {e}")
+                else:
+                    f["is_series"] = True
+                    f["series_id"] = full_id
+                    f["series_rating"] = rating
+                    f["language"] = lang
+                    f["season"] = season
+                    f["quality"] = qual
+                    f["episode"] = ep_val if (isinstance(ep_val, int) and ep_val > 0) else i
+                    f["episode_index"] = ep_val if (isinstance(ep_val, int) and ep_val > 0) else i
+                    f["total_episodes"] = total_eps
+                    files.append(f)
+
+    # Deduplicate exact duplicate file IDs
+    seen = set()
+    unique_files = []
+    for f in files:
+        fid = f.get("file_id")
+        if fid:
+            if fid in seen:
+                continue
+            seen.add(fid)
+        unique_files.append(f)
+
+    return unique_files
+
+
+async def deliver_series_request(client: Client, req_key: str, user_id: int, query: CallbackQuery = None) -> bool:
+    """
+    Single unified Series file delivery engine.
+    Retrieves the exact request context for `req_key`, validates membership and ownership,
+    verifies file attributes, and sends ONLY the exact files associated with that request.
+    """
+    from utils import temp
+    import logging
+    log = logging.getLogger(__name__)
+
+    # 1. Retrieve request context from memory or DB
+    req = getattr(temp, "SERIES_STATE", {}).get(req_key)
+    if not req:
+        req = getattr(temp, "GETALL", {}).get(req_key)
+    if not req:
+        from database.series_db import get_temp_request
+        req = await get_temp_request(req_key)
+        if req:
+            temp.SERIES_STATE[req_key] = req
+            temp.GETALL[req_key] = req
+
+    if not req:
+        log.warning(f"[SERIES DELIVERY] Request expired for key={req_key}")
+        if query:
+            await query.answer("⚠️ Request expired. Please search again.", show_alert=True)
+        return False
+
+    # 2. Check ownership
+    owner = req.get("user_id", req.get("user"))
+    if owner and int(owner) != int(user_id):
+        log.warning(f"[SERIES DELIVERY] Ownership mismatch for key={req_key}: owner={owner}, actual={user_id}")
+        if query:
+            await query.answer("⚠️ This is not your button.", show_alert=True)
+        return False
+
+    # 3. Check delivery status
+    status = str(req.get("delivery_status", req.get("state", ""))).lower()
+    if status == "completed":
+        log.info(f"[SERIES DELIVERY] Already completed for key={req_key}")
+        if query:
+            await query.answer("✅ Files already sent.", show_alert=True)
+        return False
+    if status == "sending":
+        log.info(f"[SERIES DELIVERY] Already sending for key={req_key}")
+        if query:
+            await query.answer("⏳ Files are already being sent.", show_alert=True)
+        return False
+
+    req["delivery_status"] = "sending"
+    req["state"] = "SENDING"
+
+    full_id = req.get("full_id")
+    if not full_id and req.get("series_id"):
+        full_id = await _get_full_id(req["series_id"])
+    lang = req.get("language")
+    season = int(req.get("season", 0))
+    qual = req.get("quality")
+    ep = req.get("episode")
+    rating = req.get("rating", "N/A")
+
+    # 4. Get exact files stored in the request
+    files = req.get("files")
+    if not files:
+        files = await resolve_exact_series_files(client, full_id, lang, season, qual, ep, rating)
+        req["files"] = files
+
+    req_file_ids = set(req.get("file_ids") or [f.get("file_id") for f in files if f.get("file_id")])
+
+    # 5. Strict Verification & Logging
+    verified_files = []
+    for f in files:
+        f_sid = str(f.get("series_id", ""))
+        f_lang = str(f.get("language", ""))
+        f_season = int(f.get("season", 0))
+        f_qual = str(f.get("quality", ""))
+        f_id = f.get("file_id")
+
+        # Check matching context
+        if f_sid != str(full_id) or f_lang != str(lang) or f_season != int(season) or f_qual != str(qual):
+            log.warning(f"[SERIES DELIVERY REJECTED] reason=NOT_IN_REQUEST series_id={f_sid} season={f_season} lang={f_lang} qual={f_qual} file_id={f_id} file_name={f.get('file_name')}")
+            continue
+
+        # Check file is in exact requested set
+        if req_file_ids and f_id not in req_file_ids:
+            log.warning(f"[SERIES DELIVERY REJECTED] reason=NOT_IN_REQUEST file_id={f_id} file_name={f.get('file_name')}")
+            continue
+
+        log.info(
+            f"[SERIES REQUEST FILE]\n"
+            f"request_key={req_key}\n"
+            f"file_id={f_id}\n"
+            f"file_name={f.get('file_name')}\n"
+            f"episode={f.get('episode')}\n"
+            f"series_id={f_sid}\n"
+            f"language={f_lang}\n"
+            f"season={f_season}\n"
+            f"quality={f_qual}\n"
+            f"source=EXACT_REQUEST_FILE_ID"
+        )
+        verified_files.append(f)
+
+    if not verified_files:
+        req["delivery_status"] = "failed"
+        req["state"] = "FAILED"
+        log.warning(f"[SERIES DELIVERY] No verified files to send for key={req_key}")
+        if query:
+            await query.answer("⚠️ No files found for this request.", show_alert=True)
+        return False
+
+    # 6. Delete Join Request message if exists
+    if query and query.message:
+        is_join_msg = False
+        if getattr(query, "data", "") and "checksub" in str(query.data):
+            is_join_msg = True
+        elif query.message.text and ("Channel Join" in query.message.text or "Join Request" in query.message.text or "Try Again" in str(getattr(query.message, "reply_markup", ""))):
+            is_join_msg = True
+        elif req.get("join_message_id") and getattr(query.message, "id", None) == req["join_message_id"]:
+            is_join_msg = True
+            
+        if is_join_msg:
+            try:
+                await query.message.delete()
+                log.info(f"[SERIES DELIVERY] Deleted Join Request message for key={req_key}")
+            except Exception as e:
+                log.warning(f"[SERIES DELIVERY] Failed to delete Join Request message: {e}")
+    elif req.get("join_message_id"):
+        try:
+            await client.delete_messages(chat_id=user_id, message_ids=req["join_message_id"])
+            log.info(f"[SERIES DELIVERY] Deleted join_message_id={req['join_message_id']} for key={req_key}")
+        except Exception:
+            pass
+
+    if query:
+        try:
+            await query.answer()
+        except Exception:
+            pass
+
+    # 7. Deliver files via send_series_files_to_user
+    from plugins.commands import send_series_files_to_user
+    log.info(f"[SERIES DELIVERY] Sending {len(verified_files)} verified files for key={req_key} to user_id={user_id}")
+    await send_series_files_to_user(client, user_id, verified_files, query=query)
+    
+    req["delivery_status"] = "completed"
+    req["state"] = "COMPLETED"
+    log.info(f"[SERIES DELIVERY] Successfully completed for key={req_key}")
+    return True
+
+
 @Client.on_callback_query(filters.regex(r"^sr#"), group=1)
 async def series_user_nav(client: Client, query: CallbackQuery):
     from utils import temp
     import logging
     log = logging.getLogger(__name__)
 
-
-
     parts = query.data.split("#")
     
     if len(parts) < 2: return await query.answer()
-
-
 
     key = parts[1]
     if key == "close":
@@ -2041,6 +2322,12 @@ async def series_user_nav(client: Client, query: CallbackQuery):
         from database.series_db import save_temp_request
         
         req_key = str(_uuid.uuid4())[:8]
+
+        # Resolve exact files immediately for this request
+        exact_files = await resolve_exact_series_files(client, full_id, lang, season, qual, ep, rating)
+        exact_file_ids = [f["file_id"] for f in exact_files if f.get("file_id")]
+        exact_eps = [f.get("episode") for f in exact_files if f.get("episode") is not None]
+
         req_data = {
             "request_key": req_key,
             "user_id": query.from_user.id,
@@ -2055,6 +2342,9 @@ async def series_user_nav(client: Client, query: CallbackQuery):
             "quality": qual,
             "episode": ep,
             "rating": rating,
+            "files": exact_files,
+            "file_ids": exact_file_ids,
+            "episodes": exact_eps,
             "delivery_status": "pending",
             "state": "PENDING",
             "created_at": time.time(),
@@ -2156,149 +2446,9 @@ async def series_user_nav(client: Client, query: CallbackQuery):
                 log.info(f"[SERIES PM QUALITY]\nuser_id={query.from_user.id}\nrequest={req_key}\nquality={qual}\naction=COOLDOWN_EXPIRED")
 
         temp.SERIES_PM_QUALITY_COOLDOWNS[cooldown_key] = now
-        req["delivery_status"] = "sending"
-        req_data["delivery_status"] = "sending"
-        log.info(f"[SERIES PM QUALITY]\nuser_id={query.from_user.id}\nrequest={req_key}\nquality={qual}\naction=ACCEPTED\ncooldown=10")
 
-        if ep is not None and ep > 0:
-            files = []
-            raw_ep_files = await get_series_files(full_id, lang, season, ep, qual)
-            import json, os
-            for f in raw_ep_files:
-                if f.get("is_batch"):
-                    try:
-                        file_path = await client.download_media(f["file_id"])
-                        with open(file_path, "r", encoding="utf-8") as json_file:
-                            batch_files = json.loads(json_file.read())
-                        os.remove(file_path)
-                        
-                        def _get_batch_ep(bf, fallback):
-                            if "episode" in bf and str(bf["episode"]).isdigit() and int(bf["episode"]) > 0:
-                                return int(bf["episode"])
-                            if "episode_index" in bf and str(bf["episode_index"]).isdigit() and int(bf["episode_index"]) > 0:
-                                return int(bf["episode_index"])
-                            extracted = _extract_episode_number(bf.get("file_name", ""))
-                            if extracted is not None:
-                                return extracted
-                            return fallback
-
-                        batch_files_sorted = sorted(batch_files, key=lambda b: _get_batch_ep(b, 99999))
-                        for b_idx, bf in enumerate(batch_files_sorted, start=1):
-                            bf_ep = _get_batch_ep(bf, b_idx)
-                            bf["is_series"] = True
-                            bf["series_id"] = full_id
-                            bf["series_rating"] = rating
-                            bf["language"] = lang
-                            bf["season"] = season
-                            bf["quality"] = qual
-                            bf["episode"] = bf_ep
-                            bf["episode_index"] = bf_ep
-                            bf["total_episodes"] = f.get("total_episodes", len(batch_files_sorted))
-                            files.append(bf)
-                    except Exception as e:
-                        log.error(f"Failed to fetch JSON batch: {e}")
-                else:
-                    f["is_series"] = True
-                    f["series_id"] = full_id
-                    f["series_rating"] = rating
-                    f["language"] = lang
-                    f["season"] = season
-                    f["quality"] = qual
-                    f["episode"] = ep
-                    f["episode_index"] = ep
-                    f["total_episodes"] = 1
-                    files.append(f)
-        else:
-            files = []
-            episodes = await list_quality_episodes(full_id, lang, season, qual)
-            sorted_episodes = sorted([
-                int(e) for e in episodes 
-                if (isinstance(e, int) or (isinstance(e, str) and str(e).isdigit())) and int(e) > 0
-            ])
-            other_eps = [e for e in episodes if e not in sorted_episodes]
-            all_eps = sorted_episodes + other_eps
-            total_eps = len(all_eps)
-            import json, os
-            for i, ep_val in enumerate(all_eps, start=1):
-                ep_files = await get_series_files(full_id, lang, season, ep_val, qual)
-                for f in ep_files:
-                    if f.get("is_batch"):
-                        try:
-                            file_path = await client.download_media(f["file_id"])
-                            with open(file_path, "r", encoding="utf-8") as json_file:
-                                batch_files = json.loads(json_file.read())
-                            os.remove(file_path)
-                            
-                            def _get_batch_ep(bf, fallback):
-                                if "episode" in bf and str(bf["episode"]).isdigit() and int(bf["episode"]) > 0:
-                                    return int(bf["episode"])
-                                if "episode_index" in bf and str(bf["episode_index"]).isdigit() and int(bf["episode_index"]) > 0:
-                                    return int(bf["episode_index"])
-                                extracted = _extract_episode_number(bf.get("file_name", ""))
-                                if extracted is not None:
-                                    return extracted
-                                return fallback
-
-                            batch_files_sorted = sorted(batch_files, key=lambda b: _get_batch_ep(b, 99999))
-                            for b_idx, bf in enumerate(batch_files_sorted, start=1):
-                                bf_ep = _get_batch_ep(bf, b_idx)
-                                bf["is_series"] = True
-                                bf["series_id"] = full_id
-                                bf["series_rating"] = rating
-                                bf["language"] = lang
-                                bf["season"] = season
-                                bf["quality"] = qual
-                                bf["episode"] = bf_ep
-                                bf["episode_index"] = bf_ep
-                                bf["total_episodes"] = f.get("total_episodes", len(batch_files_sorted))
-                                files.append(bf)
-                        except Exception as e:
-                            log.error(f"Failed to fetch JSON batch: {e}")
-                    else:
-                        f["is_series"] = True
-                        f["series_id"] = full_id
-                        f["series_rating"] = rating
-                        f["language"] = lang
-                        f["season"] = season
-                        f["quality"] = qual
-                        f["episode"] = ep_val if (isinstance(ep_val, int) and ep_val > 0) else i
-                        f["episode_index"] = ep_val if (isinstance(ep_val, int) and ep_val > 0) else i
-                        f["total_episodes"] = total_eps
-                        files.append(f)
-
-        # Strict Context Verification
-        verified_files = []
-        for f in files:
-            f_sid = str(f.get("series_id", ""))
-            f_lang = str(f.get("language", ""))
-            f_season = int(f.get("season", 0))
-            f_qual = str(f.get("quality", ""))
-            if f_sid != str(full_id) or f_lang != str(lang) or f_season != int(season) or f_qual != str(qual):
-                log.error(f"[SERIES DELIVERY ERROR]\nrequest_key={req_key}\nexpected_series_id={full_id}\nactual_series_id={f_sid}\nexpected_season={season}\nactual_season={f_season}\nexpected_quality={qual}\nactual_quality={f_qual}")
-                continue
-            log.info(f"[SERIES DELIVERY FILE]\nrequest_key={req_key}\nfile_id={f.get('file_id')}\nseries_id={f_sid}\nseason={f_season}\nlanguage={f_lang}\nquality={f_qual}")
-            verified_files.append(f)
-
-        if verified_files:
-            log.info(f"[REQUEST FLOW]\nrequest_key={req_key}\nuser_id={query.from_user.id}\ntype=SERIES\nseries_id={full_id}\nlanguage={lang}\nseason={season}\nquality={qual}")
-            log.info(f"[DELIVERY]\nrequest_key={req_key}\ntype=SERIES\nseries_id={full_id}\nquality={qual}\nfile_count={len(verified_files)}")
-            await query.answer()
-            if query.message.text and "Channel Join" in query.message.text:
-                try:
-                    await query.message.delete()
-                except:
-                    pass
-            from plugins.commands import send_series_files_to_user
-            await send_series_files_to_user(client, query.from_user.id, verified_files, query=query)
-            req["delivery_status"] = "completed"
-            req_data["delivery_status"] = "completed"
-            log.info(f"[DELIVERY]\nrequest_key={req_key}\naction=COMPLETED")
-            return
-        elif files is not None:
-            log.info("[PM SERIES] DB MATCH COUNT: 0")
-            req["delivery_status"] = "failed"
-            req_data["delivery_status"] = "failed"
-            return await query.answer("⚠️ File not found. It may have been removed.", show_alert=True)
+        # Deliver via unified delivery function
+        return await deliver_series_request(client, req_key, query.from_user.id, query=query)
 
 
 
