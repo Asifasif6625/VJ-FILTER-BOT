@@ -94,6 +94,7 @@ async def create_series(data: dict) -> str:
         "languages": data.get("languages", []),
         "seasons": data.get("seasons", []),
         "qualities": data.get("qualities", []),
+        "season_modes": data.get("season_modes", {}),
         "created_by": data.get("created_by"),
         "created_at": datetime.utcnow(),
         "updated_at": datetime.utcnow(),
