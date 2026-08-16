@@ -35,42 +35,96 @@ SPELL_CHECK = {}
 def is_button_owner(query: CallbackQuery, key: str) -> tuple[bool, str | None]:
     """Check if the user clicking the button is the original requester."""
     click_user = query.from_user.id
-    
-    # 1. Check in-memory BUTTON_OWNERS map
     stored_owner = BUTTON_OWNERS.get(key)
-    if stored_owner is not None:
-        if stored_owner == 0 or click_user == stored_owner:
-            return True, None
-        return False, f"⚠️ ʜᴇʟʟᴏ {query.from_user.first_name},\nᴛʜɪꜱ ɪꜱ ɴᴏᴛ ʏᴏᴜʀ ᴍᴏᴠɪᴇ ʀᴇQᴜᴇꜱᴛ,\nʀᴇQᴜᴇꜱᴛ ʏᴏᴜʀ'ꜱ..."
-        
-    # 2. Check reply_to_message if present
-    if query.message and query.message.reply_to_message and query.message.reply_to_message.from_user:
+    chat_id = query.message.chat.id if (query.message and query.message.chat) else None
+    message_id = query.message.id if query.message else None
+
+    # 1. If not found in BUTTON_OWNERS, check if key is "{chat_id}-{msg_id}"
+    if stored_owner is None and "-" in str(key):
+        try:
+            c_id_str, _ = str(key).split("-", 1)
+            c_id = int(c_id_str)
+            if c_id > 0:
+                stored_owner = c_id
+                BUTTON_OWNERS[key] = stored_owner
+        except Exception:
+            pass
+
+    # 2. In PM chat, the chat ID is the original requester's user ID
+    if stored_owner is None and query.message and query.message.chat and query.message.chat.type == enums.ChatType.PRIVATE:
+        stored_owner = query.message.chat.id
+        BUTTON_OWNERS[key] = stored_owner
+
+    # 3. Check reply_to_message if present
+    if stored_owner is None and query.message and query.message.reply_to_message and query.message.reply_to_message.from_user:
         rep_user = query.message.reply_to_message.from_user.id
-        if rep_user == click_user:
-            BUTTON_OWNERS[key] = click_user
+        if rep_user != 0:
+            stored_owner = rep_user
+            BUTTON_OWNERS[key] = stored_owner
+
+    # 4. Validation
+    if stored_owner is not None and stored_owner != 0:
+        if click_user == stored_owner:
+            logger.info(
+                f"[PM MOVIE OWNERSHIP]\n"
+                f"callback_user_id={click_user}\n"
+                f"stored_user_id={stored_owner}\n"
+                f"request_key={key}\n"
+                f"chat_id={chat_id}\n"
+                f"message_id={message_id}\n"
+                f"result=ALLOWED"
+            )
             return True, None
-        elif rep_user != 0:
-            return False, f"⚠️ ʜᴇʟʟᴏ {query.from_user.first_name},\nᴛʜɪꜱ ɪꜱ ɴᴏᴛ ʏᴏᴜʀ ᴍᴏᴠɪᴇ ʀᴇQᴜᴇꜱᴛ,\nʀᴇQᴜᴇꜱᴛ ʏᴏᴜʀ'ꜱ..."
+        else:
+            logger.info(
+                f"[PM MOVIE OWNERSHIP]\n"
+                f"callback_user_id={click_user}\n"
+                f"stored_user_id={stored_owner}\n"
+                f"request_key={key}\n"
+                f"chat_id={chat_id}\n"
+                f"message_id={message_id}\n"
+                f"result=DENIED"
+            )
+            return False, "⚠️ This is not your button."
 
-    # 3. If in private chat, the chat IS the user
-    if query.message and query.message.chat.type == enums.ChatType.PRIVATE:
-        BUTTON_OWNERS[key] = click_user
-        return True, None
+    # 5. Fail-closed if context expired or missing
+    if key not in FRESH and key not in temp.GETALL:
+        logger.info(
+            f"[PM MOVIE OWNERSHIP]\n"
+            f"callback_user_id={click_user}\n"
+            f"stored_user_id=None\n"
+            f"request_key={key}\n"
+            f"chat_id={chat_id}\n"
+            f"message_id={message_id}\n"
+            f"result=EXPIRED"
+        )
+        return False, "⚠️ Search request expired. Please search again."
 
-    # 4. If key is in FRESH, allow
-    if key in FRESH:
-        return True, None
-
-    return False, "⚠️ Search Context Expired! Please search again."
+    logger.info(
+        f"[PM MOVIE OWNERSHIP]\n"
+        f"callback_user_id={click_user}\n"
+        f"stored_user_id=None\n"
+        f"request_key={key}\n"
+        f"chat_id={chat_id}\n"
+        f"message_id={message_id}\n"
+        f"result=DENIED"
+    )
+    return False, "⚠️ This is not your button."
 
 # ─── English-Only Language Guard ───────────────────────────────────────────
+EMOJI_PATTERN = re.compile(
+    r"[\U00010000-\U0010ffff\u200d\ufe0f\ufe0e\u2600-\u27bf\u2300-\u23ff\u2b50\u2b55\u2934\u2935\u3030\u303d\u3297\u3299]+",
+    flags=re.UNICODE
+)
+
 def is_english_only(text: str) -> bool:
-    """Returns True if the text contains only English / ASCII printable characters.
-    Digits, spaces and common punctuation are always allowed."""
-    # Strip common ASCII-safe extras (numbers, spaces, punctuation)
-    # If ANY character is outside the basic ASCII Latin block, it's non-English
+    """Returns True if the non-emoji / non-symbol text contains only English / ASCII characters.
+    Emojis, numbers, spaces, and punctuation are allowed."""
+    cleaned = EMOJI_PATTERN.sub("", text).strip()
+    if not cleaned:
+        return True
     try:
-        text.encode('ascii')
+        cleaned.encode('ascii')
         return True
     except UnicodeEncodeError:
         return False
@@ -315,14 +369,25 @@ async def next_page(bot, query):
 @Client.on_callback_query(filters.regex(r"^spol"))
 async def advantage_spoll_choker(bot, query):
     _, user, movie_ = query.data.split('#')
-    movies = SPELL_CHECK.get(query.message.reply_to_message.id)
-  #  if not movies:
-     #   return await query.answer(script.OLD_ALRT_TXT.format(query.from_user.first_name), show_alert=True)
-    if int(user) != 0 and query.from_user.id != int(user):
-        return await query.answer(script.ALRT_TXT.format(query.from_user.first_name), show_alert=True)
+    movies = None
+    if query.message and query.message.reply_to_message:
+        movies = SPELL_CHECK.get(query.message.reply_to_message.id)
+    if not movies and query.message and hasattr(query.message, "reply_to_message_id") and query.message.reply_to_message_id:
+        movies = SPELL_CHECK.get(query.message.reply_to_message_id)
+    if not movies and query.message:
+        movies = SPELL_CHECK.get(query.message.id)
     if movie_ == "close_spellcheck":
         return await query.message.delete()
-    movie = movies[(int(movie_))]
+    if int(user) != 0 and query.from_user.id != int(user):
+        logger.info(f"[PM MOVIE OWNERSHIP]\ncallback_user_id={query.from_user.id}\nstored_user_id={user}\nrequest_key={query.data}\nresult=DENIED")
+        return await query.answer("⚠️ This is not your button.", show_alert=True)
+    if not movies:
+        logger.info(f"[PM MOVIE OWNERSHIP]\ncallback_user_id={query.from_user.id}\nstored_user_id={user}\nrequest_key={query.data}\nresult=EXPIRED")
+        return await query.answer("⚠️ Search request expired. Please search again.", show_alert=True)
+    try:
+        movie = movies[(int(movie_))]
+    except (IndexError, ValueError, TypeError):
+        return await query.answer("⚠️ Search request expired. Please search again.", show_alert=True)
     movie = re.sub(r"[:\-]", " ", movie)
     movie = re.sub(r"\s+", " ", movie).strip()
     await query.answer(script.TOP_ALRT_MSG)
@@ -1012,11 +1077,11 @@ async def qualities_cb_handler(client: Client, query: CallbackQuery):
         btn.append([
             InlineKeyboardButton(
                 text=QUALITIES[i].title(),
-                callback_data=f"fl#{QUALITIES[i].lower()}#{key}"
+                callback_data=f"fq#{QUALITIES[i].lower()}#{key}"
             ),
             InlineKeyboardButton(
                 text=QUALITIES[i+1].title(),
-                callback_data=f"fl#{QUALITIES[i+1].lower()}#{key}"
+                callback_data=f"fq#{QUALITIES[i+1].lower()}#{key}"
             ),
         ])
 
@@ -1030,13 +1095,13 @@ async def qualities_cb_handler(client: Client, query: CallbackQuery):
     )
     req = query.from_user.id
     offset = 0
-    btn.append([InlineKeyboardButton(text="↭ ʙᴀᴄᴋ ᴛᴏ ʜᴏᴍᴇ ↭", callback_data=f"fl#homepage#{key}")])
+    btn.append([InlineKeyboardButton(text="↭ ʙᴀᴄᴋ ᴛᴏ ʜᴏᴍᴇ ↭", callback_data=f"fq#homepage#{key}")])
 
     await query.edit_message_reply_markup(InlineKeyboardMarkup(btn))
     await query.answer()
     
 
-@Client.on_callback_query(filters.regex(r"^fl#"))
+@Client.on_callback_query(filters.regex(r"^fq#"))
 async def filter_qualities_cb_handler(client: Client, query: CallbackQuery):
     _, qual, key = query.data.split("#")
     is_owner, err_msg = is_button_owner(query, key)
@@ -1058,7 +1123,7 @@ async def filter_qualities_cb_handler(client: Client, query: CallbackQuery):
     chat_id = query.message.chat.id
     message = query.message
     searchagain = search
-    if lang != "homepage":
+    if qual != "homepage":
         search = f"{search} {qual}" 
     BUTTONS[key] = search
 
@@ -1126,7 +1191,7 @@ async def filter_qualities_cb_handler(client: Client, query: CallbackQuery):
         btn.append(
             [InlineKeyboardButton(text="😶 ɴᴏ ᴍᴏʀᴇ ᴘᴀɢᴇꜱ ᴀᴠᴀɪʟᴀʙʟᴇ 😶",callback_data="pages")]
         )
-    if lang != "homepage":
+    if qual != "homepage":
         req = query.from_user.id
         offset = 0
         btn.append([InlineKeyboardButton(text="↭ ʙᴀᴄᴋ ᴛᴏ ʜᴏᴍᴇ ↭", callback_data=f"next_{req}_{key}_{offset}")])
@@ -1388,13 +1453,26 @@ async def cb_handler(client: Client, query: CallbackQuery):
             
     elif query.data.startswith("file"):
         clicked = query.from_user.id
-        try:
-            if query.message.reply_to_message:
-                typed = query.message.reply_to_message.from_user.id if query.message.reply_to_message.from_user else 0
-            else:
-                typed = 0
-        except:
-            typed = 0
+        typed = 0
+        if query.message:
+            if query.message.chat.type == enums.ChatType.PRIVATE:
+                typed = query.message.chat.id
+            elif query.message.reply_to_message and query.message.reply_to_message.from_user:
+                typed = query.message.reply_to_message.from_user.id
+            elif hasattr(query.message, "reply_to_message_id") and query.message.reply_to_message_id:
+                typed = BUTTON_OWNERS.get(f"{query.message.chat.id}-{query.message.reply_to_message_id}", 0)
+        
+        if not typed and query.message and query.message.chat.type == enums.ChatType.PRIVATE:
+            typed = query.message.chat.id
+
+        is_owner = (clicked == typed) if typed != 0 else False
+        import logging
+        log = logging.getLogger(__name__)
+        if is_owner:
+            log.info(f"[PM MOVIE OWNERSHIP]\ncallback_user_id={clicked}\nstored_user_id={typed}\nrequest_key={query.data}\nchat_id={query.message.chat.id if query.message else None}\nmessage_id={query.message.id if query.message else None}\nresult=ALLOWED")
+        else:
+            log.info(f"[PM MOVIE OWNERSHIP]\ncallback_user_id={clicked}\nstored_user_id={typed}\nrequest_key={query.data}\nchat_id={query.message.chat.id if query.message else None}\nmessage_id={query.message.id if query.message else None}\nresult=DENIED")
+
         ident, file_id = query.data.split("#")
         files_ = await get_file_details(file_id)
         if not files_:
@@ -1421,7 +1499,7 @@ async def cb_handler(client: Client, query: CallbackQuery):
             else:
                 cmd = f"{ident}_{file_id}"
                 
-            if clicked == typed:
+            if is_owner:
                 if query.message.chat.type == enums.ChatType.PRIVATE:
                     await query.answer()
                     from plugins.commands import start
@@ -1438,8 +1516,6 @@ async def cb_handler(client: Client, query: CallbackQuery):
                             return getattr(self.message, name)
                     return await start(client, MockMsg(query, cmd))
                 else:
-                    import logging
-                    log = logging.getLogger(__name__)
                     if not hasattr(temp, "GROUP_MOVIE_REQS"):
                         temp.GROUP_MOVIE_REQS = {}
                         
@@ -1461,7 +1537,7 @@ async def cb_handler(client: Client, query: CallbackQuery):
                         await query.answer(url=f"https://telegram.me/{temp.U_NAME}?start={cmd}")
                         return
             else:
-                await query.answer(f"Hᴇʏ {query.from_user.first_name}, Tʜɪs Is Nᴏᴛ Yᴏᴜʀ Mᴏᴠɪᴇ Rᴇǫᴜᴇsᴛ. Rᴇǫᴜᴇsᴛ Yᴏᴜʀ's !", show_alert=True)
+                await query.answer("⚠️ This is not your button.", show_alert=True)
         except UserIsBlocked:
             await query.answer('Uɴʙʟᴏᴄᴋ ᴛʜᴇ ʙᴏᴛ ᴍᴀʜɴ !', show_alert=True)
         except PeerIdInvalid:
@@ -2837,10 +2913,10 @@ async def auto_filter(client, name, msg, reply_msg=None, ai_search=True, spoll=F
     if not spoll:
         message = msg
         if message.text.startswith("/"): return  # ignore commands
-        if re.findall("((^\\/|^,|^!|^\\.|^[\U0001F600-\U000E007F]).*)", message.text):
+        if re.findall("((^\\/|^,|^!|^\\.).*)", message.text):
             return
         if len(message.text) < 100:
-            search = name
+            search = EMOJI_PATTERN.sub(" ", name)
             search = search.lower()
             find = search.split(" ")
             search = ""
@@ -2859,7 +2935,7 @@ async def auto_filter(client, name, msg, reply_msg=None, ai_search=True, spoll=F
             # --- START SERIES ROUTING ---
             try:
                 from plugins.series import process_series_search
-                is_series = await process_series_search(client, message, name, reply_msg)
+                is_series = await process_series_search(client, message, search if search else name, reply_msg)
                 if is_series:
                     return
             except Exception as e:
@@ -2932,17 +3008,26 @@ async def auto_filter(client, name, msg, reply_msg=None, ai_search=True, spoll=F
         else:
             return
     else:
-        message = msg.message.reply_to_message  # msg will be callback query
         search, files, offset, total_results = spoll
+        if hasattr(msg, "message") and msg.message:
+            message = msg.message.reply_to_message if msg.message.reply_to_message else msg.message
+        else:
+            message = msg
         settings = await get_settings(message.chat.id)
-        await msg.message.delete()
+        try:
+            await msg.message.delete()
+        except:
+            pass
     pre = 'filep' if settings['file_secure'] else 'file'
     key = f"{message.chat.id}-{message.id}"
-    req = message.from_user.id if message.from_user else 0
+    req = msg.from_user.id if (hasattr(msg, 'from_user') and msg.from_user) else (message.from_user.id if (message and message.from_user) else 0)
+    if not req and message.chat.type == enums.ChatType.PRIVATE:
+        req = message.chat.id
     BUTTON_OWNERS[key] = req
     FRESH[key] = search
     temp.GETALL[key] = files
-    temp.SHORT[message.from_user.id] = message.chat.id
+    if req:
+        temp.SHORT[req] = message.chat.id
     if settings["button"]:
         btn = [
             [
@@ -3189,6 +3274,8 @@ async def advantage_spell_chok(client, name, msg, reply_msg, vj_search):
             text=script.CUDNT_FND.format(mv_rqst),
             reply_markup=InlineKeyboardMarkup(btn)
         )
+        if spell_check_del:
+            SPELL_CHECK[spell_check_del.id] = movielist
         try:
             if settings['auto_delete']:
                 await asyncio.sleep(600)

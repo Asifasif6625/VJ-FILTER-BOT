@@ -198,7 +198,7 @@ def _register_short_id(full_id: str):
 
 
 
-def _series_card(series: dict) -> str:
+def _series_card(series: dict, remaining_seconds: str = None) -> str:
     """Build a formatted text card for a series."""
     name  = series.get("name", "?")
     year  = series.get("year", "N/A")
@@ -212,9 +212,11 @@ def _series_card(series: dict) -> str:
     if genre and genre != "N/A":
         card += f"🎭 <b>Genre:</b> {genre}\n"
     if rating:
-        card += f"⭐  <b>Rating:</b> {rating}\n"
+        card += f"⭐ <b>Rating:</b> {rating}\n"
     if desc:
-        card += f"\n📁  {desc[:300]}"
+        card += f"\n📁 {desc[:300]}"
+    if remaining_seconds:
+        card += f"\n\n⚡ <b>Result Shown in:</b> {remaining_seconds} <i>seconds</i>"
     return card
 
 
@@ -1788,11 +1790,11 @@ async def _send_or_edit(message_or_query, text, reply_markup, poster=None):
 
 
 
-async def _resolve_nav_step(user_id: int, full_id: str, sid: str, series: dict, lang=None, season=None, qual=None, is_private: bool = False):
+async def _resolve_nav_step(user_id: int, full_id: str, sid: str, series: dict, lang=None, season=None, qual=None, is_private: bool = False, remaining_seconds: str = None):
     """
     Returns (text, reply_markup)
     """
-    card = _series_card(series)
+    card = _series_card(series, remaining_seconds)
     
     if lang is None:
         langs = await list_series_languages(full_id)
@@ -1842,10 +1844,9 @@ def _user_suggestions_keyboard(matches: list[dict], user_id: int) -> InlineKeybo
 
 
 async def process_series_search(client: Client, message: Message, txt: str, reply_msg: Message = None):
-    import logging
+    import logging, time
     logger = logging.getLogger(__name__)
-
-
+    start_time = time.time()
 
     matches = await search_series(txt)
     logger.info(f"[SERIES ROUTING] query={txt}")
@@ -1854,8 +1855,6 @@ async def process_series_search(client: Client, message: Message, txt: str, repl
     if not matches:
         logger.info("[SERIES ROUTING] decision=MOVIE_FILTER")
         return False
-
-
 
     seen = set()
     unique_matches = []
@@ -1866,11 +1865,9 @@ async def process_series_search(client: Client, message: Message, txt: str, repl
             seen.add(name_lower)
             unique_matches.append(m)
 
-
-
     logger.info(f"[SERIES ROUTING] unique_matches={len(unique_matches)}")
 
-
+    remaining_seconds = "{:.2f}".format(time.time() - start_time)
 
     if len(unique_matches) == 1:
         logger.info("[SERIES ROUTING] decision=SERIES_DIRECT")
@@ -1887,10 +1884,8 @@ async def process_series_search(client: Client, message: Message, txt: str, repl
         
         sid = series_id
 
-
-
         is_private = (message.chat.type == enums.ChatType.PRIVATE)
-        text, rm = await _resolve_nav_step(message.from_user.id, series_id, key, series, is_private=is_private)
+        text, rm = await _resolve_nav_step(message.from_user.id, series_id, key, series, is_private=is_private, remaining_seconds=remaining_seconds)
         poster = series.get("poster")
     else:
         logger.info("[SERIES ROUTING] decision=SERIES_SUGGESTIONS")
@@ -1900,7 +1895,7 @@ async def process_series_search(client: Client, message: Message, txt: str, repl
         for m in unique_matches:
             _register_short_id(str(m["_id"]))
             
-        text = "Choose the series/movie you want to view"
+        text = f"🍿 <b>Choose the series/movie you want to view:</b>\n\n⚡ <b>Result Shown in:</b> {remaining_seconds} <i>seconds</i>"
         rm = _user_suggestions_keyboard(unique_matches, message.from_user.id)
 
 
