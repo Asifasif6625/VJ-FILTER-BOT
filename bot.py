@@ -4,8 +4,12 @@
 
 # Clone Code Credit : YT - @Tech_VJ / TG - @VJ_Bots / GitHub - @VJBots
 
-import sys, glob, importlib, importlib.util, logging, logging.config, pytz, asyncio
+import sys, os, glob, importlib, importlib.util, logging, logging.config, pytz, asyncio
 from pathlib import Path
+
+# Prevent creation of __pycache__ folders and .pyc files
+sys.dont_write_bytecode = True
+os.environ["PYTHONDONTWRITEBYTECODE"] = "1"
 
 # Get logging configurations
 logging.config.fileConfig('logging.conf')
