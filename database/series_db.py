@@ -5,6 +5,7 @@
 import re
 import logging
 from datetime import datetime
+from difflib import SequenceMatcher
 from bson import ObjectId
 import motor.motor_asyncio
 from pymongo.errors import DuplicateKeyError
@@ -94,43 +95,172 @@ async def get_series_by_name(normalized_name: str) -> dict | None:
     return await series_col.find_one({"normalized_name": normalized_name, "status": "active"})
 
 
+def _token_similarity(q_token: str, t_token: str) -> float:
+    """Calculates similarity between a query token and a title token."""
+    if q_token == t_token:
+        return 1.0
+    
+    # Prefix matching
+    if t_token.startswith(q_token) and len(q_token) >= 3:
+        prefix_ratio = len(q_token) / len(t_token)
+        return max(0.80 + (0.20 * prefix_ratio), SequenceMatcher(None, q_token, t_token).ratio())
+        
+    if q_token.startswith(t_token) and len(t_token) >= 3:
+        prefix_ratio = len(t_token) / len(q_token)
+        return max(0.75 + (0.25 * prefix_ratio), SequenceMatcher(None, q_token, t_token).ratio())
+
+    # Fuzzy edit similarity
+    return SequenceMatcher(None, q_token, t_token).ratio()
+
+
+def _score_series_candidate(q_norm: str, q_tokens: list[str], title_norm: str) -> tuple[bool, float]:
+    """
+    Evaluates whether title_norm matches q_tokens and calculates a relevance score (0.0 to 1.0).
+    Returns (is_match, score).
+    """
+    if not title_norm:
+        return False, 0.0
+        
+    # Exact full match
+    if q_norm == title_norm:
+        return True, 1.0
+        
+    title_tokens = [t for t in title_norm.split(" ") if t]
+    if not title_tokens:
+        return False, 0.0
+        
+    num_q = len(q_tokens)
+    num_t = len(title_tokens)
+    
+    # ── Single Word Query ──
+    if num_q == 1:
+        q_tok = q_tokens[0]
+        # Exact title starts with query (e.g. 'dark' matching 'Dark' and 'Dark Matter')
+        if title_norm.startswith(q_tok):
+            score = 0.85 + (0.15 * (len(q_tok) / len(title_norm)))
+            return True, score
+            
+        best_token_sim = 0.0
+        for t_tok in title_tokens:
+            sim = _token_similarity(q_tok, t_tok)
+            if sim > best_token_sim:
+                best_token_sim = sim
+                
+        # Single word must have strong match with at least one title word
+        if best_token_sim >= 0.70:
+            score = best_token_sim * (0.80 + 0.20 * (1.0 / num_t))
+            return True, score
+            
+        full_sim = SequenceMatcher(None, q_norm, title_norm).ratio()
+        if full_sim >= 0.75:
+            return True, full_sim
+            
+        return False, 0.0
+
+    # ── Multi-Word Query ──
+    token_scores = []
+    matched_title_indices = set()
+    
+    for q_tok in q_tokens:
+        best_sim = 0.0
+        best_idx = -1
+        for idx, t_tok in enumerate(title_tokens):
+            sim = _token_similarity(q_tok, t_tok)
+            if sim > best_sim:
+                best_sim = sim
+                best_idx = idx
+                
+        token_scores.append(best_sim)
+        if best_sim >= 0.65 and best_idx != -1:
+            matched_title_indices.add(best_idx)
+            
+    # For multi-word queries, all query tokens must match (or at least N-1 if query >= 4 words)
+    min_required_matches = num_q if num_q <= 3 else (num_q - 1)
+    matched_count = sum(1 for s in token_scores if s >= 0.65)
+    
+    if matched_count < min_required_matches:
+        full_sim = SequenceMatcher(None, q_norm, title_norm).ratio()
+        if full_sim >= 0.80:
+            return True, full_sim
+        return False, 0.0
+        
+    avg_token_score = sum(token_scores) / num_q
+    
+    # Check if words matched in the same relative order
+    ordered_matches = sorted(list(matched_title_indices))
+    order_bonus = 0.05 if list(matched_title_indices) == ordered_matches else 0.0
+    
+    title_coverage = min(1.0, len(matched_title_indices) / num_t)
+    
+    score = (avg_token_score * 0.70) + (title_coverage * 0.25) + order_bonus
+    score = min(0.99, score)
+    
+    return True, score
+
+
 async def search_series(query: str) -> list[dict]:
-    """Substring search across series names, scored and deduplicated."""
+    """Multi-word & partial-word fuzzy search across series names, scored and deduplicated."""
     q = query.strip()
     if not q:
         return []
     
     q_norm = _normalize(q)
-    try:
-        regex = re.compile(re.escape(q_norm), re.IGNORECASE)
-    except Exception:
-        regex = re.compile(re.escape(q), re.IGNORECASE)
-        
-    cursor = series_col.find(
-        {"normalized_name": regex, "status": "active"}
-    ).limit(30)
-    
-    results = [doc async for doc in cursor]
-    if not results:
+    if not q_norm:
         return []
         
-    def get_score(doc):
-        name = doc.get("normalized_name", "")
-        if name == q_norm:
-            return 1
-        elif name.startswith(q_norm):
-            return 2
-        elif re.search(r'(^|\s)' + re.escape(q_norm) + r'(\s|$)', name):
-            return 3
-        else:
-            return 4
+    q_tokens = [w for w in q_norm.split(" ") if w]
+    if not q_tokens:
+        return []
 
-    results.sort(key=lambda x: (get_score(x), x.get("name", "")))
+    # 1. Retrieve candidates from MongoDB efficiently using regex
+    token_patterns = []
+    for tok in q_tokens:
+        if len(tok) <= 2:
+            token_patterns.append(re.escape(tok))
+        elif len(tok) <= 4:
+            token_patterns.append(re.escape(tok[:3]))
+        else:
+            token_patterns.append(re.escape(tok[:max(3, len(tok)-2)]))
+            
+    combined_pattern = "|".join(token_patterns)
+    try:
+        mongo_regex = re.compile(combined_pattern, re.IGNORECASE)
+    except Exception:
+        mongo_regex = re.compile(re.escape(q_norm), re.IGNORECASE)
+
+    cursor = series_col.find(
+        {"normalized_name": mongo_regex, "status": "active"}
+    ).limit(60)
+
+    candidates = [doc async for doc in cursor]
     
+    # Fallback to active series scan if regex yielded no candidates
+    if not candidates:
+        cursor = series_col.find({"status": "active"}).limit(60)
+        candidates = [doc async for doc in cursor]
+
+    if not candidates:
+        return []
+
+    # 2. Score candidates using fuzzy & multi-word matching
+    scored_results = []
+    for doc in candidates:
+        title_norm = doc.get("normalized_name", "")
+        is_match, score = _score_series_candidate(q_norm, q_tokens, title_norm)
+        if is_match and score > 0.0:
+            scored_results.append((score, doc))
+
+    if not scored_results:
+        return []
+
+    # 3. Sort by score descending, then length difference, then name
+    scored_results.sort(key=lambda x: (-x[0], abs(len(x[1].get("normalized_name", "")) - len(q_norm)), x[1].get("name", "")))
+
+    # 4. Deduplicate by unique series title
     seen = set()
     dedup = []
-    for doc in results:
-        name_lower = doc.get("name", "").lower()
+    for score, doc in scored_results:
+        name_lower = doc.get("name", "").strip().lower()
         if name_lower not in seen:
             seen.add(name_lower)
             dedup.append(doc)
