@@ -31,7 +31,7 @@ async def process_series_start(client: Client, user_id: int, req_key: str, messa
     log = logging.getLogger(__name__)
     AUTH_CHANNEL = getattr(info, "AUTH_CHANNEL", None)
     
-    log.info(f"[Series START]\nrequest_key={req_key}\naction=REQUEST_RECEIVED")
+    log.info(f"[SERIES START]\naction=REQUEST_RECEIVED\nrequest_key={req_key}\nuser_id={user_id}")
     
     req = getattr(temp, "SERIES_STATE", {}).get(req_key)
     if not req:
@@ -44,8 +44,8 @@ async def process_series_start(client: Client, user_id: int, req_key: str, messa
             temp.GETALL[req_key] = req
             
     if not req:
-        log.warning(f"[Series START] Request expired for key={req_key}")
-        msg_text = "<b><i>Sorry, this request has expired. Please search the series again.</i></b>"
+        log.warning(f"[SERIES START]\naction=REQUEST_NOT_FOUND\nrequest_key={req_key}")
+        msg_text = "<b><i>⚠️ Request expired. Please search the series again.</i></b>"
         if message:
             await message.reply(msg_text)
         else:
@@ -54,6 +54,7 @@ async def process_series_start(client: Client, user_id: int, req_key: str, messa
         
     owner = req.get("user_id", req.get("user"))
     if owner and int(owner) != int(user_id):
+        log.warning(f"[SERIES START]\naction=OWNERSHIP_MISMATCH\nrequest_key={req_key}\nowner={owner}\nuser_id={user_id}")
         msg_text = "<b><i>⚠️ This link is not for you!</i></b>"
         if message:
             await message.reply(msg_text)
@@ -74,7 +75,7 @@ async def process_series_start(client: Client, user_id: int, req_key: str, messa
     if AUTH_CHANNEL:
         sub = await utils.is_subscribed(client, user_id)
         if not sub:
-            log.info(f"[Series START]\nrequest_key={req_key}\nmembership=NOT_JOINED")
+            log.info(f"[SERIES START]\naction=MEMBERSHIP_CHECK\nresult=NOT_JOINED\nrequest_key={req_key}")
             
             # Send exactly ONE Join Request message if not already pending
             if not req.get("join_message_id"):
@@ -105,7 +106,7 @@ async def process_series_start(client: Client, user_id: int, req_key: str, messa
                     log.error(f"Failed to create join request: {e}")
             return
         else:
-            log.info(f"[Series START]\nrequest_key={req_key}\nmembership=JOINED")
+            log.info(f"[SERIES START]\naction=MEMBERSHIP_CHECK\nresult=JOINED\nrequest_key={req_key}")
             
     from plugins.series import deliver_series_request
     await deliver_series_request(client, req_key, user_id, query=None)
