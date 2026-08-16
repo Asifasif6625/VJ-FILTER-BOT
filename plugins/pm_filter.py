@@ -1221,6 +1221,9 @@ async def filter_qualities_cb_handler(client: Client, query: CallbackQuery):
                 
 @Client.on_callback_query()
 async def cb_handler(client: Client, query: CallbackQuery):
+    if query.data and query.data.startswith(("sr#", "sw#", "edser#", "vser#", "series_", "send_fsall#")):
+        query.continue_propagation()
+        return
     if query.data == "close_data":
         await query.message.delete()
     elif query.data == "get_trail":
