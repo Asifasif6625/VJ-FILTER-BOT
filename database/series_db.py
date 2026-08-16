@@ -439,6 +439,14 @@ async def replace_series_file(data: dict):
     await add_series_file(data)
 
 
+def _sid_query(series_id: str):
+    sid = str(series_id).strip()
+    candidates = [sid]
+    if len(sid) == 24:
+        candidates.append(sid[-8:])
+    return {"$in": candidates} if len(candidates) > 1 else sid
+
+
 async def get_series_files(
     series_id: str,
     language: str,
@@ -448,7 +456,7 @@ async def get_series_files(
 ) -> list[dict]:
     """Fetch all files matching (series, lang, season, episode, quality)."""
     cursor = sfiles_col.find({
-        "series_id": str(series_id),
+        "series_id": _sid_query(series_id),
         "language":  language,
         "season":    int(season),
         "episode":   int(episode),
@@ -467,7 +475,7 @@ async def find_saved_series_file(
 ) -> dict | None:
     """Find an existing saved series file record in sfiles_col matching context and file_id."""
     query = {
-        "series_id": str(series_id),
+        "series_id": _sid_query(series_id),
         "language":  language,
         "season":    int(season),
         "quality":   quality,
@@ -483,13 +491,13 @@ async def find_saved_series_file(
 
 async def list_series_languages(series_id: str) -> list[str]:
     """Distinct languages with at least one file saved."""
-    return await sfiles_col.distinct("language", {"series_id": str(series_id)})
+    return await sfiles_col.distinct("language", {"series_id": _sid_query(series_id)})
 
 
 async def list_series_seasons(series_id: str, language: str) -> list[int]:
     """Distinct season numbers for (series, language)."""
     vals = await sfiles_col.distinct(
-        "season", {"series_id": str(series_id), "language": language}
+        "season", {"series_id": _sid_query(series_id), "language": language}
     )
     return sorted(vals)
 
@@ -499,7 +507,7 @@ async def list_season_qualities(series_id: str, language: str, season: int) -> l
     return await sfiles_col.distinct(
         "quality",
         {
-            "series_id": str(series_id),
+            "series_id": _sid_query(series_id),
             "language":  language,
             "season":    int(season),
         }
@@ -513,7 +521,7 @@ async def list_quality_episodes(
     vals = await sfiles_col.distinct(
         "episode",
         {
-            "series_id": str(series_id),
+            "series_id": _sid_query(series_id),
             "language":  language,
             "season":    int(season),
             "quality":   quality,
