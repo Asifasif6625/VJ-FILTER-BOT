@@ -1978,13 +1978,78 @@ async def series_user_nav(client: Client, query: CallbackQuery):
         
     sid = req["sid"]
     
-    # Try Again Flow / Force Sub verification - check subscription before DB lookups
-    if query.message.chat.type == enums.ChatType.PRIVATE and len(parts) >= 8 and parts[2] == "l" and parts[4] == "s" and parts[6] == "q":
-        from utils import is_subscribed
+    full_id = await _get_full_id(sid)
+    if not full_id:
+        return await query.answer("Series context expired.", show_alert=True)
+    
+    series = await get_series(full_id)
+    if not series:
+        return await query.answer("Series not found in database.", show_alert=True)
+
+    lang = None
+    season = None
+    qual = None
+    
+    # ── Send file (Quality selected) ──────────────────────────────────
+    if len(parts) >= 8 and parts[2] == "l" and parts[4] == "s" and parts[6] == "q":
+        lang    = parts[3]
+        season  = int(parts[5])
+        qual    = parts[7]
+        ep      = int(parts[9]) if (len(parts) >= 10 and parts[8] == "e") else None
+        
+        rating = series.get("rating", "N/A")
+        
+        import uuid as _uuid
+        from utils import temp as _temp, is_subscribed
         from info import AUTH_CHANNEL
+        from database.series_db import save_temp_request
+        
+        req_key = str(_uuid.uuid4())[:8]
+        req_data = {
+            "request_key": req_key,
+            "user_id": query.from_user.id,
+            "user": query.from_user.id,
+            "request_type": "series",
+            "type": "series",
+            "source": "series_pm" if query.message.chat.type == enums.ChatType.PRIVATE else "series_group",
+            "series_id": sid,
+            "full_id": full_id,
+            "language": lang,
+            "season": season,
+            "quality": qual,
+            "episode": ep,
+            "rating": rating,
+            "delivery_status": "pending",
+            "state": "PENDING",
+            "created_at": time.time(),
+            "query": {
+                "full_id": full_id,
+                "lang": lang,
+                "season": season,
+                "qual": qual,
+                "rating": rating
+            }
+        }
+        _temp.SERIES_STATE[req_key] = req_data
+        _temp.GETALL[req_key] = req_data
+        try:
+            await save_temp_request(req_key, req_data)
+        except Exception as ex:
+            log.warning(f"Could not save temp request to DB: {ex}")
+
+        # Group Quality click -> Redirect to PM with /start all_<req_key>
+        if query.message.chat.type != enums.ChatType.PRIVATE:
+            log.info(f"[SERIES GROUP QUALITY]\nuser_id={query.from_user.id}\nsid={sid}\nfull_id={full_id}\nlanguage={lang}\nseason={season}\nquality={qual}\nchat_type=GROUP")
+            log.info(f"[SERIES GROUP QUALITY]\nrequest_key={req_key}\naction=REQUEST_SAVED")
+            start_url = f"https://t.me/{temp.U_NAME}?start=all_{req_key}"
+            log.info(f"[REQUEST KEY TRACE]\nstage=GROUP_QUALITY\nkey={req_key}")
+            log.info(f"[SERIES GROUP QUALITY]\nrequest_key={req_key}\naction=OPEN_PM")
+            return await query.answer(url=start_url)
+            
+        # Private Chat: Membership Verification (Force Sub / Join Request)
         if AUTH_CHANNEL:
             if not await is_subscribed(client, query):
-                log.info(f"[REQUEST FLOW]\nrequest_key={key}\nuser_id={query.from_user.id}\ntype=SERIES\nseries_id={sid}")
+                log.info(f"[REQUEST FLOW]\nrequest_key={req_key}\nuser_id={query.from_user.id}\ntype=SERIES\nseries_id={full_id}\nlanguage={lang}\nseason={season}\nquality={qual}")
                 await query.answer()
                 
                 if req.get("join_message_id"):
@@ -2008,7 +2073,7 @@ async def series_user_nav(client: Client, query: CallbackQuery):
                 )
                 btn = [
                     [InlineKeyboardButton("📢 Send Join Request", url=invite_link.invite_link)],
-                    [InlineKeyboardButton("🔄 Try Again", callback_data=f"checksub#series#{query.data}")]
+                    [InlineKeyboardButton("🔄 Try Again", callback_data=f"checksub#series#{req_key}")]
                 ]
                 join_msg = await client.send_message(
                     chat_id=query.from_user.id,
@@ -2016,74 +2081,21 @@ async def series_user_nav(client: Client, query: CallbackQuery):
                     reply_markup=InlineKeyboardMarkup(btn),
                     parse_mode=enums.ParseMode.MARKDOWN
                 )
+                req_data["join_message_id"] = join_msg.id
                 req["join_message_id"] = join_msg.id
-                log.info(f"[JOIN REQUEST]\nrequest_key={key}\naction=CREATED\nmessage_id={join_msg.id}")
+                log.info(f"[JOIN REQUEST]\nrequest_key={req_key}\naction=CREATED\nmessage_id={join_msg.id}")
                 return
 
-    full_id = await _get_full_id(sid)
-    if not full_id:
-        return await query.answer("Series context expired.", show_alert=True)
-    
-    series = await get_series(full_id)
-    if not series:
-        return await query.answer("Series not found in database.", show_alert=True)
-
-    lang = None
-    season = None
-    qual = None
-    
-    # ── Send file (Quality selected) ──────────────────────────────────
-    if len(parts) >= 8 and parts[2] == "l" and parts[4] == "s" and parts[6] == "q":
-        lang    = parts[3]
-        season  = int(parts[5])
-        qual    = parts[7]
-        
-        rating = series.get("rating", "N/A")
-        
-        if query.message.chat.type != enums.ChatType.PRIVATE:
-            from utils import temp as _temp
-            import uuid as _uuid
-            from database.series_db import save_temp_request
-            
-            log.info(f"[SERIES GROUP QUALITY]\nuser_id={query.from_user.id}\nsid={sid}\nfull_id={full_id}\nlanguage={lang}\nseason={season}\nquality={qual}\nchat_type=GROUP")
-            
-            key_pm = str(_uuid.uuid4())[:8]
-            req_data = {
-                "user": req["user"],
-                "type": "series",
-                "source": "series_group",
-                "query": {
-                    "full_id": full_id,
-                    "lang": lang,
-                    "season": season,
-                    "qual": qual,
-                    "rating": rating
-                },
-                "delivery_status": "pending"
-            }
-            _temp.GETALL[key_pm] = req_data
-            try:
-                await save_temp_request(key_pm, req_data)
-            except Exception as ex:
-                log.warning(f"Could not save temp request to DB: {ex}")
-                
-            log.info(f"[SERIES GROUP QUALITY]\nrequest_key={key_pm}\naction=REQUEST_SAVED")
-            
-            start_url = f"https://t.me/{temp.U_NAME}?start=all_{key_pm}"
-            log.info(f"[REQUEST KEY TRACE]\nstage=GROUP_QUALITY\nkey={key_pm}")
-            log.info(f"[SERIES GROUP QUALITY]\nrequest_key={key_pm}\naction=OPEN_PM")
-            return await query.answer(url=start_url)
-            
-        log.info(f"[REQUEST KEY TRACE]\nstage=PM\nkey={key}")
+        log.info(f"[REQUEST KEY TRACE]\nstage=PM\nkey={req_key}")
 
         # Check delivery status
-        if req.get("delivery_status") == "completed":
+        if req.get("delivery_status") == "completed" or req_data.get("delivery_status") == "completed":
             return await query.answer("✅ Files already sent.", show_alert=True)
-        if req.get("delivery_status") == "sending":
+        if req.get("delivery_status") == "sending" or req_data.get("delivery_status") == "sending":
             return await query.answer("⏳ Files are already being sent.", show_alert=True)
 
         # ── 10-Second Cooldown Protection (PM Series Quality Button) ──
-        import time, math
+        import math
         now = time.time()
 
         if not hasattr(temp, "SERIES_PM_QUALITY_COOLDOWNS"):
@@ -2101,18 +2113,18 @@ async def series_user_nav(client: Client, query: CallbackQuery):
             elapsed = now - last_click_time
             if elapsed < 10:
                 remaining = math.ceil(10 - elapsed)
-                log.info(f"[SERIES PM QUALITY]\nuser_id={query.from_user.id}\nrequest={key}\nquality={qual}\naction=COOLDOWN_BLOCKED\nremaining={remaining}")
+                log.info(f"[SERIES PM QUALITY]\nuser_id={query.from_user.id}\nrequest={req_key}\nquality={qual}\naction=COOLDOWN_BLOCKED\nremaining={remaining}")
                 alert_text = f"⏳ Please wait {remaining} seconds." if remaining > 1 else f"⏳ Please wait {remaining} second."
                 return await query.answer(alert_text, show_alert=True)
             else:
-                log.info(f"[SERIES PM QUALITY]\nuser_id={query.from_user.id}\nrequest={key}\nquality={qual}\naction=COOLDOWN_EXPIRED")
+                log.info(f"[SERIES PM QUALITY]\nuser_id={query.from_user.id}\nrequest={req_key}\nquality={qual}\naction=COOLDOWN_EXPIRED")
 
         temp.SERIES_PM_QUALITY_COOLDOWNS[cooldown_key] = now
         req["delivery_status"] = "sending"
-        log.info(f"[SERIES PM QUALITY]\nuser_id={query.from_user.id}\nrequest={key}\nquality={qual}\naction=ACCEPTED\ncooldown=10")
+        req_data["delivery_status"] = "sending"
+        log.info(f"[SERIES PM QUALITY]\nuser_id={query.from_user.id}\nrequest={req_key}\nquality={qual}\naction=ACCEPTED\ncooldown=10")
 
-        if len(parts) >= 10 and parts[8] == "e":
-            ep      = int(parts[9])
+        if ep is not None and ep > 0:
             files = []
             raw_ep_files = await get_series_files(full_id, lang, season, ep, qual)
             import json, os
@@ -2171,8 +2183,8 @@ async def series_user_nav(client: Client, query: CallbackQuery):
             all_eps = sorted_episodes + other_eps
             total_eps = len(all_eps)
             import json, os
-            for i, ep in enumerate(all_eps, start=1):
-                ep_files = await get_series_files(full_id, lang, season, ep, qual)
+            for i, ep_val in enumerate(all_eps, start=1):
+                ep_files = await get_series_files(full_id, lang, season, ep_val, qual)
                 for f in ep_files:
                     if f.get("is_batch"):
                         try:
@@ -2213,16 +2225,27 @@ async def series_user_nav(client: Client, query: CallbackQuery):
                         f["language"] = lang
                         f["season"] = season
                         f["quality"] = qual
-                        f["episode"] = ep if (isinstance(ep, int) and ep > 0) else i
-                        f["episode_index"] = ep if (isinstance(ep, int) and ep > 0) else i
+                        f["episode"] = ep_val if (isinstance(ep_val, int) and ep_val > 0) else i
+                        f["episode_index"] = ep_val if (isinstance(ep_val, int) and ep_val > 0) else i
                         f["total_episodes"] = total_eps
                         files.append(f)
 
-        if files:
-            log.info(f"[REQUEST FLOW]\nrequest_key={key}\nuser_id={query.from_user.id}\ntype=SERIES\nseries_id={full_id}\nlanguage={lang}\nseason={season}\nquality={qual}")
-            log.info(f"[DELIVERY]\nrequest_key={key}\ntype=SERIES\nseries_id={full_id}\nquality={qual}\nfile_count={len(files)}")
-            for f in files:
-                log.info(f"[FILE SEND]\nsource=series_user_nav\nuser_id={query.from_user.id}\nfile_id={f.get('file_id')}\nfile_name={f.get('file_name', 'Unknown')}\nrequest_key={key}")
+        # Strict Context Verification
+        verified_files = []
+        for f in files:
+            f_sid = str(f.get("series_id", ""))
+            f_lang = str(f.get("language", ""))
+            f_season = int(f.get("season", 0))
+            f_qual = str(f.get("quality", ""))
+            if f_sid != str(full_id) or f_lang != str(lang) or f_season != int(season) or f_qual != str(qual):
+                log.error(f"[SERIES DELIVERY ERROR]\nrequest_key={req_key}\nexpected_series_id={full_id}\nactual_series_id={f_sid}\nexpected_season={season}\nactual_season={f_season}\nexpected_quality={qual}\nactual_quality={f_qual}")
+                continue
+            log.info(f"[SERIES DELIVERY FILE]\nrequest_key={req_key}\nfile_id={f.get('file_id')}\nseries_id={f_sid}\nseason={f_season}\nlanguage={f_lang}\nquality={f_qual}")
+            verified_files.append(f)
+
+        if verified_files:
+            log.info(f"[REQUEST FLOW]\nrequest_key={req_key}\nuser_id={query.from_user.id}\ntype=SERIES\nseries_id={full_id}\nlanguage={lang}\nseason={season}\nquality={qual}")
+            log.info(f"[DELIVERY]\nrequest_key={req_key}\ntype=SERIES\nseries_id={full_id}\nquality={qual}\nfile_count={len(verified_files)}")
             await query.answer()
             if query.message.text and "Channel Join" in query.message.text:
                 try:
@@ -2230,13 +2253,15 @@ async def series_user_nav(client: Client, query: CallbackQuery):
                 except:
                     pass
             from plugins.commands import send_series_files_to_user
-            await send_series_files_to_user(client, query.from_user.id, files, query=query)
+            await send_series_files_to_user(client, query.from_user.id, verified_files, query=query)
             req["delivery_status"] = "completed"
-            log.info(f"[DELIVERY]\nrequest_key={key}\naction=COMPLETED")
+            req_data["delivery_status"] = "completed"
+            log.info(f"[DELIVERY]\nrequest_key={req_key}\naction=COMPLETED")
             return
         elif files is not None:
             log.info("[PM SERIES] DB MATCH COUNT: 0")
             req["delivery_status"] = "failed"
+            req_data["delivery_status"] = "failed"
             return await query.answer("⚠️ File not found. It may have been removed.", show_alert=True)
 
 
