@@ -1990,17 +1990,115 @@ async def resolve_exact_series_files(
     season: int,
     qual: str,
     ep: int | None = None,
-    rating: str = "N/A"
+    rating: str = "N/A",
+    req_key: str = ""
 ) -> list[dict]:
     """
     Resolve and return the exact list of file records corresponding to the specific Quality/Episode request.
-    This expands any JSON batches into individual file records with full series context.
+    Only files that are ACTUALLY SAVED in the Series database (series_files collection) are accepted.
+    Unsaved files from raw batch JSON are strictly rejected.
     """
-    from database.series_db import list_quality_episodes, get_series_files
+    from database.series_db import list_quality_episodes, get_series_files, find_saved_series_file
     import json, os, logging
     log = logging.getLogger(__name__)
 
     files = []
+
+    async def _validate_and_get_batch_file(bf, fallback_ep):
+        bf_file_id = bf.get("file_id")
+        bf_name = bf.get("file_name", "")
+
+        def _get_batch_ep(item, fb):
+            if "episode" in item and str(item["episode"]).isdigit() and int(item["episode"]) > 0:
+                return int(item["episode"])
+            if "episode_index" in item and str(item["episode_index"]).isdigit() and int(item["episode_index"]) > 0:
+                return int(item["episode_index"])
+            extracted = _extract_episode_number(item.get("file_name", ""))
+            if extracted is not None and extracted > 0:
+                return extracted
+            return fb
+
+        bf_ep = _get_batch_ep(bf, fallback_ep)
+
+        if not bf_file_id:
+            log.warning(
+                f"[SERIES BATCH VALIDATION]\n"
+                f"request_key={req_key}\n"
+                f"file_id=None\n"
+                f"file_name={bf_name}\n"
+                f"series_id={full_id}\n"
+                f"language={lang}\n"
+                f"season={season}\n"
+                f"quality={qual}\n"
+                f"episode={bf_ep}\n"
+                f"saved_in_database=False"
+            )
+            log.warning(
+                f"[SERIES DELIVERY REJECTED]\n"
+                f"reason=UNSAVED_BATCH_FILE\n"
+                f"file_id=None\n"
+                f"file_name={bf_name}"
+            )
+            return None
+
+        # Authoritative validation against series_files collection in database
+        saved_record = await find_saved_series_file(
+            series_id=full_id,
+            language=lang,
+            season=season,
+            quality=qual,
+            file_id=bf_file_id,
+            episode=bf_ep
+        )
+
+        if not saved_record:
+            log.warning(
+                f"[SERIES BATCH VALIDATION]\n"
+                f"request_key={req_key}\n"
+                f"file_id={bf_file_id}\n"
+                f"file_name={bf_name}\n"
+                f"series_id={full_id}\n"
+                f"language={lang}\n"
+                f"season={season}\n"
+                f"quality={qual}\n"
+                f"episode={bf_ep}\n"
+                f"saved_in_database=False"
+            )
+            log.warning(
+                f"[SERIES DELIVERY REJECTED]\n"
+                f"reason=UNSAVED_BATCH_FILE\n"
+                f"file_id={bf_file_id}\n"
+                f"file_name={bf_name}"
+            )
+            return None
+
+        saved_ep = int(saved_record.get("episode", bf_ep))
+        log.info(
+            f"[SERIES BATCH VALIDATION]\n"
+            f"request_key={req_key}\n"
+            f"file_id={bf_file_id}\n"
+            f"file_name={bf_name}\n"
+            f"series_id={full_id}\n"
+            f"language={lang}\n"
+            f"season={season}\n"
+            f"quality={qual}\n"
+            f"episode={saved_ep}\n"
+            f"saved_in_database=True"
+        )
+        log.info(
+            f"[SERIES DELIVERY ACCEPTED]\n"
+            f"source=SAVED_SERIES_DATABASE\n"
+            f"file_id={bf_file_id}\n"
+            f"episode={saved_ep}"
+        )
+
+        doc = dict(saved_record)
+        doc["is_series"] = True
+        doc["series_rating"] = rating
+        doc["episode"] = saved_ep
+        doc["episode_index"] = saved_ep
+        return doc
+
     if ep is not None and (isinstance(ep, int) or (isinstance(ep, str) and str(ep).isdigit())) and int(ep) > 0:
         ep_num = int(ep)
         raw_ep_files = await get_series_files(full_id, lang, season, ep_num, qual)
@@ -2012,42 +2110,27 @@ async def resolve_exact_series_files(
                         batch_files = json.loads(json_file.read())
                     os.remove(file_path)
 
-                    def _get_batch_ep(bf, fallback):
-                        if "episode" in bf and str(bf["episode"]).isdigit() and int(bf["episode"]) > 0:
-                            return int(bf["episode"])
-                        if "episode_index" in bf and str(bf["episode_index"]).isdigit() and int(bf["episode_index"]) > 0:
-                            return int(bf["episode_index"])
-                        extracted = _extract_episode_number(bf.get("file_name", ""))
-                        if extracted is not None and extracted > 0:
-                            return extracted
-                        return fallback
-
-                    batch_files_sorted = sorted(batch_files, key=lambda b: _get_batch_ep(b, 99999))
-                    for b_idx, bf in enumerate(batch_files_sorted, start=1):
-                        bf_ep = _get_batch_ep(bf, b_idx)
-                        bf["is_series"] = True
-                        bf["series_id"] = full_id
-                        bf["series_rating"] = rating
-                        bf["language"] = lang
-                        bf["season"] = season
-                        bf["quality"] = qual
-                        bf["episode"] = bf_ep
-                        bf["episode_index"] = bf_ep
-                        bf["total_episodes"] = f.get("total_episodes", len(batch_files_sorted))
-                        files.append(bf)
+                    for b_idx, bf in enumerate(batch_files, start=1):
+                        validated_doc = await _validate_and_get_batch_file(bf, b_idx)
+                        if validated_doc and validated_doc.get("episode") == ep_num:
+                            validated_doc["total_episodes"] = 1
+                            files.append(validated_doc)
                 except Exception as e:
                     log.error(f"Failed to fetch JSON batch: {e}")
             else:
-                f["is_series"] = True
-                f["series_id"] = full_id
-                f["series_rating"] = rating
-                f["language"] = lang
-                f["season"] = season
-                f["quality"] = qual
-                f["episode"] = ep_num
-                f["episode_index"] = ep_num
-                f["total_episodes"] = 1
-                files.append(f)
+                f_sid = str(f.get("series_id", ""))
+                f_lang = str(f.get("language", ""))
+                f_season = int(f.get("season", 0))
+                f_qual = str(f.get("quality", ""))
+                if f_sid == str(full_id) and f_lang == str(lang) and f_season == int(season) and f_qual == str(qual):
+                    doc = dict(f)
+                    doc["is_series"] = True
+                    doc["series_rating"] = rating
+                    doc["episode"] = ep_num
+                    doc["episode_index"] = ep_num
+                    doc["total_episodes"] = 1
+                    log.info(f"[SERIES DELIVERY ACCEPTED]\nsource=SAVED_SERIES_DATABASE\nfile_id={doc.get('file_id')}\nepisode={ep_num}")
+                    files.append(doc)
     else:
         episodes = await list_quality_episodes(full_id, lang, season, qual)
         sorted_episodes = sorted([
@@ -2068,42 +2151,27 @@ async def resolve_exact_series_files(
                             batch_files = json.loads(json_file.read())
                         os.remove(file_path)
 
-                        def _get_batch_ep(bf, fallback):
-                            if "episode" in bf and str(bf["episode"]).isdigit() and int(bf["episode"]) > 0:
-                                return int(bf["episode"])
-                            if "episode_index" in bf and str(bf["episode_index"]).isdigit() and int(bf["episode_index"]) > 0:
-                                return int(bf["episode_index"])
-                            extracted = _extract_episode_number(bf.get("file_name", ""))
-                            if extracted is not None and extracted > 0:
-                                return extracted
-                            return fallback
-
-                        batch_files_sorted = sorted(batch_files, key=lambda b: _get_batch_ep(b, 99999))
-                        for b_idx, bf in enumerate(batch_files_sorted, start=1):
-                            bf_ep = _get_batch_ep(bf, b_idx)
-                            bf["is_series"] = True
-                            bf["series_id"] = full_id
-                            bf["series_rating"] = rating
-                            bf["language"] = lang
-                            bf["season"] = season
-                            bf["quality"] = qual
-                            bf["episode"] = bf_ep
-                            bf["episode_index"] = bf_ep
-                            bf["total_episodes"] = f.get("total_episodes", len(batch_files_sorted))
-                            files.append(bf)
+                        for b_idx, bf in enumerate(batch_files, start=1):
+                            validated_doc = await _validate_and_get_batch_file(bf, b_idx)
+                            if validated_doc:
+                                validated_doc["total_episodes"] = total_eps
+                                files.append(validated_doc)
                     except Exception as e:
                         log.error(f"Failed to fetch JSON batch: {e}")
                 else:
-                    f["is_series"] = True
-                    f["series_id"] = full_id
-                    f["series_rating"] = rating
-                    f["language"] = lang
-                    f["season"] = season
-                    f["quality"] = qual
-                    f["episode"] = ep_val if (isinstance(ep_val, int) and ep_val > 0) else i
-                    f["episode_index"] = ep_val if (isinstance(ep_val, int) and ep_val > 0) else i
-                    f["total_episodes"] = total_eps
-                    files.append(f)
+                    f_sid = str(f.get("series_id", ""))
+                    f_lang = str(f.get("language", ""))
+                    f_season = int(f.get("season", 0))
+                    f_qual = str(f.get("quality", ""))
+                    if f_sid == str(full_id) and f_lang == str(lang) and f_season == int(season) and f_qual == str(qual):
+                        doc = dict(f)
+                        doc["is_series"] = True
+                        doc["series_rating"] = rating
+                        doc["episode"] = ep_val if (isinstance(ep_val, int) and ep_val > 0) else i
+                        doc["episode_index"] = ep_val if (isinstance(ep_val, int) and ep_val > 0) else i
+                        doc["total_episodes"] = total_eps
+                        log.info(f"[SERIES DELIVERY ACCEPTED]\nsource=SAVED_SERIES_DATABASE\nfile_id={doc.get('file_id')}\nepisode={doc['episode']}")
+                        files.append(doc)
 
     # Deduplicate exact duplicate file IDs
     seen = set()
@@ -2116,6 +2184,16 @@ async def resolve_exact_series_files(
             seen.add(fid)
         unique_files.append(f)
 
+    # Sort numerically by episode
+    def _sort_key(item):
+        e = item.get("episode")
+        if isinstance(e, int) and e > 0:
+            return (0, e)
+        if isinstance(e, str) and e.isdigit() and int(e) > 0:
+            return (0, int(e))
+        return (1, 0)
+
+    unique_files.sort(key=_sort_key)
     return unique_files
 
 
@@ -2182,7 +2260,7 @@ async def deliver_series_request(client: Client, req_key: str, user_id: int, que
     # 4. Get exact files stored in the request
     files = req.get("files")
     if not files:
-        files = await resolve_exact_series_files(client, full_id, lang, season, qual, ep, rating)
+        files = await resolve_exact_series_files(client, full_id, lang, season, qual, ep, rating, req_key=req_key)
         req["files"] = files
 
     req_file_ids = set(req.get("file_ids") or [f.get("file_id") for f in files if f.get("file_id")])
