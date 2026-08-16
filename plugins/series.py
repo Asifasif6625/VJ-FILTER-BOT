@@ -195,6 +195,34 @@ def _register_short_id(full_id: str):
     _SERIES_ID_MAP[full_id[-8:]] = full_id
 
 
+async def _normalize_series_id(value) -> str:
+    if value is None:
+        return ""
+    val_str = str(value).strip()
+    if len(val_str) == 24:
+        return val_str
+    full = await _get_full_id(val_str)
+    return full if full else val_str
+
+
+async def _match_series_id(f_sid, target_full_id) -> bool:
+    if not f_sid or not target_full_id:
+        return False
+    str_f = str(f_sid).strip()
+    str_t = str(target_full_id).strip()
+    if str_f == str_t:
+        return True
+    norm_f = await _normalize_series_id(str_f)
+    norm_t = await _normalize_series_id(str_t)
+    if norm_f and norm_t and norm_f == norm_t:
+        return True
+    if len(str_t) == 24 and str_f == str_t[-8:]:
+        return True
+    if len(str_f) == 24 and str_t == str_f[-8:]:
+        return True
+    return False
+
+
 
 
 
@@ -1801,7 +1829,14 @@ def _user_suggestions_keyboard(matches: list[dict], user_id: int) -> InlineKeybo
     for m in matches:
         sid = str(m["_id"])
         key = str(uuid.uuid4())[:8]
-        nav_state = {"user": user_id, "user_id": user_id, "sid": sid, "series_id": sid, "path": "SUGGESTION"}
+        nav_state = {
+            "user": user_id,
+            "user_id": user_id,
+            "sid": sid,
+            "series_id": sid,
+            "path": "SUGGESTION",
+            "is_direct": False
+        }
         temp.SERIES_STATE[key] = nav_state
         try:
             import asyncio
@@ -1874,7 +1909,14 @@ async def process_series_search(client: Client, message: Message, txt: str, repl
         if not hasattr(temp, "SERIES_STATE"):
             temp.SERIES_STATE = {}
         key = str(uuid.uuid4())[:8]
-        nav_state = {"user": user_id, "user_id": user_id, "sid": series_id, "series_id": series_id}
+        nav_state = {
+            "user": user_id,
+            "user_id": user_id,
+            "sid": series_id,
+            "series_id": series_id,
+            "path": "DIRECT",
+            "is_direct": True
+        }
         temp.SERIES_STATE[key] = nav_state
         try:
             await save_temp_request(key, nav_state)
@@ -1926,7 +1968,8 @@ async def resolve_exact_series_files(
     qual: str,
     ep: int | None = None,
     rating: str = "N/A",
-    req_key: str = ""
+    req_key: str = "",
+    path: str = "DIRECT"
 ) -> list[dict]:
     """
     Resolve and return the exact list of file records corresponding to the specific Quality/Episode request.
@@ -1937,6 +1980,7 @@ async def resolve_exact_series_files(
     import json, os, logging
     log = logging.getLogger(__name__)
 
+    full_id = await _normalize_series_id(full_id)
     files = []
 
     async def _validate_and_get_batch_file(bf, fallback_ep):
@@ -2057,7 +2101,7 @@ async def resolve_exact_series_files(
                 f_lang = str(f.get("language", ""))
                 f_season = int(f.get("season", 0))
                 f_qual = str(f.get("quality", ""))
-                if f_sid == str(full_id) and f_lang == str(lang) and f_season == int(season) and f_qual == str(qual):
+                if await _match_series_id(f_sid, full_id) and f_lang == str(lang) and f_season == int(season) and f_qual == str(qual):
                     doc = dict(f)
                     doc["is_series"] = True
                     doc["series_rating"] = rating
@@ -2098,7 +2142,7 @@ async def resolve_exact_series_files(
                     f_lang = str(f.get("language", ""))
                     f_season = int(f.get("season", 0))
                     f_qual = str(f.get("quality", ""))
-                    if f_sid == str(full_id) and f_lang == str(lang) and f_season == int(season) and f_qual == str(qual):
+                    if await _match_series_id(f_sid, full_id) and f_lang == str(lang) and f_season == int(season) and f_qual == str(qual):
                         doc = dict(f)
                         doc["is_series"] = True
                         doc["series_rating"] = rating
@@ -2129,6 +2173,44 @@ async def resolve_exact_series_files(
         return (1, 0)
 
     unique_files.sort(key=_sort_key)
+
+    log.info(
+        f"[SERIES RESOLVER RESULT]\n"
+        f"request_key={req_key}\n"
+        f"path={path}\n"
+        f"full_id={full_id}\n"
+        f"language={lang}\n"
+        f"season={season}\n"
+        f"quality={qual}\n"
+        f"episode={ep}\n"
+        f"files_count={len(unique_files)}"
+    )
+
+    if not unique_files:
+        log.warning(
+            f"[SERIES RESOLVER ZERO]\n"
+            f"requested_full_id={full_id}\n"
+            f"language={lang}\n"
+            f"season={season}\n"
+            f"quality={qual}\n"
+            f"episode={ep}"
+        )
+        try:
+            from database.series_db import sfiles_col
+            candidates = sfiles_col.find({"language": lang, "season": int(season), "quality": qual})
+            async for c in candidates:
+                log.info(
+                    f"[SERIES CANDIDATE]\n"
+                    f"candidate_series_id={c.get('series_id')}\n"
+                    f"candidate_language={c.get('language')}\n"
+                    f"candidate_season={c.get('season')}\n"
+                    f"candidate_quality={c.get('quality')}\n"
+                    f"candidate_episode={c.get('episode')}\n"
+                    f"candidate_file_id={c.get('file_id')}"
+                )
+        except Exception:
+            pass
+
     return unique_files
 
 
@@ -2194,11 +2276,25 @@ async def deliver_series_request(client: Client, req_key: str, user_id: int, que
     qual = req.get("quality")
     ep = req.get("episode")
     rating = req.get("rating", "N/A")
+    path = req.get("path", "DIRECT" if req.get("is_direct") else "SUGGESTION")
+
+    log.info(
+        f"[SERIES DELIVERY REQUEST]\n"
+        f"request_key={req_key}\n"
+        f"path={path}\n"
+        f"user_id={user_id}\n"
+        f"series_id={req.get('series_id')}\n"
+        f"full_id={full_id}\n"
+        f"language={lang}\n"
+        f"season={season}\n"
+        f"quality={qual}\n"
+        f"episode={ep}"
+    )
 
     # 4. Get exact files stored in the request
     files = req.get("files")
     if not files:
-        files = await resolve_exact_series_files(client, full_id, lang, season, qual, ep, rating, req_key=req_key)
+        files = await resolve_exact_series_files(client, full_id, lang, season, qual, ep, rating, req_key=req_key, path=path)
         req["files"] = files
 
     req_file_ids = set(req.get("file_ids") or [f.get("file_id") for f in files if f.get("file_id")])
@@ -2213,7 +2309,7 @@ async def deliver_series_request(client: Client, req_key: str, user_id: int, que
         f_id = f.get("file_id")
 
         # Check matching context
-        if f_sid != str(full_id) or f_lang != str(lang) or f_season != int(season) or f_qual != str(qual):
+        if not await _match_series_id(f_sid, full_id) or f_lang != str(lang) or f_season != int(season) or f_qual != str(qual):
             log.warning(f"[SERIES DELIVERY REJECTED] reason=NOT_IN_REQUEST series_id={f_sid} season={f_season} lang={f_lang} qual={f_qual} file_id={f_id} file_name={f.get('file_name')}")
             continue
 
@@ -2356,7 +2452,8 @@ async def series_user_nav(client: Client, query: CallbackQuery):
             rating = series.get("rating", "N/A")
             chat_type = "PRIVATE" if query.message.chat.type == enums.ChatType.PRIVATE else "GROUP"
             path_type = req.get("path", "DIRECT" if req.get("is_direct") else "SUGGESTION")
-            
+            is_direct_val = bool(req.get("is_direct", (path_type == "DIRECT")))
+
             # ── 10-Second Cooldown Protection (PM Series Quality Button) ──
             if query.message.chat.type == enums.ChatType.PRIVATE:
                 import math
@@ -2394,6 +2491,8 @@ async def series_user_nav(client: Client, query: CallbackQuery):
                 "request_type": "series",
                 "type": "series",
                 "source": "series_pm" if query.message.chat.type == enums.ChatType.PRIVATE else "series_group",
+                "path": path_type,
+                "is_direct": is_direct_val,
                 "series_id": sid,
                 "full_id": full_id,
                 "language": lang,

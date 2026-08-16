@@ -1799,6 +1799,14 @@ async def cb_handler(client: Client, query: CallbackQuery):
                     log.info(f"[SERIES TRY AGAIN]\nkey={req_key}\nuser_id={query.from_user.id}\nmembership=NOT_JOINED")
                     return await query.answer("⚠️ Please join the channel first.", show_alert=True)
                 
+                # Immediately delete Join Request message upon confirmed membership
+                try:
+                    if query.message:
+                        await query.message.delete()
+                        log.info(f"[SERIES TRY AGAIN] Deleted Join Request message for request_key={req_key}")
+                except Exception as e:
+                    log.warning(f"[SERIES TRY AGAIN] Failed to delete Join Request message: {e}")
+
                 from plugins.series import deliver_series_request
                 await deliver_series_request(client, req_key, query.from_user.id, query=query)
                 return
