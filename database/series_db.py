@@ -25,10 +25,15 @@ settings_col = _db["settings"]
 
 
 # ─── Helpers ──────────────────────────────────────────────────────────────────
+EMOJI_PATTERN = re.compile(
+    r"[\U00010000-\U0010ffff\u200d\ufe0f\ufe0e\u2600-\u27bf\u2300-\u23ff\u2b50\u2b55\u2934\u2935\u3030\u303d\u3297\u3299]+",
+    flags=re.UNICODE
+)
 
 def _normalize(name: str) -> str:
-    """Lowercase, strip extra spaces — used for search."""
-    return re.sub(r"\s+", " ", name.strip().lower())
+    """Lowercase, strip emojis and extra spaces — used for search."""
+    cleaned = EMOJI_PATTERN.sub(" ", name)
+    return re.sub(r"\s+", " ", cleaned.strip().lower())
 
 
 async def _ensure_indexes():
