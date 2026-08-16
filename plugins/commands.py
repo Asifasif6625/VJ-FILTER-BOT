@@ -1617,33 +1617,50 @@ async def total_requests(client, message):
 @Client.on_message(filters.command("purgerequests") & filters.private & filters.user(ADMINS))
 async def purge_requests(client, message):
     import logging
+    import asyncio
+    from pyrogram.errors import FloodWait
     log = logging.getLogger(__name__)
     log.info("[PURGE REQUESTS] START")
     log.info(f"[PURGE REQUESTS] CHANNEL = {AUTH_CHANNEL}")
     
+    db_count = 0
+    users = []
     if join_db().isActive():
+        db_count = await join_db().get_all_users_count()
+        users = await join_db().get_all_users()
         await join_db().delete_all_users()
         
-    msg = await message.reply_text("Purging pending join requests...", parse_mode=enums.ParseMode.MARKDOWN)
+    msg = await message.reply_text("Processing /purgerequests...", parse_mode=enums.ParseMode.MARKDOWN)
     
-    try:
-        if AUTH_CHANNEL:
+    declined_count = 0
+    if AUTH_CHANNEL and users:
+        for u in users:
+            uid = u.get("user_id")
+            if not uid:
+                continue
             try:
-                await client.decline_all_chat_join_requests(int(AUTH_CHANNEL))
-                log.info("[PURGE REQUESTS] PENDING COUNT = Unknown (Bulk action)")
-                log.info("[PURGE REQUESTS] PROCESSED = All")
-                log.info("[PURGE REQUESTS] FAILED = 0")
-                await msg.edit("Purged All Pending Join Requests from Database and Channel.", parse_mode=enums.ParseMode.MARKDOWN)
-            except Exception as inner_e:
-                log.error(f"[PURGE REQUESTS] API ERROR: {inner_e}")
-                log.info("[PURGE REQUESTS] FAILED = All")
-                await msg.edit(f"Purged from Database, but failed to purge from channel. API Error:\n`{inner_e}`", parse_mode=enums.ParseMode.MARKDOWN)
-        else:
-            log.info("[PURGE REQUESTS] CHANNEL = None")
-            await msg.edit("Purged All Requests from Database (No AUTH_CHANNEL set).", parse_mode=enums.ParseMode.MARKDOWN)
-    except Exception as e:
-        log.error(f"[PURGE REQUESTS] ERROR: {e}")
-        await msg.edit(f"An unexpected error occurred:\n`{e}`", parse_mode=enums.ParseMode.MARKDOWN)
+                await client.decline_chat_join_request(int(AUTH_CHANNEL), int(uid))
+                declined_count += 1
+            except FloodWait as f:
+                await asyncio.sleep(f.value)
+                try:
+                    await client.decline_chat_join_request(int(AUTH_CHANNEL), int(uid))
+                    declined_count += 1
+                except Exception:
+                    pass
+            except Exception:
+                pass
+                
+    text = f"✅ **Purged {db_count} Requests from Database.**\n\n"
+    if declined_count > 0:
+        text += f"✅ **Declined {declined_count} tracked pending request(s) in Channel.**\n\n"
+    text += (
+        "⚠️ **Note:** Telegram Bot API does not allow bots to bulk-purge all channel join requests at once "
+        "(`HideAllChatJoinRequests` is restricted to user accounts)."
+    )
+    
+    log.info(f"[PURGE REQUESTS] COMPLETED: db_purged={db_count}, channel_declined={declined_count}")
+    await msg.edit(text, parse_mode=enums.ParseMode.MARKDOWN)
 
 # ─── SERIES FILE DELIVERY HANDLER (WITH METADATA) ───────────────────────────
 async def send_series_files_to_user(client, user_id, files, query=None):
