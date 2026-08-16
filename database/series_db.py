@@ -31,10 +31,30 @@ EMOJI_PATTERN = re.compile(
     flags=re.UNICODE
 )
 
+def clean_series_title(title: str) -> str:
+    """
+    Cleans markdown formatting, decorative symbols, and punctuation
+    from a Series title while preserving the alphanumeric title words.
+    """
+    if not title:
+        return ""
+    # Remove HTML tags if present (e.g. <b>title</b>)
+    cleaned = re.sub(r"<[^>]+>", " ", title)
+    # Remove markdown formatting characters: *, _, `, ~, |, #
+    cleaned = re.sub(r"[\*\_`~|#]", " ", cleaned)
+    # Remove punctuation & decorative symbols: !, ?, :, ;, ,, ", ', (, ), [, ], {, }, <, >, /, \, @, $, %, ^, &, +, =, ~
+    cleaned = re.sub(r"[!?:;,\"'\(\)\[\]\{\}<>/\\@$%^&+=~]", " ", cleaned)
+    # Remove emojis & non-printable symbols
+    cleaned = EMOJI_PATTERN.sub(" ", cleaned)
+    # Collapse multiple spaces and strip
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    return cleaned
+
+
 def _normalize(name: str) -> str:
-    """Lowercase, strip emojis and extra spaces — used for search."""
-    cleaned = EMOJI_PATTERN.sub(" ", name)
-    return re.sub(r"\s+", " ", cleaned.strip().lower())
+    """Lowercase, clean title symbols and extra spaces — used for search."""
+    cleaned = clean_series_title(name)
+    return cleaned.lower()
 
 
 async def _ensure_indexes():
@@ -57,14 +77,15 @@ async def _ensure_indexes():
 
 async def create_series(data: dict) -> str:
     """
-    Insert a new series document.
+    Insert a new series document with a cleaned canonical title.
     data keys: name, year, genre, description, poster,
                 languages, seasons, qualities, created_by
     Returns the new _id string.
     """
+    clean_name = clean_series_title(data.get("name", ""))
     doc = {
-        "name": data.get("name", ""),
-        "normalized_name": _normalize(data.get("name", "")),
+        "name": clean_name,
+        "normalized_name": _normalize(clean_name),
         "year": data.get("year", "N/A"),
         "genre": data.get("genre", "N/A"),
         "rating": data.get("rating", ""),
@@ -288,6 +309,10 @@ async def delete_series_thumbnail():
 
 async def update_series(series_id: str, data: dict):
     """Partial update on a series document."""
+    if "name" in data and data["name"]:
+        clean_name = clean_series_title(data["name"])
+        data["name"] = clean_name
+        data["normalized_name"] = _normalize(clean_name)
     data["updated_at"] = datetime.utcnow()
     await series_col.update_one(
         {"_id": ObjectId(series_id)},
