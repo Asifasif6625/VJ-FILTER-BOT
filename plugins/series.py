@@ -2309,6 +2309,7 @@ async def series_user_nav(client: Client, query: CallbackQuery):
     
     # ── Send file (Quality selected) ──────────────────────────────────
     if len(parts) >= 8 and parts[2] == "l" and parts[4] == "s" and parts[6] == "q":
+        import time
         lang    = parts[3]
         season  = int(parts[5])
         qual    = parts[7]
@@ -2316,17 +2317,35 @@ async def series_user_nav(client: Client, query: CallbackQuery):
         
         rating = series.get("rating", "N/A")
         
+        # ── 10-Second Cooldown Protection (PM Series Quality Button) ──
+        if query.message.chat.type == enums.ChatType.PRIVATE:
+            import math
+            now = time.time()
+            if not hasattr(temp, "SERIES_PM_QUALITY_COOLDOWNS"):
+                temp.SERIES_PM_QUALITY_COOLDOWNS = {}
+
+            for k, t in list(temp.SERIES_PM_QUALITY_COOLDOWNS.items()):
+                if now - t > 60:
+                    temp.SERIES_PM_QUALITY_COOLDOWNS.pop(k, None)
+
+            cooldown_key = (query.from_user.id, key, lang, season, qual)
+            last_click_time = temp.SERIES_PM_QUALITY_COOLDOWNS.get(cooldown_key)
+
+            if last_click_time is not None:
+                elapsed = now - last_click_time
+                if elapsed < 10:
+                    remaining = math.ceil(10 - elapsed)
+                    log.info(f"[SERIES PM QUALITY]\nuser_id={query.from_user.id}\nquality={qual}\naction=COOLDOWN_BLOCKED\nremaining={remaining}")
+                    alert_text = f"⏳ Please wait {remaining} seconds." if remaining > 1 else f"⏳ Please wait {remaining} second."
+                    return await query.answer(alert_text, show_alert=True)
+
+            temp.SERIES_PM_QUALITY_COOLDOWNS[cooldown_key] = now
+
         import uuid as _uuid
-        from utils import temp as _temp, is_subscribed
-        from info import AUTH_CHANNEL
+        from utils import temp as _temp
         from database.series_db import save_temp_request
         
         req_key = str(_uuid.uuid4())[:8]
-
-        # Resolve exact files immediately for this request
-        exact_files = await resolve_exact_series_files(client, full_id, lang, season, qual, ep, rating)
-        exact_file_ids = [f["file_id"] for f in exact_files if f.get("file_id")]
-        exact_eps = [f.get("episode") for f in exact_files if f.get("episode") is not None]
 
         req_data = {
             "request_key": req_key,
@@ -2342,9 +2361,6 @@ async def series_user_nav(client: Client, query: CallbackQuery):
             "quality": qual,
             "episode": ep,
             "rating": rating,
-            "files": exact_files,
-            "file_ids": exact_file_ids,
-            "episodes": exact_eps,
             "delivery_status": "pending",
             "state": "PENDING",
             "created_at": time.time(),
@@ -2363,92 +2379,29 @@ async def series_user_nav(client: Client, query: CallbackQuery):
         except Exception as ex:
             log.warning(f"Could not save temp request to DB: {ex}")
 
+        log.info(
+            f"[SERIES QUALITY CLICK]\n"
+            f"user_id={query.from_user.id}\n"
+            f"series_id={full_id}\n"
+            f"language={lang}\n"
+            f"season={season}\n"
+            f"quality={qual}\n"
+            f"request_key={req_key}\n"
+            f"action=REQUEST_CREATED"
+        )
+
         # Group Quality click -> Redirect to PM with /start all_<req_key>
         if query.message.chat.type != enums.ChatType.PRIVATE:
-            log.info(f"[SERIES GROUP QUALITY]\nuser_id={query.from_user.id}\nsid={sid}\nfull_id={full_id}\nlanguage={lang}\nseason={season}\nquality={qual}\nchat_type=GROUP")
-            log.info(f"[SERIES GROUP QUALITY]\nrequest_key={req_key}\naction=REQUEST_SAVED")
             start_url = f"https://t.me/{temp.U_NAME}?start=all_{req_key}"
-            log.info(f"[REQUEST KEY TRACE]\nstage=GROUP_QUALITY\nkey={req_key}")
-            log.info(f"[SERIES GROUP QUALITY]\nrequest_key={req_key}\naction=OPEN_PM")
+            log.info(f"[SERIES QUALITY CLICK]\nrequest_key={req_key}\naction=ROUTED_TO_PM")
             return await query.answer(url=start_url)
             
-        # Private Chat: Membership Verification (Force Sub / Join Request)
-        if AUTH_CHANNEL:
-            if not await is_subscribed(client, query):
-                log.info(f"[REQUEST FLOW]\nrequest_key={req_key}\nuser_id={query.from_user.id}\ntype=SERIES\nseries_id={full_id}\nlanguage={lang}\nseason={season}\nquality={qual}")
-                await query.answer()
-                
-                if req.get("join_message_id"):
-                    try:
-                        await client.delete_messages(chat_id=query.from_user.id, message_ids=req["join_message_id"])
-                    except Exception:
-                        pass
-                
-                try:
-                    invite_link = await client.create_chat_invite_link(int(AUTH_CHANNEL), creates_join_request=True)
-                except Exception as e:
-                    log.error(f"Failed to create invite link: {e}")
-                    return await query.answer("Make sure Bot is admin in Forcesub channel", show_alert=True)
-                
-                text = (
-                    "📢 **Channel Join Request**\n\n"
-                    "ഫയലുകൾ ലഭിക്കുന്നതിന് മുമ്പ് ഞങ്ങളുടെ ചാനലിലേക്ക് Join Request അയയ്ക്കുക.\n\n"
-                    "Request അയച്ച ശേഷം താഴെയുള്ള Try Again ബട്ടൺ ക്ലിക്ക് ചെയ്യുക.\n\n"
-                    "Please send a Join Request to our channel before getting the files.\n\n"
-                    "After sending the request, click Try Again below."
-                )
-                btn = [
-                    [InlineKeyboardButton("📢 Send Join Request", url=invite_link.invite_link)],
-                    [InlineKeyboardButton("🔄 Try Again", callback_data=f"checksub#series#{req_key}")]
-                ]
-                join_msg = await client.send_message(
-                    chat_id=query.from_user.id,
-                    text=text,
-                    reply_markup=InlineKeyboardMarkup(btn),
-                    parse_mode=enums.ParseMode.MARKDOWN
-                )
-                req_data["join_message_id"] = join_msg.id
-                req["join_message_id"] = join_msg.id
-                log.info(f"[JOIN REQUEST]\nrequest_key={req_key}\naction=CREATED\nmessage_id={join_msg.id}")
-                return
-
-        log.info(f"[REQUEST KEY TRACE]\nstage=PM\nkey={req_key}")
-
-        # Check delivery status
-        if req.get("delivery_status") == "completed" or req_data.get("delivery_status") == "completed":
-            return await query.answer("✅ Files already sent.", show_alert=True)
-        if req.get("delivery_status") == "sending" or req_data.get("delivery_status") == "sending":
-            return await query.answer("⏳ Files are already being sent.", show_alert=True)
-
-        # ── 10-Second Cooldown Protection (PM Series Quality Button) ──
-        import math
-        now = time.time()
-
-        if not hasattr(temp, "SERIES_PM_QUALITY_COOLDOWNS"):
-            temp.SERIES_PM_QUALITY_COOLDOWNS = {}
-
-        # Clean up expired entries older than 60s
-        for k, t in list(temp.SERIES_PM_QUALITY_COOLDOWNS.items()):
-            if now - t > 60:
-                temp.SERIES_PM_QUALITY_COOLDOWNS.pop(k, None)
-
-        cooldown_key = (query.from_user.id, key, lang, season, qual)
-        last_click_time = temp.SERIES_PM_QUALITY_COOLDOWNS.get(cooldown_key)
-
-        if last_click_time is not None:
-            elapsed = now - last_click_time
-            if elapsed < 10:
-                remaining = math.ceil(10 - elapsed)
-                log.info(f"[SERIES PM QUALITY]\nuser_id={query.from_user.id}\nrequest={req_key}\nquality={qual}\naction=COOLDOWN_BLOCKED\nremaining={remaining}")
-                alert_text = f"⏳ Please wait {remaining} seconds." if remaining > 1 else f"⏳ Please wait {remaining} second."
-                return await query.answer(alert_text, show_alert=True)
-            else:
-                log.info(f"[SERIES PM QUALITY]\nuser_id={query.from_user.id}\nrequest={req_key}\nquality={qual}\naction=COOLDOWN_EXPIRED")
-
-        temp.SERIES_PM_QUALITY_COOLDOWNS[cooldown_key] = now
-
-        # Deliver via unified delivery function
-        return await deliver_series_request(client, req_key, query.from_user.id, query=query)
+        # Private Chat: Answer callback immediately and route to /start all_<req_key> flow
+        await query.answer()
+        log.info(f"[SERIES QUALITY CLICK]\nrequest_key={req_key}\naction=ROUTED_TO_PM")
+        from plugins.commands import process_series_start
+        asyncio.create_task(process_series_start(client, query.from_user.id, req_key))
+        return
 
 
 
