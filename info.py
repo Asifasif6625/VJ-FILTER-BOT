@@ -3,9 +3,13 @@
 # Ask Doubt on telegram @KingVJ01
 
 
-import re
+import sys, os, re
 from os import environ
 from Script import script 
+
+# Prevent creation of __pycache__ folders and .pyc files
+sys.dont_write_bytecode = True
+os.environ["PYTHONDONTWRITEBYTECODE"] = "1" 
 
 id_pattern = re.compile(r'^.\d+$')
 
