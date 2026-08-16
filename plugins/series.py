@@ -1692,25 +1692,62 @@ async def cmd_slink(client: Client, message: Message):
 
 
 
+def schedule_series_auto_delete(message, delay: int = 300):
+    from info import AUTO_DELETE
+    if not AUTO_DELETE or not message:
+        return
+    from utils import temp
+    if not hasattr(temp, "SERIES_SCHEDULED_DELETES"):
+        temp.SERIES_SCHEDULED_DELETES = set()
+
+    chat_id = getattr(getattr(message, "chat", None), "id", None)
+    msg_id = getattr(message, "id", None)
+    if not chat_id or not msg_id:
+        return
+    msg_key = (chat_id, msg_id)
+    if msg_key in temp.SERIES_SCHEDULED_DELETES:
+        return
+    temp.SERIES_SCHEDULED_DELETES.add(msg_key)
+
+    async def _auto_delete():
+        try:
+            import asyncio
+            await asyncio.sleep(delay)
+            await message.delete()
+        except Exception:
+            pass
+        finally:
+            temp.SERIES_SCHEDULED_DELETES.discard(msg_key)
+
+    import asyncio
+    asyncio.create_task(_auto_delete())
+
+
 async def _send_or_edit(message_or_query, text, reply_markup, poster=None):
     if isinstance(message_or_query, Message):
         if poster:
-            return await message_or_query.reply_photo(photo=poster, caption=text, reply_markup=reply_markup, parse_mode=enums.ParseMode.HTML)
+            m = await message_or_query.reply_photo(photo=poster, caption=text, reply_markup=reply_markup, parse_mode=enums.ParseMode.HTML)
         else:
-            return await message_or_query.reply_text(text, reply_markup=reply_markup, parse_mode=enums.ParseMode.HTML)
+            m = await message_or_query.reply_text(text, reply_markup=reply_markup, parse_mode=enums.ParseMode.HTML)
+        if m:
+            schedule_series_auto_delete(m, delay=300)
+        return m
     else:
         try:
             if message_or_query.message.photo:
                 if poster and message_or_query.message.photo.file_id != poster:
                     from pyrogram.types import InputMediaPhoto
-                    return await message_or_query.message.edit_media(
+                    m = await message_or_query.message.edit_media(
                         media=InputMediaPhoto(poster, caption=text),
                         reply_markup=reply_markup
                     )
                 else:
-                    return await message_or_query.message.edit_caption(caption=text, reply_markup=reply_markup, parse_mode=enums.ParseMode.HTML)
+                    m = await message_or_query.message.edit_caption(caption=text, reply_markup=reply_markup, parse_mode=enums.ParseMode.HTML)
             else:
-                return await message_or_query.message.edit_text(text, reply_markup=reply_markup, parse_mode=enums.ParseMode.HTML)
+                m = await message_or_query.message.edit_text(text, reply_markup=reply_markup, parse_mode=enums.ParseMode.HTML)
+            if m:
+                schedule_series_auto_delete(m, delay=300)
+            return m
         except MessageNotModified:
             return message_or_query.message
 
@@ -1826,10 +1863,16 @@ async def process_series_search(client: Client, message: Message, txt: str, repl
         
         import uuid
         from utils import temp
+        from database.series_db import save_temp_request
         if not hasattr(temp, "SERIES_STATE"):
             temp.SERIES_STATE = {}
         key = str(uuid.uuid4())[:8]
-        temp.SERIES_STATE[key] = {"user": user_id, "sid": series_id}
+        nav_state = {"user": user_id, "user_id": user_id, "sid": series_id, "series_id": series_id}
+        temp.SERIES_STATE[key] = nav_state
+        try:
+            await save_temp_request(key, nav_state)
+        except Exception:
+            pass
         
         sid = series_id
 
@@ -1857,18 +1900,7 @@ async def process_series_search(client: Client, message: Message, txt: str, repl
                 await reply_msg.delete()
             except:
                 pass
-        msg = await _send_or_edit(message, text, rm, poster=poster)
-        if msg:
-            from info import AUTO_DELETE
-            if AUTO_DELETE:
-                async def delete_search_msg(m):
-                    await asyncio.sleep(240)
-                    try:
-                        await m.delete()
-                    except Exception:
-                        pass
-                import asyncio
-                asyncio.create_task(delete_search_msg(msg))
+        await _send_or_edit(message, text, rm, poster=poster)
     return True
 
 
@@ -2104,6 +2136,7 @@ async def deliver_series_request(client: Client, req_key: str, user_id: int, que
     log = logging.getLogger(__name__)
 
     log.info(f"[SERIES DELIVERY]\naction=START\nrequest_key={req_key}")
+    log.info(f"[SERIES DELIVERY]\nrequest_key={req_key}\naction=START")
 
     # 1. Retrieve request context from memory or DB
     req = getattr(temp, "SERIES_STATE", {}).get(req_key)
@@ -2206,6 +2239,7 @@ async def deliver_series_request(client: Client, req_key: str, user_id: int, que
         return False
 
     log.info(f"[SERIES DELIVERY]\naction=FILES_FOUND\ncount={len(verified_files)}\nrequest_key={req_key}")
+    log.info(f"[SERIES DELIVERY]\nrequest_key={req_key}\nfiles_count={len(verified_files)}")
 
     # 6. Delete Join Request message if exists
     if query and query.message:
@@ -2263,24 +2297,35 @@ async def series_user_nav(client: Client, query: CallbackQuery):
         
     req = getattr(temp, "SERIES_STATE", {}).get(key)
     if not req:
+        from database.series_db import get_temp_request
+        req = await get_temp_request(key)
+        if req:
+            if not hasattr(temp, "SERIES_STATE"):
+                temp.SERIES_STATE = {}
+            temp.SERIES_STATE[key] = req
+
+    if not req:
         return await query.answer("⚠️ Request expired. Please search again.", show_alert=True)
         
-    log.info(f"[SERIES CALLBACK] callback={query.data} click_user={query.from_user.id} owner_user={req['user']}")
-    if query.from_user.id != req["user"]:
+    log.info(f"[SERIES CALLBACK] callback={query.data} click_user={query.from_user.id} owner_user={req.get('user', req.get('user_id'))}")
+    owner_id = req.get("user", req.get("user_id"))
+    if owner_id and int(query.from_user.id) != int(owner_id):
         log.info("[SERIES CALLBACK] ownership=DENIED")
         log.info("[SERIES GROUP QUALITY]\naction=OWNERSHIP_DENIED")
         return await query.answer("⚠️ This is not your button.", show_alert=True)
     log.info("[SERIES CALLBACK] ownership=ALLOWED")
         
-    sid = req["sid"]
+    sid = req.get("sid", req.get("series_id"))
+    if not sid:
+        return await query.answer("⚠️ Unable to process this Series request. Please search again.", show_alert=True)
     
     full_id = await _get_full_id(sid)
     if not full_id:
-        return await query.answer("Series context expired.", show_alert=True)
+        return await query.answer("⚠️ Unable to process this Series request. Please search again.", show_alert=True)
     
     series = await get_series(full_id)
     if not series:
-        return await query.answer("Series not found in database.", show_alert=True)
+        return await query.answer("⚠️ Unable to process this Series request. Please search again.", show_alert=True)
 
     lang = None
     season = None
@@ -2288,130 +2333,142 @@ async def series_user_nav(client: Client, query: CallbackQuery):
     
     # ── Send file (Quality selected) ──────────────────────────────────
     if len(parts) >= 8 and parts[2] == "l" and parts[4] == "s" and parts[6] == "q":
-        import time
-        lang    = parts[3]
-        season  = int(parts[5])
-        qual    = parts[7]
-        ep      = int(parts[9]) if (len(parts) >= 10 and parts[8] == "e") else None
-        
-        rating = series.get("rating", "N/A")
-        
-        # ── 10-Second Cooldown Protection (PM Series Quality Button) ──
-        if query.message.chat.type == enums.ChatType.PRIVATE:
-            import math
-            now = time.time()
-            if not hasattr(temp, "SERIES_PM_QUALITY_COOLDOWNS"):
-                temp.SERIES_PM_QUALITY_COOLDOWNS = {}
-
-            for k, t in list(temp.SERIES_PM_QUALITY_COOLDOWNS.items()):
-                if now - t > 60:
-                    temp.SERIES_PM_QUALITY_COOLDOWNS.pop(k, None)
-
-            cooldown_key = (query.from_user.id, key, lang, season, qual)
-            last_click_time = temp.SERIES_PM_QUALITY_COOLDOWNS.get(cooldown_key)
-
-            if last_click_time is not None:
-                elapsed = now - last_click_time
-                if elapsed < 10:
-                    remaining = math.ceil(10 - elapsed)
-                    log.info(f"[SERIES PM QUALITY]\nuser_id={query.from_user.id}\nquality={qual}\naction=COOLDOWN_BLOCKED\nremaining={remaining}")
-                    alert_text = f"⏳ Please wait {remaining} seconds." if remaining > 1 else f"⏳ Please wait {remaining} second."
-                    return await query.answer(alert_text, show_alert=True)
-
-            temp.SERIES_PM_QUALITY_COOLDOWNS[cooldown_key] = now
-
-        import uuid as _uuid
-        from utils import temp as _temp
-        from database.series_db import save_temp_request, get_temp_request
-        
-        req_key = str(_uuid.uuid4())[:8]
-
-        req_data = {
-            "request_key": req_key,
-            "user_id": query.from_user.id,
-            "user": query.from_user.id,
-            "request_type": "series",
-            "type": "series",
-            "source": "series_pm" if query.message.chat.type == enums.ChatType.PRIVATE else "series_group",
-            "series_id": sid,
-            "full_id": full_id,
-            "language": lang,
-            "season": season,
-            "quality": qual,
-            "episode": ep,
-            "rating": rating,
-            "delivery_status": "pending",
-            "state": "PENDING",
-            "created_at": time.time(),
-            "query": {
-                "full_id": full_id,
-                "lang": lang,
-                "season": season,
-                "qual": qual,
-                "rating": rating
-            }
-        }
-        _temp.SERIES_STATE[req_key] = req_data
-        _temp.GETALL[req_key] = req_data
         try:
-            await save_temp_request(req_key, req_data)
-            test_req = await get_temp_request(req_key)
-            if test_req:
-                log.info(f"[SERIES GROUP QUALITY]\naction=REQUEST_SAVED\nrequest_key={req_key}")
-            else:
-                log.warning(f"[SERIES GROUP QUALITY]\naction=REQUEST_SAVE_VERIFY_FAILED\nrequest_key={req_key}")
-        except Exception as ex:
-            log.error(f"[SERIES GROUP QUALITY]\naction=REQUEST_SAVE_VERIFY_FAILED\nrequest_key={req_key}\nerror={ex}")
-
-        # Group Quality click -> Redirect to PM with /start all_<req_key>
-        if query.message.chat.type != enums.ChatType.PRIVATE:
+            import time
+            lang    = parts[3]
+            season  = int(parts[5])
+            qual    = parts[7]
+            ep      = int(parts[9]) if (len(parts) >= 10 and parts[8] == "e") else None
+            
+            rating = series.get("rating", "N/A")
+            chat_type = "PRIVATE" if query.message.chat.type == enums.ChatType.PRIVATE else "GROUP"
+            
             log.info(
-                f"[SERIES GROUP QUALITY]\n"
-                f"action=CLICK\n"
+                f"[SERIES DIRECT QUALITY]\n"
+                f"chat_type={chat_type}\n"
                 f"user_id={query.from_user.id}\n"
-                f"chat_id={query.message.chat.id}\n"
-                f"series_id={sid}\n"
+                f"callback={query.data}\n"
+                f"key={key}\n"
+                f"sid={sid}\n"
                 f"full_id={full_id}\n"
                 f"language={lang}\n"
                 f"season={season}\n"
-                f"quality={qual}\n"
-                f"request_key={req_key}\n"
-                f"source=GROUP"
+                f"quality={qual}"
             )
-
-            bot_username = temp.U_NAME if (hasattr(temp, "U_NAME") and temp.U_NAME) else getattr(getattr(client, "me", None), "username", None)
-            if bot_username:
-                bot_username = str(bot_username).lstrip("@")
-            else:
-                bot_username = "Bot"
-
-            start_url = f"https://t.me/{bot_username}?start=all_{req_key}"
-            log.info(
-                f"[SERIES GROUP QUALITY]\n"
-                f"action=OPEN_PM\n"
-                f"request_key={req_key}\n"
-                f"bot_username={bot_username}\n"
-                f"start_url={start_url}"
-            )
-            try:
-                return await query.answer(url=start_url)
-            except Exception as e:
-                log.warning(f"[SERIES GROUP QUALITY] query.answer(url=start_url) failed: {e}. Replying with fallback button.")
-                return await query.message.reply_text(
-                    "📩 Open bot to get your requested Series files:",
-                    reply_markup=InlineKeyboardMarkup([
-                        [InlineKeyboardButton("📂 Open Bot", url=start_url)]
-                    ])
-                )
             
-        # Private Chat: Answer callback immediately and route to /start all_<req_key> flow
-        await query.answer()
-        log.info(f"[SERIES QUALITY CLICK]\nrequest_key={req_key}\naction=ROUTED_TO_PM")
-        from plugins.commands import process_series_start
-        asyncio.create_task(process_series_start(client, query.from_user.id, req_key))
-        return
+            # ── 10-Second Cooldown Protection (PM Series Quality Button) ──
+            if query.message.chat.type == enums.ChatType.PRIVATE:
+                import math
+                now = time.time()
+                if not hasattr(temp, "SERIES_PM_QUALITY_COOLDOWNS"):
+                    temp.SERIES_PM_QUALITY_COOLDOWNS = {}
 
+                for k, t in list(temp.SERIES_PM_QUALITY_COOLDOWNS.items()):
+                    if now - t > 60:
+                        temp.SERIES_PM_QUALITY_COOLDOWNS.pop(k, None)
 
+                cooldown_key = (query.from_user.id, key, lang, season, qual)
+                last_click_time = temp.SERIES_PM_QUALITY_COOLDOWNS.get(cooldown_key)
+
+                if last_click_time is not None:
+                    elapsed = now - last_click_time
+                    if elapsed < 10:
+                        remaining = math.ceil(10 - elapsed)
+                        log.info(f"[SERIES PM QUALITY]\nuser_id={query.from_user.id}\nquality={qual}\naction=COOLDOWN_BLOCKED\nremaining={remaining}")
+                        alert_text = f"⏳ Please wait {remaining} seconds." if remaining > 1 else f"⏳ Please wait {remaining} second."
+                        return await query.answer(alert_text, show_alert=True)
+
+                temp.SERIES_PM_QUALITY_COOLDOWNS[cooldown_key] = now
+
+            import uuid as _uuid
+            from utils import temp as _temp
+            from database.series_db import save_temp_request, get_temp_request
+            
+            req_key = str(_uuid.uuid4())[:8]
+
+            req_data = {
+                "request_key": req_key,
+                "user_id": query.from_user.id,
+                "user": query.from_user.id,
+                "request_type": "series",
+                "type": "series",
+                "source": "series_pm" if query.message.chat.type == enums.ChatType.PRIVATE else "series_group",
+                "series_id": sid,
+                "full_id": full_id,
+                "language": lang,
+                "season": season,
+                "quality": qual,
+                "episode": ep,
+                "rating": rating,
+                "delivery_status": "pending",
+                "state": "PENDING",
+                "created_at": time.time(),
+                "query": {
+                    "full_id": full_id,
+                    "lang": lang,
+                    "season": season,
+                    "qual": qual,
+                    "rating": rating
+                }
+            }
+            _temp.SERIES_STATE[req_key] = req_data
+            _temp.GETALL[req_key] = req_data
+            try:
+                await save_temp_request(req_key, req_data)
+                test_req = await get_temp_request(req_key)
+                if test_req:
+                    log.info(f"[SERIES GROUP QUALITY]\naction=REQUEST_SAVED\nrequest_key={req_key}")
+                else:
+                    log.warning(f"[SERIES GROUP QUALITY]\naction=REQUEST_SAVE_VERIFY_FAILED\nrequest_key={req_key}")
+            except Exception as ex:
+                log.error(f"[SERIES GROUP QUALITY]\naction=REQUEST_SAVE_VERIFY_FAILED\nrequest_key={req_key}\nerror={ex}")
+
+            log.info(
+                f"[SERIES DIRECT QUALITY]\n"
+                f"action=REQUEST_CREATED\n"
+                f"request_key={req_key}"
+            )
+
+            # Group Quality click -> Redirect to PM with /start all_<req_key>
+            if query.message.chat.type != enums.ChatType.PRIVATE:
+                bot_username = temp.U_NAME if (hasattr(temp, "U_NAME") and temp.U_NAME) else getattr(getattr(client, "me", None), "username", None)
+                if bot_username:
+                    bot_username = str(bot_username).lstrip("@")
+                else:
+                    bot_username = "Bot"
+
+                start_url = f"https://t.me/{bot_username}?start=all_{req_key}"
+                log.info(
+                    f"[SERIES GROUP QUALITY]\n"
+                    f"action=OPEN_PM\n"
+                    f"request_key={req_key}\n"
+                    f"bot_username={bot_username}\n"
+                    f"start_url={start_url}"
+                )
+                try:
+                    return await query.answer(url=start_url)
+                except Exception as e:
+                    log.warning(f"[SERIES GROUP QUALITY] query.answer(url=start_url) failed: {e}. Replying with fallback button.")
+                    return await query.message.reply_text(
+                        "📩 Open bot to get your requested Series files:",
+                        reply_markup=InlineKeyboardMarkup([
+                            [InlineKeyboardButton("📂 Open Bot", url=start_url)]
+                        ])
+                    )
+                
+            # Private Chat: Answer callback immediately and route to /start all_<req_key> flow
+            await query.answer()
+            log.info(
+                f"[SERIES DIRECT QUALITY]\n"
+                f"action=ROUTED_TO_PM\n"
+                f"request_key={req_key}"
+            )
+            from plugins.commands import process_series_start
+            asyncio.create_task(process_series_start(client, query.from_user.id, req_key))
+            return
+        except Exception as e:
+            log.error(f"[SERIES DIRECT QUALITY ERROR] {e}", exc_info=True)
+            return await query.answer("⚠️ Unable to process this Series request. Please search again.", show_alert=True)
 
     # Navigation mapping
     if len(parts) >= 4 and parts[2] == "l":
@@ -2421,13 +2478,18 @@ async def series_user_nav(client: Client, query: CallbackQuery):
     if len(parts) >= 8 and parts[6] == "q":
         qual = parts[7]
         
+    try:
+        await query.answer()
+    except Exception:
+        pass
+
     text, rm = await _resolve_nav_step(query.from_user.id, full_id, key, series, lang, season, qual, is_private=(query.message.chat.type == enums.ChatType.PRIVATE))
     if rm:
         poster = series.get("poster")
         await _send_or_edit(query, text, rm, poster=poster)
-        return await query.answer()
+        return
     
-    return await query.answer(text, show_alert=True)
+    return
 
 
 

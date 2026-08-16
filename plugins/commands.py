@@ -32,6 +32,7 @@ async def process_series_start(client: Client, user_id: int, req_key: str, messa
     AUTH_CHANNEL = getattr(info, "AUTH_CHANNEL", None)
     
     log.info(f"[SERIES START]\naction=REQUEST_RECEIVED\nrequest_key={req_key}\nuser_id={user_id}")
+    log.info(f"[SERIES START]\nrequest_key={req_key}\naction=REQUEST_RECEIVED")
     
     req = getattr(temp, "SERIES_STATE", {}).get(req_key)
     if not req:
