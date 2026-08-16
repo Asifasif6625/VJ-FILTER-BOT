@@ -1821,7 +1821,8 @@ async def _resolve_nav_step(user_id: int, full_id: str, sid: str, series: dict, 
 
 def _user_suggestions_keyboard(matches: list[dict], user_id: int) -> InlineKeyboardMarkup:
     rows = []
-    import uuid
+    import uuid, logging
+    log = logging.getLogger(__name__)
     from utils import temp
     from database.series_db import save_temp_request
     if not hasattr(temp, "SERIES_STATE"):
@@ -1834,6 +1835,7 @@ def _user_suggestions_keyboard(matches: list[dict], user_id: int) -> InlineKeybo
             "user_id": user_id,
             "sid": sid,
             "series_id": sid,
+            "full_id": sid,
             "path": "SUGGESTION",
             "is_direct": False
         }
@@ -1843,6 +1845,15 @@ def _user_suggestions_keyboard(matches: list[dict], user_id: int) -> InlineKeybo
             asyncio.create_task(save_temp_request(key, nav_state))
         except Exception:
             pass
+        log.info(
+            f"[SERIES SUGGESTION STATE]\n"
+            f"user_id={user_id}\n"
+            f"series_id={sid}\n"
+            f"sid={sid}\n"
+            f"full_id={sid}\n"
+            f"path=SUGGESTION\n"
+            f"is_direct=False"
+        )
         rows.append([InlineKeyboardButton(m["name"], callback_data=f"sr#{key}")])
     return InlineKeyboardMarkup(rows)
 
@@ -1914,6 +1925,7 @@ async def process_series_search(client: Client, message: Message, txt: str, repl
             "user_id": user_id,
             "sid": series_id,
             "series_id": series_id,
+            "full_id": series_id,
             "path": "DIRECT",
             "is_direct": True
         }
@@ -1922,6 +1934,16 @@ async def process_series_search(client: Client, message: Message, txt: str, repl
             await save_temp_request(key, nav_state)
         except Exception:
             pass
+
+        logger.info(
+            f"[SERIES DIRECT SEARCH STATE]\n"
+            f"user_id={user_id}\n"
+            f"series_id={series_id}\n"
+            f"sid={series_id}\n"
+            f"full_id={series_id}\n"
+            f"path=DIRECT\n"
+            f"is_direct=True"
+        )
         
         sid = series_id
 
@@ -1976,12 +1998,23 @@ async def resolve_exact_series_files(
     Only files that are ACTUALLY SAVED in the Series database (series_files collection) are accepted.
     Unsaved files from raw batch JSON are strictly rejected.
     """
-    from database.series_db import list_quality_episodes, get_series_files, find_saved_series_file
+    from database.series_db import list_quality_episodes, get_series_files, find_saved_series_file, _sid_query
     import json, os, logging
     log = logging.getLogger(__name__)
 
     full_id = await _normalize_series_id(full_id)
     files = []
+
+    log.info(
+        f"[SERIES DB REQUEST]\n"
+        f"request_key={req_key}\n"
+        f"source={path}\n"
+        f"full_id={full_id}\n"
+        f"language={lang}\n"
+        f"season={season}\n"
+        f"quality={qual}\n"
+        f"episode={ep}"
+    )
 
     async def _validate_and_get_batch_file(bf, fallback_ep):
         bf_file_id = bf.get("file_id")
@@ -2113,13 +2146,39 @@ async def resolve_exact_series_files(
     else:
         episodes = await list_quality_episodes(full_id, lang, season, qual)
         log.info(
-            f"[SERIES DB TRACE]\n"
+            f"[SERIES DB EPISODES]\n"
+            f"request_key={req_key}\n"
             f"full_id={full_id}\n"
             f"language={lang}\n"
             f"season={season}\n"
             f"quality={qual}\n"
             f"episodes={episodes}"
         )
+        if not episodes:
+            log.warning(
+                f"[SERIES DB MISMATCH DEBUG]\n"
+                f"requested:\n"
+                f"full_id={full_id}\n"
+                f"language={lang}\n"
+                f"season={season}\n"
+                f"quality={qual}"
+            )
+            try:
+                from database.series_db import sfiles_col
+                candidates = sfiles_col.find({"series_id": _sid_query(full_id)})
+                async for c in candidates:
+                    log.info(
+                        f"[SERIES DB CANDIDATE RECORD]\n"
+                        f"series_id={c.get('series_id')}\n"
+                        f"language={c.get('language')}\n"
+                        f"season={c.get('season')}\n"
+                        f"quality={c.get('quality')}\n"
+                        f"episode={c.get('episode')}\n"
+                        f"file_id={c.get('file_id')}"
+                    )
+            except Exception:
+                pass
+
         sorted_episodes = sorted([
             int(e) for e in episodes 
             if (isinstance(e, int) or (isinstance(e, str) and str(e).isdigit())) and int(e) > 0
@@ -2295,14 +2354,15 @@ async def deliver_series_request(client: Client, req_key: str, user_id: int, que
     req["delivery_status"] = "sending"
     req["state"] = "SENDING"
 
-    full_id = req.get("full_id")
-    if not full_id and req.get("series_id"):
-        full_id = await _get_full_id(req["series_id"])
-    lang = req.get("language")
-    season = int(req.get("season", 0))
-    qual = req.get("quality")
+    query_ctx = req.get("query", {}) if isinstance(req.get("query"), dict) else {}
+    full_id = query_ctx.get("full_id") or req.get("full_id") or req.get("series_id")
+    if not full_id and req.get("sid"):
+        full_id = await _get_full_id(req["sid"])
+    lang = query_ctx.get("lang") or req.get("language")
+    season = int(query_ctx.get("season") if query_ctx.get("season") is not None else req.get("season", 0))
+    qual = query_ctx.get("qual") or req.get("quality")
     ep = req.get("episode")
-    rating = req.get("rating", "N/A")
+    rating = query_ctx.get("rating") or req.get("rating", "N/A")
     path = req.get("path", "DIRECT" if req.get("is_direct") else "SUGGESTION")
 
     log.info(
@@ -2358,6 +2418,19 @@ async def deliver_series_request(client: Client, req_key: str, user_id: int, que
             f"source=EXACT_REQUEST_FILE_ID"
         )
         verified_files.append(f)
+
+    log.info(
+        f"[SERIES FINAL FILE CHECK]\n"
+        f"request_key={req_key}\n"
+        f"source={path}\n"
+        f"full_id={full_id}\n"
+        f"language={lang}\n"
+        f"season={season}\n"
+        f"quality={qual}\n"
+        f"episode={ep}\n"
+        f"resolver_count={len(files)}\n"
+        f"verified_count={len(verified_files)}"
+    )
 
     if not verified_files:
         req["delivery_status"] = "failed"
@@ -2477,6 +2550,8 @@ async def series_user_nav(client: Client, query: CallbackQuery):
     lang = None
     season = None
     qual = None
+    path_type = req.get("path", "DIRECT" if req.get("is_direct") else "SUGGESTION")
+    is_direct_val = bool(req.get("is_direct", (path_type == "DIRECT")))
     
     # ── Send file (Quality selected) ──────────────────────────────────
     if len(parts) >= 8 and parts[2] == "l" and parts[4] == "s" and parts[6] == "q":
@@ -2489,8 +2564,12 @@ async def series_user_nav(client: Client, query: CallbackQuery):
             
             rating = series.get("rating", "N/A")
             chat_type = "PRIVATE" if query.message.chat.type == enums.ChatType.PRIVATE else "GROUP"
-            path_type = req.get("path", "DIRECT" if req.get("is_direct") else "SUGGESTION")
-            is_direct_val = bool(req.get("is_direct", (path_type == "DIRECT")))
+
+            import uuid as _uuid
+            from utils import temp as _temp
+            from database.series_db import save_temp_request, get_temp_request
+            
+            req_key = str(_uuid.uuid4())[:8]
 
             # Trace working suggestion vs direct test
             if path_type == "SUGGESTION":
@@ -2503,6 +2582,16 @@ async def series_user_nav(client: Client, query: CallbackQuery):
                     f"quality={qual}\n"
                     f"episodes={ep}"
                 )
+                log.info(
+                    f"[SERIES SUGGESTION QUALITY]\n"
+                    f"request_key={req_key}\n"
+                    f"sid={sid}\n"
+                    f"full_id={full_id}\n"
+                    f"language={lang}\n"
+                    f"season={season}\n"
+                    f"quality={qual}\n"
+                    f"episode={ep}"
+                )
             else:
                 log.info(
                     f"[SERIES DIRECT TEST]\n"
@@ -2512,6 +2601,16 @@ async def series_user_nav(client: Client, query: CallbackQuery):
                     f"season={season}\n"
                     f"quality={qual}\n"
                     f"episodes={ep}"
+                )
+                log.info(
+                    f"[SERIES DIRECT QUALITY]\n"
+                    f"request_key={req_key}\n"
+                    f"sid={sid}\n"
+                    f"full_id={full_id}\n"
+                    f"language={lang}\n"
+                    f"season={season}\n"
+                    f"quality={qual}\n"
+                    f"episode={ep}"
                 )
 
             # ── 10-Second Cooldown Protection (PM Series Quality Button) ──
@@ -2537,12 +2636,6 @@ async def series_user_nav(client: Client, query: CallbackQuery):
                         return await query.answer(alert_text, show_alert=True)
 
                 temp.SERIES_PM_QUALITY_COOLDOWNS[cooldown_key] = now
-
-            import uuid as _uuid
-            from utils import temp as _temp
-            from database.series_db import save_temp_request, get_temp_request
-            
-            req_key = str(_uuid.uuid4())[:8]
 
             if path_type == "DIRECT" or is_direct_val:
                 log.info(
