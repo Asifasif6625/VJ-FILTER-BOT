@@ -447,6 +447,14 @@ def _sid_query(series_id: str):
     return {"$in": candidates} if len(candidates) > 1 else sid
 
 
+def _num_query(val):
+    try:
+        n = int(val)
+        return {"$in": [n, str(n)]}
+    except Exception:
+        return val
+
+
 async def get_series_files(
     series_id: str,
     language: str,
@@ -458,8 +466,8 @@ async def get_series_files(
     cursor = sfiles_col.find({
         "series_id": _sid_query(series_id),
         "language":  language,
-        "season":    int(season),
-        "episode":   int(episode),
+        "season":    _num_query(season),
+        "episode":   _num_query(episode),
         "quality":   quality,
     })
     return [doc async for doc in cursor]
