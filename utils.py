@@ -1,4 +1,4 @@
-# Don't Remove Credit @VJ_Bots
+# Don't Remove Credit @VJ_Botz
 # Subscribe YouTube Channel For Amazing Bot @Tech_VJ
 # Ask Doubt on telegram @KingVJ01
 
@@ -40,12 +40,15 @@ class temp(object):
     CURRENT=int(os.environ.get("SKIP", 2))
     CANCEL = False
     MELCOW = {}
+    SERIES_WIZARD = {}
+    SERIES_STATE = {}
     U_NAME = None
     B_NAME = None
     GETALL = {}
     SHORT = {}
     SETTINGS = {}
     IMDB_CAP = {}
+    SERIES_PM_QUALITY_COOLDOWNS = {}
 
 
 async def pub_is_subscribed(bot, query, channel):
@@ -63,14 +66,17 @@ async def pub_is_subscribed(bot, query, channel):
     return btn
 
 async def is_subscribed(bot, query):
+    user_id = query if isinstance(query, int) else getattr(getattr(query, "from_user", None), "id", getattr(query, "id", None))
+    if not user_id:
+        return False
     if REQUEST_TO_JOIN_MODE == True and join_db().isActive():
         try:
-            user = await join_db().get_user(query.from_user.id)
-            if user and user["user_id"] == query.from_user.id:
+            user = await join_db().get_user(user_id)
+            if user and user["user_id"] == user_id:
                 return True
             else:
                 try:
-                    user_data = await bot.get_chat_member(AUTH_CHANNEL, query.from_user.id)
+                    user_data = await bot.get_chat_member(AUTH_CHANNEL, user_id)
                 except UserNotParticipant:
                     pass
                 except Exception as e:
@@ -83,7 +89,7 @@ async def is_subscribed(bot, query):
             return False
     else:
         try:
-            user = await bot.get_chat_member(AUTH_CHANNEL, query.from_user.id)
+            user = await bot.get_chat_member(AUTH_CHANNEL, user_id)
         except UserNotParticipant:
             pass
         except Exception as e:
@@ -167,7 +173,7 @@ async def get_poster(query, bulk=False, id=False, file=None):
         'release_date': date,
         'year': movie.get('year'),
         'genres': list_to_str(movie.get("genres")),
-        'poster': movie.get('full-size cover url'),
+        'poster': movie.get('full-size cover url') or movie.get('cover url'),
         'plot': plot,
         'rating': str(movie.get("rating")),
         'url':f'https://www.imdb.com/title/tt{movieid}'
@@ -603,7 +609,7 @@ async def send_all(bot, userid, files, ident, chat_id, user_name, query):
     if 'is_shortlink' in settings.keys():
         ENABLE_SHORTLINK = settings['is_shortlink']
     else:
-        await save_group_settings(message.chat.id, 'is_shortlink', False)
+        await save_group_settings(chat_id, 'is_shortlink', False)
         ENABLE_SHORTLINK = False
     try:
         if ENABLE_SHORTLINK:
@@ -736,4 +742,3 @@ async def get_seconds(time_string):
         return value * 86400 * 365
     else:
         return 0
-
