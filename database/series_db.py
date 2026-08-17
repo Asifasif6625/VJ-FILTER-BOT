@@ -409,15 +409,31 @@ async def add_series_file(data: dict) -> tuple[bool, str]:
         return False, "error"
 
 
+def _sid_query(series_id: str):
+    sid = str(series_id).strip()
+    candidates = [sid]
+    if len(sid) == 24:
+        candidates.append(sid[-8:])
+    return {"$in": candidates} if len(candidates) > 1 else sid
+
+
+def _num_query(val):
+    try:
+        n = int(val)
+        return {"$in": [n, str(n)]}
+    except Exception:
+        return val
+
+
 async def check_episode_exists(
     series_id: str, language: str, season: int, episode: int, quality: str
 ) -> bool:
     """Check if a specific episode exists for given series context."""
     doc = await sfiles_col.find_one({
-        "series_id": str(series_id),
+        "series_id": _sid_query(series_id),
         "language":  language,
-        "season":    int(season),
-        "episode":   int(episode),
+        "season":    _num_query(season),
+        "episode":   _num_query(episode),
         "quality":   quality,
     })
     return doc is not None
@@ -427,24 +443,16 @@ async def replace_series_file(data: dict):
     """Replace an existing episode file document."""
     ep = int(data["episode"]) if data.get("episode") is not None else -1
     del_query = {
-        "series_id": str(data["series_id"]),
+        "series_id": _sid_query(data["series_id"]),
         "language":  data["language"],
-        "season":    int(data["season"]),
-        "episode":   ep,
+        "season":    _num_query(data["season"]),
+        "episode":   _num_query(ep),
         "quality":   data["quality"],
     }
     if ep == -1 and data.get("message_id"):
         del_query["message_id"] = data["message_id"]
     await sfiles_col.delete_many(del_query)
     await add_series_file(data)
-
-
-def _sid_query(series_id: str):
-    sid = str(series_id).strip()
-    candidates = [sid]
-    if len(sid) == 24:
-        candidates.append(sid[-8:])
-    return {"$in": candidates} if len(candidates) > 1 else sid
 
 
 async def get_series_files(
@@ -458,8 +466,8 @@ async def get_series_files(
     cursor = sfiles_col.find({
         "series_id": _sid_query(series_id),
         "language":  language,
-        "season":    int(season),
-        "episode":   int(episode),
+        "season":    _num_query(season),
+        "episode":   _num_query(episode),
         "quality":   quality,
     })
     return [doc async for doc in cursor]
@@ -477,7 +485,7 @@ async def find_saved_series_file(
     query = {
         "series_id": _sid_query(series_id),
         "language":  language,
-        "season":    int(season),
+        "season":    _num_query(season),
         "quality":   quality,
         "file_id":   str(file_id),
         "is_batch":  {"$ne": True}
@@ -491,7 +499,8 @@ async def find_saved_series_file(
 
 async def list_series_languages(series_id: str) -> list[str]:
     """Distinct languages with at least one file saved."""
-    return await sfiles_col.distinct("language", {"series_id": _sid_query(series_id)})
+    vals = await sfiles_col.distinct("language", {"series_id": _sid_query(series_id)})
+    return [v for v in vals if v]
 
 
 async def list_series_seasons(series_id: str, language: str) -> list[int]:
@@ -499,19 +508,26 @@ async def list_series_seasons(series_id: str, language: str) -> list[int]:
     vals = await sfiles_col.distinct(
         "season", {"series_id": _sid_query(series_id), "language": language}
     )
-    return sorted(vals)
+    result = []
+    for v in vals:
+        try:
+            result.append(int(v))
+        except (ValueError, TypeError):
+            pass
+    return sorted(list(set(result)))
 
 
 async def list_season_qualities(series_id: str, language: str, season: int) -> list[str]:
     """Distinct qualities for (series, language, season)."""
-    return await sfiles_col.distinct(
+    vals = await sfiles_col.distinct(
         "quality",
         {
             "series_id": _sid_query(series_id),
             "language":  language,
-            "season":    int(season),
+            "season":    _num_query(season),
         }
     )
+    return [v for v in vals if v]
 
 
 async def list_quality_episodes(
