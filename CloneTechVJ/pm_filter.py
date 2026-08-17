@@ -1,4 +1,4 @@
-# Don't Remove Credit @VJ_Bots
+# Don't Remove Credit @VJ_Botz
 # Subscribe YouTube Channel For Amazing Bot @Tech_VJ
 # Ask Doubt on telegram @KingVJ01
 
@@ -11,7 +11,7 @@ from info import *
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery, InputMediaPhoto, ChatPermissions, WebAppInfo
 from pyrogram import Client, filters, enums
 from pyrogram.errors import FloodWait, UserIsBlocked, MessageNotModified, PeerIdInvalid
-from pyrogram.errors.exceptions.bad_request_400 import MediaEmpty, PhotoInvalidDimensions, WebpageMediaEmpty
+from pyrogram.errors import MediaEmpty, PhotoInvalidDimensions, WebpageMediaEmpty
 from utils import get_size, is_subscribed, pub_is_subscribed, get_poster, search_gagala, temp, get_settings, save_group_settings, get_shortlink, get_tutorial, send_all, get_cap
 from database.users_chats_db import db
 from database.ia_filterdb import get_file_details, get_search_results, get_bad_files
@@ -139,6 +139,13 @@ async def advantage_spoll_choker(bot, query):
         reply_msg = await query.message.edit_text(f"<b><i>Searching For {movie} 🔍</i></b>")
         await auto_filter(bot, movie, query, reply_msg, ai_search, k)
     else:
+        try:
+            from plugins.series import process_series_search
+            is_series = await process_series_search(bot, query.message.reply_to_message or query.message, movie, query.message)
+            if is_series:
+                return
+        except Exception:
+            pass
         reqstr1 = query.from_user.id if query.from_user else 0
         reqstr = await bot.get_users(reqstr1)
         k = await query.message.edit(script.MVE_NT_FND)
@@ -788,41 +795,74 @@ async def cb_handler(client: Client, query: CallbackQuery):
 
         try:
             if settings['url']:
-                if clicked == typed:
-                    temp.SHORT[clicked] = query.message.chat.id
-                    await query.answer(url=f"https://telegram.me/{me.username}?start=short_{file_id}")
-                    return
-                else:
-                    await query.answer(f"Hᴇʏ {query.from_user.first_name}, Tʜɪs Is Nᴏᴛ Yᴏᴜʀ Mᴏᴠɪᴇ Rᴇǫᴜᴇsᴛ. Rᴇǫᴜᴇsᴛ Yᴏᴜʀ's !", show_alert=True)
+                cmd = f"short_{file_id}"
             else:
-                if clicked == typed:
-                    await query.answer(url=f"https://telegram.me/{me.username}?start={ident}_{file_id}")
-                    return
+                cmd = f"{ident}_{file_id}"
+                
+            if clicked == typed:
+                if query.message.chat.type == enums.ChatType.PRIVATE:
+                    await query.answer()
+                    from plugins.commands import start
+                    class MockMsg:
+                        def __init__(self, q, c):
+                            self.message = q.message
+                            self.chat = q.message.chat
+                            self.from_user = q.from_user
+                            self.text = f"/start {c}"
+                            self.command = ["start", c]
+                            self.id = q.message.id
+                            self.date = q.message.date
+                        def __getattr__(self, name):
+                            return getattr(self.message, name)
+                    return await start(client, MockMsg(query, cmd))
                 else:
-                    await query.answer(f"Hᴇʏ {query.from_user.first_name}, Tʜɪs Is Nᴏᴛ Yᴏᴜʀ Mᴏᴠɪᴇ Rᴇǫᴜᴇsᴛ. Rᴇǫᴜᴇsᴛ Yᴏᴜʀ's !", show_alert=True)
+                    if settings['url']:
+                        temp.SHORT[clicked] = query.message.chat.id
+                    await query.answer(url=f"https://telegram.me/{me.username}?start={cmd}")
+                    return
+            else:
+                await query.answer(f"Hᴇʏ {query.from_user.first_name}, Tʜɪs Is Nᴏᴛ Yᴏᴜʀ Mᴏᴠɪᴇ Rᴇǫᴜᴇsᴛ. Rᴇǫᴜᴇsᴛ Yᴏᴜʀ's !", show_alert=True)
         except UserIsBlocked:
             await query.answer('Uɴʙʟᴏᴄᴋ ᴛʜᴇ ʙᴏᴛ ᴍᴀʜɴ !', show_alert=True)
         except PeerIdInvalid:
-            await query.answer(url=f"https://telegram.me/{me.username}?start={ident}_{file_id}")
+            await query.answer(url=f"https://telegram.me/{me.username}?start={cmd}")
         except Exception as e:
-            await query.answer(url=f"https://telegram.me/{me.username}?start={ident}_{file_id}")
+            await query.answer(url=f"https://telegram.me/{me.username}?start={cmd}")
             
     elif query.data.startswith("sendfiles"):
         clicked = query.from_user.id
         ident, key = query.data.split("#")
         try:
             if settings['url']:
-                await query.answer(url=f"https://telegram.me/{me.username}?start=sendfiles1_{key}")
+                cmd = f"sendfiles1_{key}"
             else:
-                await query.answer(url=f"https://telegram.me/{me.username}?start=allfiles_{key}")    
+                cmd = f"allfiles_{key}"
+                
+            if query.message.chat.type == enums.ChatType.PRIVATE:
+                await query.answer()
+                from plugins.commands import start
+                class MockMsg:
+                    def __init__(self, q, c):
+                        self.message = q.message
+                        self.chat = q.message.chat
+                        self.from_user = q.from_user
+                        self.text = f"/start {c}"
+                        self.command = ["start", c]
+                        self.id = q.message.id
+                        self.date = q.message.date
+                    def __getattr__(self, name):
+                        return getattr(self.message, name)
+                return await start(client, MockMsg(query, cmd))
+            else:
+                await query.answer(url=f"https://telegram.me/{me.username}?start={cmd}")
                 
         except UserIsBlocked:
             await query.answer('Uɴʙʟᴏᴄᴋ ᴛʜᴇ ʙᴏᴛ ᴍᴀʜɴ !', show_alert=True)
         except PeerIdInvalid:
-            await query.answer(url=f"https://telegram.me/{me.username}?start=sendfiles3_{key}")
+            await query.answer(url=f"https://telegram.me/{me.username}?start={cmd}")
         except Exception as e:
             logger.exception(e)
-            await query.answer(url=f"https://telegram.me/{me.username}?start=sendfiles4_{key}")
+            await query.answer(url=f"https://telegram.me/{me.username}?start={cmd}")
     
     elif query.data.startswith("send_fsall"):
         temp_var, ident, key, offset = query.data.split("#")
@@ -877,6 +917,21 @@ async def auto_filter(client, name, msg, reply_msg, ai_search, spoll=False):
             files, offset, total_results = await get_search_results(message.chat.id ,search, offset=0, filter=True)
             settings = await get_settings(message.chat.id)
             if not files:
+                try:
+                    from plugins.series import process_series_search
+                    from database.series_db import search_series, _normalize
+                    series_matches = await search_series(_normalize(name))
+                    if not series_matches:
+                        series_matches = await search_series(name)
+                    if series_matches:
+                        if hasattr(msg, "text") and msg.text and name == msg.text:
+                            return
+                        else:
+                            is_series = await process_series_search(client, message, name, reply_msg)
+                            if is_series:
+                                return
+                except Exception as e:
+                    pass
                 return await advantage_spell_chok(client, name, msg, reply_msg, ai_search)
         else:
             return
@@ -1056,4 +1111,3 @@ async def advantage_spell_chok(client, name, msg, reply_msg, vj_search):
         )
         await asyncio.sleep(600)
         await spell_check_del.delete()
-

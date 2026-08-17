@@ -1,7 +1,3 @@
-# Don't Remove Credit @VJ_Bots
-# Subscribe YouTube Channel For Amazing Bot @Tech_VJ
-# Ask Doubt on telegram @KingVJ01
-
 from asyncio import sleep
 from plugins.Extra.rename.filedetect import refunc
 from pyrogram import Client, filters, enums

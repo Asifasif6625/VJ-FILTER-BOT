@@ -1,12 +1,9 @@
-# Don't Remove Credit @VJ_Bots
-# Subscribe YouTube Channel For Amazing Bot @Tech_VJ
-# Ask Doubt on telegram @KingVJ01
-
 import asyncio
 import logging
 import aiohttp
 import traceback
 from info import *
+
 
 async def ping_server():
     sleep_time = PING_INTERVAL
@@ -22,4 +19,3 @@ async def ping_server():
             logging.warning("Couldn't connect to the site URL..!")
         except Exception:
             traceback.print_exc()
-

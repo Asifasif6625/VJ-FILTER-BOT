@@ -1,7 +1,3 @@
-# Don't Remove Credit @VJ_Bots
-# Subscribe YouTube Channel For Amazing Bot @Tech_VJ
-# Ask Doubt on telegram @KingVJ01
-
 import motor.motor_asyncio
 from info import AUTH_CHANNEL, OTHER_DB_URI
 
@@ -43,4 +39,3 @@ class JoinReqs:
 
     async def get_all_users_count(self):
         return await self.col.count_documents({})
-
