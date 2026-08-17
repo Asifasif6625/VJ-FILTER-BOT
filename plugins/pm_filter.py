@@ -182,12 +182,15 @@ async def pm_text(bot, message):
     if content.startswith("/") or content.startswith("#"): return  # ignore commands and hashtags
     
     from utils import temp
+    if user_id in temp.AUTO_SERIES:
+        return
     if user_id in temp.SERIES_WIZARD:
         wiz = temp.SERIES_WIZARD.get(user_id)
         # Only block normal search if wizard is actively awaiting textual input
         if isinstance(wiz, dict) and wiz.get("state") in (
             "WAITING_NAME", "WAITING_YEAR", "WAITING_GENRE", 
-            "WAITING_RATING", "WAITING_DESCRIPTION", "WAITING_POSTER", "WAITING_BATCH"
+            "WAITING_RATING", "WAITING_DESCRIPTION", "WAITING_POSTER", "WAITING_BATCH",
+            "WAITING_CUSTOM_LANG_INPUT", "WAITING_CUSTOM_QUAL_INPUT"
         ):
             return
         
