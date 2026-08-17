@@ -1,7 +1,3 @@
-# Don't Remove Credit @VJ_Bots
-# Subscribe YouTube Channel For Amazing Bot @Tech_VJ
-# Ask Doubt on telegram @KingVJ01
-
 import jinja2
 from info import *
 from TechVJ.bot import TechVJBot
@@ -47,4 +43,3 @@ async def render_page(id, secure_hash, src=None):
         file_size=file_size,
         file_unique_id=file_data.unique_id,
     )
-

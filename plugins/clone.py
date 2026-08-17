@@ -1,4 +1,4 @@
-# Don't Remove Credit Tg - @VJ_Bots
+# Don't Remove Credit Tg - @VJ_Botz
 # Subscribe YouTube Channel For Amazing Bot https://youtube.com/@Tech_VJ
 # Ask Doubt on telegram @KingVJ01
 
@@ -34,9 +34,10 @@ async def clone_menu(client, message):
     msg = await message.reply_text("**👨‍💻 ᴡᴀɪᴛ ᴀ ᴍɪɴᴜᴛᴇ ɪ ᴀᴍ ᴄʀᴇᴀᴛɪɴɢ ʏᴏᴜʀ ʙᴏᴛ ❣️**")
     try:
         vj = Client(
-            f"{bot_token}", API_ID, API_HASH,
+            f"clone_{bot_token.split(':')[0]}", API_ID, API_HASH,
             bot_token=bot_token,
-            plugins={"root": "CloneTechVJ"}
+            plugins={"root": "CloneTechVJ"},
+            in_memory=True
         )
         await vj.start()
         bot = await vj.get_me()
@@ -62,9 +63,10 @@ async def restart_bots():
         bot_token = bot['bot_token']
         try:
             vj = Client(
-                f"{bot_token}", API_ID, API_HASH,
+                f"clone_{bot_token.split(':')[0]}", API_ID, API_HASH,
                 bot_token=bot_token,
                 plugins={"root": "CloneTechVJ"},
+                in_memory=True
             )
             await vj.start()
         except Exception as e:

@@ -1,4 +1,4 @@
-# Don't Remove Credit @VJ_Bots
+# Don't Remove Credit @VJ_Botz
 # Subscribe YouTube Channel For Amazing Bot @Tech_VJ
 # Ask Doubt on telegram @KingVJ01
 
@@ -20,19 +20,141 @@ logger = logging.getLogger(__name__)
 BATCH_FILES = {}
 join_db = JoinReqs
 
+
+
+async def process_series_start(client: Client, user_id: int, req_key: str, message: Message = None):
+    import utils
+    from utils import temp
+    from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+    import info
+    import logging
+    log = logging.getLogger(__name__)
+    AUTH_CHANNEL = getattr(info, "AUTH_CHANNEL", None)
+    
+    log.info(f"[SERIES START]\naction=REQUEST_RECEIVED\nrequest_key={req_key}\nuser_id={user_id}")
+    log.info(f"[SERIES START]\nrequest_key={req_key}\naction=REQUEST_RECEIVED")
+    
+    req = getattr(temp, "SERIES_STATE", {}).get(req_key)
+    if not req:
+        req = getattr(temp, "GETALL", {}).get(req_key)
+    if not req:
+        from database.series_db import get_temp_request
+        req = await get_temp_request(req_key)
+        if req:
+            temp.SERIES_STATE[req_key] = req
+            temp.GETALL[req_key] = req
+            
+    if not req:
+        log.warning(f"[SERIES START]\naction=REQUEST_NOT_FOUND\nrequest_key={req_key}")
+        msg_text = "<b><i>⚠️ Request expired. Please search the series again.</i></b>"
+        if message:
+            await message.reply(msg_text)
+        else:
+            await client.send_message(user_id, msg_text)
+        return
+        
+    full_id = req.get("full_id") or req.get("series_id")
+    if full_id and len(str(full_id)) != 24:
+        from plugins.series import _get_full_id
+        full_id = await _get_full_id(str(full_id))
+        if full_id:
+            req["full_id"] = full_id
+            req["series_id"] = full_id
+
+    log.info(
+        f"[SERIES START TRACE]\n"
+        f"request_key={req_key}\n"
+        f"user_id={user_id}\n"
+        f"sid={req.get('sid')}\n"
+        f"full_id={full_id}\n"
+        f"language={req.get('language')}\n"
+        f"season={req.get('season')}\n"
+        f"quality={req.get('quality')}"
+    )
+
+    owner = req.get("user_id", req.get("user"))
+    if owner and int(owner) != int(user_id):
+        log.warning(f"[SERIES START]\naction=OWNERSHIP_MISMATCH\nrequest_key={req_key}\nowner={owner}\nuser_id={user_id}")
+        msg_text = "<b><i>⚠️ This link is not for you!</i></b>"
+        if message:
+            await message.reply(msg_text)
+        else:
+            await client.send_message(user_id, msg_text)
+        return
+        
+    status = str(req.get("delivery_status", req.get("state", ""))).lower()
+    if status == "completed":
+        if message:
+            await message.reply("✅ Files already sent.")
+        return
+    if status == "sending":
+        if message:
+            await message.reply("⏳ Files are already being sent.")
+        return
+        
+    if AUTH_CHANNEL:
+        sub = await utils.is_subscribed(client, user_id)
+        if not sub:
+            log.info(f"[SERIES START]\naction=MEMBERSHIP_CHECK\nresult=NOT_JOINED\nrequest_key={req_key}")
+            log.info(f"[SERIES START]\nmembership=NOT_JOINED")
+            
+            # Send exactly ONE Join Request message if not already pending
+            if not req.get("join_message_id"):
+                try:
+                    invite_link = await client.create_chat_invite_link(int(AUTH_CHANNEL), creates_join_request=True)
+                    text = (
+                        "📢 **Channel Join Request**\n\n"
+                        "ഫയലുകൾ ലഭിക്കുന്നതിന് മുമ്പ് ഞങ്ങളുടെ ചാനലിലേക്ക് Join Request അയയ്ക്കുക.\n\n"
+                        "Request അയച്ച ശേഷം താഴെയുള്ള Try Again ബട്ടൺ ക്ലിക്ക് ചെയ്യുക.\n\n"
+                        "Please send a Join Request to our channel before getting the files.\n\n"
+                        "After sending the request, click Try Again below."
+                    )
+                    btn = [
+                        [InlineKeyboardButton("📢 Send Join Request", url=invite_link.invite_link)],
+                        [InlineKeyboardButton("🔄 Try Again", callback_data=f"checksub#series#{req_key}")]
+                    ]
+                    join_msg = await client.send_message(
+                        chat_id=user_id,
+                        text=text,
+                        reply_markup=InlineKeyboardMarkup(btn),
+                        parse_mode=enums.ParseMode.MARKDOWN
+                    )
+                    req["join_message_id"] = join_msg.id
+                    from database.series_db import save_temp_request
+                    await save_temp_request(req_key, req)
+                    log.info(f"[JOIN REQUEST]\nrequest_key={req_key}\naction=CREATED\nmessage_id={join_msg.id}")
+                except Exception as e:
+                    log.error(f"Failed to create join request: {e}")
+            return
+        else:
+            log.info(f"[SERIES START]\naction=MEMBERSHIP_CHECK\nresult=JOINED\nrequest_key={req_key}")
+            log.info(f"[SERIES START]\nmembership=JOINED")
+            
+    from plugins.series import deliver_series_request
+    import time
+    timing_dict = {
+        "start": time.perf_counter(),
+        "received": time.perf_counter(),
+        "loaded": time.perf_counter(),
+        "membership": time.perf_counter()
+    }
+    await deliver_series_request(client, req_key, user_id, query=None, timing=timing_dict)
+
+
+
 @Client.on_message(filters.command("start") & filters.incoming)
 async def start(client, message):
+    import logging
+    log = logging.getLogger(__name__)
+    
+    log.info(f"[DEBUG START] Raw text: {message.text}")
+    
     try:
         await message.react(emoji=random.choice(REACTIONS), big=True)
     except:
         pass
     if message.chat.type in [enums.ChatType.GROUP, enums.ChatType.SUPERGROUP]:
         buttons = [[
-            InlineKeyboardButton('⤬ ᴀᴅᴅ ᴍᴇ ᴛᴏ ʏᴏᴜʀ ɢʀᴏᴜᴘ ⤬', url=f'http://t.me/{temp.U_NAME}?startgroup=true')
-        ],[
-            InlineKeyboardButton('sᴜᴘᴘᴏʀᴛ ɢʀᴏᴜᴘ', url=f'https://t.me/{SUPPORT_CHAT}'),
-            InlineKeyboardButton('ᴍᴏᴠɪᴇ ɢʀᴏᴜᴘ', url=GRP_LNK)
-        ],[
             InlineKeyboardButton('ᴊᴏɪɴ ᴜᴘᴅᴀᴛᴇ ᴄʜᴀɴɴᴇʟ', url=CHNL_LNK)
         ]]
         reply_markup = InlineKeyboardMarkup(buttons)
@@ -49,28 +171,10 @@ async def start(client, message):
     if len(message.command) != 2:
         if PREMIUM_AND_REFERAL_MODE == True:
             buttons = [[
-                InlineKeyboardButton('⤬ ᴀᴅᴅ ᴍᴇ ᴛᴏ ʏᴏᴜʀ ɢʀᴏᴜᴘ ⤬', url=f'http://t.me/{temp.U_NAME}?startgroup=true')
-            ],[
-                InlineKeyboardButton('ᴇᴀʀɴ ᴍᴏɴᴇʏ', callback_data="shortlink_info"),
-                InlineKeyboardButton('ᴍᴏᴠɪᴇ ɢʀᴏᴜᴘ', url=GRP_LNK)
-            ],[
-                InlineKeyboardButton('ʜᴇʟᴘ', callback_data='help'),
-                InlineKeyboardButton('ᴀʙᴏᴜᴛ', callback_data='about')
-            ],[
-                InlineKeyboardButton('ᴘʀᴇᴍɪᴜᴍ ᴀɴᴅ ʀᴇғᴇʀʀᴀʟ', callback_data='subscription')
-            ],[
                 InlineKeyboardButton('ᴊᴏɪɴ ᴜᴘᴅᴀᴛᴇ ᴄʜᴀɴɴᴇʟ', url=CHNL_LNK)
             ]]
         else:
             buttons = [[
-                InlineKeyboardButton('⤬ ᴀᴅᴅ ᴍᴇ ᴛᴏ ʏᴏᴜʀ ɢʀᴏᴜᴘ ⤬', url=f'http://t.me/{temp.U_NAME}?startgroup=true')
-            ],[
-                InlineKeyboardButton('ᴇᴀʀɴ ᴍᴏɴᴇʏ', callback_data="shortlink_info"),
-                InlineKeyboardButton('ᴍᴏᴠɪᴇ ɢʀᴏᴜᴘ', url=GRP_LNK)
-            ],[
-                InlineKeyboardButton('ʜᴇʟᴘ', callback_data='help'),
-                InlineKeyboardButton('ᴀʙᴏᴜᴛ', callback_data='about')
-            ],[
                 InlineKeyboardButton('ᴊᴏɪɴ ᴜᴘᴅᴀᴛᴇ ᴄʜᴀɴɴᴇʟ', url=CHNL_LNK)
             ]]
         if CLONE_MODE == True:
@@ -87,89 +191,53 @@ async def start(client, message):
         )
         return
     
-    if AUTH_CHANNEL and not await is_subscribed(client, message):
+    data = message.command[1]
+
+    if data.startswith("fsub_"):
+        req_id = data.split("_", 1)[1]
+        req = temp.GROUP_MOVIE_REQS.get(req_id)
+        if not req:
+            return await message.reply("<b><i>Sorry, this request has expired. Please search again.</b></i>")
+        if message.from_user.id != req["user"]:
+            return await message.reply("<b><i>⚠️ This request is not for you!</b></i>")
+            
+        import logging
+        logging.getLogger(__name__).info(f"[GROUP MOVIE] SHOW JOIN REQUEST")
+        
         try:
-            if REQUEST_TO_JOIN_MODE == True:
-                invite_link = await client.create_chat_invite_link(chat_id=(int(AUTH_CHANNEL)), creates_join_request=True)
-            else:
-                invite_link = await client.create_chat_invite_link(int(AUTH_CHANNEL))
+            invite_link = await client.create_chat_invite_link(int(AUTH_CHANNEL), creates_join_request=True)
         except Exception as e:
-            print(e)
             await message.reply_text("Make sure Bot is admin in Forcesub channel")
             return
-        try:
-            btn = [[InlineKeyboardButton("ʙᴀᴄᴋᴜᴘ ᴄʜᴀɴɴᴇʟ", url=invite_link.invite_link)]]
-            if message.command[1] != "subscribe":
-                if REQUEST_TO_JOIN_MODE == True:
-                    if TRY_AGAIN_BTN == True:
-                        try:
-                            kk, file_id = message.command[1].split("_", 1)
-                            btn.append([InlineKeyboardButton("↻ ᴛʀʏ ᴀɢᴀɪɴ", callback_data=f"checksub#{kk}#{file_id}")])
-                        except (IndexError, ValueError):
-                            btn.append([InlineKeyboardButton("↻ ᴛʀʏ ᴀɢᴀɪɴ", url=f"https://t.me/{temp.U_NAME}?start={message.command[1]}")])
-                else:
-                    try:
-                        kk, file_id = message.command[1].split("_", 1)
-                        btn.append([InlineKeyboardButton("↻ ᴛʀʏ ᴀɢᴀɪɴ", callback_data=f"checksub#{kk}#{file_id}")])
-                    except (IndexError, ValueError):
-                        btn.append([InlineKeyboardButton("↻ ᴛʀʏ ᴀɢᴀɪɴ", url=f"https://t.me/{temp.U_NAME}?start={message.command[1]}")])
-            if REQUEST_TO_JOIN_MODE == True:
-                if TRY_AGAIN_BTN == True:
-                    text = "**🕵️ ʏᴏᴜ ᴅᴏ ɴᴏᴛ ᴊᴏɪɴ ᴍʏ ʙᴀᴄᴋᴜᴘ ᴄʜᴀɴɴᴇʟ ғɪʀsᴛ ᴊᴏɪɴ ᴄʜᴀɴɴᴇʟ ᴛʜᴇɴ ᴛʀʏ ᴀɢᴀɪɴ**"
-                else:
-                    await db.set_msg_command(message.from_user.id, com=message.command[1])
-                    text = "**🕵️ ʏᴏᴜ ᴅᴏ ɴᴏᴛ ᴊᴏɪɴ ᴍʏ ʙᴀᴄᴋᴜᴘ ᴄʜᴀɴɴᴇʟ ғɪʀsᴛ ᴊᴏɪɴ ᴄʜᴀɴɴᴇʟ**"
-            else:
-                text = "**🕵️ ʏᴏᴜ ᴅᴏ ɴᴏᴛ ᴊᴏɪɴ ᴍʏ ʙᴀᴄᴋᴜᴘ ᴄʜᴀɴɴᴇʟ ғɪʀsᴛ ᴊᴏɪɴ ᴄʜᴀɴɴᴇʟ ᴛʜᴇɴ ᴛʀʏ ᴀɢᴀɪɴ**"
-            await client.send_message(
-                chat_id=message.from_user.id,
-                text=text,
-                reply_markup=InlineKeyboardMarkup(btn),
-                parse_mode=enums.ParseMode.MARKDOWN
-            )
-            return
-        except Exception as e:
-            print(e)
-            return await message.reply_text("something wrong with force subscribe.")
             
-    if len(message.command) == 2 and message.command[1] in ["subscribe", "error", "okay", "help"]:
-        if PREMIUM_AND_REFERAL_MODE == True:
-            buttons = [[
-                InlineKeyboardButton('⤬ ᴀᴅᴅ ᴍᴇ ᴛᴏ ʏᴏᴜʀ ɢʀᴏᴜᴘ ⤬', url=f'http://t.me/{temp.U_NAME}?startgroup=true')
-            ],[
-                InlineKeyboardButton('ᴇᴀʀɴ ᴍᴏɴᴇʏ', callback_data="shortlink_info"),
-                InlineKeyboardButton('ᴍᴏᴠɪᴇ ɢʀᴏᴜᴘ', url=GRP_LNK)
-            ],[
-                InlineKeyboardButton('ʜᴇʟᴘ', callback_data='help'),
-                InlineKeyboardButton('ᴀʙᴏᴜᴛ', callback_data='about')
-            ],[
-                InlineKeyboardButton('ᴘʀᴇᴍɪᴜᴍ ᴀɴᴅ ʀᴇғᴇʀʀᴀʟ', callback_data='subscription')
-            ],[
-                InlineKeyboardButton('ᴊᴏɪɴ ᴜᴘᴅᴀᴛᴇ ᴄʜᴀɴɴᴇʟ', url=CHNL_LNK)
-            ]]
-        else:
-            buttons = [[
-                InlineKeyboardButton('⤬ ᴀᴅᴅ ᴍᴇ ᴛᴏ ʏᴏᴜʀ ɢʀᴏᴜᴘ ⤬', url=f'http://t.me/{temp.U_NAME}?startgroup=true')
-            ],[
-                InlineKeyboardButton('ᴇᴀʀɴ ᴍᴏɴᴇʏ', callback_data="shortlink_info"),
-                InlineKeyboardButton('ᴍᴏᴠɪᴇ ɢʀᴏᴜᴘ', url=GRP_LNK)
-            ],[
-                InlineKeyboardButton('ʜᴇʟᴘ', callback_data='help'),
-                InlineKeyboardButton('ᴀʙᴏᴜᴛ', callback_data='about')
-            ],[
-                InlineKeyboardButton('ᴊᴏɪɴ ᴜᴘᴅᴀᴛᴇ ᴄʜᴀɴɴᴇʟ', url=CHNL_LNK)
-            ]]
-        if CLONE_MODE == True:
-            buttons.append([InlineKeyboardButton('ᴄʀᴇᴀᴛᴇ ᴏᴡɴ ᴄʟᴏɴᴇ ʙᴏᴛ', callback_data='clone')])
-        reply_markup = InlineKeyboardMarkup(buttons)      
-        await message.reply_photo(
-            photo=random.choice(PICS),
-            caption=script.START_TXT.format(message.from_user.mention, temp.U_NAME, temp.B_NAME),
-            reply_markup=reply_markup,
-            parse_mode=enums.ParseMode.HTML
+        text = (
+            "📢 **Channel Join Request**\n\n"
+            "ഫയൽ ലഭിക്കുന്നതിന് മുമ്പ് ഞങ്ങളുടെ ചാനലിലേക്ക് Join Request അയയ്ക്കുക.\n\n"
+            "Request അയച്ച ശേഷം താഴെയുള്ള Try Again ബട്ടൺ ക്ലിക്ക് ചെയ്യുക.\n\n"
+            "Please send a Join Request to our channel before getting the file.\n\n"
+            "After sending the request, click Try Again below."
+        )
+        btn = [
+            [InlineKeyboardButton("📢 Send Join Request", url=invite_link.invite_link)],
+            [InlineKeyboardButton("🔄 Try Again", callback_data=f"checksub#movie#{req_id}")]
+        ]
+        await client.send_message(
+            chat_id=message.from_user.id,
+            text=text,
+            reply_markup=InlineKeyboardMarkup(btn),
+            parse_mode=enums.ParseMode.MARKDOWN
         )
         return
-    data = message.command[1]
+        
+    # --- SERIES GROUP TO PM FLOW ---
+    if data.startswith("all_"):
+        file_id = data.split("_", 1)[1]
+        await process_series_start(client, message.from_user.id, file_id, message=message)
+        return
+    # --- END SERIES GROUP TO PM FLOW ---
+    
+    # Global Force Subscribe intercepted bypassed as requested
+    
     if data.split("-", 1)[0] == "VJ":
         user_id = int(data.split("-", 1)[1])
         vj = await referal_add_user(user_id, message.from_user.id)
@@ -190,29 +258,15 @@ async def start(client, message):
         else:
             if PREMIUM_AND_REFERAL_MODE == True:
                 buttons = [[
-                    InlineKeyboardButton('⤬ ᴀᴅᴅ ᴍᴇ ᴛᴏ ʏᴏᴜʀ ɢʀᴏᴜᴘ ⤬', url=f'http://t.me/{temp.U_NAME}?startgroup=true')
-                ],[
-                    InlineKeyboardButton('ᴇᴀʀɴ ᴍᴏɴᴇʏ', callback_data="shortlink_info"),
-                    InlineKeyboardButton('ᴍᴏᴠɪᴇ ɢʀᴏᴜᴘ', url=GRP_LNK)
-                ],[
-                    InlineKeyboardButton('ʜᴇʟᴘ', callback_data='help'),
-                    InlineKeyboardButton('ᴀʙᴏᴜᴛ', callback_data='about')
-                ],[
-                    InlineKeyboardButton('ᴘʀᴇᴍɪᴜᴍ ᴀɴᴅ ʀᴇғᴇʀʀᴀʟ', callback_data='subscription')
-                ],[
                     InlineKeyboardButton('ᴊᴏɪɴ ᴜᴘᴅᴀᴛᴇ ᴄʜᴀɴɴᴇʟ', url=CHNL_LNK)
                 ]]
             else:
                 buttons = [[
-                    InlineKeyboardButton('⤬ ᴀᴅᴅ ᴍᴇ ᴛᴏ ʏᴏᴜʀ ɢʀᴏᴜᴘ ⤬', url=f'http://t.me/{temp.U_NAME}?startgroup=true')
+                    InlineKeyboardButton("⚙️ 𝓑𝓞𝓣 𝓤𝓟𝓓𝓐𝓣𝓔 𝓒𝓗𝓐𝓝𝓝𝓔𝓛 ⚙️", url="https://t.me/+d8zuVyrBBcNkYzI1")
                 ],[
-                    InlineKeyboardButton('ᴇᴀʀɴ ᴍᴏɴᴇʏ', callback_data="shortlink_info"),
-                    InlineKeyboardButton('ᴍᴏᴠɪᴇ ɢʀᴏᴜᴘ', url=GRP_LNK)
+                    InlineKeyboardButton("📂 𝓙𝓞𝓘𝓝 𝓕𝓞𝓡 𝓤𝓟𝓓𝓐𝓣𝓔 𝓒𝓗𝓐𝓝𝓝𝓔𝓛 📂", url="https://t.me/+rjw2I6MtjW8xYzRl")
                 ],[
-                    InlineKeyboardButton('ʜᴇʟᴘ', callback_data='help'),
-                    InlineKeyboardButton('ᴀʙᴏᴜᴛ', callback_data='about')
-                ],[
-                    InlineKeyboardButton('ᴊᴏɪɴ ᴜᴘᴅᴀᴛᴇ ᴄʜᴀɴɴᴇʟ', url=CHNL_LNK)
+                    InlineKeyboardButton("🔰 𝓑𝓞𝓣 𝓐𝓑𝓞𝓤𝓣 𝓟𝓐𝓝𝓔𝓛 🔰", callback_data="about")
                 ]]
             if CLONE_MODE == True:
                 buttons.append([InlineKeyboardButton('ᴄʀᴇᴀᴛᴇ ᴏᴡɴ ᴄʟᴏɴᴇ ʙᴏᴛ', callback_data='clone')])
@@ -232,20 +286,35 @@ async def start(client, message):
     except:
         file_id = data
         pre = ""
-    if data.split("-", 1)[0] == "BATCH":
+    if data.split("-", 1)[0] in ["BATCH", "PBATCH"]:
         sts = await message.reply("<b>ᴘʟᴇᴀsᴇ ᴡᴀɪᴛ...</b>")
-        file_id = data.split("-", 1)[1]
-        msgs = BATCH_FILES.get(file_id)
+        is_pbatch = data.split("-", 1)[0] == "PBATCH"
+        identifier = data.split("-", 1)[1]
+        msgs = BATCH_FILES.get(identifier)
         if not msgs:
-            file = await client.download_media(file_id)
-            try: 
+            try:
+                # If identifier is an integer, it's a message ID in LOG_CHANNEL
+                msg_id = int(identifier)
+                post = await client.get_messages(LOG_CHANNEL, msg_id)
+                if not post or not post.document:
+                    await sts.edit("FAILED TO LOCATE BATCH DATA IN LOG_CHANNEL")
+                    return
+                file_id = post.document.file_id
+            except ValueError:
+                # Fallback to old raw file_id logic
+                file_id = identifier
+
+            try:
+                file = await client.download_media(file_id)
                 with open(file) as file_data:
                     msgs=json.loads(file_data.read())
-            except:
-                await sts.edit("FAILED")
-                return await client.send_message(LOG_CHANNEL, "UNABLE TO OPEN FILE.")
-            os.remove(file)
-            BATCH_FILES[file_id] = msgs
+                os.remove(file)
+            except Exception as e:
+                import logging
+                logging.getLogger(__name__).error(f"BATCH DOWNLOAD ERROR: {e}")
+                await sts.edit("FAILED TO DOWNLOAD BATCH DATA")
+                return await client.send_message(LOG_CHANNEL, f"UNABLE TO OPEN FILE.\n{e}")
+            BATCH_FILES[identifier] = msgs
 
         filesarr = []
         for msg in msgs:
@@ -258,7 +327,7 @@ async def start(client, message):
                 except:
                     f_caption=f_caption
             if f_caption is None:
-                f_caption = f"@VJ_Bots {title}"
+                f_caption = f"{title}"
             try:
                 if STREAM_MODE == True:
                     log_msg = await client.send_cached_media(chat_id=LOG_CHANNEL, file_id=msg.get("file_id"))
@@ -280,7 +349,7 @@ async def start(client, message):
                 msg = await client.send_cached_media(
                     chat_id=message.from_user.id,
                     file_id=msg.get("file_id"),
-                    caption=f_caption,
+                    caption="",
                     protect_content=msg.get('protect', False),
                     reply_markup=reply_markup
                 )
@@ -291,7 +360,7 @@ async def start(client, message):
                 msg = await client.send_cached_media(
                     chat_id=message.from_user.id,
                     file_id=msg.get("file_id"),
-                    caption=f_caption,
+                    caption="",
                     protect_content=msg.get('protect', False),
                     reply_markup=InlineKeyboardMarkup(button)
                 )
@@ -304,7 +373,7 @@ async def start(client, message):
         await asyncio.sleep(600)
         for x in filesarr:
             await x.delete()
-        await k.edit_text("<b>✅ ʏᴏᴜʀ ᴍᴇssᴀɢᴇ ɪs sᴜᴄᴄᴇssғᴜʟʟʏ ᴅᴇʟᴇᴛᴇᴅ</b>")  
+        await k.edit_text("<blockquote>Copyright Protection Notify</blockquote>\n\n <b>Your Requst Movie Files Automaticaly Deleted.\n\nനിങൾ റിക്വസ്റ്റ് ചെയ്ത മൂവി ഫയൽ ഓട്ടോമാറ്റിക്കലി ഡിലീറ്റ് ആയിട്ടുണ്ട്.</b>")  
         return
     
     elif data.split("-", 1)[0] == "DSTORE":
@@ -349,10 +418,10 @@ async def start(client, message):
                 else:
                     reply_markup = None
                 try:
-                    p = await msg.copy(message.chat.id, caption=f_caption, protect_content=True if protect == "/pbatch" else False, reply_markup=reply_markup)
+                    p = await msg.copy(message.chat.id, caption="", protect_content=True if protect == "/pbatch" else False, reply_markup=reply_markup)
                 except FloodWait as e:
                     await asyncio.sleep(e.value)
-                    p = await msg.copy(message.chat.id, caption=f_caption, protect_content=True if protect == "/pbatch" else False, reply_markup=reply_markup)
+                    p = await msg.copy(message.chat.id, caption="", protect_content=True if protect == "/pbatch" else False, reply_markup=reply_markup)
                 except:
                     continue
             elif msg.empty:
@@ -429,58 +498,103 @@ async def start(client, message):
         await k.edit("<b>✅ ʏᴏᴜʀ ᴍᴇssᴀɢᴇ ɪs sᴜᴄᴄᴇssғᴜʟʟʏ ᴅᴇʟᴇᴛᴇᴅ</b>")
         return
         
-    elif data.startswith("all"):
+    elif data.startswith("allfiles"):
+        import logging
+        log = logging.getLogger(__name__)
+        # Check temp.GETALL first
         files = temp.GETALL.get(file_id)
+        
         if not files:
-            return await message.reply('<b><i>No such file exist.</b></i>')
+            log.warning(f"[ALLFILES START] GETALL NOT FOUND file_id={file_id}")
+            return
+            
         filesarr = []
-        for file in files:
-            file_id = file["file_id"]
-            files1 = await get_file_details(file_id)
-            title = files1["file_name"]
-            size=get_size(files1["file_size"])
-            f_caption=files1["caption"]
-            if CUSTOM_FILE_CAPTION:
+        
+        # ORIGINAL NON-SERIES LOGIC
+        for idx, file in enumerate(files, start=1):
+                file_id_str = file["file_id"]
+                protect_content = True if (hasattr(message, "command") and len(message.command) > 1 and message.command[1].startswith("allfilesp")) else False
+                
+                files1 = await get_file_details(file_id_str)
+                if not files1: continue
+                title = files1["file_name"]
+                size=get_size(files1["file_size"])
+                f_caption=files1.get("caption", "")
+            
+                if CUSTOM_FILE_CAPTION:
+                    try:
+                        f_caption=CUSTOM_FILE_CAPTION.format(file_name= '' if title is None else title, file_size='' if size is None else size, file_caption='' if f_caption is None else f_caption)
+                    except:
+                        f_caption=f_caption
+                if f_caption is None:
+                    f_caption = f"{' '.join(filter(lambda x: not x.startswith('[') and not x.startswith('@'), files1['file_name'].split()))}"
+                if not await db.has_premium_access(message.from_user.id):
+                    if not await check_verification(client, message.from_user.id) and VERIFY == True:
+                        btn = [[
+                            InlineKeyboardButton("ᴠᴇʀɪғʏ", url=await get_token(client, message.from_user.id, f"https://telegram.me/{temp.U_NAME}?start="))
+                        ],[
+                            InlineKeyboardButton("ʜᴏᴡ ᴛᴏ ᴠᴇʀɪғʏ", url=VERIFY_TUTORIAL)
+                        ]]
+                        text = "<b>ʜᴇʏ {} 👋,\n\nʏᴏᴜ ᴀʀᴇ ɴᴏᴛ ᴠᴇʀɪғɪᴇᴅ ᴛᴏᴅᴀʏ, ᴘʟᴇᴀꜱᴇ ᴄʟɪᴄᴋ ᴏɴ ᴠᴇʀɪғʏ & ɢᴇᴛ ᴜɴʟɪᴍɪᴛᴇᴅ ᴀᴄᴄᴇꜱꜱ ғᴏʀ ᴛᴏᴅᴀʏ</b>"
+                        if PREMIUM_AND_REFERAL_MODE == True:
+                            text += "<b>ɪғ ʏᴏᴜ ᴡᴀɴᴛ ᴅɪʀᴇᴄᴛ ғɪʟᴇꜱ ᴡɪᴛʜᴏᴜᴛ ᴀɴʏ ᴠᴇʀɪꜰɪᴄᴀᴛɪᴏɴꜱ ᴛʜᴇɴ ʙᴜʏ ʙᴏᴛ ꜱᴜʙꜱᴄʀɪᴘᴛɪᴏɴ ☺️\n\n💶 ꜱᴇɴᴅ /plan ᴛᴏ ʙᴜʏ ꜱᴜʙꜱᴄʀɪᴘᴛɪᴏɴ</b>"
+                        await message.reply_text(
+                            text=text.format(message.from_user.mention),
+                            protect_content=True,
+                            reply_markup=InlineKeyboardMarkup(btn)
+                        )
+                        return
+                        
+                        
+                if STREAM_MODE == True:
+                    button = [[InlineKeyboardButton('sᴛʀᴇᴀᴍ ᴀɴᴅ ᴅᴏᴡɴʟᴏᴀᴅ', callback_data=f'generate_stream_link:{file_id_str}')]]
+                    reply_markup = InlineKeyboardMarkup(button)
+                else:
+                    reply_markup = None
+                    
                 try:
-                    f_caption=CUSTOM_FILE_CAPTION.format(file_name= '' if title is None else title, file_size='' if size is None else size, file_caption='' if f_caption is None else f_caption)
-                except:
-                    f_caption=f_caption
-            if f_caption is None:
-                f_caption = f"@VJ_Bots {' '.join(filter(lambda x: not x.startswith('[') and not x.startswith('@'), files1['file_name'].split()))}"
-            if not await db.has_premium_access(message.from_user.id):
-                if not await check_verification(client, message.from_user.id) and VERIFY == True:
-                    btn = [[
-                        InlineKeyboardButton("ᴠᴇʀɪғʏ", url=await get_token(client, message.from_user.id, f"https://telegram.me/{temp.U_NAME}?start="))
-                    ],[
-                        InlineKeyboardButton("ʜᴏᴡ ᴛᴏ ᴠᴇʀɪғʏ", url=VERIFY_TUTORIAL)
-                    ]]
-                    text = "<b>ʜᴇʏ {} 👋,\n\nʏᴏᴜ ᴀʀᴇ ɴᴏᴛ ᴠᴇʀɪғɪᴇᴅ ᴛᴏᴅᴀʏ, ᴘʟᴇᴀꜱᴇ ᴄʟɪᴄᴋ ᴏɴ ᴠᴇʀɪғʏ & ɢᴇᴛ ᴜɴʟɪᴍɪᴛᴇᴅ ᴀᴄᴄᴇꜱꜱ ғᴏʀ ᴛᴏᴅᴀʏ</b>"
-                    if PREMIUM_AND_REFERAL_MODE == True:
-                        text += "<b>ɪғ ʏᴏᴜ ᴡᴀɴᴛ ᴅɪʀᴇᴄᴛ ғɪʟᴇꜱ ᴡɪᴛʜᴏᴜᴛ ᴀɴʏ ᴠᴇʀɪғɪᴄᴀᴛɪᴏɴꜱ ᴛʜᴇɴ ʙᴜʏ ʙᴏᴛ ꜱᴜʙꜱᴄʀɪᴘᴛɪᴏɴ ☺️\n\n💶 ꜱᴇɴᴅ /plan ᴛᴏ ʙᴜʏ ꜱᴜʙꜱᴄʀɪᴘᴛɪᴏɴ</b>"
-                    await message.reply_text(
-                        text=text.format(message.from_user.mention),
-                        protect_content=True,
-                        reply_markup=InlineKeyboardMarkup(btn)
+                    log.info(f"[NORMAL FILE] Sending\nuser_id={message.from_user.id}\nfile_id={file_id_str}")
+                    log.info(f"[TRY AGAIN SEND] file_id={file_id_str} source=normal_file")
+                    msg = await client.send_cached_media(
+                        chat_id=message.from_user.id,
+                        file_id=file_id_str,
+                        caption=f_caption,
+                        protect_content=protect_content,
+                        reply_markup=reply_markup
                     )
-                    return
-            if STREAM_MODE == True:
-                button = [[InlineKeyboardButton('sᴛʀᴇᴀᴍ ᴀɴᴅ ᴅᴏᴡɴʟᴏᴀᴅ', callback_data=f'generate_stream_link:{file_id}')]]
-                reply_markup=InlineKeyboardMarkup(button)
-            else:
-                reply_markup = None
-            msg = await client.send_cached_media(
-                chat_id=message.from_user.id,
-                file_id=file_id,
-                caption=f_caption,
-                protect_content=True if pre == 'allfilesp' else False,
-                reply_markup=reply_markup
-            )
-            filesarr.append(msg)
+                    log.info("[NORMAL FILE] SENT SUCCESSFULLY")
+                    filesarr.append(msg)
+                except FloodWait as e:
+                    await asyncio.sleep(e.value + 1)
+                    try:
+                        msg = await client.send_cached_media(
+                            chat_id=message.from_user.id,
+                            file_id=file_id_str,
+                            caption=f_caption,
+                            protect_content=protect_content,
+                            reply_markup=reply_markup
+                        )
+                        log.info("[NORMAL FILE] SENT SUCCESSFULLY")
+                        filesarr.append(msg)
+                    except Exception as e:
+                        log.error(f"[NORMAL FILE] SEND ERROR\nuser_id={message.from_user.id}\nfile_id={file_id_str}\nerror={e}")
+                except Exception as e:
+                    log.error(f"[NORMAL FILE] SEND ERROR\nuser_id={message.from_user.id}\nfile_id={file_id_str}\nerror={e}")
         k = await client.send_message(chat_id = message.from_user.id, text=f"<blockquote><b><u>❗️❗️❗️IMPORTANT❗️️❗️❗️</u></b>\n\nᴛʜɪs ᴍᴇssᴀɢᴇ ᴡɪʟʟ ʙᴇ ᴅᴇʟᴇᴛᴇᴅ ɪɴ <b><u>10 mins</u> 🫥 <i></b>(ᴅᴜᴇ ᴛᴏ ᴄᴏᴘʏʀɪɢʜᴛ ɪssᴜᴇs)</i>.\n\n<b><i>ᴘʟᴇᴀsᴇ ғᴏʀᴡᴀʀᴅ ᴛʜɪs ᴍᴇssᴀɢᴇ ᴛᴏ ʏᴏᴜʀ sᴀᴠᴇᴅ ᴍᴇssᴀɢᴇs ᴏʀ ᴀɴʏ ᴘʀɪᴠᴀᴛᴇ ᴄʜᴀᴛ.</i></b></blockquote>")
-        await asyncio.sleep(600)
-        for x in filesarr:
-            await x.delete()
-        await k.edit_text("<b>✅ ʏᴏᴜʀ ᴍᴇssᴀɢᴇ ɪs sᴜᴄᴄᴇssғᴜʟʟʏ ᴅᴇʟᴇᴛᴇᴅ</b>")
+        
+        async def delete_files_later():
+            await asyncio.sleep(600)
+            for x in filesarr:
+                try:
+                    await x.delete()
+                except Exception:
+                    pass
+            try:
+                await k.edit_text("<b>✅ ʏᴏᴜʀ ᴍᴇssᴀɢᴇ ɪs sᴜᴄᴄᴇssғᴜʟʟʏ ᴅᴇʟᴇᴛᴇᴅ</b>")
+            except Exception:
+                pass
+                
+        asyncio.create_task(delete_files_later())
         return    
         
     elif data.startswith("files"):
@@ -541,7 +655,7 @@ async def start(client, message):
             file = getattr(msg, filetype.value)
             title = file.file_name
             size=get_size(file.file_size)
-            f_caption = f"@VJ_Bots <code>{title}</code>"
+            f_caption = f"<code>{title}</code>"
             if CUSTOM_FILE_CAPTION:
                 try:
                     f_caption=CUSTOM_FILE_CAPTION.format(file_name= '' if title is None else title, file_size='' if size is None else size, file_caption='')
@@ -567,7 +681,7 @@ async def start(client, message):
         except:
             f_caption=f_caption
     if f_caption is None:
-        f_caption = f"@VJ_Bots {' '.join(filter(lambda x: not x.startswith('[') and not x.startswith('@'), files['file_name'].split()))}"
+        f_caption = f"{' '.join(filter(lambda x: not x.startswith('[') and not x.startswith('@'), files['file_name'].split()))}"
     if not await db.has_premium_access(message.from_user.id):
         if not await check_verification(client, message.from_user.id) and VERIFY == True:
             btn = [[
@@ -589,18 +703,39 @@ async def start(client, message):
         reply_markup=InlineKeyboardMarkup(button)
     else:
         reply_markup = None
-    msg = await client.send_cached_media(
-        chat_id=message.from_user.id,
-        file_id=file_id,
-        caption=f_caption,
-        protect_content=True if pre == 'filep' else False,
-        reply_markup=reply_markup
-    )
+    import logging
+    log = logging.getLogger(__name__)
+    
+    try:
+        log.info(f"[FILE SEND] request_id={file_id}")
+        log.info(f"[FILE SEND] file_id={file_id}")
+        msg = await client.send_cached_media(
+            chat_id=message.from_user.id,
+            file_id=file_id,
+            caption=f_caption,
+            protect_content=True if pre == 'filep' else False,
+            reply_markup=reply_markup
+        )
+        log.info(f"[FILE SEND] SUCCESS request_id={file_id}")
+    except Exception as e:
+        log.error(f"[FILE SEND] ERROR: {e}")
+        return await message.reply("Error sending file.")
+        
     btn = [[InlineKeyboardButton("✅ ɢᴇᴛ ғɪʟᴇ ᴀɢᴀɪɴ ✅", callback_data=f'del#{file_id}')]]
     k = await msg.reply(text=f"<blockquote><b><u>❗️❗️❗️IMPORTANT❗️️❗️❗️</u></b>\n\nᴛʜɪs ᴍᴇssᴀɢᴇ ᴡɪʟʟ ʙᴇ ᴅᴇʟᴇᴛᴇᴅ ɪɴ <b><u>10 mins</u> 🫥 <i></b>(ᴅᴜᴇ ᴛᴏ ᴄᴏᴘʏʀɪɢʜᴛ ɪssᴜᴇs)</i>.\n\n<b><i>ᴘʟᴇᴀsᴇ ғᴏʀᴡᴀʀᴅ ᴛʜɪs ᴍᴇssᴀɢᴇ ᴛᴏ ʏᴏᴜʀ sᴀᴠᴇᴅ ᴍᴇssᴀɢᴇs ᴏʀ ᴀɴʏ ᴘʀɪᴠᴀᴛᴇ ᴄʜᴀᴛ.</i></b></blockquote>")
-    await asyncio.sleep(600)
-    await msg.delete()
-    await k.edit_text("<b>✅ ʏᴏᴜʀ ᴍᴇssᴀɢᴇ ɪs sᴜᴄᴄᴇssғᴜʟʟʏ ᴅᴇʟᴇᴛᴇᴅ ɪғ ʏᴏᴜ ᴡᴀɴᴛ ᴀɢᴀɪɴ ᴛʜᴇɴ ᴄʟɪᴄᴋ ᴏɴ ʙᴇʟᴏᴡ ʙᴜᴛᴛᴏɴ</b>",reply_markup=InlineKeyboardMarkup(btn))
+    
+    async def delete_file_later():
+        await asyncio.sleep(600)
+        try:
+            await msg.delete()
+        except:
+            pass
+        try:
+            await k.edit_text("<b>✅ ʏᴏᴜʀ ᴍᴇssᴀɢᴇ ɪs sᴜᴄᴄᴇssғᴜʟʟʏ ᴅᴇʟᴇᴛᴇᴅ ɪғ ʏᴏᴜ ᴡᴀɴᴛ ᴀɢᴀɪɴ ᴛʜᴇɴ ᴄʟɪᴄᴋ ᴏɴ ʙᴇʟᴏᴡ ʙᴜᴛᴛᴏɴ</b>",reply_markup=InlineKeyboardMarkup(btn))
+        except:
+            pass
+            
+    asyncio.create_task(delete_file_later())
     return   
 
 @Client.on_message(filters.command('channel') & filters.user(ADMINS))
@@ -1231,6 +1366,9 @@ async def removetutorial(bot, message):
 @Client.on_message(filters.command("restart") & filters.user(ADMINS))
 async def stop_button(bot, message):
     msg = await bot.send_message(text="**🔄 𝙿𝚁𝙾𝙲𝙴𝚂𝚂𝙴𝚂 𝚂𝚃𝙾𝙿𝙴𝙳. 𝙱𝙾𝚃 𝙸𝚂 𝚁𝙴𝚂𝚃𝙰𝚁𝚃𝙸𝙽𝙶...**", chat_id=message.chat.id)       
+    import sys
+    import os
+    import asyncio
     await asyncio.sleep(3)
     await msg.edit("**✅️ 𝙱𝙾𝚃 𝙸𝚂 𝚁𝙴𝚂𝚃𝙰𝚁𝚃𝙴𝙳. 𝙽𝙾𝚆 𝚈𝙾𝚄 𝙲𝙰𝙽 𝚄𝚂𝙴 𝙼𝙴**")
     os.execl(sys.executable, sys.executable, *sys.argv)
@@ -1288,16 +1426,14 @@ async def fsub(client, message):
         try:
             chat = await client.get_chat(id)
         except Exception as e:
-            return await message.reply_text(f"<b>{id} is invalid!\nMake sure this bot admin in that channel.\n\nError - {e}</b>")
-        if chat.type != enums.ChatType.CHANNEL:
-            return await message.reply_text(f"<b>{id} is not channel.</b>")
-        channels += f'{chat.title}\n'
+            await message.reply_text(f"<b>Bot is not an admin in {id} or channel is private.</b>")
+            return
+        channels += f"{chat.title}\n"
     await save_group_settings(grpid, 'fsub', fsub_ids)
-    await message.reply_text(f"<b>Successfully set force channels for {title} to\n\n{channels}\n\nYou can remove it by /nofsub.</b>")
-        
+    await message.reply_text(f"<b>Successfully added force subscribe in {title}\n\n{channels}</b>")
 
 @Client.on_message(filters.command("add_premium"))
-async def give_premium_cmd_handler(client, message):
+async def add_premium_cmd_handler(client, message):
     if PREMIUM_AND_REFERAL_MODE == False:
         return 
     user_id = message.from_user.id
@@ -1310,7 +1446,7 @@ async def give_premium_cmd_handler(client, message):
         seconds = await get_seconds(time)
         if seconds > 0:
             expiry_time = datetime.datetime.now() + datetime.timedelta(seconds=seconds)
-            user_data = {"id": user_id, "expiry_time": expiry_time} 
+            user_data = {"id": user_id, "expiry_time": expiry_time}  # Using "id" instead of "user_id"
             await db.update_user(user_data)  # Use the update_user method to update or insert user data
             await message.reply_text("Premium access added to the user.")            
             await client.send_message(
@@ -1396,14 +1532,230 @@ async def total_requests(client, message):
         )
 
 @Client.on_message(filters.command("purgerequests") & filters.private & filters.user(ADMINS))
-async def purge_requests(client, message):   
+async def purge_requests(client, message):
+    import logging
+    import asyncio
+    from pyrogram.errors import FloodWait
+    log = logging.getLogger(__name__)
+    log.info("[PURGE REQUESTS] START")
+    log.info(f"[PURGE REQUESTS] CHANNEL = {AUTH_CHANNEL}")
+    
+    db_count = 0
+    users = []
     if join_db().isActive():
+        db_count = await join_db().get_all_users_count()
+        users = await join_db().get_all_users()
         await join_db().delete_all_users()
-        await message.reply_text(
-            text="Purged All Requests.",
-            parse_mode=enums.ParseMode.MARKDOWN,
-            disable_web_page_preview=True
+        
+    msg = await message.reply_text("Processing /purgerequests...", parse_mode=enums.ParseMode.MARKDOWN)
+    
+    declined_count = 0
+    if AUTH_CHANNEL and users:
+        for u in users:
+            uid = u.get("user_id")
+            if not uid:
+                continue
+            try:
+                await client.decline_chat_join_request(int(AUTH_CHANNEL), int(uid))
+                declined_count += 1
+            except FloodWait as f:
+                await asyncio.sleep(f.value)
+                try:
+                    await client.decline_chat_join_request(int(AUTH_CHANNEL), int(uid))
+                    declined_count += 1
+                except Exception:
+                    pass
+            except Exception:
+                pass
+                
+    text = f"✅ **Purged {db_count} Requests from Database.**\n\n"
+    if declined_count > 0:
+        text += f"✅ **Declined {declined_count} tracked pending request(s) in Channel.**\n\n"
+    text += (
+        "⚠️ **Note:** Telegram Bot API does not allow bots to bulk-purge all channel join requests at once "
+        "(`HideAllChatJoinRequests` is restricted to user accounts)."
+    )
+    
+    log.info(f"[PURGE REQUESTS] COMPLETED: db_purged={db_count}, channel_declined={declined_count}")
+    await msg.edit(text, parse_mode=enums.ParseMode.MARKDOWN)
+
+# ─── SERIES FILE DELIVERY HANDLER (WITH METADATA) ───────────────────────────
+async def send_series_files_to_user(client, user_id, files, query=None):
+    from utils import get_size
+    from pyrogram.errors import FloodWait
+    import logging
+    import asyncio
+    import html
+    import re
+    
+    log = logging.getLogger(__name__)
+    if not files:
+        return
+        
+    async def delayed_delete(m, delay):
+        await asyncio.sleep(delay)
+        try:
+            await m.delete()
+        except Exception:
+            pass
+
+    async def _send_single_file(file_id_str, f_caption):
+        log.info(f"[FILE SEND] request_id={file_id_str}")
+        log.info(f"[FILE SEND] file_id={file_id_str}")
+        while True:
+            try:
+                msg = await client.send_cached_media(
+                    chat_id=user_id,
+                    file_id=file_id_str,
+                    caption=f_caption,
+                    protect_content=False,
+                )
+                log.info(f"[FILE SEND] SUCCESS request_id={file_id_str}")
+                asyncio.create_task(delayed_delete(msg, 240))
+                return msg
+            except FloodWait as e:
+                log.warning(f"[FILE SEND] FloodWait for {e.value}s on {file_id_str}")
+                await asyncio.sleep(e.value + 1)
+            except Exception as e:
+                log.error(f"[FILE SEND] ERROR: {e}")
+                return None
+
+    def _get_episode_num(f):
+        ep = f.get("episode")
+        if isinstance(ep, int) and ep > 0:
+            return ep
+        try:
+            if ep is not None and str(ep).isdigit() and int(ep) > 0:
+                return int(ep)
+        except Exception:
+            pass
+
+        ep_idx = f.get("episode_index")
+        if isinstance(ep_idx, int) and ep_idx > 0:
+            return ep_idx
+        try:
+            if ep_idx is not None and str(ep_idx).isdigit() and int(ep_idx) > 0:
+                return int(ep_idx)
+        except Exception:
+            pass
+
+        from plugins.series import _extract_episode_number
+        fname = f.get("file_name", "")
+        extracted = _extract_episode_number(fname)
+        if extracted is not None and extracted > 0:
+            return extracted
+        return 99999
+
+    # 1. Sort files numerically by episode number
+    sorted_files = sorted(files, key=_get_episode_num)
+    
+    # 2. Deduplicate exact duplicate records (same file_id)
+    seen_ids = set()
+    ordered_files = []
+    for f in sorted_files:
+        fid = f.get("file_id")
+        if fid:
+            if fid in seen_ids:
+                continue
+            seen_ids.add(fid)
+        ordered_files.append(f)
+        
+    sorted_order = [_get_episode_num(f) for f in ordered_files]
+
+    # 3. Extract common Series metadata context
+    first_file = ordered_files[0] if ordered_files else {}
+    is_series = any(f.get("is_series") for f in ordered_files)
+    
+    series_id = first_file.get("series_id", "")
+    season = first_file.get("season", 0)
+    language = first_file.get("language", "")
+    quality = first_file.get("quality", "")
+
+    # 4. Send metadata ONCE before sending files
+    if is_series and language and quality:
+        if str(season).isdigit():
+            s_num = int(season)
+            series_tag = f"#Series {s_num:02d}" if s_num > 0 else "#Series 01"
+        else:
+            series_tag = f"#{season}"
+            
+        lang_clean = str(language).strip().replace(" ", "_")
+        lang_tag = f"#{lang_clean}" if not lang_clean.startswith("#") else lang_clean
+        
+        qual_clean = str(quality).strip().replace(" ", "_")
+        qual_tag = f"#{qual_clean}" if not qual_clean.startswith("#") else qual_clean
+        
+        metadata_text = f"{series_tag}\n{lang_tag}\n{qual_tag}"
+        
+        log.info(f"[SERIES DELIVERY]\nrequest_id={first_file.get('file_id', '')}\nseries_id={series_id}\nseason={season}\nlanguage={language}\nquality={quality}\ntotal_files={len(ordered_files)}")
+        log.info(f"[SERIES DELIVERY]\naction=EPISODES_SORTED\norder={sorted_order}")
+        log.info(f"[SERIES DELIVERY]\naction=METADATA_SENT\nmetadata={metadata_text.replace(chr(10), ' ')}")
+        
+        try:
+            meta_msg = await client.send_message(
+                chat_id=user_id,
+                text=metadata_text,
+                protect_content=False,
+            )
+            asyncio.create_task(delayed_delete(meta_msg, 240))
+        except Exception as ex:
+            log.warning(f"Failed to send metadata message: {ex}")
+
+    # 5. Sequentially send files in exact sorted order
+    total_eps = len(ordered_files)
+    sent_messages = []
+    
+    for idx, file in enumerate(ordered_files, start=1):
+        file_id_str = file.get("file_id")
+        if not file_id_str:
+            continue
+            
+        fname = file.get("file_name", "Unknown File")
+        if len(fname) > 900:
+            fname = fname[:900] + "..."
+        file_name = html.escape(fname)
+        
+        raw_size = file.get("file_size", 0)
+        file_size = get_size(raw_size) if raw_size else "Unknown Size"
+        
+        bot_uname = temp.U_NAME if hasattr(temp, "U_NAME") and temp.U_NAME else "BotUsername"
+        lang_str = file.get("language", "Unknown")
+        rating = file.get("series_rating", "")
+        ep_num = _get_episode_num(file)
+        if ep_num == 99999:
+            ep_num = idx
+            
+        f_caption = (
+            f"⦿ <i>File name:</i> <code>{file_name}</code>\n"
+            f"⦿ <i>Size:</i> {file_size}\n"
+            f"⦿ <i>Language:</i> {lang_str}\n"
         )
+        if rating and str(rating).lower() not in ["skip", "n/a", ""]:
+            f_caption += f"⦿ <i>Rating:</i> ⭐ {rating}\n"
+            
+        f_caption += (
+            f"⦿ <i>File:</i> {idx} / {total_eps}\n\n"
+            f"@{bot_uname}"
+        )
+        
+        msg = await _send_single_file(file_id_str, f_caption)
+        if msg:
+            sent_messages.append(msg)
+            log.info(f"[SERIES DELIVERY]\naction=FILE_SENT\nepisode={ep_num}")
+            await asyncio.sleep(0.3)
 
+    log.info(f"[SERIES DELIVERY]\naction=COMPLETED\ntotal_files={len(sent_messages)}")
 
-
+    # 6. Send final delete notification
+    if sent_messages:
+        k = await client.send_message(
+            chat_id=user_id,
+            text=(
+                "<blockquote><b><u>❗️❗️❗️IMPORTANT❗️️❗️❗️</u></b>\n\n"
+                "ᴛʜɪs ᴍᴇssᴀɢᴇ ᴡɪʟʟ ʙᴇ ᴅᴇʟᴇᴛᴇᴅ ɪɴ <b><u>4 mins</u> 🫥 <i></b>"
+                "(ᴅᴜᴇ ᴛᴏ ᴄᴏᴘʏʀɪɢʜᴛ ɪssᴜᴇs)</i>.\n\n"
+                "<b><i>ᴘʟᴇᴀsᴇ ғᴏʀᴡᴀʀᴅ ᴛʜᴇsᴇ ғɪʟᴇs ᴛᴏ sᴏᴍᴇᴡʜᴇʀᴇ ᴇʟsᴇ ᴀɴᴅ sᴛᴀʀᴛ ᴅᴏᴡɴʟᴏᴀᴅɪɴɢ ᴛʜᴇʀᴇ</b></i></blockquote>"
+            ),
+            parse_mode=enums.ParseMode.HTML
+        )
+        asyncio.create_task(delayed_delete(k, 240))

@@ -1,4 +1,4 @@
-# Don't Remove Credit @VJ_Bots
+# Don't Remove Credit @VJ_Botz
 # Subscribe YouTube Channel For Amazing Bot @Tech_VJ
 # Ask Doubt on telegram @KingVJ01
 
@@ -25,11 +25,10 @@ async def save_file(media):
     
     file_id = unpack_new_file_id(media.file_id)
     file_name = clean_file_name(media.file_name)
-    new_file_name = f"@VJ_Bots {file_name}"
     
     file = {
         'file_id': file_id,
-        'file_name': new_file_name,
+        'file_name': file_name,
         'file_size': media.file_size,
         'caption': media.caption.html if media.caption else None
     }
@@ -64,15 +63,8 @@ def clean_file_name(file_name):
     for char in unwanted_chars:
         file_name = file_name.replace(char, '')
         
-    old_file_name = ' '.join(filter(lambda x: not x.startswith('@') and not x.startswith('http') and not x.startswith('www.') and not x.startswith('t.me'), file_name.split()))
-    new_file_name = add_space_between_e_and_number(old_file_name)
-    return new_file_name
+    return ' '.join(filter(lambda x: not x.startswith('@') and not x.startswith('http') and not x.startswith('www.') and not x.startswith('t.me'), file_name.split()))
 
-def add_space_between_e_and_number(input_string):
-    # Use regex to find 'e' or 'E' followed by a digit and add a space
-    output_string = re.sub(r'(e|E)([0-9])', r'1 2', input_string)
-    return output_string
-    
 def is_file_already_saved(file_id, file_name):
     """Check if the file is already saved in either collection."""
     found1 = {'file_name': file_name}
@@ -182,4 +174,3 @@ def unpack_new_file_id(new_file_id):
     )
     return file_id
     
-

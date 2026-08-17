@@ -1,10 +1,10 @@
-# Don't Remove Credit @VJ_Bots
+# Don't Remove Credit @VJ_Botz
 # Subscribe YouTube Channel For Amazing Bot @Tech_VJ
 # Ask Doubt on telegram @KingVJ01
 
 import os, logging, time
 from pyrogram import Client, filters, enums
-from pyrogram.errors.exceptions.bad_request_400 import UserNotParticipant, MediaEmpty, PhotoInvalidDimensions, WebpageMediaEmpty
+from pyrogram.errors import UserNotParticipant, MediaEmpty, PhotoInvalidDimensions, WebpageMediaEmpty
 from info import IMDB_TEMPLATE
 from utils import extract_user, get_file_id, get_poster, last_online 
 from datetime import datetime
@@ -215,4 +215,3 @@ async def imdb_callback(bot: Client, quer_y: CallbackQuery):
         
 
         
-
