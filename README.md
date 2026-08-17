@@ -35,7 +35,7 @@
 
 - Note : You Can Turn On Or Off Every Feature, Just Use Which Feature You Want By Turning It On.
 
-Join My <a href='https://telegram.me/vj_bots'>Update Channel</a> For More Update Regarding Repo.</b>
+Join My <a href='https://telegram.dog/vj_botz'>Update Channel</a> For More Update Regarding Repo.</b>
 
 ### How To Deploy : [Video Tutorial](https://youtu.be/3SJR7vH2kRo)
 
@@ -191,8 +191,6 @@ Edit info.py with variables as given below then run bot
  - Thanks To All Everyone In This Journey</b>
 
 ## Note 🏷️
-
-<b>• If You Want Paid Edits Or Any Paid Features In Any Kind Of Auto Filter Bot Repo You Can Contact Developer.</b>
  
 [![Contact Developer](https://img.shields.io/static/v1?label=Contact+Developer&message=On+Telegram&color=critical)](https://telegram.me/KingVJ01) 
 
@@ -206,5 +204,3 @@ Selling The Codes To Other People For Money Is *Strictly Prohibited*.</b>
 </pre>
 </p>
 </details>
-
-

@@ -1,4 +1,4 @@
-# Don't Remove Credit @VJ_Bots
+# Don't Remove Credit @VJ_Botz
 # Subscribe YouTube Channel For Amazing Bot @Tech_VJ
 # Ask Doubt on telegram @KingVJ01
 
@@ -14,4 +14,3 @@ RUN mkdir /VJ-FILTER-BOT
 WORKDIR /VJ-FILTER-BOT
 COPY . /VJ-FILTER-BOT
 CMD ["python", "bot.py"]
-

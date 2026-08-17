@@ -1,11 +1,15 @@
-# Don't Remove Credit @VJ_Bots
+# Don't Remove Credit @VJ_Botz
 # Subscribe YouTube Channel For Amazing Bot @Tech_VJ
 # Ask Doubt on telegram @KingVJ01
 
 # Clone Code Credit : YT - @Tech_VJ / TG - @VJ_Bots / GitHub - @VJBots
 
-import sys, glob, importlib, logging, logging.config, pytz, asyncio
+import sys, os, glob, importlib, importlib.util, logging, logging.config, pytz, asyncio
 from pathlib import Path
+
+# Prevent creation of __pycache__ folders and .pyc files
+sys.dont_write_bytecode = True
+os.environ["PYTHONDONTWRITEBYTECODE"] = "1"
 
 # Get logging configurations
 logging.config.fileConfig('logging.conf')
@@ -87,7 +91,7 @@ async def start():
     app = web.AppRunner(await web_server())
     await app.setup()
     bind_address = "0.0.0.0"
-    await web.TCPSite(app, bind_address, PORT).start()
+    await web.TCPSite(app, bind_address, int(PORT)).start()
     await idle()
 
 
@@ -96,5 +100,3 @@ if __name__ == '__main__':
         loop.run_until_complete(start())
     except KeyboardInterrupt:
         logging.info('Service Stopped Bye 👋')
-
-
