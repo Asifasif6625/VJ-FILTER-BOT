@@ -42,6 +42,7 @@ class temp(object):
     MELCOW = {}
     SERIES_WIZARD = {}
     SERIES_STATE = {}
+    AUTO_SERIES = {}
     U_NAME = None
     B_NAME = None
     GETALL = {}
