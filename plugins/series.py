@@ -116,62 +116,127 @@ AUTO_LANGUAGE_MAP = {
     "thai": "Thai",
 }
 
-AUTO_QUALITY_PATTERNS = [
-    (re.compile(r"\b(2160p|4k\s*hdr|4k\s*uhd|4k|uhd)\b", re.I), "2160p/4K"),
-    (re.compile(r"\b(1440p|2k)\b", re.I), "1440p"),
-    (re.compile(r"\b(1080p\s*hevc|1080p\s*10bit|1080p)\b", re.I), "1080p"),
-    (re.compile(r"\b(720p\s*hevc|720p\s*10bit|720p)\b", re.I), "720p"),
-    (re.compile(r"\b(480p)\b", re.I), "480p"),
-    (re.compile(r"\b(360p)\b", re.I), "360p"),
-    (re.compile(r"\b(web[-._]?dl|webrip)\b", re.I), "WEB-DL"),
-    (re.compile(r"\b(bluray|bdrip|brrip)\b", re.I), "BluRay"),
-    (re.compile(r"\b(hdrip|hdtv)\b", re.I), "HDRip"),
-    (re.compile(r"\b(dvdrip)\b", re.I), "DVDRip"),
-]
-
-
-def parse_series_filename(filename: str, series_title: str, target_season: int) -> dict | None:
+def extract_quality_from_filename(filename: str) -> str:
     """
-    Parse a media filename to extract series metadata:
-    - Verifies filename matches series_title
-    - Verifies season == target_season
-    - Extracts episode (int)
-    - Detects language (str)
-    - Detects quality (str)
-    Returns dict or None if invalid/unmatched.
+    Extract accurate, normalized video quality from a filename.
+    Supports resolution, bit-depth, HDR/Dolby Vision, and source tags in priority order.
     """
     if not filename:
-        return None
+        return "Unknown"
+
+    text = str(filename)
+    text = re.sub(r"\.(mkv|mp4|avi|mov|wmv|flv|webm|m4v|ts)$", "", text, flags=re.I)
+    # Normalize separators into spaces for reliable word boundary matching
+    text = re.sub(r"[\._\-\+\[\]\(\)\{\}]", " ", text)
+    text = " " + re.sub(r"\s+", " ", text).strip() + " "
+
+    # 1. Detect Resolution (in priority order)
+    res = None
+    if re.search(r"\b2160p\b", text, re.I):
+        res = "2160p"
+    elif re.search(r"\b(4k|uhd)\b", text, re.I):
+        res = "4K"
+    elif re.search(r"\b(1440p|2k)\b", text, re.I):
+        res = "1440p"
+    elif re.search(r"\b1080p\b", text, re.I):
+        res = "1080p"
+    elif re.search(r"\b(1080i|fhd)\b", text, re.I):
+        res = "1080i"
+    elif re.search(r"\b720p\b", text, re.I):
+        res = "720p"
+    elif re.search(r"\b(576p|576i)\b", text, re.I):
+        res = "576p"
+    elif re.search(r"\b(480p|480i|sd)\b", text, re.I):
+        res = "480p"
+    elif re.search(r"\b360p\b", text, re.I):
+        res = "360p"
+    elif re.search(r"\b240p\b", text, re.I):
+        res = "240p"
+    elif re.search(r"\bhd\b", text, re.I) and not re.search(r"\b(web\s*hd|hd\s*rip|hdtv)\b", text, re.I):
+        res = "720p"
+
+    # 2. Detect Bit-Depth
+    bit_depth = None
+    if re.search(r"\b10\s*bit\b", text, re.I):
+        bit_depth = "10bit"
+    elif re.search(r"\b8\s*bit\b", text, re.I):
+        bit_depth = "8bit"
+
+    # 3. Detect HDR / Dolby Vision
+    hdr = None
+    if re.search(r"\b(dolby\s*vision|dovi|\bdv\b)", text, re.I):
+        hdr = "Dolby Vision"
+    elif re.search(r"\bhdr10\+\b", text, re.I):
+        hdr = "HDR10+"
+    elif re.search(r"\b(hdr10|hdr)\b", text, re.I):
+        hdr = "HDR"
+
+    # If resolution was found, build compound quality
+    if res:
+        parts = [res]
+        if bit_depth:
+            parts.append(bit_depth)
+        if hdr:
+            parts.append(hdr)
+        return " ".join(parts)
+
+    # 4. Fallback Source Tags if no resolution was found
+    if re.search(r"\b(web\s*hd|web\s*dl|webrip)\b", text, re.I):
+        return "WEB-DL"
+    if re.search(r"\b(bluray|bdrip|brrip)\b", text, re.I):
+        return "BluRay"
+    if re.search(r"\b(hdrip|hdtv)\b", text, re.I):
+        return "HDRip"
+    if re.search(r"\b(dvdrip|dvd)\b", text, re.I):
+        return "DVDRip"
+
+    return "Unknown"
+
+
+def parse_series_filename(filename: str, series_title: str, target_season: int = None) -> dict:
+    """
+    Parse a media filename to extract series metadata.
+    Returns dict:
+      {
+         "status": "matched" | "other_season" | "invalid",
+         "series": series_title,
+         "season": int,
+         "episode": int,
+         "language": str,
+         "quality": str,
+         "reason": str,
+      }
+    """
+    if not filename:
+        return {"status": "invalid", "reason": "empty_filename"}
 
     raw_name = str(filename)
     raw_name = re.sub(r"\.(mkv|mp4|avi|mov|wmv|flv|webm|m4v|ts)$", "", raw_name, flags=re.I)
     cleaned = ' '.join(filter(lambda x: not x.startswith('@') and not x.startswith('http') and not x.startswith('www.') and not x.startswith('t.me'), raw_name.split()))
+    token_text = " " + re.sub(r"[\._\-\+\[\]\(\)\{\}]", " ", cleaned) + " "
 
     # 1. Season & Episode Extraction
     season_val = None
     episode_val = None
 
-    m = re.search(r"(?i)\b(?:s|season[\s._-]*)0?(\d+)[\s._-]*e(?:p(?:isode)?)?[\s._-]*0?(\d+)\b", cleaned)
+    m = re.search(r"(?i)\b(?:s|season\s*)0?(\d{1,3})\s*e(?:p(?:isode)?)?\s*0?(\d{1,3})\b", token_text)
     if m:
         season_val = int(m.group(1))
         episode_val = int(m.group(2))
     else:
-        m = re.search(r"(?i)\b0?(\d+)x0?(\d+)\b", cleaned)
+        m = re.search(r"(?i)\b0?(\d{1,3})\s*x\s*0?(\d{1,3})\b", token_text)
         if m:
             season_val = int(m.group(1))
             episode_val = int(m.group(2))
         else:
-            m_s = re.search(r"(?i)\b(?:s|season[\s._-]*)0?(\d+)\b", cleaned)
-            m_e = re.search(r"(?i)\b(?:e|ep|episode[\s._-]*)0?(\d+)\b", cleaned)
+            m_s = re.search(r"(?i)\b(?:s|season\s*)0?(\d{1,3})\b", token_text)
+            m_e = re.search(r"(?i)\b(?:e|ep|episode\s*)0?(\d{1,3})\b", token_text)
             if m_s and m_e:
                 season_val = int(m_s.group(1))
                 episode_val = int(m_e.group(1))
 
     if season_val is None or episode_val is None or episode_val <= 0:
-        return None
-
-    if season_val != int(target_season):
-        return None
+        return {"status": "invalid", "reason": "missing_season_or_episode"}
 
     # 2. Series Title Match Validation
     title_norm = _normalize(series_title)
@@ -183,10 +248,23 @@ def parse_series_filename(filename: str, series_title: str, target_season: int) 
     matched_tokens = sum(1 for tok in title_tokens if tok in clean_f_norm)
     min_match = max(1, len(title_tokens) - (1 if len(title_tokens) >= 4 else 0))
     if matched_tokens < min_match:
-        return None
+        return {"status": "invalid", "reason": "title_mismatch"}
 
-    # 3. Language Detection
-    detected_lang = None
+    # 3. Check Target Season
+    if target_season is not None and int(season_val) != int(target_season):
+        return {
+            "status": "other_season",
+            "series": series_title,
+            "season": season_val,
+            "episode": episode_val,
+            "reason": f"season_{season_val}_not_target_{target_season}"
+        }
+
+    # 4. Quality Detection
+    detected_quality = extract_quality_from_filename(raw_name)
+
+    # 5. Language Detection
+    detected_lang = "English"  # Default fallback when no specific regional tag is present
     f_words = re.split(r"[\s._\-\[\]\(\)\{\}\+]+", cleaned.lower())
     if "dual" in f_words and "audio" in f_words:
         detected_lang = "Dual Audio"
@@ -198,29 +276,21 @@ def parse_series_filename(filename: str, series_title: str, target_season: int) 
                 detected_lang = AUTO_LANGUAGE_MAP[w]
                 break
 
-    if not detected_lang:
-        return None
-
-    # 4. Quality Detection
-    detected_quality = "720p"
-    for pattern, q_name in AUTO_QUALITY_PATTERNS:
-        if pattern.search(cleaned):
-            detected_quality = q_name
-            break
-
     return {
+        "status": "matched",
         "series": series_title,
         "season": season_val,
         "episode": episode_val,
         "language": detected_lang,
         "quality": detected_quality,
+        "reason": "season_episode_quality_detected",
     }
 
 
 async def scan_sdatabase_for_series(title: str, season: int, series_id: str = None, client: Client = None) -> dict:
     """
     Scan the stored file database (SDatabase) for files matching the given Series and Season.
-    Returns structured results with valid files, organized hierarchy, and skipped/duplicate counts.
+    Returns structured results with valid files, organized hierarchy, and accurate statistics.
     """
     from database.ia_filterdb import col, sec_col, MULTIPLE_DATABASE
     from database.series_db import check_episode_exists
@@ -231,32 +301,19 @@ async def scan_sdatabase_for_series(title: str, season: int, series_id: str = No
         q_tokens = [_normalize(clean_title)]
 
     tok_pattern = ".*".join(re.escape(t) for t in q_tokens)
-    season_pattern = f"(s0?{season}|season[\\s._-]*0?{season}|{season}x)"
-    full_pattern = f"{tok_pattern}.*{season_pattern}"
-    try:
-        query_regex = re.compile(full_pattern, re.IGNORECASE)
-    except Exception:
-        query_regex = re.compile(tok_pattern, re.IGNORECASE)
+    query_regex = re.compile(tok_pattern, re.IGNORECASE)
 
-    cursor1 = col.find({"file_name": query_regex}).limit(500)
+    cursor1 = col.find({"file_name": query_regex}).limit(1000)
     docs = [d for d in cursor1]
     if MULTIPLE_DATABASE:
-        cursor2 = sec_col.find({"file_name": query_regex}).limit(500)
+        cursor2 = sec_col.find({"file_name": query_regex}).limit(1000)
         docs.extend([d for d in cursor2])
 
-    if not docs:
-        broad_regex = re.compile(tok_pattern, re.IGNORECASE)
-        cursor1 = col.find({"file_name": broad_regex}).limit(500)
-        docs = [d for d in cursor1]
-        if MULTIPLE_DATABASE:
-            cursor2 = sec_col.find({"file_name": broad_regex}).limit(500)
-            docs.extend([d for d in cursor2])
-
-    # Direct search in SDATABASE_CHANNEL if available
+    # Direct search in SDATABASE_CHANNEL if client is available
     if client and SDATABASE_CHANNEL:
         try:
             search_query = " ".join(q_tokens[:3])
-            async for msg in client.search_messages(chat_id=SDATABASE_CHANNEL, query=search_query, limit=200):
+            async for msg in client.search_messages(chat_id=SDATABASE_CHANNEL, query=search_query, limit=500):
                 media = getattr(msg, msg.media.value, None) if msg.media else None
                 if not media:
                     continue
@@ -273,20 +330,35 @@ async def scan_sdatabase_for_series(title: str, season: int, series_id: str = No
             logger.warning(f"Telegram channel search in SDATABASE_CHANNEL ({SDATABASE_CHANNEL}): {e}")
 
     valid_files = []
-    skipped_count = 0
-    duplicate_count = 0
+    total_scanned = len(docs)
+    total_matched = 0
+    total_new = 0
+    total_duplicates = 0
+    total_other_season = 0
+    total_invalid = 0
     seen_file_keys = set()
 
     for doc in docs:
         fname = doc.get("file_name", "")
         parsed = parse_series_filename(fname, clean_title, season)
-        if not parsed:
-            skipped_count += 1
+
+        status = parsed.get("status")
+        if status == "invalid":
+            total_invalid += 1
+            logger.debug(f"[AUTO S ADD SCAN] filename={fname} match=False reason={parsed.get('reason')}")
+            continue
+        elif status == "other_season":
+            total_other_season += 1
+            logger.debug(f"[AUTO S ADD SCAN] filename={fname} match=False reason={parsed.get('reason')}")
             continue
 
+        # Status is matched
+        total_matched += 1
         lang = parsed["language"]
         ep = parsed["episode"]
         qual = parsed["quality"]
+
+        logger.info(f"[AUTO S ADD SCAN] filename={fname} series={clean_title} season={season} episode={ep} quality={qual} language={lang} match=True reason={parsed.get('reason')}")
 
         key = (lang, season, ep, qual, doc.get("file_id"))
         if key in seen_file_keys:
@@ -296,9 +368,10 @@ async def scan_sdatabase_for_series(title: str, season: int, series_id: str = No
         if series_id:
             is_dup = await check_episode_exists(series_id, lang, season, ep, qual)
             if is_dup:
-                duplicate_count += 1
+                total_duplicates += 1
                 continue
 
+        total_new += 1
         valid_files.append({
             "language": lang,
             "season": season,
@@ -325,9 +398,12 @@ async def scan_sdatabase_for_series(title: str, season: int, series_id: str = No
     return {
         "valid_files": valid_files,
         "organized": organized,
-        "total_valid": len(valid_files),
-        "total_skipped": skipped_count,
-        "total_duplicates": duplicate_count,
+        "total_scanned": total_scanned,
+        "total_matched": total_matched,
+        "total_new": total_new,
+        "total_duplicates": total_duplicates,
+        "total_other_season": total_other_season,
+        "total_invalid": total_invalid,
     }
 
 
@@ -1470,15 +1546,20 @@ async def wizard_callback(client: Client, query: CallbackQuery):
         res = await scan_sdatabase_for_series(auto_data["title"], season_num, auto_data.get("existing_series_id"), client=client)
         auto_data["scan"] = res
 
-        if res["total_valid"] == 0:
+        if res["total_new"] == 0 and res["total_duplicates"] == 0:
             text = (
                 f"📊 <b>AUTO SCAN RESULT</b>\n\n"
                 f"🎬 <b>Series:</b> {auto_data['title']}\n"
+                f"📅 <b>Year:</b> {auto_data['year']}\n"
                 f"📺 <b>Season:</b> {season_num}\n\n"
                 f"⚠️ <b>No matching files found in SDatabase for Season {season_num}.</b>\n\n"
-                f"• Invalid / Skipped: {res['total_skipped']}\n"
-                f"• Existing Duplicates: {res['total_duplicates']}\n\n"
-                "Make sure files in SDatabase contain proper title and episode tags (e.g. <code>Stranger.Things.S05E01.English.1080p.mkv</code>)."
+                f"📁 <b>Files scanned:</b> {res['total_scanned']}\n"
+                f"✅ <b>Matching files:</b> {res['total_matched']}\n"
+                f"➕ <b>New files:</b> {res['total_new']}\n"
+                f"♻️ <b>Existing duplicates:</b> {res['total_duplicates']}\n"
+                f"⏭ <b>Other season:</b> {res['total_other_season']}\n"
+                f"❌ <b>Invalid:</b> {res['total_invalid']}\n\n"
+                "Make sure files in SDatabase contain proper title and episode tags (e.g. <code>Reacher.S01E03.480p.WEB-HD.x264.mkv</code>)."
             )
             markup = InlineKeyboardMarkup([
                 [InlineKeyboardButton("🔄 Rescan", callback_data="sw#auto_rescan")],
@@ -1486,7 +1567,7 @@ async def wizard_callback(client: Client, query: CallbackQuery):
                 [InlineKeyboardButton("❌ Cancel", callback_data="sw#auto_cancel")]
             ])
             await query.message.edit_text(text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
-            return await query.answer("Scan complete: 0 new files found.")
+            return await query.answer("Scan complete: 0 matching files found.")
 
         lines = []
         for lang, quals in res["organized"].items():
@@ -1502,11 +1583,14 @@ async def wizard_callback(client: Client, query: CallbackQuery):
             f"🎬 <b>Series:</b> {auto_data['title']}\n"
             f"📅 <b>Year:</b> {auto_data['year']}\n"
             f"📺 <b>Season:</b> {season_num}\n\n"
-            f"📁 <b>Files found:</b> {res['total_valid']}\n"
+            f"📁 <b>Files scanned:</b> {res['total_scanned']}\n"
+            f"✅ <b>Matching files:</b> {res['total_matched']}\n"
+            f"➕ <b>New files:</b> {res['total_new']}\n"
+            f"♻️ <b>Existing duplicates:</b> {res['total_duplicates']}\n"
+            f"⏭ <b>Other season:</b> {res['total_other_season']}\n"
+            f"❌ <b>Invalid:</b> {res['total_invalid']}\n\n"
             f"🌐 <b>Languages:</b> {langs_list}\n\n"
-            f"🎞 <b>Qualities & Episodes:</b>\n{episodes_summary}\n\n"
-            f"✅ <b>{res['total_valid']} valid files found</b>\n"
-            f"⚠️ <b>{res['total_skipped']} invalid | {res['total_duplicates']} duplicate skipped</b>"
+            f"🎞 <b>Qualities & Episodes:</b>\n{episodes_summary}"
         )
         markup = InlineKeyboardMarkup([
             [InlineKeyboardButton("💾 Save Series", callback_data="sw#auto_save")],
@@ -1514,7 +1598,7 @@ async def wizard_callback(client: Client, query: CallbackQuery):
             [InlineKeyboardButton("❌ Cancel", callback_data="sw#auto_cancel")]
         ])
         await query.message.edit_text(text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
-        return await query.answer(f"Scan complete: {res['total_valid']} files found!")
+        return await query.answer(f"Scan complete: {res['total_new']} new files ready to import!")
 
     if action == "auto_rescan":
         auto_data = temp.AUTO_SERIES.get(uid)
@@ -1531,14 +1615,19 @@ async def wizard_callback(client: Client, query: CallbackQuery):
         res = await scan_sdatabase_for_series(auto_data["title"], season_num, auto_data.get("existing_series_id"), client=client)
         auto_data["scan"] = res
 
-        if res["total_valid"] == 0:
+        if res["total_new"] == 0 and res["total_duplicates"] == 0:
             text = (
                 f"📊 <b>AUTO SCAN RESULT</b>\n\n"
                 f"🎬 <b>Series:</b> {auto_data['title']}\n"
+                f"📅 <b>Year:</b> {auto_data['year']}\n"
                 f"📺 <b>Season:</b> {season_num}\n\n"
                 f"⚠️ <b>No matching files found in SDatabase for Season {season_num}.</b>\n\n"
-                f"• Invalid / Skipped: {res['total_skipped']}\n"
-                f"• Existing Duplicates: {res['total_duplicates']}"
+                f"📁 <b>Files scanned:</b> {res['total_scanned']}\n"
+                f"✅ <b>Matching files:</b> {res['total_matched']}\n"
+                f"➕ <b>New files:</b> {res['total_new']}\n"
+                f"♻️ <b>Existing duplicates:</b> {res['total_duplicates']}\n"
+                f"⏭ <b>Other season:</b> {res['total_other_season']}\n"
+                f"❌ <b>Invalid:</b> {res['total_invalid']}"
             )
             markup = InlineKeyboardMarkup([
                 [InlineKeyboardButton("🔄 Rescan", callback_data="sw#auto_rescan")],
@@ -1546,7 +1635,7 @@ async def wizard_callback(client: Client, query: CallbackQuery):
                 [InlineKeyboardButton("❌ Cancel", callback_data="sw#auto_cancel")]
             ])
             await query.message.edit_text(text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
-            return await query.answer("Rescan complete: 0 new files found.")
+            return await query.answer("Rescan complete: 0 matching files found.")
 
         lines = []
         for lang, quals in res["organized"].items():
@@ -1562,11 +1651,14 @@ async def wizard_callback(client: Client, query: CallbackQuery):
             f"🎬 <b>Series:</b> {auto_data['title']}\n"
             f"📅 <b>Year:</b> {auto_data['year']}\n"
             f"📺 <b>Season:</b> {season_num}\n\n"
-            f"📁 <b>Files found:</b> {res['total_valid']}\n"
+            f"📁 <b>Files scanned:</b> {res['total_scanned']}\n"
+            f"✅ <b>Matching files:</b> {res['total_matched']}\n"
+            f"➕ <b>New files:</b> {res['total_new']}\n"
+            f"♻️ <b>Existing duplicates:</b> {res['total_duplicates']}\n"
+            f"⏭ <b>Other season:</b> {res['total_other_season']}\n"
+            f"❌ <b>Invalid:</b> {res['total_invalid']}\n\n"
             f"🌐 <b>Languages:</b> {langs_list}\n\n"
-            f"🎞 <b>Qualities & Episodes:</b>\n{episodes_summary}\n\n"
-            f"✅ <b>{res['total_valid']} valid files found</b>\n"
-            f"⚠️ <b>{res['total_skipped']} invalid | {res['total_duplicates']} duplicate skipped</b>"
+            f"🎞 <b>Qualities & Episodes:</b>\n{episodes_summary}"
         )
         markup = InlineKeyboardMarkup([
             [InlineKeyboardButton("💾 Save Series", callback_data="sw#auto_save")],
@@ -1574,7 +1666,7 @@ async def wizard_callback(client: Client, query: CallbackQuery):
             [InlineKeyboardButton("❌ Cancel", callback_data="sw#auto_cancel")]
         ])
         await query.message.edit_text(text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
-        return await query.answer(f"Rescan complete: {res['total_valid']} files found!")
+        return await query.answer(f"Rescan complete: {res['total_new']} new files ready to import!")
 
     if action == "auto_save":
         auto_data = temp.AUTO_SERIES.get(uid)
