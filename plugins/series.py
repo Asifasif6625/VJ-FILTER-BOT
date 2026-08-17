@@ -248,11 +248,12 @@ def _series_card(series: dict, remaining_seconds: str = None) -> str:
     return card
 
 
-def _lang_keyboard(selected: list[str]) -> InlineKeyboardMarkup:
+def _lang_keyboard(selected: list[str], available_langs: list[str] = None) -> InlineKeyboardMarkup:
+    options = available_langs if available_langs is not None else LANG_OPTIONS
     rows = []
-    for i in range(0, len(LANG_OPTIONS), 3):
+    for i in range(0, len(options), 3):
         row = []
-        for lang in LANG_OPTIONS[i:i+3]:
+        for lang in options[i:i+3]:
             tick = "🟢 " if lang in selected else ""
             row.append(InlineKeyboardButton(f"{tick}{lang}", callback_data=f"sw#lang#{lang}"))
         rows.append(row)
@@ -268,19 +269,31 @@ def _season_keyboard(
     max_seasons: int,
     selected: list[int],
     show_skip: bool = False,
+    available_seasons: list[int] = None,
 ) -> InlineKeyboardMarkup:
     rows = []
-    for i in range(1, max_seasons + 1, 3):
-        row = []
-        for s in range(i, min(i + 3, max_seasons + 1)):
-            tick = "🟢 " if s in selected else ""
-            row.append(InlineKeyboardButton(f"{tick}S{s}", callback_data=f"sw#season#{s}"))
-        rows.append(row)
-    
-    control_row = [InlineKeyboardButton("🟢 Submit", callback_data="sw#season#submit")]
-    if show_skip:
-        control_row.append(InlineKeyboardButton("⏭️ Skip Season", callback_data="sw#season#skip"))
-    rows.append(control_row)
+    if available_seasons is not None:
+        for i in range(0, len(available_seasons), 3):
+            row = []
+            for s in available_seasons[i:i+3]:
+                tick = "🟢 " if s in selected else ""
+                label = f"S{s}" if s > 0 else "Direct Episodes"
+                row.append(InlineKeyboardButton(f"{tick}{label}", callback_data=f"sw#season#{s}"))
+            rows.append(row)
+        control_row = [InlineKeyboardButton("🟢 Submit", callback_data="sw#season#submit")]
+        rows.append(control_row)
+    else:
+        for i in range(1, max_seasons + 1, 3):
+            row = []
+            for s in range(i, min(i + 3, max_seasons + 1)):
+                tick = "🟢 " if s in selected else ""
+                row.append(InlineKeyboardButton(f"{tick}S{s}", callback_data=f"sw#season#{s}"))
+            rows.append(row)
+        
+        control_row = [InlineKeyboardButton("🟢 Submit", callback_data="sw#season#submit")]
+        if show_skip:
+            control_row.append(InlineKeyboardButton("⏭️ Skip Season", callback_data="sw#season#skip"))
+        rows.append(control_row)
     
     rows.append([
         InlineKeyboardButton("⬅️ Back", callback_data="sw#season#back"),
@@ -292,20 +305,23 @@ def _season_keyboard(
 def _quality_keyboard(
     selected: list[str],
     already_saved: list[str] = None,
+    available_qualities: list[str] = None,
 ) -> InlineKeyboardMarkup:
     """
-    selected      — qualities chosen for the CURRENT batch (shown with 🟢)
-    already_saved — qualities already committed to the series (shown with ✅)
+    selected            — qualities chosen for the CURRENT batch (shown with 🟢)
+    already_saved       — qualities already committed to the series (shown with ✅)
+    available_qualities — if in edit mode, show only qualities that exist in DB for this Lang+Season
     """
     already_saved = already_saved or []
+    options = available_qualities if available_qualities is not None else QUALITY_OPTIONS
     rows = []
-    for i in range(0, len(QUALITY_OPTIONS), 3):
+    for i in range(0, len(options), 3):
         row = []
-        for q in QUALITY_OPTIONS[i:i+3]:
+        for q in options[i:i+3]:
             if q in selected:
                 tick = "🟢 "
                 cb = f"sw#quality#{q}"
-            elif q in already_saved:
+            elif available_qualities is None and q in already_saved:
                 tick = "✅ "
                 cb = f"sw#quality_used#{q}"
             else:
@@ -338,6 +354,39 @@ async def _get_used_qualities(wiz: dict) -> list[str]:
     return list(used)
 
 
+async def _get_edit_available_langs(wiz: dict) -> list[str] | None:
+    if wiz.get("mode") == "edit" and wiz.get("series_id"):
+        db_langs = await list_series_languages(wiz["series_id"])
+        if db_langs:
+            return [l for l in LANG_OPTIONS if l in db_langs] + [l for l in db_langs if l not in LANG_OPTIONS]
+        return []
+    return None
+
+
+async def _get_edit_available_seasons(wiz: dict) -> list[int] | None:
+    if wiz.get("mode") == "edit" and wiz.get("series_id"):
+        langs = wiz.get("batch_langs") or []
+        if langs:
+            lang = langs[0]
+            db_seasons = await list_series_seasons(wiz["series_id"], lang)
+            return sorted(db_seasons)
+        return []
+    return None
+
+
+async def _get_edit_available_qualities(wiz: dict) -> list[str] | None:
+    if wiz.get("mode") == "edit" and wiz.get("series_id"):
+        langs = wiz.get("batch_langs") or []
+        seasons = wiz.get("batch_seasons") or []
+        if langs and seasons:
+            lang = langs[0]
+            season = seasons[0]
+            db_quals = await list_season_qualities(wiz["series_id"], lang, season)
+            return [q for q in QUALITY_OPTIONS if q in db_quals] + [q for q in db_quals if q not in QUALITY_OPTIONS]
+        return []
+    return None
+
+
 def _should_show_skip_season(wiz: dict) -> bool:
     """
     Check whether to display [⏭️ Skip Season] button.
@@ -357,7 +406,7 @@ def _should_show_skip_season(wiz: dict) -> bool:
 def _config_menu_keyboard(series_id: str = None, from_viewseries: bool = False) -> InlineKeyboardMarkup:
     buttons = [
         [
-            InlineKeyboardButton("📁 Add Files", callback_data="sw#menu#batch")
+            InlineKeyboardButton("➕ Add Episode", callback_data="sw#menu#batch")
         ]
     ]
     if series_id:
@@ -849,6 +898,11 @@ async def wizard_text_handler(client: Client, message: Message):
             parse_mode=enums.ParseMode.HTML,
         )
 
+    elif state == S_BATCH_WAIT:
+        if text and (text.startswith("https://t.me/") or text.startswith("http://t.me/")):
+            message.text = f"/slink {text}"
+            return await cmd_slink(client, message)
+
 
 # ══════════════════════════════════════════════════════════════════════════════
 # ─── CALLBACK HANDLER — WIZARD BUTTONS ───────────────────────────────────────
@@ -980,10 +1034,13 @@ async def wizard_callback(client: Client, query: CallbackQuery):
             wiz["batch_langs"] = []
             wiz["batch_seasons"] = []
             wiz["batch_qualities"] = []
-            logger.info(f"[SERIES EDIT]\nuser_id={uid}\nseries_id={wiz.get('series_id')}\naction=ADD_FILES")
+            logger.info(f"[SERIES EDIT]\nuser_id={uid}\nseries_id={wiz.get('series_id')}\naction=ADD_EPISODE")
+            avail_langs = await _get_edit_available_langs(wiz)
+            if avail_langs is not None and len(avail_langs) == 0:
+                return await query.answer("⚠️ No files stored in database for this series yet.", show_alert=True)
             await query.message.edit_text(
-                f"📁 <b>Add Files</b> — <b>{wiz['name']}</b>\n\nSelect <b>language</b> for this batch:",
-                reply_markup=_lang_keyboard(wiz["batch_langs"]),
+                f"📁 <b>Add Episode</b> — <b>{wiz['name']}</b>\n\nSelect <b>language</b>:",
+                reply_markup=_lang_keyboard(wiz["batch_langs"], available_langs=avail_langs),
                 parse_mode=enums.ParseMode.HTML,
             )
         return await query.answer()
@@ -992,6 +1049,7 @@ async def wizard_callback(client: Client, query: CallbackQuery):
     if action == "lang":
         val = "#".join(parts[2:])
         target_list = wiz["batch_langs"] if wiz["state"] == S_BATCH_LANG else wiz["languages"]
+        avail_langs = await _get_edit_available_langs(wiz)
         if val == "submit":
             if len(target_list) == 0:
                 return await query.answer("⚠️ Please select one language.", show_alert=True)
@@ -1000,10 +1058,13 @@ async def wizard_callback(client: Client, query: CallbackQuery):
             if wiz["state"] == S_BATCH_LANG:
                 wiz["languages"] = list(set(wiz.get("languages", []) + target_list))
                 wiz["state"] = S_BATCH_SEASON
-                show_skip = _should_show_skip_season(wiz)
+                avail_seasons = await _get_edit_available_seasons(wiz)
+                if avail_seasons is not None and len(avail_seasons) == 0:
+                    return await query.answer("⚠️ No seasons with files found for this language.", show_alert=True)
+                show_skip = _should_show_skip_season(wiz) if avail_seasons is None else False
                 await query.message.edit_text(
-                    f"📁 <b>Add Files</b> — <b>{wiz['name']}</b>\n🌐 Language: <b>{', '.join(target_list)}</b>\n\nSelect <b>season</b>:",
-                    reply_markup=_season_keyboard(MAX_SEASONS, wiz.get("batch_seasons", []), show_skip=show_skip),
+                    f"📁 <b>Add Episode</b> — <b>{wiz['name']}</b>\n🌐 Language: <b>{', '.join(target_list)}</b>\n\nSelect <b>season</b>:",
+                    reply_markup=_season_keyboard(MAX_SEASONS, wiz.get("batch_seasons", []), show_skip=show_skip, available_seasons=avail_seasons),
                     parse_mode=enums.ParseMode.HTML,
                 )
             else:
@@ -1026,7 +1087,7 @@ async def wizard_callback(client: Client, query: CallbackQuery):
             lang = val
             target_list[:] = [lang]
             try:
-                await query.message.edit_reply_markup(_lang_keyboard(target_list))
+                await query.message.edit_reply_markup(_lang_keyboard(target_list, available_langs=avail_langs))
             except MessageNotModified:
                 pass
         return await query.answer()
@@ -1035,7 +1096,8 @@ async def wizard_callback(client: Client, query: CallbackQuery):
     if action == "season":
         val = parts[2] if len(parts) > 2 else ""
         target_list = wiz["batch_seasons"] if wiz["state"] == S_BATCH_SEASON else wiz["seasons"]
-        show_skip = _should_show_skip_season(wiz)
+        avail_seasons = await _get_edit_available_seasons(wiz)
+        show_skip = _should_show_skip_season(wiz) if avail_seasons is None else False
         if val == "submit":
             if len(target_list) == 0:
                 return await query.answer("⚠️ Please select one season.", show_alert=True)
@@ -1045,14 +1107,17 @@ async def wizard_callback(client: Client, query: CallbackQuery):
                 wiz["batch_seasons"] = list(target_list)
                 wiz["seasons"] = list(set(wiz.get("seasons", []) + target_list))
                 wiz["state"] = S_BATCH_QUAL
-                used_qualities = await _get_used_qualities(wiz)
-                seasons_str = ', '.join(str(s) for s in sorted(target_list))
+                avail_quals = await _get_edit_available_qualities(wiz)
+                if avail_quals is not None and len(avail_quals) == 0:
+                    return await query.answer("⚠️ No qualities with files found for this language and season.", show_alert=True)
+                used_qualities = await _get_used_qualities(wiz) if avail_quals is None else []
+                seasons_str = ', '.join(f"S{s}" if s > 0 else "Direct Episodes" for s in sorted(target_list))
                 await query.message.edit_text(
-                    f"📁 <b>Add Files</b> — <b>{wiz['name']}</b>\n"
+                    f"📁 <b>Add Episode</b> — <b>{wiz['name']}</b>\n"
                     f"🌐 {', '.join(wiz.get('batch_langs', []))} · 📁 Season: <b>{seasons_str}</b>\n\n"
                     "Select <b>quality</b>:\n"
-                    "<i>✅ = already saved to series  |  🟢 = selected for this batch</i>",
-                    reply_markup=_quality_keyboard(wiz.get("batch_qualities", []), used_qualities),
+                    + ("" if avail_quals is not None else "<i>✅ = already saved to series  |  🟢 = selected for this batch</i>"),
+                    reply_markup=_quality_keyboard(wiz.get("batch_qualities", []), already_saved=used_qualities, available_qualities=avail_quals),
                     parse_mode=enums.ParseMode.HTML,
                 )
             else:
@@ -1066,7 +1131,7 @@ async def wizard_callback(client: Client, query: CallbackQuery):
                     parse_mode=enums.ParseMode.HTML,
                 )
         elif val == "skip":
-            if not _should_show_skip_season(wiz):
+            if not _should_show_skip_season(wiz) or avail_seasons is not None:
                 return await query.answer("⚠️ Season is already added for this language. Please select a season.", show_alert=True)
             if wiz["state"] == S_BATCH_SEASON:
                 wiz["batch_seasons"] = [0]
@@ -1093,9 +1158,10 @@ async def wizard_callback(client: Client, query: CallbackQuery):
         elif val == "back":
             if wiz["state"] == S_BATCH_SEASON:
                 wiz["state"] = S_BATCH_LANG
+                avail_langs = await _get_edit_available_langs(wiz)
                 await query.message.edit_text(
-                    f"📁 <b>Add Files</b> — <b>{wiz['name']}</b>\n\nSelect <b>language</b> for this batch:",
-                    reply_markup=_lang_keyboard(wiz.get("batch_langs", [])),
+                    f"📁 <b>Add Episode</b> — <b>{wiz['name']}</b>\n\nSelect <b>language</b>:",
+                    reply_markup=_lang_keyboard(wiz.get("batch_langs", []), available_langs=avail_langs),
                     parse_mode=enums.ParseMode.HTML,
                 )
             else:
@@ -1108,7 +1174,7 @@ async def wizard_callback(client: Client, query: CallbackQuery):
             n = int(val)
             target_list[:] = [n]
             try:
-                await query.message.edit_reply_markup(_season_keyboard(MAX_SEASONS, target_list, show_skip=show_skip))
+                await query.message.edit_reply_markup(_season_keyboard(MAX_SEASONS, target_list, show_skip=show_skip, available_seasons=avail_seasons))
             except MessageNotModified:
                 pass
         return await query.answer()
@@ -1117,6 +1183,7 @@ async def wizard_callback(client: Client, query: CallbackQuery):
     if action == "quality":
         val = "#".join(parts[2:])
         target_list = wiz["batch_qualities"] if wiz["state"] == S_BATCH_QUAL else wiz["qualities"]
+        avail_quals = await _get_edit_available_qualities(wiz)
         if val == "submit":
             if len(target_list) == 0:
                 return await query.answer("⚠️ Select one quality.", show_alert=True)
@@ -1125,13 +1192,13 @@ async def wizard_callback(client: Client, query: CallbackQuery):
             if wiz["state"] == S_BATCH_QUAL:
                 wiz["qualities"] = list(set(wiz["qualities"] + target_list))
                 wiz["state"] = S_BATCH_WAIT
-                seasons_str = ', '.join(str(s) for s in sorted(wiz.get('batch_seasons', []))) if wiz.get('batch_seasons') and wiz.get('batch_seasons') != [0] else 'None (Direct Episodes)'
+                seasons_str = ', '.join(f"S{s}" if s > 0 else "Direct Episodes" for s in sorted(wiz.get('batch_seasons', []))) if wiz.get('batch_seasons') else 'None (Direct Episodes)'
                 await query.message.edit_text(
-                    f"📁 <b>Add File</b>\n\n"
-                    f"<b>Series:</b> {wiz['name']}\n"
-                    f"<b>Language:</b> {', '.join(wiz.get('batch_langs', []))}\n"
-                    f"<b>Season:</b> {seasons_str}\n"
-                    f"<b>Quality:</b> {', '.join(wiz.get('batch_qualities', []))}\n\n"
+                    f"📁 <b>Add Episode / File</b>\n\n"
+                    f"📺 <b>Series:</b> {wiz['name']}\n"
+                    f"🌐 <b>Language:</b> {', '.join(wiz.get('batch_langs', []))}\n"
+                    f"📁 <b>Season:</b> {seasons_str}\n"
+                    f"🎞 <b>Quality:</b> {', '.join(wiz.get('batch_qualities', []))}\n\n"
                     "Now send the channel link for the file(s):\n\n"
                     "• <b>Single File / Episode:</b>\n"
                     "<code>/slink https://t.me/c/123456/1001</code>\n\n"
@@ -1152,10 +1219,11 @@ async def wizard_callback(client: Client, query: CallbackQuery):
         elif val == "back":
             if wiz["state"] == S_BATCH_QUAL:
                 wiz["state"] = S_BATCH_SEASON
-                show_skip = _should_show_skip_season(wiz)
+                avail_seasons = await _get_edit_available_seasons(wiz)
+                show_skip = _should_show_skip_season(wiz) if avail_seasons is None else False
                 await query.message.edit_text(
-                    f"📁 <b>Add Files</b> — <b>{wiz['name']}</b>\n🌐 Language: <b>{', '.join(wiz.get('batch_langs', []))}</b>\n\nSelect <b>season</b>:",
-                    reply_markup=_season_keyboard(MAX_SEASONS, wiz.get("batch_seasons", []), show_skip=show_skip),
+                    f"📁 <b>Add Episode</b> — <b>{wiz['name']}</b>\n🌐 Language: <b>{', '.join(wiz.get('batch_langs', []))}</b>\n\nSelect <b>season</b>:",
+                    reply_markup=_season_keyboard(MAX_SEASONS, wiz.get("batch_seasons", []), show_skip=show_skip, available_seasons=avail_seasons),
                     parse_mode=enums.ParseMode.HTML,
                 )
             else:
@@ -1168,11 +1236,11 @@ async def wizard_callback(client: Client, query: CallbackQuery):
             q = val
             target_list[:] = [q]
             if wiz["state"] == S_BATCH_QUAL:
-                used_qualities = await _get_used_qualities(wiz)
+                used_qualities = await _get_used_qualities(wiz) if avail_quals is None else []
             else:
                 used_qualities = []
             try:
-                await query.message.edit_reply_markup(_quality_keyboard(target_list, used_qualities))
+                await query.message.edit_reply_markup(_quality_keyboard(target_list, used_qualities, available_qualities=avail_quals))
             except MessageNotModified:
                 pass
         return await query.answer()
