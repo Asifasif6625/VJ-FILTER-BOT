@@ -1124,27 +1124,38 @@ async def wizard_text_handler(client: Client, message: Message):
                 del temp.AUTO_SERIES[uid]
                 return await message.reply_text("❌ Auto S Add cancelled.")
 
-            m_imdb = re.search(r"tt\d{5,10}", text, re.I)
+            m_imdb = re.search(r"(tt\d{5,10})", text, re.I)
             if not m_imdb:
                 return await message.reply_text(
                     "❌ <b>Invalid IMDb link or ID.</b>\n\n"
-                    "Please provide a valid IMDb URL (e.g. <code>https://www.imdb.com/title/tt4574334/</code>) or ID (<code>tt4574334</code>).",
+                    "Please provide a valid IMDb URL (e.g. <code>https://www.imdb.com/title/tt9288030/</code>) or ID (<code>tt9288030</code>).",
                     parse_mode=enums.ParseMode.HTML,
                 )
 
-            imdb_id = m_imdb.group(0).lower()
+            imdb_id = m_imdb.group(1).lower()
             loading_msg = await message.reply_text("⏳ Fetching IMDb metadata, please wait...")
 
+            info = None
             try:
                 info = await get_poster(imdb_id, id=True)
+                logger.info(f"[AUTO S ADD IMDb] id={imdb_id} status={'success' if info else 'failed'} title={info.get('title') if info else None}")
             except Exception as e:
-                logger.error(f"IMDb fetch error: {e}")
+                logger.error(f"[AUTO S ADD IMDb] id={imdb_id} error={e}")
                 info = None
 
             if not info or not info.get("title"):
                 return await loading_msg.edit_text(
                     f"❌ <b>Could not retrieve IMDb data for <code>{imdb_id}</code>.</b>\n"
-                    "Please check the link and try again, or send /cancel to abort.",
+                    "Please try again later or check the IMDb link, or send /cancel to abort.",
+                    parse_mode=enums.ParseMode.HTML,
+                )
+
+            # ── Series Validation ──
+            kind = str(info.get("kind", "")).lower()
+            if kind in ["movie", "feature"]:
+                return await loading_msg.edit_text(
+                    f"⚠️ <b>This IMDb title (<code>{info['title']}</code>) is not a TV Series.</b>\n\n"
+                    "Please send a valid Series IMDb link, or send /cancel to abort.",
                     parse_mode=enums.ParseMode.HTML,
                 )
 
@@ -1166,7 +1177,7 @@ async def wizard_text_handler(client: Client, message: Message):
                 "genre": info.get("genres", "N/A"),
                 "rating": str(info.get("rating") or ""),
                 "description": info.get("plot", ""),
-                "poster": info.get("poster", ""),
+                "poster": info.get("poster") or "",
                 "total_seasons": tot_seasons,
                 "existing_series_id": str(existing["_id"]) if existing else None,
             })
@@ -1190,11 +1201,16 @@ async def wizard_text_handler(client: Client, message: Message):
             )
 
             await loading_msg.delete()
-            return await message.reply_text(
+            await message.reply_text(
                 caption,
                 reply_markup=markup,
                 parse_mode=enums.ParseMode.HTML,
             )
+            try:
+                message.stop_propagation()
+            except Exception:
+                pass
+            return
 
     if uid not in temp.SERIES_WIZARD:
         return
