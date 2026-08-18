@@ -457,31 +457,23 @@ async def movie_qual_callback(client: Client, query: CallbackQuery):
     if not files:
         return await query.answer("⚠️ No files found for this quality.", show_alert=True)
         
-    logger.info(f"[MOVIE QUALITY]\nkey={key}\nlanguage={lang}\nquality={qual}\nfiles={len(files)}")
-
     title = state.get("title", "Movie")
-    year = state.get("year", "")
-    year_str = f" ({year})" if year and year != "N/A" else ""
-    rating = state.get("rating", "")
-    rating_str = f"\n⭐ <b>Rating:</b> {rating}/10" if rating else ""
-    pre = state.get("pre", "file")
+    logger.info(f"[MOVIE QUALITY]\ntitle={title}\nlanguage={lang}\nquality={qual}\nfiles={len(files)}")
     
-    cap = (
-        f"🎬 <b>{title}{year_str}</b>"
-        f"{rating_str}\n\n"
-        f"🌐 <b>Language:</b> {lang}\n"
-        f"🎞 <b>Quality:</b> {qual}\n\n"
-        f"📁 <b>Select File to Download:</b>"
+    await query.answer(f"🚀 Sending {len(files)} {lang} {qual} files to your PM...", show_alert=False)
+    
+    from plugins.commands import send_movie_files_to_user
+    user_id = query.from_user.id
+    sent_count = await send_movie_files_to_user(
+        client=client,
+        user_id=user_id,
+        files=files,
+        query=query,
+        movie_title=title,
+        language=lang,
+        quality=qual
     )
-    markup = build_movie_file_keyboard(key, lang, qual, files, page=0, pre=pre)
-    try:
-        if query.message.photo or query.message.caption:
-            await query.message.edit_caption(caption=cap, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
-        else:
-            await query.message.edit_text(text=cap, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
-    except MessageNotModified:
-        pass
-    await query.answer()
+    logger.info(f"[MOVIE SEND FILES]\ntitle={title}\nlanguage={lang}\nquality={qual}\ncount={sent_count}")
 
 @Client.on_callback_query(filters.regex(r"^(mvpage#|movie_files#)"))
 async def movie_page_callback(client: Client, query: CallbackQuery):
@@ -3328,6 +3320,7 @@ async def auto_filter(client, name, msg, reply_msg=None, ai_search=True, spoll=F
         req = message.chat.id
     BUTTON_OWNERS[key] = req
     FRESH[key] = search
+    BUTTONS[key] = search
     temp.GETALL[key] = files
     if req:
         temp.SHORT[req] = message.chat.id
@@ -3340,9 +3333,6 @@ async def auto_filter(client, name, msg, reply_msg=None, ai_search=True, spoll=F
         except Exception as ie:
             logger.warning(f"[MOVIE FILTER IMDb fetch failed for '{search}']: {ie}")
             imdb = None
-    cur_time = datetime.now(pytz.timezone('Asia/Kolkata')).time()
-    time_difference = timedelta(hours=cur_time.hour, minutes=cur_time.minute, seconds=(cur_time.second+(cur_time.microsecond/1000000))) - timedelta(hours=curr_time.hour, minutes=curr_time.minute, seconds=(curr_time.second+(curr_time.microsecond/1000000)))
-    remaining_seconds = "{:.2f}".format(time_difference.total_seconds())
 
     movie_title = (imdb.get('title') if imdb and imdb.get('title') else search.title())
     movie_year = str(imdb.get('year') or '') if imdb else ''
@@ -3375,25 +3365,23 @@ async def auto_filter(client, name, msg, reply_msg=None, ai_search=True, spoll=F
         "created_at": time.time()
     }
 
-    logger.info(f"[MOVIE STATE CREATED]\nkey={key}\nowner={req}\nfiles={len(files)}\nlanguages={list(grouped.keys())}")
+    logger.info(f"[MOVIE STATE CREATED]\ntitle={movie_title}\nyear={movie_year}\nlanguages={len(grouped)}")
 
     year_str = f" ({movie_year})" if movie_year and movie_year != "N/A" else ""
     rating_str = f"\n⭐ <b>Rating:</b> {movie_rating}/10" if movie_rating else ""
     genre_str = f"\n🎭 <b>Genre:</b> {movie_genre}" if movie_genre and movie_genre != "N/A" else ""
-    langs_disp = ", ".join(grouped.keys())
 
     cap = (
         f"🎬 <b>{movie_title}{year_str}</b>"
         f"{rating_str}"
-        f"{genre_str}\n"
-        f"🌐 <b>Available Languages:</b> {langs_disp}\n\n"
-        f"🍿 <b>Choose Language:</b>"
+        f"{genre_str}\n\n"
+        f"🌐 <b>Select Language:</b>"
     )
-    btn_markup = build_movie_language_keyboard(key, grouped)
+    reply_markup = build_movie_language_keyboard(key, grouped)
 
     if movie_poster:
         try:
-            hehe = await message.reply_photo(photo=movie_poster, caption=cap, reply_markup=btn_markup)
+            hehe = await message.reply_photo(photo=movie_poster, caption=cap, reply_markup=reply_markup)
             if reply_msg:
                 await reply_msg.delete()
             try:
@@ -3407,8 +3395,8 @@ async def auto_filter(client, name, msg, reply_msg=None, ai_search=True, spoll=F
                 await hehe.delete()
                 await message.delete()
         except (MediaEmpty, PhotoInvalidDimensions, WebpageMediaEmpty):
-            poster_alt = movie_poster.replace('.jpg', "._V1_UX360.jpg") 
-            hmm = await message.reply_photo(photo=poster_alt, caption=cap, reply_markup=btn_markup)
+            poster_alt = (movie_poster or '').replace('.jpg', "._V1_UX360.jpg") 
+            hmm = await message.reply_photo(photo=poster_alt, caption=cap, reply_markup=reply_markup)
             if reply_msg:
                 await reply_msg.delete()
             try:
@@ -3424,9 +3412,9 @@ async def auto_filter(client, name, msg, reply_msg=None, ai_search=True, spoll=F
         except Exception as e:
             logger.exception(e) 
             if reply_msg:
-                fek = await reply_msg.edit_text(text=cap, reply_markup=btn_markup)
+                fek = await reply_msg.edit_text(text=cap, reply_markup=reply_markup)
             else:
-                fek = await message.reply_text(text=cap, reply_markup=btn_markup)
+                fek = await message.reply_text(text=cap, reply_markup=reply_markup)
             try:
                 if settings['auto_delete']:
                     await asyncio.sleep(300)
@@ -3439,9 +3427,9 @@ async def auto_filter(client, name, msg, reply_msg=None, ai_search=True, spoll=F
                 await message.delete()
     else:
         if reply_msg:
-            fuk = await reply_msg.edit_text(text=cap, reply_markup=btn_markup, disable_web_page_preview=True)
+            fuk = await reply_msg.edit_text(text=cap, reply_markup=reply_markup, disable_web_page_preview=True)
         else:
-            fuk = await message.reply_text(text=cap, reply_markup=btn_markup, disable_web_page_preview=True)
+            fuk = await message.reply_text(text=cap, reply_markup=reply_markup, disable_web_page_preview=True)
         
         try:
             if settings['auto_delete']:
