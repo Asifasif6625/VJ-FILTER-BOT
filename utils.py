@@ -26,9 +26,12 @@ try:
     imdb = Cinemagoer(uri="sqlite:///cinemagoer.db")
 except Exception:
     try:
-        imdb = Cinemagoer(accessSystem="http")
+        imdb = Cinemagoer(uri="sqlite:////tmp/cinemagoer.db")
     except Exception:
-        imdb = Cinemagoer() 
+        try:
+            imdb = Cinemagoer(accessSystem="http")
+        except Exception:
+            imdb = Cinemagoer() 
 TOKENS = {}
 VERIFIED = {}
 BANNED = {}
