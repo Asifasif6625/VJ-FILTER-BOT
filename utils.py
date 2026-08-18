@@ -43,6 +43,7 @@ class temp(object):
     SERIES_WIZARD = {}
     SERIES_STATE = {}
     AUTO_SERIES = {}
+    AUTO_MOVIE = {}
     U_NAME = None
     B_NAME = None
     GETALL = {}
