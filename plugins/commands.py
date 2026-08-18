@@ -45,8 +45,9 @@ async def process_series_start(client: Client, user_id: int, req_key: str, messa
             temp.GETALL[req_key] = req
             
     if not req:
+        from plugins.series import to_series_font
         log.warning(f"[SERIES START]\naction=REQUEST_NOT_FOUND\nrequest_key={req_key}")
-        msg_text = "<b><i>⚠️ Request expired. Please search the series again.</i></b>"
+        msg_text = f"<b><i>⚠️ {to_series_font('Request expired. Please search the series again.')}</i></b>"
         if message:
             await message.reply(msg_text)
         else:
@@ -74,8 +75,9 @@ async def process_series_start(client: Client, user_id: int, req_key: str, messa
 
     owner = req.get("user_id", req.get("user"))
     if owner and int(owner) != int(user_id):
+        from plugins.series import to_series_font
         log.warning(f"[SERIES START]\naction=OWNERSHIP_MISMATCH\nrequest_key={req_key}\nowner={owner}\nuser_id={user_id}")
-        msg_text = "<b><i>⚠️ This link is not for you!</i></b>"
+        msg_text = f"<b><i>⚠️ {to_series_font('This link is not for you!')}</i></b>"
         if message:
             await message.reply(msg_text)
         else:
@@ -84,12 +86,14 @@ async def process_series_start(client: Client, user_id: int, req_key: str, messa
         
     status = str(req.get("delivery_status", req.get("state", ""))).lower()
     if status == "completed":
+        from plugins.series import to_series_font
         if message:
-            await message.reply("✅ Files already sent.")
+            await message.reply(f"✅ {to_series_font('Files already sent.')}")
         return
     if status == "sending":
+        from plugins.series import to_series_font
         if message:
-            await message.reply("⏳ Files are already being sent.")
+            await message.reply(f"⏳ {to_series_font('Files are already being sent.')}")
         return
         
     if AUTH_CHANNEL:
@@ -235,6 +239,14 @@ async def start(client, message):
         await process_series_start(client, message.from_user.id, file_id, message=message)
         return
     # --- END SERIES GROUP TO PM FLOW ---
+
+    # --- SERIES DEEP LINK PM FLOW ---
+    if data.startswith("series_"):
+        series_key = data.split("_", 1)[1]
+        from plugins.series import process_series_deeplink
+        await process_series_deeplink(client, message, series_key)
+        return
+    # --- END SERIES DEEP LINK PM FLOW ---
     
     # Global Force Subscribe intercepted bypassed as requested
     
@@ -1531,26 +1543,28 @@ async def total_requests(client, message):
             disable_web_page_preview=True
         )
 
-@Client.on_message(filters.command("purgerequests") & filters.private & filters.user(ADMINS))
-async def purge_requests(client, message):
+async def execute_purge_requests(client=None) -> tuple[int, int]:
+    """
+    Core purge requests logic: deletes join requests from database
+    and declines tracked pending join requests in AUTH_CHANNEL.
+    Reused by both manual /purgerequests command and 24-hour automatic scheduler.
+    """
     import logging
     import asyncio
     from pyrogram.errors import FloodWait
     log = logging.getLogger(__name__)
-    log.info("[PURGE REQUESTS] START")
-    log.info(f"[PURGE REQUESTS] CHANNEL = {AUTH_CHANNEL}")
-    
+    log.info("[REQUEST PURGE] START")
+    log.info(f"[REQUEST PURGE] CHANNEL = {AUTH_CHANNEL}")
+
     db_count = 0
     users = []
     if join_db().isActive():
         db_count = await join_db().get_all_users_count()
         users = await join_db().get_all_users()
         await join_db().delete_all_users()
-        
-    msg = await message.reply_text("Processing /purgerequests...", parse_mode=enums.ParseMode.MARKDOWN)
-    
+
     declined_count = 0
-    if AUTH_CHANNEL and users:
+    if AUTH_CHANNEL and users and client:
         for u in users:
             uid = u.get("user_id")
             if not uid:
@@ -1567,7 +1581,17 @@ async def purge_requests(client, message):
                     pass
             except Exception:
                 pass
-                
+
+    log.info(f"[REQUEST PURGE]\nAutomatic 24-hour purge completed: db_purged={db_count}, channel_declined={declined_count}")
+    return db_count, declined_count
+
+
+@Client.on_message(filters.command("purgerequests") & filters.private & filters.user(ADMINS))
+async def purge_requests(client, message):
+    msg = await message.reply_text("Processing /purgerequests...", parse_mode=enums.ParseMode.MARKDOWN)
+
+    db_count, declined_count = await execute_purge_requests(client)
+
     text = f"✅ **Purged {db_count} Requests from Database.**\n\n"
     if declined_count > 0:
         text += f"✅ **Declined {declined_count} tracked pending request(s) in Channel.**\n\n"
@@ -1575,8 +1599,7 @@ async def purge_requests(client, message):
         "⚠️ **Note:** Telegram Bot API does not allow bots to bulk-purge all channel join requests at once "
         "(`HideAllChatJoinRequests` is restricted to user accounts)."
     )
-    
-    log.info(f"[PURGE REQUESTS] COMPLETED: db_purged={db_count}, channel_declined={declined_count}")
+
     await msg.edit(text, parse_mode=enums.ParseMode.MARKDOWN)
 
 # ─── SERIES FILE DELIVERY HANDLER (WITH METADATA) ───────────────────────────
