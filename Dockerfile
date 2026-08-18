@@ -10,8 +10,7 @@ WORKDIR /VJ-FILTER-BOT
 
 COPY requirements.txt /requirements.txt
 
-RUN pip3 install --no-cache-dir -U pip \
-    && pip3 install --no-cache-dir -U -r /requirements.txt
+RUN pip3 install --no-cache-dir -r /requirements.txt
 
 COPY CloneTechVJ /VJ-FILTER-BOT/CloneTechVJ
 COPY database /VJ-FILTER-BOT/database
