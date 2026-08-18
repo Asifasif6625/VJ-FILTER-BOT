@@ -343,7 +343,7 @@ def build_movie_language_keyboard(key, grouped_data):
             count = sum(len(flist) for flist in grouped_data[l].values())
             row.append(InlineKeyboardButton(f"{flag} {l} ({count})", callback_data=f"movie_lang#{key}#{l}"))
         buttons.append(row)
-    buttons.append([InlineKeyboardButton("🔴 Close", callback_data=f"mvclose#{key}")])
+    buttons.append([InlineKeyboardButton("🔴 Close", callback_data=f"movie_close#{key}")])
     return InlineKeyboardMarkup(buttons)
 
 def build_movie_quality_keyboard(key, lang, qualities_dict):
@@ -357,7 +357,7 @@ def build_movie_quality_keyboard(key, lang, qualities_dict):
             count = len(qualities_dict[q])
             row.append(InlineKeyboardButton(f"{q} ({count})", callback_data=f"movie_quality#{key}#{lang}#{q}"))
         buttons.append(row)
-    buttons.append([InlineKeyboardButton("⬅️ Back", callback_data=f"mvback#{key}#langs")])
+    buttons.append([InlineKeyboardButton("⬅️ Back", callback_data=f"movie_back#{key}#langs")])
     return InlineKeyboardMarkup(buttons)
 
 def build_movie_file_keyboard(key, lang, qual, files, page=0, pre="file"):
@@ -392,7 +392,7 @@ def build_movie_file_keyboard(key, lang, qual, files, page=0, pre="file"):
         
     buttons.append([
         InlineKeyboardButton("⬅️ Quality", callback_data=f"movie_lang#{key}#{lang}"),
-        InlineKeyboardButton("⬅️ Language", callback_data=f"mvback#{key}#langs")
+        InlineKeyboardButton("⬅️ Language", callback_data=f"movie_back#{key}#langs")
     ])
     return InlineKeyboardMarkup(buttons)
 
@@ -415,7 +415,7 @@ async def movie_lang_callback(client: Client, query: CallbackQuery):
         return await query.answer("⚠️ No qualities found for this language.", show_alert=True)
         
     total_lang_files = sum(len(flist) for flist in qualities_dict.values())
-    logger.info(f"[MOVIE LANGUAGE]\nlanguage={lang}\nfiles={total_lang_files}")
+    logger.info(f"[MOVIE LANGUAGE]\nkey={key}\nlanguage={lang}\nfiles={total_lang_files}")
 
     title = state.get("title", "Movie")
     year = state.get("year", "")
@@ -457,7 +457,7 @@ async def movie_qual_callback(client: Client, query: CallbackQuery):
     if not files:
         return await query.answer("⚠️ No files found for this quality.", show_alert=True)
         
-    logger.info(f"[MOVIE QUALITY]\nlanguage={lang}\nquality={qual}\nfiles={len(files)}")
+    logger.info(f"[MOVIE QUALITY]\nkey={key}\nlanguage={lang}\nquality={qual}\nfiles={len(files)}")
 
     title = state.get("title", "Movie")
     year = state.get("year", "")
@@ -502,6 +502,8 @@ async def movie_page_callback(client: Client, query: CallbackQuery):
     page = int(page_str) if page_str.isdigit() else 0
     pre = state.get("pre", "file")
     
+    logger.info(f"[MOVIE FILES]\nkey={key}\nlanguage={lang}\nquality={qual}\npage={page}\nfiles={len(files)}")
+
     markup = build_movie_file_keyboard(key, lang, qual, files, page=page, pre=pre)
     try:
         await query.message.edit_reply_markup(reply_markup=markup)
@@ -537,7 +539,7 @@ async def movie_back_callback(client: Client, query: CallbackQuery):
         cap = (
             f"🎬 <b>{title}{year_str}</b>"
             f"{rating_str}"
-            f"{genre_str}\n"
+            f"{genre_str}\n\n"
             f"🌐 <b>Available Languages:</b> {langs_disp}\n\n"
             f"🍿 <b>Choose Language:</b>"
         )
@@ -566,6 +568,10 @@ async def movie_back_callback(client: Client, query: CallbackQuery):
 
 @Client.on_callback_query(filters.regex(r"^(mvclose#|movie_close#)"))
 async def movie_close_callback(client: Client, query: CallbackQuery):
+    parts = query.data.split("#")
+    key = parts[1] if len(parts) > 1 else None
+    if key and hasattr(temp, "MOVIE_STATE"):
+        temp.MOVIE_STATE.pop(key, None)
     try:
         await query.message.delete()
     except Exception:
@@ -3262,48 +3268,32 @@ async def auto_filter(client, name, msg, reply_msg=None, ai_search=True, spoll=F
             )
 
             search = EMOJI_PATTERN.sub(" ", name)
-            search = search.lower()
-            find = search.split(" ")
-            search = ""
-            removes = ["in","upload", "series", "full", "horror", "thriller", "mystery", "print", "file"]
-            for x in find:
-                if x in removes:
-                    continue
-                else:
-                    search = search + x + " "
-            search = re.sub(r"\b(pl(i|e)*?(s|z+|ease|se|ese|(e+)s(e)?)|((send|snd|giv(e)?|gib)(\sme)?)|movie(s)?|new|latest|bro|bruh|broh|helo|that|find|dubbed|link|venum|iruka|pannunga|pannungga|anuppunga|anupunga|anuppungga|anupungga|film|undo|kitti|kitty|tharu|kittumo|kittum|movie|any(one)|with\ssubtitle(s)?)", "", search, flags=re.IGNORECASE)
+            search = re.sub(r"[\.\_\-\:\+\/\\\[\]\(\)\{\}\#\@\*\&]+", " ", search)
+            search = re.sub(r"(?i)\b(pl(i|e)*?(s|z+|ease|se|ese|(e+)s(e)?)|((send|snd|giv(e)?|gib)(\sme)?)|movie(s)?|new|latest|bro|bruh|broh|helo|that|find|dubbed|link|venum|iruka|pannunga|pannungga|anuppunga|anupunga|anuppungga|anupungga|film|undo|kitti|kitty|tharu|kittumo|kittum|movie|any(one)|with\ssubtitle(s)?|upload|full|print|file)\b", " ", search)
             search = re.sub(r"\s+", " ", search).strip()
-            search = search.replace("-", " ")
-            search = search.replace(":", "")
-            search = search.replace(".", "")
             
-            # --- START SERIES ROUTING ---
-            try:
-                from plugins.series import process_series_search
-                is_series = await process_series_search(client, message, search if search else name, reply_msg)
-                if is_series:
-                    return
-            except Exception as e:
-                logger.error(
-                    f"[SEARCH ROUTING ERROR]\n"
-                    f"user_id={user_id}\n"
-                    f"chat_type={chat_type}\n"
-                    f"query={name}\n"
-                    f"exception={e}",
-                    exc_info=True
-                )
-            # --- END SERIES ROUTING ---
-
-            logger.info(
-                f"[SEARCH ROUTING]\n"
-                f"stage=MOVIE\n"
-                f"decision=MOVIE_FILTER"
-            )
-
             files, offset, total_results = await get_search_results(message.chat.id, search, max_results=100, offset=0, filter=True)
-            logger.info(f"[MOVIE FILTER]\nquery={search}\nfiles={len(files)}")
+            logger.info(f"[MOVIE SEARCH]\nquery={search}\ndb_files={len(files)}")
             settings = await get_settings(message.chat.id)
+
             if not files:
+                # ── If no movie files in ia_filterdb, check Series Filter ──
+                try:
+                    from plugins.series import process_series_search
+                    is_series = await process_series_search(client, message, search if search else name, reply_msg)
+                    if is_series:
+                        return
+                except Exception as e:
+                    logger.error(
+                        f"[SEARCH ROUTING ERROR]\n"
+                        f"user_id={user_id}\n"
+                        f"chat_type={chat_type}\n"
+                        f"query={name}\n"
+                        f"exception={e}",
+                        exc_info=True
+                    )
+
+                # ── Not a series either -> normal no-result message (NO IMDb poster!) ──
                 no_db_btn = InlineKeyboardMarkup([[InlineKeyboardButton("🦨Reason", callback_data="not_in_db_reason")]])
                 msg_text = "<b>sᴏʀʀʏ ɴᴏ ꜰɪʟᴇs ᴡᴇʀᴇ ꜰᴏᴜɴᴅ ꜰᴏʀ ʏᴏᴜʀ ʀᴇǫᴜᴇꜱᴛ😕\n\nᴄʜᴇᴄᴋ ʏᴏᴜʀ sᴘᴇʟʟɪɴɢ ɪɴ ɢᴏᴏɢʟᴇ ᴀɴᴅ ᴛʀʏ ᴀɢᴀɪɴ 😃\n\nᴍᴏᴠɪᴇ ʀᴇǫᴜᴇꜱᴛ ꜰᴏʀᴍᴀᴛ 👇\n\nᴇxᴀᴍᴘʟᴇ : Uncharted or Uncharted 2022 or Uncharted En\n\nꜱᴇʀɪᴇꜱ ʀᴇǫᴜᴇꜱᴛ ꜰᴏʀᴍᴀᴛ 👇\n\nᴇxᴀᴍᴘʟᴇ : Loki S01 or Loki S01E04 or Lucifer S03E24\n\n🚯 ᴅᴏɴᴛ ᴜꜱᴇ ➠ ':(!,./)\n\n<i>🕐 This message will be deleted in 50 seconds.</i></b>"
                 if reply_msg:
@@ -3364,7 +3354,10 @@ async def auto_filter(client, name, msg, reply_msg=None, ai_search=True, spoll=F
     if not hasattr(temp, "MOVIE_STATE"):
         temp.MOVIE_STATE = {}
 
+    import time
     temp.MOVIE_STATE[key] = {
+        "key": key,
+        "owner_id": req,
         "user": req,
         "title": movie_title,
         "year": movie_year,
@@ -3372,13 +3365,17 @@ async def auto_filter(client, name, msg, reply_msg=None, ai_search=True, spoll=F
         "genre": movie_genre,
         "poster": movie_poster,
         "imdb": imdb,
+        "imdb_id": imdb.get("imdb_id") if imdb else None,
         "grouped": grouped,
+        "files": files,
         "all_files": files,
         "search": search,
         "pre": pre,
         "chat_id": message.chat.id,
         "created_at": time.time()
     }
+
+    logger.info(f"[MOVIE STATE CREATED]\nkey={key}\nowner={req}\nfiles={len(files)}\nlanguages={list(grouped.keys())}")
 
     year_str = f" ({movie_year})" if movie_year and movie_year != "N/A" else ""
     rating_str = f"\n⭐ <b>Rating:</b> {movie_rating}/10" if movie_rating else ""

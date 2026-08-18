@@ -696,14 +696,16 @@ def _build_auto_movie_lang_text(movie_data):
     tot_new = res.get('total_new', 0)
     tot_dup = res.get('total_duplicates', 0)
     tot_unk = res.get('total_unknown_quality', 0)
+    runtime_str = f"\n⏱ {movie_data['runtime']}" if movie_data.get("runtime") else ""
 
     # 1. Zero matching files
     if tot_matched == 0:
         return (
-            f"🎬 <b>AUTO MOVIE ADD</b>\n\n"
+            f"🎬 <b>SUPER MOVIE ADD</b>\n\n"
             f"🎬 <b>{movie_data['title']} ({movie_data['year']})</b>"
             f"{rating_str}"
-            f"{genre_str}\n\n"
+            f"{genre_str}"
+            f"{runtime_str}\n\n"
             f"❌ <b>NO MATCHING MOVIE FILES FOUND</b>\n\n"
             f"📁 <b>Files scanned:</b> {tot_scanned}\n"
             f"✅ <b>Matching files:</b> 0\n\n"
@@ -731,10 +733,11 @@ def _build_auto_movie_lang_text(movie_data):
     # 3. All matching files already exist (0 new)
     if tot_matched > 0 and tot_new == 0 and tot_dup > 0:
         return (
-            f"🎬 <b>AUTO MOVIE ADD</b>\n\n"
+            f"🎬 <b>SUPER MOVIE ADD</b>\n\n"
             f"🎬 <b>{movie_data['title']} ({movie_data['year']})</b>"
             f"{rating_str}"
-            f"{genre_str}\n\n"
+            f"{genre_str}"
+            f"{runtime_str}\n\n"
             f"⚠️ <b>ALL MOVIE FILES ALREADY EXIST</b>\n\n"
             f"📁 <b>Files scanned:</b> {tot_scanned}\n"
             f"✅ <b>Matching files:</b> {tot_matched}\n"
@@ -747,11 +750,12 @@ def _build_auto_movie_lang_text(movie_data):
 
     # 4. New files found (Scan Result)
     return (
-        f"🎬 <b>AUTO MOVIE ADD</b>\n\n"
+        f"🎬 <b>SUPER MOVIE ADD</b>\n\n"
         f"🎬 <b>{movie_data['title']} ({movie_data['year']})</b>"
         f"{rating_str}"
-        f"{genre_str}\n\n"
-        f"📊 <b>Scan Result</b>\n\n"
+        f"{genre_str}"
+        f"{runtime_str}\n\n"
+        f"📊 <b>SCAN RESULT</b>\n\n"
         f"📁 <b>Files scanned:</b> {tot_scanned}\n"
         f"✅ <b>Matching files:</b> {tot_matched}\n"
         f"🆕 <b>New files:</b> {tot_new}\n"
@@ -771,21 +775,21 @@ def _build_auto_movie_lang_keyboard(session_id, movie_data):
     # CASE 1 & 2: 0 matching files or all duplicates
     if tot_matched == 0 or tot_new == 0:
         buttons.append([
-            InlineKeyboardButton("🔄 Rescan", callback_data=f"am_rescan:{session_id}"),
-            InlineKeyboardButton("❌ Cancel", callback_data=f"am_cancel:{session_id}")
+            InlineKeyboardButton("🔄 RESCAN", callback_data=f"am_rescan:{session_id}"),
+            InlineKeyboardButton("❌ CANCEL", callback_data=f"am_cancel:{session_id}")
         ])
     # CASE 3: Some new files (tot_new > 0 and tot_dup > 0)
     elif tot_new > 0 and tot_dup > 0:
-        buttons.append([InlineKeyboardButton(f"💾 Save ({tot_new} New)", callback_data=f"am_save:{session_id}")])
+        buttons.append([InlineKeyboardButton(f"💾 SAVE MOVIE ({tot_new} New)", callback_data=f"am_save:{session_id}")])
         buttons.append([
-            InlineKeyboardButton("🔄 Rescan", callback_data=f"am_rescan:{session_id}"),
-            InlineKeyboardButton("❌ Cancel", callback_data=f"am_cancel:{session_id}")
+            InlineKeyboardButton("🔄 RESCAN", callback_data=f"am_rescan:{session_id}"),
+            InlineKeyboardButton("❌ CANCEL", callback_data=f"am_cancel:{session_id}")
         ])
     # CASE 4: All matching files are new (tot_new > 0 and tot_dup == 0)
     else:
         buttons.append([
-            InlineKeyboardButton(f"💾 Save ({tot_new})", callback_data=f"am_save:{session_id}"),
-            InlineKeyboardButton("❌ Cancel", callback_data=f"am_cancel:{session_id}")
+            InlineKeyboardButton(f"💾 SAVE MOVIE ({tot_new})", callback_data=f"am_save:{session_id}"),
+            InlineKeyboardButton("❌ CANCEL", callback_data=f"am_cancel:{session_id}")
         ])
 
     return InlineKeyboardMarkup(buttons)
@@ -878,8 +882,14 @@ def _build_auto_movie_file_keyboard(session_id, lang, qual, files, page=0, pre="
 def _is_admin(user_id: int | str) -> bool:
     if not user_id:
         return False
-    u_str = str(user_id).strip()
-    return user_id in ADMINS or u_str in [str(a).strip() for a in ADMINS]
+    try:
+        from info import ADMINS, AUTH_USERS
+        admin_list = [str(a).strip() for a in (ADMINS or [])] + [str(u).strip() for u in (AUTH_USERS or [])]
+        u_str = str(user_id).strip()
+        return u_str in admin_list or int(user_id) in (ADMINS or []) or int(user_id) in (AUTH_USERS or [])
+    except Exception:
+        u_str = str(user_id).strip()
+        return user_id in ADMINS or u_str in [str(a).strip() for a in ADMINS]
 
 
 
@@ -1422,15 +1432,16 @@ async def cmd_delthumbseries(client: Client, message: Message):
 # ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═  
 
 
-@Client.on_message(filters.command(["series", "seres", "seriesmenu"]) & filters.private, group=0)
+@Client.on_message(filters.command(["series", "seires", "seres", "seriesmenu", "smenu", "movieseries", "seriesmovie"]), group=0)
 async def cmd_series_menu(client: Client, message: Message):
-    if not _is_admin(message.from_user.id):
+    uid = message.from_user.id if message.from_user else 0
+    if not _is_admin(uid):
         return await message.reply_text("❌ You are not authorized to use this command.")
 
     markup = InlineKeyboardMarkup([
         [
             InlineKeyboardButton("📝 Manual Adding", callback_data="sw#start_manual"),
-            InlineKeyboardButton("📺 Auto Series Add", callback_data="sw#start_auto")
+            InlineKeyboardButton("📺 Auto S Add", callback_data="sw#start_auto")
         ],
         [
             InlineKeyboardButton("🎬 Auto Movie Add", callback_data="sw#start_auto_movie")
@@ -1443,12 +1454,12 @@ async def cmd_series_menu(client: Client, message: Message):
     )
 
 
-@Client.on_message(filters.command(["automovieadd", "movieautoadd", "automovie"]) & filters.private, group=0)
+@Client.on_message(filters.command(["automovieadd", "movieautoadd", "automovie", "movieadd", "addmovie", "automov"]), group=0)
 async def cmd_automovieadd(client: Client, message: Message):
-    if not _is_admin(message.from_user.id):
+    uid = message.from_user.id if message.from_user else 0
+    if not _is_admin(uid):
         return await message.reply_text("❌ You are not authorized to use this command.")
 
-    uid = message.from_user.id
     from utils import clear_wizard_session, set_wizard_session
     clear_wizard_session(uid)
     movie_state = {
@@ -1460,21 +1471,23 @@ async def cmd_automovieadd(client: Client, message: Message):
     set_wizard_session(uid, workflow="AUTO_MOVIE", state="WAIT_IMDB", data=movie_state, chat_id=message.chat.id)
     temp.AUTO_MOVIE[uid] = movie_state
     await message.reply_text(
-        "🎬 <b>Auto Movie Add — Movie Importer</b>\n\n"
-        "Send IMDb Movie link or ID:\n\n"
-        "Examples:\n"
+        "🎬 <b>SUPER MOVIE ADD</b>\n\n"
+        "Send IMDb Movie link or IMDb ID:\n\n"
+        "Example:\n"
         "<code>https://www.imdb.com/title/tt35723557/</code>\n"
+        "or\n"
         "<code>tt35723557</code>",
         reply_markup=InlineKeyboardMarkup([[
-            InlineKeyboardButton("❌ Cancel", callback_data="sw#auto_movie_cancel")
+            InlineKeyboardButton("❌ CANCEL", callback_data="sw#auto_movie_cancel")
         ]]),
         parse_mode=enums.ParseMode.HTML,
     )
 
 
-@Client.on_message(filters.command("seriesfil") & filters.private, group=0)
+@Client.on_message(filters.command(["seriesfil", "addseries", "seriesadd"]), group=0)
 async def cmd_seriesfil(client: Client, message: Message):
-    if not _is_admin(message.from_user.id):
+    uid = message.from_user.id if message.from_user else 0
+    if not _is_admin(uid):
         return await message.reply_text("❌ You are not authorized to use this command.")
 
     uid = message.from_user.id
@@ -1639,15 +1652,15 @@ async def cmd_ed_series(client: Client, message: Message):
 # ─── /cancel — ABORT WIZARD ──────────────────────────────────────────────────
 # ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ 
 
-@Client.on_message(filters.command("cancel") & filters.private, group=0)
+@Client.on_message(filters.command("cancel"), group=0)
 async def cmd_cancel(client: Client, message: Message):
-    uid = message.from_user.id
+    uid = message.from_user.id if message.from_user else 0
     from utils import cancel_wizard_session
     workflow = cancel_wizard_session(uid)
     if workflow == "AUTO_MOVIE":
-        return await message.reply_text("❌ <b>Auto Movie Add cancelled.</b>", parse_mode=enums.ParseMode.HTML)
+        return await message.reply_text("❌ <b>Super Movie Add cancelled.</b>", parse_mode=enums.ParseMode.HTML)
     elif workflow in ("AUTO_SERIES", "SERIES_WIZARD"):
-        return await message.reply_text("❌ <b>Auto Series Add cancelled.</b>", parse_mode=enums.ParseMode.HTML)
+        return await message.reply_text("❌ <b>Series Add cancelled.</b>", parse_mode=enums.ParseMode.HTML)
     elif workflow == "THUMBNAIL":
         return await message.reply_text("❌ <b>Series thumbnail update cancelled.</b>", parse_mode=enums.ParseMode.HTML)
     elif workflow:
@@ -1751,7 +1764,14 @@ async def wizard_text_handler(client: Client, message: Message):
                 )
 
             imdb_id = m_imdb.group(1).lower()
-            loading_msg = await message.reply_text("⏳ Fetching IMDb Series metadata, please wait...")
+            logger.info(f"[AUTO_SERIES IMDb] accepted id={imdb_id}")
+            try:
+                await message.delete()
+                logger.info(f"[AUTO_SERIES IMDb] user message deleted")
+            except Exception as de:
+                logger.warning(f"[AUTO_SERIES IMDb] could not delete user message: {de}")
+
+            loading_msg = await client.send_message(chat_id=message.chat.id, text="⏳ Fetching IMDb Series metadata, please wait...")
 
             info = None
             try:
@@ -1831,8 +1851,9 @@ async def wizard_text_handler(client: Client, message: Message):
             )
 
             await loading_msg.delete()
-            await message.reply_text(
-                caption,
+            await client.send_message(
+                chat_id=message.chat.id,
+                text=caption,
                 reply_markup=markup,
                 parse_mode=enums.ParseMode.HTML,
             )
@@ -1858,7 +1879,14 @@ async def wizard_text_handler(client: Client, message: Message):
                 )
 
             imdb_id = m_imdb.group(1).lower()
-            loading_msg = await message.reply_text("⏳ Fetching IMDb Movie metadata, please wait...")
+            logger.info(f"[AUTO_MOVIE IMDb] accepted id={imdb_id}")
+            try:
+                await message.delete()
+                logger.info(f"[AUTO_MOVIE IMDb] user message deleted")
+            except Exception as de:
+                logger.warning(f"[AUTO_MOVIE IMDb] could not delete user message: {de}")
+
+            loading_msg = await client.send_message(chat_id=message.chat.id, text="⏳ Fetching IMDb Movie metadata, please wait...")
 
             info = None
             try:
@@ -2161,13 +2189,14 @@ async def wizard_callback(client: Client, query: CallbackQuery):
         }
         set_wizard_session(uid, workflow="AUTO_MOVIE", state="WAIT_IMDB", data=temp.AUTO_MOVIE[uid], chat_id=query.message.chat.id)
         await query.message.edit_text(
-            "🎬 <b>Auto Movie Add — Movie Importer</b>\n\n"
-            "Send IMDb Movie link or ID:\n\n"
-            "Examples:\n"
+            "🎬 <b>SUPER MOVIE ADD</b>\n\n"
+            "Send IMDb Movie link or IMDb ID:\n\n"
+            "Example:\n"
             "<code>https://www.imdb.com/title/tt35723557/</code>\n"
+            "or\n"
             "<code>tt35723557</code>",
             reply_markup=InlineKeyboardMarkup([[
-                InlineKeyboardButton("❌ Cancel", callback_data="sw#auto_movie_cancel")
+                InlineKeyboardButton("❌ CANCEL", callback_data="sw#auto_movie_cancel")
             ]]),
             parse_mode=enums.ParseMode.HTML,
         )
@@ -2582,17 +2611,6 @@ async def wizard_callback(client: Client, query: CallbackQuery):
                 if ok:
                     added_count += 1
 
-            if valid_files:
-                first_f = valid_files[0]
-                saved_check = await get_series_files(
-                    series_id,
-                    first_f["language"],
-                    first_f["season"],
-                    first_f["episode"],
-                    first_f["quality"]
-                )
-                logger.info(f"[AUTO_SERIES SAVE] verified persistence series_id={series_id} saved_sample_count={len(saved_check)}")
-
             if is_skip:
                 ep_lines = []
                 for s_num, langs in sorted(res["organized_by_season"].items()):
@@ -2653,125 +2671,14 @@ async def wizard_callback(client: Client, query: CallbackQuery):
             logger.error(f"[AUTO_MOVE_ADD] save_error series={auto_data['title']} error={e}")
             return await query.answer(f"❌ Error while saving: {e}", show_alert=True)
 
-    if action == "auto_cancel":
+    if action == "auto_cancel" or action == "auto_movie_cancel":
         if uid in temp.AUTO_SERIES:
             del temp.AUTO_SERIES[uid]
-        await query.message.edit_text("❌ <b>Auto S Add cancelled.</b>", parse_mode=enums.ParseMode.HTML)
-        return await query.answer("Cancelled.")
-
-    # ── Auto Movie Add Callbacks ─────────────────────────────────────────────
-    if action == "auto_movie_rescan" or action.startswith("am_rescan"):
-        session_id = action.split(":")[1] if ":" in action else uid
-        movie_data = temp.AUTO_MOVIE.get(session_id) or temp.AUTO_MOVIE.get(uid)
-        if not movie_data:
-            return await query.answer("Session expired. Send /automovieadd to start again.", show_alert=True)
-
-        await query.message.edit_text(
-            f"🔄 <b>Rescanning SDatabase for {movie_data['title']} ({movie_data['year']})...</b>",
-            parse_mode=enums.ParseMode.HTML,
-        )
-
-        res = await scan_sdatabase_for_movie(movie_data["title"], movie_data["year"], client=client)
-        movie_data["scan"] = res
-        movie_data["grouped"] = _group_auto_movie_files(res)
-
-        text_res = _build_auto_movie_lang_text(movie_data)
-        markup = _build_auto_movie_lang_keyboard(session_id, movie_data)
-        await query.message.edit_text(text_res, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
-        return await query.answer(f"Rescan complete: {res['total_new']} new files ready to save.")
-
-    if action == "auto_movie_save" or action.startswith("am_save"):
-        session_id = action.split(":")[1] if ":" in action else uid
-        movie_data = temp.AUTO_MOVIE.get(session_id) or temp.AUTO_MOVIE.get(uid)
-        if not movie_data or "scan" not in movie_data:
-            return await query.answer("⚠️ Session expired. Send /automovieadd to start again.", show_alert=True)
-
-        res = movie_data["scan"]
-        total_matched = res.get("total_matched", 0)
-        total_new = res.get("total_new", 0)
-        total_duplicates = res.get("total_duplicates", 0)
-        valid_files = res.get("valid_files") or res.get("valid_new_files") or []
-
-        if total_matched == 0:
-            return await query.answer("⚠️ No matching files found to save.", show_alert=True)
-
-        if total_new == 0 and total_duplicates > 0:
-            return await query.answer(f"⚠️ All {total_duplicates} files already exist in the database. Nothing new to save.", show_alert=True)
-
-        if not valid_files:
-            return await query.answer("⚠️ No new files to save.", show_alert=True)
-
-        from database.ia_filterdb import col, sec_col, MULTIPLE_DATABASE, clean_file_name, is_file_already_saved
-        from utils import clear_wizard_session
-
-        logger.info(f"[AUTO_MOVIE SAVE] movie={movie_data['title']} user_id={uid} new={total_new} duplicate={total_duplicates}")
-
-        try:
-            added_count = 0
-            dup_count = 0
-            for f in valid_files:
-                file_id = f.get("file_id")
-                file_name = clean_file_name(f.get("file_name"))
-
-                if is_file_already_saved(file_id, file_name):
-                    dup_count += 1
-                    continue
-
-                file_doc = {
-                    'file_id': file_id,
-                    'file_name': file_name,
-                    'file_size': f.get("file_size", 0),
-                    'caption': f.get("caption")
-                }
-                try:
-                    col.insert_one(file_doc)
-                    if MULTIPLE_DATABASE:
-                        try:
-                            sec_col.insert_one(file_doc)
-                        except Exception:
-                            pass
-                    added_count += 1
-                except Exception:
-                    if MULTIPLE_DATABASE:
-                        try:
-                            sec_col.insert_one(file_doc)
-                            added_count += 1
-                        except Exception:
-                            dup_count += 1
-                    else:
-                        dup_count += 1
-
-            temp.AUTO_MOVIE.pop(session_id, None)
-            temp.AUTO_MOVIE.pop(uid, None)
-            clear_wizard_session(uid)
-
-            logger.info(f"[AUTO_MOVIE SAVE]\ntitle={movie_data['title']}\nsaved={added_count}\nduplicates={dup_count}")
-
-            success_text = (
-                f"✅ <b>MOVIE SAVED SUCCESSFULLY</b>\n\n"
-                f"🎬 <b>{movie_data['title']} ({movie_data['year']})</b>\n\n"
-                f"🆕 <b>New files saved:</b> {added_count}\n"
-                f"♻️ <b>Duplicates skipped:</b> {dup_count}\n\n"
-                f"<i>All files are now indexed and available in the Super Movie Filter.</i>"
-            )
-            markup = InlineKeyboardMarkup([
-                [InlineKeyboardButton("🔎 Search Movie", switch_inline_query_current_chat=movie_data['title'])],
-                [InlineKeyboardButton("🏠 Close", callback_data="sw#auto_close")]
-            ])
-            await query.message.edit_text(success_text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
-            return await query.answer("🎉 Movie files saved successfully!")
-        except Exception as e:
-            logger.error(f"[AUTO_MOVIE SAVE] movie={movie_data['title']} error={e}")
-            return await query.answer(f"❌ Error while saving: {e}", show_alert=True)
-
-    if action == "auto_movie_cancel" or action.startswith("am_cancel"):
-        session_id = action.split(":")[1] if ":" in action else uid
-        temp.AUTO_MOVIE.pop(session_id, None)
-        temp.AUTO_MOVIE.pop(uid, None)
+        if uid in temp.AUTO_MOVIE:
+            del temp.AUTO_MOVIE[uid]
         from utils import clear_wizard_session
         clear_wizard_session(uid)
-        logger.info(f"[AUTO_MOVIE CANCEL]\nuser_id={uid}")
-        await query.message.edit_text("❌ <b>Auto Movie Add cancelled.</b>", parse_mode=enums.ParseMode.HTML)
+        await query.message.edit_text("❌ <b>Action cancelled.</b>", parse_mode=enums.ParseMode.HTML)
         return await query.answer("Cancelled.")
 
     if action == "auto_close" or action == "am_close":
@@ -2783,6 +2690,155 @@ async def wizard_callback(client: Client, query: CallbackQuery):
 
 
 @Client.on_callback_query(filters.regex(r"^am_"))
+async def auto_movie_hierarchical_callbacks(client: Client, query: CallbackQuery):
+    data = query.data
+    parts = data.split(":")
+    action = parts[0]
+    session_id = parts[1] if len(parts) > 1 else ""
+
+    movie_data = getattr(temp, "AUTO_MOVIE", {}).get(session_id)
+    if not movie_data:
+        movie_data = getattr(temp, "AUTO_MOVIE", {}).get(query.from_user.id)
+
+    if not movie_data:
+        return await query.answer("⚠️ Session expired. Please send IMDb link again.", show_alert=True)
+
+    uid = movie_data.get("user_id", query.from_user.id)
+    if query.from_user.id != uid and not _is_admin(query.from_user.id):
+        return await query.answer("⚠️ This is not your session.", show_alert=True)
+
+    if action == "am_lang":
+        lang = parts[2] if len(parts) > 2 else ""
+        qualities = list(movie_data.get("grouped", {}).get(lang, {}).keys())
+        if not qualities:
+            return await query.answer("❌ No qualities available for this language.", show_alert=True)
+        text = _build_auto_movie_qual_text(movie_data, lang)
+        markup = _build_auto_movie_qual_keyboard(session_id, lang, qualities)
+        await query.message.edit_text(text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
+        return await query.answer()
+
+    elif action == "am_qual":
+        lang = parts[2] if len(parts) > 2 else ""
+        qual = parts[3] if len(parts) > 3 else ""
+        files = movie_data.get("grouped", {}).get(lang, {}).get(qual, [])
+        if not files:
+            return await query.answer("❌ No files available for this quality.", show_alert=True)
+        text = _build_auto_movie_file_text(movie_data, lang, qual)
+        markup = _build_auto_movie_file_keyboard(session_id, lang, qual, files, page=0)
+        await query.message.edit_text(text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
+        return await query.answer()
+
+    elif action == "am_page":
+        lang = parts[2] if len(parts) > 2 else ""
+        qual = parts[3] if len(parts) > 3 else ""
+        page = int(parts[4]) if len(parts) > 4 and parts[4].isdigit() else 0
+        files = movie_data.get("grouped", {}).get(lang, {}).get(qual, [])
+        markup = _build_auto_movie_file_keyboard(session_id, lang, qual, files, page=page)
+        await query.message.edit_reply_markup(reply_markup=markup)
+        return await query.answer()
+
+    elif action == "am_back":
+        target = parts[2] if len(parts) > 2 else "lang"
+        if target == "lang":
+            text = _build_auto_movie_lang_text(movie_data)
+            markup = _build_auto_movie_lang_keyboard(session_id, movie_data)
+            await query.message.edit_text(text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
+            return await query.answer()
+
+    elif action == "am_cancel":
+        temp.AUTO_MOVIE.pop(session_id, None)
+        temp.AUTO_MOVIE.pop(uid, None)
+        from utils import clear_wizard_session
+        clear_wizard_session(uid)
+        logger.info(f"[AUTO_MOVIE CANCEL]\nuser_id={uid}")
+        await query.message.edit_text("❌ <b>Auto Movie Add cancelled.</b>", parse_mode=enums.ParseMode.HTML)
+        return await query.answer("Cancelled.")
+
+    elif action == "am_rescan":
+        await query.message.edit_text(
+            f"🔄 <b>Rescanning database for {movie_data['title']} ({movie_data['year']})...</b>",
+            parse_mode=enums.ParseMode.HTML
+        )
+        res = await scan_sdatabase_for_movie(movie_data["title"], movie_data["year"], client=client)
+        movie_data["scan"] = res
+        movie_data["grouped"] = _group_auto_movie_files(res)
+        text_res = _build_auto_movie_lang_text(movie_data)
+        markup = _build_auto_movie_lang_keyboard(session_id, movie_data)
+        await query.message.edit_text(text_res, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
+        return await query.answer(f"Rescan complete: {res['total_new']} new files.")
+
+    elif action == "am_save":
+        res = movie_data.get("scan", {})
+        valid_new = res.get("valid_new_files", [])
+        if not valid_new:
+            return await query.answer("⚠️ No new files to save.", show_alert=True)
+
+        await query.message.edit_text(
+            f"💾 <b>Saving {len(valid_new)} movie files for {movie_data['title']}...</b>",
+            parse_mode=enums.ParseMode.HTML
+        )
+
+        from database.ia_filterdb import col, sec_col, MULTIPLE_DATABASE, clean_file_name, is_file_already_saved, get_search_results
+        from utils import clear_wizard_session
+        added_count = 0
+        dup_count = 0
+        for f in valid_new:
+            fid = f.get("file_id")
+            fname = clean_file_name(f.get("file_name"))
+
+            if is_file_already_saved(fid, fname):
+                dup_count += 1
+                continue
+
+            file_doc = {
+                'file_id': fid,
+                'file_name': fname,
+                'file_size': f.get("file_size", 0),
+                'caption': f.get("caption")
+            }
+            try:
+                col.insert_one(file_doc)
+                if MULTIPLE_DATABASE:
+                    try:
+                        sec_col.insert_one(file_doc)
+                    except Exception:
+                        pass
+                added_count += 1
+            except Exception as e:
+                logger.error(f"[AUTO_MOVIE SAVE ERROR] file_id={fid} error={e}")
+
+        temp.AUTO_MOVIE.pop(session_id, None)
+        temp.AUTO_MOVIE.pop(uid, None)
+        clear_wizard_session(uid)
+
+        logger.info(f"[AUTO_MOVIE SAVE]\ntitle={movie_data['title']}\nsaved={added_count}\nduplicates={dup_count}")
+
+        # ── Critical Save Verification ──
+        clean_search_title = re.sub(r"[\.\_\-\:\+\/\\\[\]\(\)\{\}]+", " ", movie_data['title']).strip()
+        try:
+            verify_files, _, total_found = await get_search_results(query.message.chat.id, clean_search_title, offset=0, filter=True)
+            searchable_count = len(verify_files) if verify_files else 0
+        except Exception:
+            searchable_count = added_count
+        logger.info(f"[AUTO_MOVIE VERIFY]\ntitle={movie_data['title']}\nyear={movie_data.get('year')}\nsaved={added_count}\nsearch_results={searchable_count}")
+
+        langs_list = ", ".join(movie_data.get("grouped", {}).keys()) or "All"
+        success_text = (
+            f"✅ <b>SUPER MOVIE SAVED</b>\n\n"
+            f"🎬 <b>{movie_data['title']} ({movie_data['year']})</b>\n\n"
+            f"📁 <b>{added_count} files saved</b>\n\n"
+            f"🌐 <b>Languages:</b> {langs_list}\n\n"
+            f"<i>The user should now be able to search:\n<code>{movie_data['title']}</code>\nand get the Super Movie Filter.</i>"
+        )
+        markup = InlineKeyboardMarkup([
+            [InlineKeyboardButton("🔎 Search Movie", switch_inline_query_current_chat=movie_data['title'])],
+            [InlineKeyboardButton("🏠 Close", callback_data="sw#auto_close")]
+        ])
+        await query.message.edit_text(success_text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
+        return await query.answer("🎉 Super Movie saved successfully!")
+
+
+@Client.on_callback_query(filters.regex(r"^(am_|sm_)"))
 async def auto_movie_hierarchical_callbacks(client: Client, query: CallbackQuery):
     data = query.data
     parts = data.split(":")
