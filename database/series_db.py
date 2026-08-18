@@ -23,6 +23,7 @@ sfiles_col   = _db["series_files"]
 sbatch_col   = _db["series_batches"]
 temp_reqs_col = _db["temp_requests"]
 settings_col = _db["settings"]
+announcements_col = _db["announcements"]
 
 
 # ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -57,10 +58,25 @@ def _normalize(name: str) -> str:
     return cleaned.lower()
 
 
+def make_series_key(title: str) -> str:
+    """
+    Generate a URL-safe normalized key from series title for /start deep link.
+    e.g., "Stranger Things" -> "stranger_things"
+    "Money Heist: Korea" -> "money_heist_korea"
+    """
+    if not title:
+        return ""
+    cleaned = clean_series_title(title)
+    key = re.sub(r"[^a-zA-Z0-9]+", "_", cleaned).strip("_").lower()
+    return key or "series"
+
+
 async def _ensure_indexes():
     """Create useful indexes once at startup."""
     try:
         await series_col.create_index("normalized_name")
+        await series_col.create_index("series_key")
+        await announcements_col.create_index("series_id", unique=True)
         await sfiles_col.create_index(
             ["series_id", "language", "season", "episode", "quality"]
         )
@@ -86,6 +102,7 @@ async def create_series(data: dict) -> str:
     doc = {
         "name": clean_name,
         "normalized_name": _normalize(clean_name),
+        "series_key": make_series_key(clean_name),
         "year": data.get("year", "N/A"),
         "genre": data.get("genre", "N/A"),
         "rating": data.get("rating", ""),
@@ -96,6 +113,7 @@ async def create_series(data: dict) -> str:
         "qualities": data.get("qualities", []),
         "season_modes": data.get("season_modes", {}),
         "created_by": data.get("created_by"),
+        "announcement_sent": False,
         "created_at": datetime.utcnow(),
         "updated_at": datetime.utcnow(),
         "status": "active",
@@ -115,6 +133,37 @@ async def get_series(series_id: str) -> dict | None:
 async def get_series_by_name(normalized_name: str) -> dict | None:
     """Exact-match on normalized_name."""
     return await series_col.find_one({"normalized_name": normalized_name, "status": "active"})
+
+
+async def get_series_by_key(series_key: str) -> dict | None:
+    """
+    Fetch a series by its URL-safe series_key, normalized_name, or string _id.
+    """
+    if not series_key:
+        return None
+    key = str(series_key).strip().lower()
+    # 1. Direct series_key match
+    doc = await series_col.find_one({"series_key": key, "status": "active"})
+    if doc:
+        return doc
+    # 2. Check normalized name with spaces
+    norm_name = key.replace("_", " ")
+    doc = await series_col.find_one({"normalized_name": norm_name, "status": "active"})
+    if doc:
+        return doc
+    # 3. Check ObjectId match if valid hex string
+    if len(key) == 24:
+        try:
+            doc = await series_col.find_one({"_id": ObjectId(key), "status": "active"})
+            if doc:
+                return doc
+        except Exception:
+            pass
+    # 4. Fallback search by fuzzy / regex
+    matches = await search_series(norm_name)
+    if matches:
+        return matches[0]
+    return None
 
 
 def _token_similarity(q_token: str, t_token: str) -> float:
@@ -314,11 +363,95 @@ async def update_series(series_id: str, data: dict):
         clean_name = clean_series_title(data["name"])
         data["name"] = clean_name
         data["normalized_name"] = _normalize(clean_name)
+        data["series_key"] = make_series_key(clean_name)
     data["updated_at"] = datetime.utcnow()
     await series_col.update_one(
         {"_id": ObjectId(series_id)},
         {"$set": data}
     )
+
+
+# ─── Announcement Channel & Tracking ──────────────────────────────────────────
+
+async def set_announcement_channel(channel_id: int | str):
+    """Save or update the configured announcement channel ID."""
+    cid = int(channel_id) if str(channel_id).lstrip("-").isdigit() else str(channel_id)
+    await settings_col.update_one(
+        {"_id": "announcement_channel"},
+        {"$set": {"channel_id": cid}},
+        upsert=True
+    )
+
+async def get_announcement_channel() -> int | str | None:
+    """Retrieve the configured announcement channel ID."""
+    doc = await settings_col.find_one({"_id": "announcement_channel"})
+    return doc.get("channel_id") if doc else None
+
+async def delete_announcement_channel():
+    """Delete the configured announcement channel setting."""
+    await settings_col.delete_one({"_id": "announcement_channel"})
+
+async def is_announcement_sent(series_id: str) -> bool:
+    """Check if an announcement has already been sent for a series."""
+    sid = str(series_id).strip()
+    existing = await announcements_col.find_one({"series_id": sid})
+    if existing:
+        return True
+    # Also check series document flag
+    try:
+        sdoc = await series_col.find_one({"_id": ObjectId(sid)})
+        if sdoc and sdoc.get("announcement_sent"):
+            return True
+    except Exception:
+        pass
+    return False
+
+async def get_announcement(series_id: str) -> dict | None:
+    """Fetch the persistent announcement record for a series."""
+    sid = str(series_id).strip()
+    return await announcements_col.find_one({"series_id": sid})
+
+async def save_announcement(series_id: str, channel_id: int | str, message_id: int, series_key: str = "") -> str:
+    """Save an announcement tracking record."""
+    sid = str(series_id).strip()
+    doc = {
+        "series_id": sid,
+        "channel_id": channel_id,
+        "message_id": message_id,
+        "series_key": series_key,
+        "sent_at": datetime.utcnow()
+    }
+    await announcements_col.update_one(
+        {"series_id": sid},
+        {"$set": doc},
+        upsert=True
+    )
+    try:
+        await series_col.update_one(
+            {"_id": ObjectId(sid)},
+            {"$set": {"announcement_sent": True, "announcement_message_id": message_id}}
+        )
+    except Exception:
+        pass
+    return sid
+
+async def delete_announcement(series_id: str) -> dict | None:
+    """
+    Delete an announcement record for a series and clear its tracking flag.
+    Returns the deleted announcement record if it existed.
+    """
+    sid = str(series_id).strip()
+    doc = await announcements_col.find_one({"series_id": sid})
+    if doc:
+        await announcements_col.delete_one({"series_id": sid})
+    try:
+        await series_col.update_one(
+            {"_id": ObjectId(sid)},
+            {"$unset": {"announcement_sent": "", "announcement_message_id": ""}}
+        )
+    except Exception:
+        pass
+    return doc
 
 
 async def set_sbatch_msgid(doc_id: str, message_id: int):
