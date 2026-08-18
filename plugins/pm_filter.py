@@ -184,20 +184,14 @@ async def pm_text(bot, message):
     content = message.text
     user = message.from_user.first_name if message.from_user else "User"
     user_id = message.from_user.id if message.from_user else 0
-    if content.startswith("/") or content.startswith("#"): return  # ignore commands and hashtags
+    if not content or content.startswith("/") or content.startswith("#"): return  # ignore commands and hashtags
     
-    from utils import temp
-    if user_id in temp.AUTO_SERIES:
+    # ── Check active wizard session ──
+    from utils import get_wizard_session, temp
+    if get_wizard_session(user_id) is not None:
         return
-    if user_id in temp.SERIES_WIZARD:
-        wiz = temp.SERIES_WIZARD.get(user_id)
-        # Only block normal search if wizard is actively awaiting textual input
-        if isinstance(wiz, dict) and wiz.get("state") in (
-            "WAITING_NAME", "WAITING_YEAR", "WAITING_GENRE", 
-            "WAITING_RATING", "WAITING_DESCRIPTION", "WAITING_POSTER", "WAITING_BATCH",
-            "WAITING_CUSTOM_LANG_INPUT", "WAITING_CUSTOM_QUAL_INPUT"
-        ):
-            return
+    if user_id in getattr(temp, "AUTO_SERIES", {}) or user_id in getattr(temp, "AUTO_MOVIE", {}) or user_id in getattr(temp, "SERIES_WIZARD", {}) or getattr(temp, "SETTING_SERIES_THUMB", {}).get(user_id):
+        return
         
     # ── English-only guard ──
     if not is_english_only(content):
@@ -231,19 +225,24 @@ async def english_only_reason_alert(bot, query):
 async def not_in_db_reason_alert(bot, query):
     """Show a popup alert when user clicks the Reason button for movie not in db."""
     await query.answer(
-        "this mosve not availabe database",
+        "this movie not available in database",
         show_alert=True
     )
+
 # ─── Movie Filter Hierarchical Flow Helpers & Handlers ───────────────────────
 LANGUAGE_FLAGS = {
-    "Malayalam": "🇲🇾",
-    "English": "🇬🇧",
-    "Hindi": "🇮🇳",
+    "Malayalam": "🇮🇳",
     "Tamil": "🇮🇳",
+    "Hindi": "🇮🇳",
     "Telugu": "🇮🇳",
     "Kannada": "🇮🇳",
     "Bengali": "🇮🇳",
     "Marathi": "🇮🇳",
+    "Punjabi": "🇮🇳",
+    "Gujarati": "🇮🇳",
+    "Urdu": "🇮🇳",
+    "Odia": "🇮🇳",
+    "English": "🇬🇧",
     "Dual Audio": "🎙",
     "Multi Audio": "🎧",
     "German": "🇩🇪",
@@ -510,7 +509,7 @@ async def movie_page_callback(client: Client, query: CallbackQuery):
         pass
     await query.answer()
 
-@Client.on_callback_query(filters.regex(r"^mvback#"))
+@Client.on_callback_query(filters.regex(r"^(mvback#|movie_back#)"))
 async def movie_back_callback(client: Client, query: CallbackQuery):
     parts = query.data.split("#")
     key = parts[1]
@@ -565,7 +564,7 @@ async def movie_back_callback(client: Client, query: CallbackQuery):
         pass
     await query.answer()
 
-@Client.on_callback_query(filters.regex(r"^mvclose#"))
+@Client.on_callback_query(filters.regex(r"^(mvclose#|movie_close#)"))
 async def movie_close_callback(client: Client, query: CallbackQuery):
     try:
         await query.message.delete()
@@ -3306,56 +3305,11 @@ async def auto_filter(client, name, msg, reply_msg=None, ai_search=True, spoll=F
             settings = await get_settings(message.chat.id)
             if not files:
                 no_db_btn = InlineKeyboardMarkup([[InlineKeyboardButton("🦨Reason", callback_data="not_in_db_reason")]])
-                imdb = await get_poster(search, bulk=False) if NOFILEREQ else None
-                if imdb:
-                    TEMPLATE = script.IMDB_TEMPLATE_TXT
-                    cur_time = datetime.now(pytz.timezone('Asia/Kolkata')).time()
-                    time_difference = timedelta(hours=cur_time.hour, minutes=cur_time.minute, seconds=(cur_time.second+(cur_time.microsecond/1000000))) - timedelta(hours=curr_time.hour, minutes=curr_time.minute, seconds=(curr_time.second+(curr_time.microsecond/1000000)))
-                    remaining_seconds = "{:.2f}".format(time_difference.total_seconds())
-                    cap = TEMPLATE.format(
-                        qurey=search,
-                        title=imdb.get('title'),
-                        votes=imdb.get('votes'),
-                        aka=imdb.get("aka"),
-                        seasons=imdb.get("seasons"),
-                        box_office=imdb.get('box_office'),
-                        localized_title=imdb.get('localized_title'),
-                        kind=imdb.get('kind'),
-                        imdb_id=imdb.get("imdb_id"),
-                        cast=imdb.get("cast"),
-                        runtime=imdb.get("runtime"),
-                        countries=imdb.get("countries"),
-                        certificates=imdb.get("certificates"),
-                        languages=imdb.get("languages"),
-                        director=imdb.get("director"),
-                        writer=imdb.get("writer"),
-                        producer=imdb.get("producer"),
-                        composer=imdb.get("composer"),
-                        cinematographer=imdb.get("cinematographer"),
-                        music_team=imdb.get("music_team"),
-                        distributors=imdb.get("distributors"),
-                        release_date=imdb.get('release_date'),
-                        year=imdb.get('year'),
-                        genres=imdb.get('genres'),
-                        poster=imdb.get('poster'),
-                        plot=imdb.get('plot'),
-                        rating=imdb.get('rating'),
-                        url=imdb.get('url'),
-                        **locals()
-                    )
-                    cap += f"\n\nSearch: {search.title()}\n\n🎥Movie: {imdb.get('title')}\n🍂Year: {imdb.get('year')}\n🍁Language: {imdb.get('languages')}\n\nNot available in Database This Move"
-                    if reply_msg:
-                        await reply_msg.delete()
-                    if imdb.get('poster'):
-                        msg_obj = await message.reply_photo(photo=imdb.get('poster'), caption=cap, reply_markup=no_db_btn)
-                    else:
-                        msg_obj = await message.reply_text(text=cap, reply_markup=no_db_btn, disable_web_page_preview=True)
+                msg_text = "<b>sᴏʀʀʏ ɴᴏ ꜰɪʟᴇs ᴡᴇʀᴇ ꜰᴏᴜɴᴅ ꜰᴏʀ ʏᴏᴜʀ ʀᴇǫᴜᴇꜱᴛ😕\n\nᴄʜᴇᴄᴋ ʏᴏᴜʀ sᴘᴇʟʟɪɴɢ ɪɴ ɢᴏᴏɢʟᴇ ᴀɴᴅ ᴛʀʏ ᴀɢᴀɪɴ 😃\n\nᴍᴏᴠɪᴇ ʀᴇǫᴜᴇꜱᴛ ꜰᴏʀᴍᴀᴛ 👇\n\nᴇxᴀᴍᴘʟᴇ : Uncharted or Uncharted 2022 or Uncharted En\n\nꜱᴇʀɪᴇꜱ ʀᴇǫᴜᴇꜱᴛ ꜰᴏʀᴍᴀᴛ 👇\n\nᴇxᴀᴍᴘʟᴇ : Loki S01 or Loki S01E04 or Lucifer S03E24\n\n🚯 ᴅᴏɴᴛ ᴜꜱᴇ ➠ ':(!,./)\n\n<i>🕐 This message will be deleted in 50 seconds.</i></b>"
+                if reply_msg:
+                    msg_obj = await reply_msg.edit_text(msg_text, reply_markup=no_db_btn)
                 else:
-                    msg_text = "<b>sᴏʀʀʏ ɴᴏ ꜰɪʟᴇs ᴡᴇʀᴇ ꜰᴏᴜɴᴅ ꜰᴏʀ ʏᴏᴜʀ ʀᴇǫᴜᴇꜱᴛ😕\n\nᴄʜᴇᴄᴋ ʏᴏᴜʀ sᴘᴇʟʟɪɴɢ ɪɴ ɢᴏᴏɢʟᴇ ᴀɴᴅ ᴛʀʏ ᴀɢᴀɪɴ 😃\n\nᴍᴏᴠɪᴇ ʀᴇǫᴜᴇꜱᴛ ꜰᴏʀᴍᴀᴛ 👇\n\nᴇxᴀᴍᴘʟᴇ : Uncharted or Uncharted 2022 or Uncharted En\n\nꜱᴇʀɪᴇꜱ ʀᴇǫᴜᴇꜱᴛ ꜰᴏʀᴍᴀᴛ 👇\n\nᴇxᴀᴍᴘʟᴇ : Loki S01 or Loki S01E04 or Lucifer S03E24\n\n🚯 ᴅᴏɴᴛ ᴜꜱᴇ ➠ ':(!,./)\n\n<i>🕐 This message will be deleted in 50 seconds.</i></b>"
-                    if reply_msg:
-                        msg_obj = await reply_msg.edit_text(msg_text, reply_markup=no_db_btn)
-                    else:
-                        msg_obj = await message.reply_text(msg_text, reply_markup=no_db_btn)
+                    msg_obj = await message.reply_text(msg_text, reply_markup=no_db_btn)
                 
                 await asyncio.sleep(50)
                 try:
@@ -3388,7 +3342,14 @@ async def auto_filter(client, name, msg, reply_msg=None, ai_search=True, spoll=F
     if req:
         temp.SHORT[req] = message.chat.id
 
-    imdb = await get_poster(search, file=(files[0])['file_name']) if settings.get("imdb", True) else None
+    imdb = None
+    if settings.get("imdb", True):
+        try:
+            first_fname = (files[0]).get('file_name') if files else None
+            imdb = await get_poster(search, file=first_fname)
+        except Exception as ie:
+            logger.warning(f"[MOVIE FILTER IMDb fetch failed for '{search}']: {ie}")
+            imdb = None
     cur_time = datetime.now(pytz.timezone('Asia/Kolkata')).time()
     time_difference = timedelta(hours=cur_time.hour, minutes=cur_time.minute, seconds=(cur_time.second+(cur_time.microsecond/1000000))) - timedelta(hours=curr_time.hour, minutes=curr_time.minute, seconds=(curr_time.second+(curr_time.microsecond/1000000)))
     remaining_seconds = "{:.2f}".format(time_difference.total_seconds())
