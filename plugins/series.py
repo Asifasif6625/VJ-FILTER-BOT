@@ -738,13 +738,13 @@ def _build_auto_movie_lang_text(movie_data):
             f"{rating_str}"
             f"{genre_str}"
             f"{runtime_str}\n\n"
-            f"⚠️ <b>ALL MOVIE FILES ALREADY EXIST</b>\n\n"
             f"📁 <b>Files scanned:</b> {tot_scanned}\n"
             f"✅ <b>Matching files:</b> {tot_matched}\n"
             f"🆕 <b>New files:</b> 0\n"
-            f"⚠️ <b>Existing duplicates:</b> {tot_dup}\n\n"
+            f"⚠️ <b>Existing in database:</b> {tot_dup}\n\n"
             f"🌐 <b>Languages & Qualities:</b>\n\n"
-            f"{breakdown_str}"
+            f"{breakdown_str}\n\n"
+            f"<i>Click below to create the Super Movie Filter for this movie.</i>"
         )
 
     # 4. New files found (Scan Result)
@@ -770,23 +770,32 @@ def _build_auto_movie_lang_keyboard(session_id, movie_data):
     tot_dup = res.get("total_duplicates", 0)
 
     buttons = []
-    # CASE 1 & 2: 0 matching files or all duplicates
-    if tot_matched == 0 or tot_new == 0:
+    # 0 matching files
+    if tot_matched == 0:
         buttons.append([
             InlineKeyboardButton("🔄 Rescan", callback_data=f"am_rescan:{session_id}"),
             InlineKeyboardButton("❌ Cancel", callback_data=f"am_cancel:{session_id}")
         ])
-    # CASE 3: Some new files (tot_new > 0 and tot_dup > 0)
+    # Some new files (tot_new > 0 and tot_dup > 0)
     elif tot_new > 0 and tot_dup > 0:
-        buttons.append([InlineKeyboardButton(f"💾 Save ({tot_new} New)", callback_data=f"am_save:{session_id}")])
+        buttons.append([InlineKeyboardButton(f"💾 Save Super Movie ({tot_new} New)", callback_data=f"am_save:{session_id}")])
         buttons.append([
             InlineKeyboardButton("🔄 Rescan", callback_data=f"am_rescan:{session_id}"),
             InlineKeyboardButton("❌ Cancel", callback_data=f"am_cancel:{session_id}")
         ])
-    # CASE 4: All matching files are new (tot_new > 0 and tot_dup == 0)
+    # All matching files are new (tot_new > 0 and tot_dup == 0)
+    elif tot_new > 0 and tot_dup == 0:
+        buttons.append([
+            InlineKeyboardButton("💾 Save Super Movie", callback_data=f"am_save:{session_id}"),
+            InlineKeyboardButton("❌ Cancel", callback_data=f"am_cancel:{session_id}")
+        ])
+    # All matching files already exist in ia_filterdb (tot_new == 0, tot_dup > 0)
     else:
         buttons.append([
-            InlineKeyboardButton(f"💾 Save", callback_data=f"am_save:{session_id}"),
+            InlineKeyboardButton("💾 Create Super Movie Filter", callback_data=f"am_save:{session_id}")
+        ])
+        buttons.append([
+            InlineKeyboardButton("🔄 Rescan", callback_data=f"am_rescan:{session_id}"),
             InlineKeyboardButton("❌ Cancel", callback_data=f"am_cancel:{session_id}")
         ])
 
@@ -2288,12 +2297,13 @@ async def wizard_callback(client: Client, query: CallbackQuery):
                 f"ℹ️ <i>All matching episodes are already saved in the Series database.</i>"
             )
             markup = InlineKeyboardMarkup([
+                [InlineKeyboardButton("💾 Save Series Filter", callback_data="sw#auto_save")],
                 [InlineKeyboardButton("🔄 Rescan", callback_data="sw#auto_rescan")],
                 [InlineKeyboardButton("📺 Select Season", callback_data="sw#auto_sel_season")],
                 [InlineKeyboardButton("❌ Cancel", callback_data="sw#auto_cancel")]
             ])
             await query.message.edit_text(text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
-            return await query.answer(f"Scan complete: all {res['total_duplicates']} episodes already exist in database.")
+            return await query.answer(f"Scan complete: {res['total_matched']} episodes detected.")
 
         text = (
             f"📊 <b>AUTO SCAN RESULT</b>\n\n"
@@ -2406,12 +2416,13 @@ async def wizard_callback(client: Client, query: CallbackQuery):
                 f"ℹ️ <i>All matching episodes are already saved in the Series database.</i>"
             )
             markup = InlineKeyboardMarkup([
+                [InlineKeyboardButton("💾 Save Series Filter", callback_data="sw#auto_save")],
                 [InlineKeyboardButton("🔄 Rescan", callback_data="sw#auto_rescan")],
                 [InlineKeyboardButton("📺 Change Season", callback_data="sw#auto_sel_season")],
                 [InlineKeyboardButton("❌ Cancel", callback_data="sw#auto_cancel")]
             ])
             await query.message.edit_text(text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
-            return await query.answer(f"Scan complete: all {res['total_duplicates']} episodes already exist in database.")
+            return await query.answer(f"Scan complete: {res['total_matched']} episodes detected.")
 
         text = (
             f"📊 <b>AUTO SCAN RESULT</b>\n\n"
@@ -2561,24 +2572,18 @@ async def wizard_callback(client: Client, query: CallbackQuery):
         res = auto_data["scan"]
         total_matched = res.get("total_matched", 0)
         total_new = res.get("total_new", 0)
-        total_duplicates = res.get("total_duplicates", 0)
-        valid_files = res.get("valid_files") or res.get("valid_new_files") or []
+        all_match_files = res.get("all_matching_files") or res.get("valid_files") or []
+        files_for_metadata = valid_files if valid_files else all_match_files
 
-        if total_matched == 0:
+        if total_matched == 0 and not files_for_metadata:
             return await query.answer("⚠️ No matching files found to save.", show_alert=True)
-
-        if total_new == 0 and total_duplicates > 0:
-            return await query.answer(f"⚠️ All {total_duplicates} files already exist in the database. Nothing new to save.", show_alert=True)
-
-        if not valid_files:
-            return await query.answer("⚠️ No new files to save.", show_alert=True)
 
         is_skip = auto_data.get("season_skip", False)
         existing_series_id = auto_data.get("existing_series_id")
 
-        detected_langs = sorted(list(set(f["language"] for f in valid_files)))
-        detected_seasons = sorted(list(set(f["season"] for f in valid_files)))
-        detected_quals = sorted(list(set(f["quality"] for f in valid_files)))
+        detected_langs = sorted(list(set(f["language"] for f in files_for_metadata)))
+        detected_seasons = sorted(list(set(f["season"] for f in files_for_metadata)))
+        detected_quals = sorted(list(set(f["quality"] for f in files_for_metadata)))
 
         logger.info(f"[AUTO_SERIES SAVE] series={auto_data['title']} user_id={uid} new={total_new} duplicate={total_duplicates}")
 
@@ -2788,13 +2793,20 @@ async def auto_movie_hierarchical_callbacks(client: Client, query: CallbackQuery
     elif action == "am_save":
         res = movie_data.get("scan", {})
         valid_new = res.get("valid_new_files", [])
-        if not valid_new:
-            return await query.answer("⚠️ No new files to save.", show_alert=True)
+        tot_matched = res.get("total_matched", 0)
+        if tot_matched == 0 and not valid_new:
+            return await query.answer("⚠️ No matching movie files found to create filter.", show_alert=True)
 
-        await query.message.edit_text(
-            f"💾 <b>Saving {len(valid_new)} movie files for {movie_data['title']}...</b>",
-            parse_mode=enums.ParseMode.HTML
-        )
+        if valid_new:
+            await query.message.edit_text(
+                f"💾 <b>Saving {len(valid_new)} new files and creating Super Movie Filter for {movie_data['title']}...</b>",
+                parse_mode=enums.ParseMode.HTML
+            )
+        else:
+            await query.message.edit_text(
+                f"💾 <b>Creating Super Movie Filter for {movie_data['title']}...</b>",
+                parse_mode=enums.ParseMode.HTML
+            )
 
         from database.ia_filterdb import col, sec_col, MULTIPLE_DATABASE, clean_file_name, is_file_already_saved, get_search_results
         from utils import clear_wizard_session
