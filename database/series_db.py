@@ -24,6 +24,7 @@ sbatch_col   = _db["series_batches"]
 temp_reqs_col = _db["temp_requests"]
 settings_col = _db["settings"]
 announcements_col = _db["announcements"]
+super_movies_col = _db["super_movies"]
 
 
 # ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -725,3 +726,88 @@ async def get_batches(series_id: str, language: str, season: int, quality: str) 
         "quality":   quality,
     })
     return [doc async for doc in cursor]
+
+
+# ─── Super Movie CRUD ────────────────────────────────────────────────────────
+async def create_super_movie(data: dict) -> str:
+    clean_name = clean_series_title(data.get("title", ""))
+    doc = {
+        "title": clean_name,
+        "normalized_name": _normalize(clean_name),
+        "year": str(data.get("year", "N/A")),
+        "genre": data.get("genre", "N/A"),
+        "rating": str(data.get("rating", "")),
+        "poster": data.get("poster", ""),
+        "imdb_id": data.get("imdb_id", ""),
+        "languages": data.get("languages", []),
+        "qualities": data.get("qualities", []),
+        "created_by": data.get("created_by"),
+        "created_at": datetime.utcnow(),
+        "updated_at": datetime.utcnow(),
+        "status": "active",
+    }
+    existing = await super_movies_col.find_one({"normalized_name": doc["normalized_name"], "year": doc["year"]})
+    if existing:
+        await super_movies_col.update_one({"_id": existing["_id"]}, {"$set": doc})
+        return str(existing["_id"])
+    result = await super_movies_col.insert_one(doc)
+    return str(result.inserted_id)
+
+
+async def get_super_movie(movie_id: str) -> dict | None:
+    try:
+        return await super_movies_col.find_one({"_id": ObjectId(movie_id)})
+    except Exception:
+        return None
+
+
+async def search_super_movies(query: str) -> list[dict]:
+    q = query.strip()
+    if not q:
+        return []
+    q_norm = _normalize(q)
+    if not q_norm:
+        return []
+    q_tokens = [w for w in q_norm.split(" ") if w]
+    if not q_tokens:
+        return []
+
+    token_patterns = []
+    for tok in q_tokens:
+        if len(tok) <= 2:
+            token_patterns.append(re.escape(tok))
+        elif len(tok) <= 4:
+            token_patterns.append(re.escape(tok[:3]))
+        else:
+            token_patterns.append(re.escape(tok[:max(3, len(tok)-2)]))
+            
+    combined_pattern = "|".join(token_patterns)
+    try:
+        mongo_regex = re.compile(combined_pattern, re.IGNORECASE)
+    except Exception:
+        mongo_regex = re.compile(re.escape(q_norm), re.IGNORECASE)
+
+    cursor = super_movies_col.find(
+        {"normalized_name": mongo_regex, "status": "active"}
+    ).limit(60)
+
+    candidates = [doc async for doc in cursor]
+    if not candidates:
+        cursor = super_movies_col.find({"status": "active"}).limit(60)
+        candidates = [doc async for doc in cursor]
+
+    if not candidates:
+        return []
+
+    scored_results = []
+    for doc in candidates:
+        title_norm = doc.get("normalized_name", "")
+        is_match, score = _score_series_candidate(q_norm, q_tokens, title_norm)
+        if is_match and score > 0.0:
+            scored_results.append((score, doc))
+
+    if not scored_results:
+        return []
+
+    scored_results.sort(key=lambda x: x[0], reverse=True)
+    return [doc for score, doc in scored_results]
