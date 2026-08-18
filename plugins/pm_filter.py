@@ -3263,13 +3263,22 @@ async def auto_filter(client, name, msg, reply_msg=None, ai_search=True, spoll=F
             search = re.sub(r"[\.\_\-\:\+\/\\\[\]\(\)\{\}\#\@\*\&]+", " ", search)
             search = re.sub(r"(?i)\b(pl(i|e)*?(s|z+|ease|se|ese|(e+)s(e)?)|((send|snd|giv(e)?|gib)(\sme)?)|movie(s)?|new|latest|bro|bruh|broh|helo|that|find|dubbed|link|venum|iruka|pannunga|pannungga|anuppunga|anupunga|anuppungga|anupungga|film|undo|kitti|kitty|tharu|kittumo|kittum|movie|any(one)|with\ssubtitle(s)?|upload|full|print|file)\b", " ", search)
             search = re.sub(r"\s+", " ", search).strip()
+
+            # ── 1. Check if explicitly added Super Movie ──
+            try:
+                from plugins.series import process_super_movie_search
+                is_super_movie = await process_super_movie_search(client, message, search if search else name, reply_msg)
+                if is_super_movie:
+                    return
+            except Exception as e:
+                logger.error(f"[SUPER MOVIE SEARCH ROUTING ERROR] {e}")
             
             files, offset, total_results = await get_search_results(message.chat.id, search, max_results=100, offset=0, filter=True)
             logger.info(f"[MOVIE SEARCH]\nquery={search}\ndb_files={len(files)}")
             settings = await get_settings(message.chat.id)
 
             if not files:
-                # ── If no movie files in ia_filterdb, check Series Filter ──
+                # ── 2. If no movie files in ia_filterdb, check Series Filter ──
                 try:
                     from plugins.series import process_series_search
                     is_series = await process_series_search(client, message, search if search else name, reply_msg)

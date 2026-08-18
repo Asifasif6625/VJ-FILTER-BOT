@@ -1430,7 +1430,7 @@ async def cmd_delthumbseries(client: Client, message: Message):
 # ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═  
 
 
-@Client.on_message(filters.command(["series", "seires", "seres", "sereis", "seris", "seriesmenu", "smenu", "movieseries", "seriesmovie"]), group=0)
+@Client.on_message(filters.command(["series", "seires", "seres", "sereis", "seris", "seriesmenu", "smenu", "movieseries", "seriesmovie"]), group=-1)
 async def cmd_series_menu(client: Client, message: Message):
     uid = message.from_user.id if message.from_user else (message.sender_chat.id if message.sender_chat else 0)
     logger.info(f"[SERIES COMMAND] user_id={uid}")
@@ -1445,7 +1445,12 @@ async def cmd_series_menu(client: Client, message: Message):
             pass
 
     if not is_authorized:
-        return await message.reply_text("❌ You are not authorized to use this command.")
+        return await message.reply_text(
+            f"❌ <b>You are not authorized to use this command.</b>\n\n"
+            f"Your User ID: <code>{uid}</code>\n"
+            f"<i>Add this ID to ADMINS in info.py or environment variables to enable admin access.</i>",
+            parse_mode=enums.ParseMode.HTML
+        )
 
     from utils import clear_wizard_session
     clear_wizard_session(uid)
@@ -1466,7 +1471,7 @@ async def cmd_series_menu(client: Client, message: Message):
     )
 
 
-@Client.on_message(filters.command(["automovieadd", "movieautoadd", "automovie", "movieadd", "addmovie", "automov"]), group=0)
+@Client.on_message(filters.command(["automovieadd", "movieautoadd", "automovie", "movieadd", "addmovie", "automov"]), group=-1)
 async def cmd_automovieadd(client: Client, message: Message):
     uid = message.from_user.id if message.from_user else 0
     if not _is_admin(uid):
@@ -1496,7 +1501,7 @@ async def cmd_automovieadd(client: Client, message: Message):
     )
 
 
-@Client.on_message(filters.command(["seriesfil", "addseries", "seriesadd"]), group=0)
+@Client.on_message(filters.command(["seriesfil", "addseries", "seriesadd"]), group=-1)
 async def cmd_seriesfil(client: Client, message: Message):
     uid = message.from_user.id if message.from_user else 0
     if not _is_admin(uid):
@@ -1664,7 +1669,7 @@ async def cmd_ed_series(client: Client, message: Message):
 # ─── /cancel — ABORT WIZARD ──────────────────────────────────────────────────
 # ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ 
 
-@Client.on_message(filters.command("cancel"), group=0)
+@Client.on_message(filters.command("cancel"), group=-1)
 async def cmd_cancel(client: Client, message: Message):
     uid = message.from_user.id if message.from_user else 0
     from utils import cancel_wizard_session
@@ -2819,6 +2824,26 @@ async def auto_movie_hierarchical_callbacks(client: Client, query: CallbackQuery
                 added_count += 1
             except Exception as e:
                 logger.error(f"[AUTO_MOVIE SAVE ERROR] file_id={fid} error={e}")
+
+        from database.series_db import create_super_movie
+        grouped_files = movie_data.get("grouped", {})
+        langs = list(grouped_files.keys())
+        quals = list({q for l in grouped_files.values() for q in l.keys()})
+        try:
+            await create_super_movie({
+                "title": movie_data["title"],
+                "year": movie_data.get("year", "N/A"),
+                "rating": movie_data.get("rating", ""),
+                "genre": movie_data.get("genre", "N/A"),
+                "poster": movie_data.get("poster", ""),
+                "imdb_id": movie_data.get("imdb_id", ""),
+                "languages": langs,
+                "qualities": quals,
+                "created_by": uid
+            })
+            logger.info(f"[SUPER MOVIE CREATED] title={movie_data['title']} languages={len(langs)} qualities={len(quals)}")
+        except Exception as e:
+            logger.error(f"[SUPER MOVIE CREATION ERROR] {e}")
 
         temp.AUTO_MOVIE.pop(session_id, None)
         temp.AUTO_MOVIE.pop(uid, None)
@@ -4356,6 +4381,114 @@ async def process_series_search(client: Client, message: Message, txt: str, repl
             except:
                 pass
         await _send_or_edit(message, text, rm, poster=poster)
+    return True
+
+
+async def process_super_movie_search(client: Client, message: Message, txt: str, reply_msg: Message = None) -> bool:
+    """
+    Checks if the searched query matches an explicitly added Super Movie.
+    If matched, opens the Super Movie Filter (Poster -> Language -> Quality -> Direct Send).
+    If not matched, returns False (allowing pm_filter to handle normal movie search).
+    """
+    from database.series_db import search_super_movies
+    from database.ia_filterdb import get_search_results
+    from utils import get_settings, get_poster, temp
+    import logging, time, uuid, asyncio
+
+    logger = logging.getLogger(__name__)
+    user_id = message.from_user.id if (hasattr(message, "from_user") and message.from_user) else (message.sender_chat.id if getattr(message, "sender_chat", None) else 0)
+
+    matches = await search_super_movies(txt)
+    if not matches:
+        return False
+
+    movie = matches[0]
+    movie_title = movie.get("title", txt)
+    movie_year = str(movie.get("year", ""))
+    movie_rating = str(movie.get("rating", ""))
+    movie_genre = str(movie.get("genre", ""))
+    movie_poster = movie.get("poster", "")
+
+    # Query ia_filterdb for actual movie files matching this title
+    clean_title = re.sub(r"[\.\_\-\:\+\/\\\[\]\(\)\{\}]+", " ", movie_title).strip()
+    files, _, _ = await get_search_results(message.chat.id, clean_title, max_results=100, offset=0, filter=True)
+    if not files:
+        files, _, _ = await get_search_results(message.chat.id, txt, max_results=100, offset=0, filter=True)
+    
+    if not files:
+        return False
+
+    settings = await get_settings(message.chat.id)
+    pre = 'filep' if settings.get('file_secure') else 'file'
+    key = f"{message.chat.id}-{message.id}"
+    req = user_id
+
+    from plugins.pm_filter import group_movie_files, build_movie_language_keyboard
+
+    grouped = group_movie_files(files)
+    if not grouped:
+        return False
+
+    if not hasattr(temp, "MOVIE_STATE"):
+        temp.MOVIE_STATE = {}
+
+    temp.MOVIE_STATE[key] = {
+        "key": key,
+        "owner_id": req,
+        "user": req,
+        "title": movie_title,
+        "year": movie_year,
+        "rating": movie_rating,
+        "genre": movie_genre,
+        "poster": movie_poster,
+        "grouped": grouped,
+        "files": files,
+        "all_files": files,
+        "search": txt,
+        "pre": pre,
+        "chat_id": message.chat.id,
+        "created_at": time.time()
+    }
+
+    logger.info(f"[SUPER MOVIE MATCHED]\ntitle={movie_title}\nyear={movie_year}\nlanguages={len(grouped)}")
+
+    year_str = f" ({movie_year})" if movie_year and movie_year != "N/A" else ""
+    rating_str = f"\n⭐ <b>Rating:</b> {movie_rating}/10" if movie_rating else ""
+    genre_str = f"\n🎭 <b>Genre:</b> {movie_genre}" if movie_genre and movie_genre != "N/A" else ""
+
+    cap = (
+        f"🎬 <b>{movie_title}{year_str}</b>"
+        f"{rating_str}"
+        f"{genre_str}\n\n"
+        f"🌐 <b>Select Language:</b>"
+    )
+    reply_markup = build_movie_language_keyboard(key, grouped)
+
+    if movie_poster:
+        try:
+            if reply_msg:
+                await reply_msg.delete()
+            hehe = await message.reply_photo(photo=movie_poster, caption=cap, reply_markup=reply_markup)
+            if settings.get('auto_delete'):
+                async def _del():
+                    await asyncio.sleep(300)
+                    try:
+                        await hehe.delete()
+                        await message.delete()
+                    except Exception:
+                        pass
+                asyncio.create_task(_del())
+        except Exception:
+            if reply_msg:
+                await reply_msg.edit_text(text=cap, reply_markup=reply_markup)
+            else:
+                await message.reply_text(text=cap, reply_markup=reply_markup)
+    else:
+        if reply_msg:
+            await reply_msg.edit_text(text=cap, reply_markup=reply_markup, disable_web_page_preview=True)
+        else:
+            await message.reply_text(text=cap, reply_markup=reply_markup, disable_web_page_preview=True)
+
     return True
 
 
