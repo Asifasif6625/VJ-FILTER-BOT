@@ -112,8 +112,16 @@ async def is_subscribed(bot, query):
 
 async def get_poster(query, bulk=False, id=False, file=None):
     try:
-        if not id:
-            query = (str(query).strip()).lower()
+        query_str = str(query).strip()
+        imdb_url_match = re.search(r"(?:imdb\.com/title/)?(tt\d{5,10})", query_str, re.IGNORECASE)
+
+        if id or (imdb_url_match and not bulk):
+            if imdb_url_match:
+                movieid = re.sub(r"^tt", "", imdb_url_match.group(1).strip(), flags=re.IGNORECASE)
+            else:
+                movieid = re.sub(r"^tt", "", query_str, flags=re.IGNORECASE)
+        else:
+            query = query_str.lower()
             title = query
             year = re.findall(r'[1-2]\d{3}$', query, re.IGNORECASE)
             if year:
@@ -176,8 +184,6 @@ async def get_poster(query, bulk=False, id=False, file=None):
 
             if not movieid:
                 return None
-        else:
-            movieid = re.sub(r"^tt", "", str(query).strip())
 
         movie = None
         try:
