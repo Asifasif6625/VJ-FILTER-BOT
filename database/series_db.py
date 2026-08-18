@@ -71,17 +71,23 @@ def make_series_key(title: str) -> str:
     return key or "series"
 
 
+_indexes_ensured = False
+
 async def _ensure_indexes():
     """Create useful indexes once at startup."""
+    global _indexes_ensured
+    if _indexes_ensured:
+        return
+    _indexes_ensured = True
     try:
         await series_col.create_index("normalized_name")
         await series_col.create_index("series_key")
         await announcements_col.create_index("series_id", unique=True)
         await sfiles_col.create_index(
-            ["series_id", "language", "season", "episode", "quality"]
+            [("series_id", 1), ("language", 1), ("season", 1), ("episode", 1), ("quality", 1)]
         )
         await sbatch_col.create_index(
-            ["series_id", "language", "season", "quality"]
+            [("series_id", 1), ("language", 1), ("season", 1), ("quality", 1)]
         )
         # TTL index for temporary requests (expires after 1 hour)
         await temp_reqs_col.create_index("created_at", expireAfterSeconds=3600)
