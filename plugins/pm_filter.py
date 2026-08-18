@@ -3325,6 +3325,37 @@ async def auto_filter(client, name, msg, reply_msg=None, ai_search=True, spoll=F
     if req:
         temp.SHORT[req] = message.chat.id
 
+    btn = [
+        [
+            InlineKeyboardButton(
+                text=f"[{get_size(filevj['file_size'])}] {' '.join(filter(lambda x: not x.startswith('[') and not x.startswith('@') and not x.startswith('www.'), filevj['file_name'].split()))}",
+                callback_data=f"{pre}#{filevj['file_id']}"
+            ),
+        ]
+        for filevj in files
+    ]
+    btn.insert(0, 
+        [
+            InlineKeyboardButton(f'ǫᴜᴀʟɪᴛʏ', callback_data=f"qualities#{key}"),
+            InlineKeyboardButton("ᴇᴘɪsᴏᴅᴇs", callback_data=f"episodes#{key}"),
+            InlineKeyboardButton("sᴇᴀsᴏɴs", callback_data=f"seasons#{key}")
+        ]
+    )
+    btn.insert(0, [
+        InlineKeyboardButton("𝐒𝐞𝐧𝐝 𝐀𝐥𝐥", callback_data=f"sendfiles#{key}"),
+        InlineKeyboardButton("ʟᴀɴɢᴜᴀɢᴇs", callback_data=f"languages#{key}"),
+        InlineKeyboardButton("ʏᴇᴀʀs", callback_data=f"years#{key}")
+    ])
+    if offset != "":
+        req_id = message.from_user.id if (hasattr(message, "from_user") and message.from_user) else 0
+        btn.append(
+            [InlineKeyboardButton("𝐏𝐀𝐆𝐄", callback_data="pages"), InlineKeyboardButton(text=f"1/{math.ceil(int(total_results)/int(MAX_B_TN))}", callback_data="pages"), InlineKeyboardButton(text="𝐍𝐄𝐗𝐓 ➪", callback_data=f"next_{req_id}_{key}_{offset}")]
+        )
+    else:
+        btn.append(
+            [InlineKeyboardButton(text="𝐍𝐎 𝐌𝐎𝐑𝐄 𝐏𝐀𝐆𝐄𝐒 𝐀𝐕𝐀𝐈𝐋𝐀𝐁𝐋𝐄", callback_data="pages")]
+        )
+
     imdb = None
     if settings.get("imdb", True):
         try:
@@ -3334,54 +3365,55 @@ async def auto_filter(client, name, msg, reply_msg=None, ai_search=True, spoll=F
             logger.warning(f"[MOVIE FILTER IMDb fetch failed for '{search}']: {ie}")
             imdb = None
 
-    movie_title = (imdb.get('title') if imdb and imdb.get('title') else search.title())
-    movie_year = str(imdb.get('year') or '') if imdb else ''
-    movie_rating = str(imdb.get('rating') or '') if imdb else ''
-    movie_genre = imdb.get('genres') if imdb else ''
-    movie_poster = imdb.get('poster') if imdb else None
+    cur_time = datetime.now(pytz.timezone('Asia/Kolkata')).time()
+    time_difference = timedelta(hours=cur_time.hour, minutes=cur_time.minute, seconds=(cur_time.second+(cur_time.microsecond/1000000))) - timedelta(hours=curr_time.hour, minutes=curr_time.minute, seconds=(curr_time.second+(curr_time.microsecond/1000000)))
+    remaining_seconds = "{:.2f}".format(time_difference.total_seconds())
 
-    grouped = group_movie_files(files)
-    if not hasattr(temp, "MOVIE_STATE"):
-        temp.MOVIE_STATE = {}
-
-    import time
-    temp.MOVIE_STATE[key] = {
-        "key": key,
-        "owner_id": req,
-        "user": req,
-        "title": movie_title,
-        "year": movie_year,
-        "rating": movie_rating,
-        "genre": movie_genre,
-        "poster": movie_poster,
-        "imdb": imdb,
-        "imdb_id": imdb.get("imdb_id") if imdb else None,
-        "grouped": grouped,
-        "files": files,
-        "all_files": files,
-        "search": search,
-        "pre": pre,
-        "chat_id": message.chat.id,
-        "created_at": time.time()
-    }
-
-    logger.info(f"[MOVIE STATE CREATED]\ntitle={movie_title}\nyear={movie_year}\nlanguages={len(grouped)}")
-
-    year_str = f" ({movie_year})" if movie_year and movie_year != "N/A" else ""
-    rating_str = f"\n⭐ <b>Rating:</b> {movie_rating}/10" if movie_rating else ""
-    genre_str = f"\n🎭 <b>Genre:</b> {movie_genre}" if movie_genre and movie_genre != "N/A" else ""
-
-    cap = (
-        f"🎬 <b>{movie_title}{year_str}</b>"
-        f"{rating_str}"
-        f"{genre_str}\n\n"
-        f"🌐 <b>Select Language:</b>"
-    )
-    reply_markup = build_movie_language_keyboard(key, grouped)
-
-    if movie_poster:
+    TEMPLATE = script.IMDB_TEMPLATE_TXT
+    if imdb:
         try:
-            hehe = await message.reply_photo(photo=movie_poster, caption=cap, reply_markup=reply_markup)
+            cap = TEMPLATE.format(
+                qurey=search,
+                title=imdb.get('title', search),
+                votes=imdb.get('votes', ''),
+                aka=imdb.get("aka", ''),
+                seasons=imdb.get("seasons", ''),
+                box_office=imdb.get('box_office', ''),
+                localized_title=imdb.get('localized_title', ''),
+                kind=imdb.get('kind', ''),
+                imdb_id=imdb.get("imdb_id", ''),
+                cast=imdb.get("cast", ''),
+                runtime=imdb.get("runtime", ''),
+                countries=imdb.get("countries", ''),
+                certificates=imdb.get("certificates", ''),
+                languages=imdb.get("languages", ''),
+                director=imdb.get("director", ''),
+                writer=imdb.get("writer", ''),
+                producer=imdb.get("producer", ''),
+                composer=imdb.get("composer", ''),
+                cinematographer=imdb.get("cinematographer", ''),
+                music_team=imdb.get("music_team", ''),
+                distributors=imdb.get("distributors", ''),
+                release_date=imdb.get('release_date', ''),
+                year=imdb.get('year', ''),
+                genres=imdb.get('genres', ''),
+                poster=imdb.get('poster', ''),
+                plot=imdb.get('plot', ''),
+                rating=imdb.get('rating', ''),
+                url=imdb.get('url', ''),
+                **locals()
+            )
+            if hasattr(message, "from_user") and message.from_user:
+                temp.IMDB_CAP[message.from_user.id] = cap
+        except Exception:
+            cap = f"<b>🎬 {search.title()}\n\n📁 Select File to Download:</b>"
+    else:
+        cap = f"<b>Tʜᴇ Rᴇꜱᴜʟᴛꜱ Fᴏʀ ☞ {search}\n\nRᴇǫᴜᴇsᴛᴇᴅ Bʏ ☞ {message.from_user.mention if (hasattr(message, 'from_user') and message.from_user) else 'User'}\n\nʀᴇsᴜʟᴛ sʜᴏᴡ ɪɴ ☞ {remaining_seconds} sᴇᴄᴏɴᴅs\n\nᴘᴏᴡᴇʀᴇᴅ ʙʏ ☞ : {message.chat.title if message.chat else ''} \n\n⚠️ ᴀꜰᴛᴇʀ 5 ᴍɪɴᴜᴛᴇꜱ ᴛʜɪꜱ ᴍᴇꜱꜱᴀɢᴇ ᴡɪʟʟ ʙᴇ ᴀᴜᴛᴏᴍᴀᴛɪᴄᴀʟʟʏ ᴅᴇʟᴇᴛᴇᴅ 🗑️\n\n</b>"
+
+    reply_markup = InlineKeyboardMarkup(btn)
+    if imdb and imdb.get('poster'):
+        try:
+            hehe = await message.reply_photo(photo=imdb.get('poster'), caption=cap, reply_markup=reply_markup)
             if reply_msg:
                 await reply_msg.delete()
             try:
@@ -3395,7 +3427,7 @@ async def auto_filter(client, name, msg, reply_msg=None, ai_search=True, spoll=F
                 await hehe.delete()
                 await message.delete()
         except (MediaEmpty, PhotoInvalidDimensions, WebpageMediaEmpty):
-            poster_alt = (movie_poster or '').replace('.jpg', "._V1_UX360.jpg") 
+            poster_alt = (imdb.get('poster') or '').replace('.jpg', "._V1_UX360.jpg") 
             hmm = await message.reply_photo(photo=poster_alt, caption=cap, reply_markup=reply_markup)
             if reply_msg:
                 await reply_msg.delete()
