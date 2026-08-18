@@ -5364,9 +5364,14 @@ def start_cleanup_schedulers(client: Client = None):
 # ─── STARTUP: Ensure DB indexes & Schedulers ─────────────────────────────────
 # ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ 
 
+_series_startup_done = False
+
 async def _startup():
+    global _series_startup_done
+    if _series_startup_done:
+        return
+    _series_startup_done = True
     await _ensure_indexes()
-    logger.info("Series DB indexes ensured.")
     start_cleanup_schedulers()
 
 
@@ -5380,4 +5385,5 @@ try:
         loop.run_until_complete(_startup())
 except Exception as _e:
     logger.warning(f"Series DB startup: {_e}")
+
 
