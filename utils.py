@@ -22,7 +22,13 @@ logger.setLevel(logging.INFO)
 join_db = JoinReqs
 BTN_URL_REGEX = re.compile(r"(\[([^\[]+?)\]\((buttonurl|buttonalert):(?:/{0,2})(.+?)(:same)?\))")
 
-imdb = Cinemagoer() 
+try:
+    imdb = Cinemagoer(uri="sqlite:///cinemagoer.db")
+except Exception:
+    try:
+        imdb = Cinemagoer(accessSystem="http")
+    except Exception:
+        imdb = Cinemagoer() 
 TOKENS = {}
 VERIFIED = {}
 BANNED = {}
