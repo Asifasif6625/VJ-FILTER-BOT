@@ -1434,8 +1434,21 @@ async def cmd_delthumbseries(client: Client, message: Message):
 async def cmd_series_menu(client: Client, message: Message):
     uid = message.from_user.id if message.from_user else (message.sender_chat.id if message.sender_chat else 0)
     logger.info(f"[SERIES COMMAND] user_id={uid}")
-    if not _is_admin(uid):
+
+    is_authorized = _is_admin(uid)
+    if not is_authorized and message.chat and message.chat.type in [enums.ChatType.GROUP, enums.ChatType.SUPERGROUP]:
+        try:
+            member = await message.chat.get_member(uid)
+            if member and member.status in [enums.ChatMemberStatus.ADMINISTRATOR, enums.ChatMemberStatus.OWNER]:
+                is_authorized = True
+        except Exception:
+            pass
+
+    if not is_authorized:
         return await message.reply_text("❌ You are not authorized to use this command.")
+
+    from utils import clear_wizard_session
+    clear_wizard_session(uid)
 
     markup = InlineKeyboardMarkup([
         [
