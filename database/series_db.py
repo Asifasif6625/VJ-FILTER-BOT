@@ -772,42 +772,31 @@ async def search_super_movies(query: str) -> list[dict]:
     if not q_tokens:
         return []
 
-    token_patterns = []
-    for tok in q_tokens:
-        if len(tok) <= 2:
-            token_patterns.append(re.escape(tok))
-        elif len(tok) <= 4:
-            token_patterns.append(re.escape(tok[:3]))
-        else:
-            token_patterns.append(re.escape(tok[:max(3, len(tok)-2)]))
-            
-    combined_pattern = "|".join(token_patterns)
-    try:
-        mongo_regex = re.compile(combined_pattern, re.IGNORECASE)
-    except Exception:
-        mongo_regex = re.compile(re.escape(q_norm), re.IGNORECASE)
+    # 1. Exact match on normalized_name
+    doc = await super_movies_col.find_one({"normalized_name": q_norm, "status": "active"})
+    if doc:
+        return [doc]
 
-    cursor = super_movies_col.find(
-        {"normalized_name": mongo_regex, "status": "active"}
-    ).limit(60)
+    # 2. Match without trailing year (e.g. "Idhayam Murali 2026" -> "idhayam murali")
+    q_no_year = re.sub(r"\b(19|20)\d{2}\b", "", q_norm).strip()
+    q_no_year = re.sub(r"\s+", " ", q_no_year).strip()
+    if q_no_year and q_no_year != q_norm:
+        doc = await super_movies_col.find_one({"normalized_name": q_no_year, "status": "active"})
+        if doc:
+            return [doc]
 
-    candidates = [doc async for doc in cursor]
-    if not candidates:
-        cursor = super_movies_col.find({"status": "active"}).limit(60)
-        candidates = [doc async for doc in cursor]
+    # 3. Match candidate if query tokens contain all main words of normalized_name
+    cursor = super_movies_col.find({"status": "active"}).limit(100)
+    candidates = [d async for d in cursor]
+    matched = []
+    for cand in candidates:
+        cand_norm = cand.get("normalized_name", "")
+        cand_tokens = [w for w in cand_norm.split(" ") if w]
+        if not cand_tokens:
+            continue
+        if all(ct in q_tokens for ct in cand_tokens):
+            matched.append(cand)
+        elif all(qt in cand_tokens for qt in q_tokens) and len(q_tokens) == len(cand_tokens):
+            matched.append(cand)
 
-    if not candidates:
-        return []
-
-    scored_results = []
-    for doc in candidates:
-        title_norm = doc.get("normalized_name", "")
-        is_match, score = _score_series_candidate(q_norm, q_tokens, title_norm)
-        if is_match and score > 0.0:
-            scored_results.append((score, doc))
-
-    if not scored_results:
-        return []
-
-    scored_results.sort(key=lambda x: x[0], reverse=True)
-    return [doc for score, doc in scored_results]
+    return matched
