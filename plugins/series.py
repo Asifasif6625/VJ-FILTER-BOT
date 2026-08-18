@@ -430,6 +430,8 @@ async def scan_sdatabase_for_series(title: str, season: int = None, series_id: s
         if not any(x["episode"] == f["episode"] for x in organized[l][q]):
             organized[l][q].append(f)
 
+    logger.info(f"[AUTO_SERIES SCAN] series={clean_title} scanned={total_scanned} matched={total_matched} new={total_new} duplicate={total_duplicates}")
+
     return {
         "valid_files": valid_new_files,
         "valid_new_files": valid_new_files,
@@ -605,6 +607,8 @@ async def scan_sdatabase_for_movie(title: str, year: str = None, client: Client 
         if q not in organized[l]:
             organized[l].append(q)
 
+    logger.info(f"[AUTO_MOVIE SCAN] scanned={total_scanned} matched={total_matched} new={total_new} duplicate={total_duplicates}")
+
     return {
         "valid_files": valid_new_files,
         "valid_new_files": valid_new_files,
@@ -618,6 +622,190 @@ async def scan_sdatabase_for_movie(title: str, year: str = None, client: Client 
         "total_unknown_quality": total_unknown_quality,
         "total_invalid": total_invalid,
     }
+
+
+# ─── Auto Movie Add Hierarchical UI Helpers ─────────────────────────────────
+LANGUAGE_FLAGS = {
+    "Malayalam": "🇲🇾",
+    "English": "🇬🇧",
+    "Hindi": "🇮🇳",
+    "Tamil": "🇮🇳",
+    "Telugu": "🇮🇳",
+    "Kannada": "🇮🇳",
+    "Bengali": "🇮🇳",
+    "Marathi": "🇮🇳",
+    "Dual Audio": "🎙",
+    "Multi Audio": "🎧",
+    "German": "🇩🇪",
+    "Korean": "🇰🇷",
+    "Japanese": "🇯🇵",
+    "Spanish": "🇪🇸",
+    "French": "🇫🇷",
+    "Arabic": "🇸🇦",
+    "Russian": "🇷🇺",
+    "Chinese": "🇨🇳",
+    "Italian": "🇮🇹",
+    "Portuguese": "🇵🇹",
+    "Turkish": "🇹🇷",
+    "Thai": "🇹🇭",
+}
+
+def _group_auto_movie_files(res):
+    match_list = res.get("all_matching_files") or res.get("valid_files") or []
+    grouped = {}
+    for f in match_list:
+        l = f.get("language", "English")
+        q = f.get("quality", "Unknown")
+        if l not in grouped:
+            grouped[l] = {}
+        if q not in grouped[l]:
+            grouped[l][q] = []
+        grouped[l][q].append(f)
+    return grouped
+
+def _build_auto_movie_lang_text(movie_data):
+    res = movie_data.get("scan", {})
+    rating_str = f"\n⭐ <b>Rating:</b> {movie_data['rating']}/10" if movie_data.get("rating") else ""
+    genre_str = f"\n🎭 <b>Genre:</b> {movie_data['genre']}" if movie_data.get("genre") and movie_data['genre'] != "N/A" else ""
+
+    if res.get("total_matched", 0) == 0:
+        return (
+            f"❌ <b>NO MATCHING MOVIE FILES FOUND</b>\n\n"
+            f"🎬 <b>Movie:</b> {movie_data['title']}\n"
+            f"📅 <b>Year:</b> {movie_data['year']}"
+            f"{rating_str}"
+            f"{genre_str}\n\n"
+            f"📁 <b>Files scanned:</b> {res.get('total_scanned', 0)}\n"
+            f"✅ <b>Matching files:</b> 0\n\n"
+            "<i>Make sure files in SDatabase contain proper movie title words.</i>"
+        )
+
+    if res.get("total_matched", 0) > 0 and res.get("total_new", 0) == 0 and res.get("total_duplicates", 0) > 0:
+        status_note = "\n\n⚠️ <b>ALL MATCHING MOVIE FILES ALREADY EXIST IN DATABASE</b>\n<i>You can browse the available files below or click Rescan.</i>"
+    else:
+        status_note = ""
+
+    return (
+        f"🎬 <b>{movie_data['title']} ({movie_data['year']})</b>"
+        f"{rating_str}"
+        f"{genre_str}\n\n"
+        f"📊 <b>Scan Summary:</b>\n"
+        f"📁 <b>Files scanned:</b> {res.get('total_scanned', 0)}\n"
+        f"✅ <b>Matching files:</b> {res.get('total_matched', 0)}\n"
+        f"🆕 <b>New files:</b> {res.get('total_new', 0)}\n"
+        f"♻️ <b>Already in database:</b> {res.get('total_duplicates', 0)}"
+        f"{status_note}\n\n"
+        f"🍿 <b>Select Language:</b>"
+    )
+
+def _build_auto_movie_lang_keyboard(session_id, movie_data):
+    res = movie_data.get("scan", {})
+    grouped = movie_data.get("grouped", {})
+    if not grouped:
+        grouped = _group_auto_movie_files(res)
+        movie_data["grouped"] = grouped
+
+    buttons = []
+    langs = list(grouped.keys())
+    preferred_order = ["Malayalam", "Tamil", "Hindi", "Telugu", "Kannada", "English", "Dual Audio", "Multi Audio"]
+    langs.sort(key=lambda x: (preferred_order.index(x) if x in preferred_order else 99, x))
+
+    for i in range(0, len(langs), 2):
+        row = []
+        for l in langs[i:i+2]:
+            flag = LANGUAGE_FLAGS.get(l, "🌐")
+            row.append(InlineKeyboardButton(f"{flag} {l}", callback_data=f"am_lang:{session_id}:{l}"))
+        buttons.append(row)
+
+    # Action row
+    act_row = []
+    if res.get("total_new", 0) > 0:
+        act_row.append(InlineKeyboardButton(f"💾 Save ({res['total_new']} New)", callback_data=f"am_save:{session_id}"))
+    act_row.append(InlineKeyboardButton("🔄 Rescan", callback_data=f"am_rescan:{session_id}"))
+    act_row.append(InlineKeyboardButton("❌ Cancel", callback_data=f"am_cancel:{session_id}"))
+    
+    if len(act_row) == 3:
+        buttons.append([act_row[0]])
+        buttons.append([act_row[1], act_row[2]])
+    else:
+        buttons.append(act_row)
+
+    return InlineKeyboardMarkup(buttons)
+
+def _build_auto_movie_qual_text(movie_data, lang):
+    rating_str = f"\n⭐ <b>Rating:</b> {movie_data['rating']}/10" if movie_data.get("rating") else ""
+    return (
+        f"🎬 <b>{movie_data['title']} ({movie_data['year']})</b>"
+        f"{rating_str}\n\n"
+        f"🌐 <b>Language:</b> {lang}\n\n"
+        f"🎞 <b>Select Quality:</b>"
+    )
+
+def _build_auto_movie_qual_keyboard(session_id, lang, qualities):
+    buttons = []
+    quality_order = ["2160p", "4K", "1440p", "1080p", "720p", "480p", "360p", "HDRip", "WEB-DL", "BluRay", "DVDRip", "HEVC", "Unknown"]
+    qualities_sorted = sorted(qualities, key=lambda x: (quality_order.index(x) if x in quality_order else 99, x))
+
+    for i in range(0, len(qualities_sorted), 2):
+        row = []
+        for q in qualities_sorted[i:i+2]:
+            row.append(InlineKeyboardButton(q, callback_data=f"am_qual:{session_id}:{lang}:{q}"))
+        buttons.append(row)
+
+    buttons.append([
+        InlineKeyboardButton("⬅️ Language", callback_data=f"am_back:{session_id}:lang"),
+        InlineKeyboardButton("❌ Cancel", callback_data=f"am_cancel:{session_id}")
+    ])
+    return InlineKeyboardMarkup(buttons)
+
+def _build_auto_movie_file_text(movie_data, lang, qual):
+    rating_str = f"\n⭐ <b>Rating:</b> {movie_data['rating']}/10" if movie_data.get("rating") else ""
+    return (
+        f"🎬 <b>{movie_data['title']} ({movie_data['year']})</b>"
+        f"{rating_str}\n\n"
+        f"🌐 <b>Language:</b> {lang}\n"
+        f"🎞 <b>Quality:</b> {qual}\n\n"
+        f"📁 <b>Select File to Download / Test:</b>"
+    )
+
+def _build_auto_movie_file_keyboard(session_id, lang, qual, files, page=0, pre="file"):
+    import math
+    PAGE_SIZE = 10
+    total_files = len(files)
+    total_pages = max(1, math.ceil(total_files / PAGE_SIZE))
+    page = max(0, min(page, total_pages - 1))
+
+    start_idx = page * PAGE_SIZE
+    end_idx = start_idx + PAGE_SIZE
+    current_page_files = files[start_idx:end_idx]
+
+    buttons = []
+    for f in current_page_files:
+        f_size = get_size(f.get("file_size", 0))
+        cleaned_fn = ' '.join(filter(lambda x: not x.startswith('[') and not x.startswith('@') and not x.startswith('www.') and not x.startswith('t.me'), f.get("file_name", "").split()))
+        buttons.append([
+            InlineKeyboardButton(
+                f"📥 [{f_size}] {cleaned_fn[:45]}",
+                callback_data=f"{pre}#{f['file_id']}"
+            )
+        ])
+
+    if total_pages > 1:
+        pag_row = []
+        if page > 0:
+            pag_row.append(InlineKeyboardButton("◀️ Prev", callback_data=f"am_page:{session_id}:{lang}:{qual}:{page-1}"))
+        pag_row.append(InlineKeyboardButton(f"{page+1}/{total_pages}", callback_data="pages"))
+        if page < total_pages - 1:
+            pag_row.append(InlineKeyboardButton("Next ▶️", callback_data=f"am_page:{session_id}:{lang}:{qual}:{page+1}"))
+        buttons.append(pag_row)
+
+    buttons.append([
+        InlineKeyboardButton("⬅️ Quality", callback_data=f"am_lang:{session_id}:{lang}"),
+        InlineKeyboardButton("⬅️ Language", callback_data=f"am_back:{session_id}:lang"),
+        InlineKeyboardButton("❌ Cancel", callback_data=f"am_cancel:{session_id}")
+    ])
+    return InlineKeyboardMarkup(buttons)
+
 
 
 
@@ -1490,9 +1678,12 @@ async def wizard_text_handler(client: Client, message: Message):
             info = None
             try:
                 info = await get_poster(imdb_id, id=True)
-                logger.info(f"[AUTO S ADD IMDb] id={imdb_id} status={'success' if info else 'failed'} title={info.get('title') if info else None}")
+                if info:
+                    logger.info(f"[AUTO_SERIES IMDb] id={imdb_id} title={info.get('title')} year={info.get('year')} kind={info.get('kind')}")
+                else:
+                    logger.warning(f"[AUTO_SERIES IMDb] id={imdb_id} status=failed")
             except Exception as e:
-                logger.error(f"[AUTO S ADD IMDb] id={imdb_id} error={e}")
+                logger.error(f"[AUTO_SERIES IMDb] id={imdb_id} error={e}")
                 info = None
 
             if not info or not info.get("title"):
@@ -1596,9 +1787,12 @@ async def wizard_text_handler(client: Client, message: Message):
             info = None
             try:
                 info = await get_poster(imdb_id, id=True)
-                logger.info(f"[AUTO MOVIE ADD IMDb] id={imdb_id} status={'success' if info else 'failed'} title={info.get('title') if info else None}")
+                if info:
+                    logger.info(f"[AUTO_MOVIE IMDb] id={imdb_id} title={info.get('title')} year={info.get('year')} kind={info.get('kind')}")
+                else:
+                    logger.warning(f"[AUTO_MOVIE IMDb] id={imdb_id} status=failed")
             except Exception as e:
-                logger.error(f"[AUTO MOVIE ADD IMDb] id={imdb_id} error={e}")
+                logger.error(f"[AUTO_MOVIE IMDb] id={imdb_id} error={e}")
                 info = None
 
             if not info or not info.get("title"):
@@ -1616,7 +1810,11 @@ async def wizard_text_handler(client: Client, message: Message):
                     parse_mode=enums.ParseMode.HTML,
                 )
 
+            import uuid
+            session_id = str(uuid.uuid4())[:8]
             movie_data.update({
+                "session_id": session_id,
+                "user_id": uid,
                 "state": "CONFIRM_IMDB",
                 "imdb_id": info.get("imdb_id", imdb_id),
                 "title": info["title"],
@@ -1625,6 +1823,7 @@ async def wizard_text_handler(client: Client, message: Message):
                 "rating": str(info.get("rating") or ""),
                 "description": info.get("plot", ""),
                 "poster": info.get("poster") or "",
+                "created_at": time.time(),
             })
 
             await loading_msg.edit_text(
@@ -1634,53 +1833,21 @@ async def wizard_text_handler(client: Client, message: Message):
 
             res = await scan_sdatabase_for_movie(movie_data["title"], movie_data["year"], client=client)
             movie_data["scan"] = res
+            movie_data["grouped"] = _group_auto_movie_files(res)
+            temp.AUTO_MOVIE[session_id] = movie_data
+            temp.AUTO_MOVIE[uid] = movie_data
 
-            rating_str = f"\n⭐ <b>Rating:</b> {movie_data['rating']}/10" if movie_data['rating'] else ""
-
-            if res["total_new"] == 0 and res["total_duplicates"] == 0:
-                text_res = (
-                    f"🎬 <b>Movie:</b> {movie_data['title']}\n"
-                    f"📅 <b>Year:</b> {movie_data['year']}\n"
-                    f"🎭 <b>Genre:</b> {movie_data['genre']}"
-                    f"{rating_str}\n\n"
-                    f"📊 <b>Scan Result</b>\n\n"
-                    f"⚠️ <b>No matching movie files found in SDatabase.</b>\n\n"
-                    f"📁 <b>Files scanned:</b> {res['total_scanned']}\n"
-                    f"✅ <b>Matching files:</b> {res['total_matched']}\n"
-                    f"➕ <b>New files:</b> {res['total_new']}\n"
-                    f"♻️ <b>Existing duplicates:</b> {res['total_duplicates']}\n"
-                    f"⚠️ <b>Unknown quality:</b> {res['total_unknown_quality']}"
-                )
+            if res["total_matched"] == 0:
+                text_res = _build_auto_movie_lang_text(movie_data)
                 markup = InlineKeyboardMarkup([
-                    [InlineKeyboardButton("🔄 Rescan", callback_data="sw#auto_movie_rescan")],
-                    [InlineKeyboardButton("❌ Cancel", callback_data="sw#auto_movie_cancel")]
+                    [InlineKeyboardButton("🔄 Rescan", callback_data=f"am_rescan:{session_id}")],
+                    [InlineKeyboardButton("❌ Cancel", callback_data=f"am_cancel:{session_id}")]
                 ])
                 await loading_msg.edit_text(text_res, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
                 return
 
-            langs_lines = []
-            for lang, quals in res["organized"].items():
-                langs_lines.append(f"• <b>{lang}:</b> {', '.join(quals)}")
-            langs_summary = "\n".join(langs_lines) if langs_lines else "None"
-
-            text_res = (
-                f"🎬 <b>Movie:</b> {movie_data['title']}\n"
-                f"📅 <b>Year:</b> {movie_data['year']}\n"
-                f"🎭 <b>Genre:</b> {movie_data['genre']}"
-                f"{rating_str}\n\n"
-                f"📊 <b>Scan Result</b>\n\n"
-                f"📁 <b>Files scanned:</b> {res['total_scanned']}\n"
-                f"✅ <b>Matching files:</b> {res['total_matched']}\n"
-                f"➕ <b>New files:</b> {res['total_new']}\n"
-                f"♻️ <b>Existing duplicates:</b> {res['total_duplicates']}\n"
-                f"⚠️ <b>Unknown quality:</b> {res['total_unknown_quality']}\n\n"
-                f"🌐 <b>Languages & Qualities:</b>\n{langs_summary}"
-            )
-            markup = InlineKeyboardMarkup([
-                [InlineKeyboardButton("💾 Save", callback_data="sw#auto_movie_save")],
-                [InlineKeyboardButton("🔄 Rescan", callback_data="sw#auto_movie_rescan")],
-                [InlineKeyboardButton("❌ Cancel", callback_data="sw#auto_movie_cancel")]
-            ])
+            text_res = _build_auto_movie_lang_text(movie_data)
+            markup = _build_auto_movie_lang_keyboard(session_id, movie_data)
             await loading_msg.edit_text(text_res, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
             try:
                 message.stop_propagation()
@@ -1943,16 +2110,12 @@ async def wizard_callback(client: Client, query: CallbackQuery):
 
         if res["total_matched"] == 0:
             text = (
-                f"📊 <b>AUTO SCAN RESULT</b>\n\n"
+                f"❌ <b>NO MATCHING SERIES EPISODES FOUND</b>\n\n"
                 f"🎬 <b>Series:</b> {auto_data['title']}\n"
                 f"📅 <b>Year:</b> {auto_data['year']}\n\n"
-                f"⚠️ <b>No matching files found in SDatabase.</b>\n\n"
                 f"📁 <b>Files scanned:</b> {res['total_scanned']}\n"
-                f"✅ <b>Matching files:</b> {res['total_matched']}\n"
-                f"➕ <b>New files:</b> {res['total_new']}\n"
-                f"♻️ <b>Existing duplicates:</b> {res['total_duplicates']}\n"
-                f"❌ <b>Invalid:</b> {res['total_invalid']}\n\n"
-                "Make sure files in SDatabase contain proper title and episode tags (e.g. <code>Reacher.S01E03.480p.WEB-HD.x264.mkv</code>)."
+                f"✅ <b>Matching files:</b> 0\n\n"
+                "<i>Make sure files in SDatabase contain proper title and episode tags (e.g. <code>Reacher.S01E03.480p.mkv</code>).</i>"
             )
             markup = InlineKeyboardMarkup([
                 [InlineKeyboardButton("🔄 Rescan", callback_data="sw#auto_rescan")],
@@ -1980,6 +2143,29 @@ async def wizard_callback(client: Client, query: CallbackQuery):
         langs_list = ", ".join(all_langs) if all_langs else "Unknown"
         quals_list = ", ".join(all_quals) if all_quals else "Unknown"
 
+        if res["total_matched"] > 0 and res["total_new"] == 0 and res["total_duplicates"] > 0:
+            text = (
+                f"⚠️ <b>ALL MATCHING EPISODES ALREADY EXIST</b>\n\n"
+                f"🎬 <b>Series:</b> {auto_data['title']}\n"
+                f"📅 <b>Year:</b> {auto_data['year']}\n"
+                f"📺 <b>Seasons Detected:</b> {seasons_str}\n\n"
+                f"📁 <b>Files scanned:</b> {res['total_scanned']}\n"
+                f"✅ <b>Matching files:</b> {res['total_matched']}\n"
+                f"♻️ <b>Already in database:</b> {res['total_duplicates']}\n"
+                f"🆕 <b>New files:</b> 0\n\n"
+                f"🌐 <b>Languages:</b> {langs_list}\n"
+                f"🎞 <b>Qualities:</b> {quals_list}\n\n"
+                f"🎞 <b>Qualities & Episodes:</b>\n{episodes_summary}\n\n"
+                f"ℹ️ <i>All matching episodes are already saved in the Series database.</i>"
+            )
+            markup = InlineKeyboardMarkup([
+                [InlineKeyboardButton("🔄 Rescan", callback_data="sw#auto_rescan")],
+                [InlineKeyboardButton("📺 Select Season", callback_data="sw#auto_sel_season")],
+                [InlineKeyboardButton("❌ Cancel", callback_data="sw#auto_cancel")]
+            ])
+            await query.message.edit_text(text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
+            return await query.answer(f"Scan complete: all {res['total_duplicates']} episodes already exist in database.")
+
         text = (
             f"📊 <b>AUTO SCAN RESULT</b>\n\n"
             f"🎬 <b>Series:</b> {auto_data['title']}\n"
@@ -1987,7 +2173,7 @@ async def wizard_callback(client: Client, query: CallbackQuery):
             f"📺 <b>Seasons Detected:</b> {seasons_str}\n\n"
             f"📁 <b>Files scanned:</b> {res['total_scanned']}\n"
             f"✅ <b>Matching files:</b> {res['total_matched']}\n"
-            f"➕ <b>New files:</b> {res['total_new']}\n"
+            f"🆕 <b>New files:</b> {res['total_new']}\n"
             f"♻️ <b>Existing duplicates:</b> {res['total_duplicates']}\n"
             f"❌ <b>Invalid:</b> {res['total_invalid']}\n\n"
             f"🌐 <b>Languages:</b> {langs_list}\n"
@@ -1995,7 +2181,7 @@ async def wizard_callback(client: Client, query: CallbackQuery):
             f"🎞 <b>Qualities & Episodes:</b>\n{episodes_summary}"
         )
         markup = InlineKeyboardMarkup([
-            [InlineKeyboardButton("💾 Save Series", callback_data="sw#auto_save")],
+            [InlineKeyboardButton(f"💾 Save Series ({res['total_new']} New)", callback_data="sw#auto_save")],
             [InlineKeyboardButton("🔄 Rescan", callback_data="sw#auto_rescan")],
             [InlineKeyboardButton("❌ Cancel", callback_data="sw#auto_cancel")]
         ])
@@ -2046,18 +2232,13 @@ async def wizard_callback(client: Client, query: CallbackQuery):
 
         if res["total_matched"] == 0:
             text = (
-                f"📊 <b>AUTO SCAN RESULT</b>\n\n"
+                f"❌ <b>NO MATCHING SERIES EPISODES FOUND</b>\n\n"
                 f"🎬 <b>Series:</b> {auto_data['title']}\n"
                 f"📅 <b>Year:</b> {auto_data['year']}\n"
                 f"📺 <b>Season:</b> {season_num}\n\n"
-                f"⚠️ <b>No matching files found in SDatabase for Season {season_num}.</b>\n\n"
                 f"📁 <b>Files scanned:</b> {res['total_scanned']}\n"
-                f"✅ <b>Matching files:</b> {res['total_matched']}\n"
-                f"➕ <b>New files:</b> {res['total_new']}\n"
-                f"♻️ <b>Existing duplicates:</b> {res['total_duplicates']}\n"
-                f"⏭ <b>Other season:</b> {res['total_other_season']}\n"
-                f"❌ <b>Invalid:</b> {res['total_invalid']}\n\n"
-                "Make sure files in SDatabase contain proper title and episode tags (e.g. <code>Reacher.S01E03.480p.WEB-HD.x264.mkv</code>)."
+                f"✅ <b>Matching files:</b> 0\n\n"
+                f"<i>Make sure files in SDatabase contain proper title and Season {season_num} tags.</i>"
             )
             markup = InlineKeyboardMarkup([
                 [InlineKeyboardButton("🔄 Rescan", callback_data="sw#auto_rescan")],
@@ -2080,6 +2261,29 @@ async def wizard_callback(client: Client, query: CallbackQuery):
         langs_list = ", ".join(all_langs) if all_langs else "Unknown"
         quals_list = ", ".join(all_quals) if all_quals else "Unknown"
 
+        if res["total_matched"] > 0 and res["total_new"] == 0 and res["total_duplicates"] > 0:
+            text = (
+                f"⚠️ <b>ALL MATCHING EPISODES ALREADY EXIST</b>\n\n"
+                f"🎬 <b>Series:</b> {auto_data['title']}\n"
+                f"📅 <b>Year:</b> {auto_data['year']}\n"
+                f"📺 <b>Season:</b> {season_num}\n\n"
+                f"📁 <b>Files scanned:</b> {res['total_scanned']}\n"
+                f"✅ <b>Matching files:</b> {res['total_matched']}\n"
+                f"♻️ <b>Already in database:</b> {res['total_duplicates']}\n"
+                f"🆕 <b>New files:</b> 0\n\n"
+                f"🌐 <b>Languages:</b> {langs_list}\n"
+                f"🎞 <b>Qualities:</b> {quals_list}\n\n"
+                f"🎞 <b>Qualities & Episodes:</b>\n{episodes_summary}\n\n"
+                f"ℹ️ <i>All matching episodes are already saved in the Series database.</i>"
+            )
+            markup = InlineKeyboardMarkup([
+                [InlineKeyboardButton("🔄 Rescan", callback_data="sw#auto_rescan")],
+                [InlineKeyboardButton("📺 Change Season", callback_data="sw#auto_sel_season")],
+                [InlineKeyboardButton("❌ Cancel", callback_data="sw#auto_cancel")]
+            ])
+            await query.message.edit_text(text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
+            return await query.answer(f"Scan complete: all {res['total_duplicates']} episodes already exist in database.")
+
         text = (
             f"📊 <b>AUTO SCAN RESULT</b>\n\n"
             f"🎬 <b>Series:</b> {auto_data['title']}\n"
@@ -2087,7 +2291,7 @@ async def wizard_callback(client: Client, query: CallbackQuery):
             f"📺 <b>Season:</b> {season_num}\n\n"
             f"📁 <b>Files scanned:</b> {res['total_scanned']}\n"
             f"✅ <b>Matching files:</b> {res['total_matched']}\n"
-            f"➕ <b>New files:</b> {res['total_new']}\n"
+            f"🆕 <b>New files:</b> {res['total_new']}\n"
             f"♻️ <b>Existing duplicates:</b> {res['total_duplicates']}\n"
             f"⏭ <b>Other season:</b> {res['total_other_season']}\n"
             f"❌ <b>Invalid:</b> {res['total_invalid']}\n\n"
@@ -2096,7 +2300,7 @@ async def wizard_callback(client: Client, query: CallbackQuery):
             f"🎞 <b>Qualities & Episodes:</b>\n{episodes_summary}"
         )
         markup = InlineKeyboardMarkup([
-            [InlineKeyboardButton("💾 Save Series", callback_data="sw#auto_save")],
+            [InlineKeyboardButton(f"💾 Save Series ({res['total_new']} New)", callback_data="sw#auto_save")],
             [InlineKeyboardButton("🔄 Rescan", callback_data="sw#auto_rescan")],
             [InlineKeyboardButton("❌ Cancel", callback_data="sw#auto_cancel")]
         ])
@@ -2126,17 +2330,13 @@ async def wizard_callback(client: Client, query: CallbackQuery):
 
         if res["total_matched"] == 0:
             text = (
-                f"📊 <b>AUTO SCAN RESULT</b>\n\n"
+                f"❌ <b>NO MATCHING SERIES EPISODES FOUND</b>\n\n"
                 f"🎬 <b>Series:</b> {auto_data['title']}\n"
                 f"📅 <b>Year:</b> {auto_data['year']}\n"
                 f"📺 <b>Target:</b> {scan_label}\n\n"
-                f"⚠️ <b>No matching files found in SDatabase.</b>\n\n"
                 f"📁 <b>Files scanned:</b> {res['total_scanned']}\n"
-                f"✅ <b>Matching files:</b> {res['total_matched']}\n"
-                f"➕ <b>New files:</b> {res['total_new']}\n"
-                f"♻️ <b>Existing duplicates:</b> {res['total_duplicates']}\n"
-                f"⏭ <b>Other season:</b> {res['total_other_season']}\n"
-                f"❌ <b>Invalid:</b> {res['total_invalid']}"
+                f"✅ <b>Matching files:</b> 0\n\n"
+                "<i>Make sure files in SDatabase contain proper title and episode tags.</i>"
             )
             markup = InlineKeyboardMarkup([
                 [InlineKeyboardButton("🔄 Rescan", callback_data="sw#auto_rescan")],
@@ -2178,6 +2378,29 @@ async def wizard_callback(client: Client, query: CallbackQuery):
             quals_list = ", ".join(all_quals) if all_quals else "Unknown"
             season_display = f"📺 <b>Season:</b> {season_num}"
 
+        if res["total_matched"] > 0 and res["total_new"] == 0 and res["total_duplicates"] > 0:
+            text = (
+                f"⚠️ <b>ALL MATCHING EPISODES ALREADY EXIST</b>\n\n"
+                f"🎬 <b>Series:</b> {auto_data['title']}\n"
+                f"📅 <b>Year:</b> {auto_data['year']}\n"
+                f"{season_display}\n\n"
+                f"📁 <b>Files scanned:</b> {res['total_scanned']}\n"
+                f"✅ <b>Matching files:</b> {res['total_matched']}\n"
+                f"♻️ <b>Already in database:</b> {res['total_duplicates']}\n"
+                f"🆕 <b>New files:</b> 0\n\n"
+                f"🌐 <b>Languages:</b> {langs_list}\n"
+                f"🎞 <b>Qualities:</b> {quals_list}\n\n"
+                f"🎞 <b>Qualities & Episodes:</b>\n{episodes_summary}\n\n"
+                f"ℹ️ <i>All matching episodes are already saved in the Series database.</i>"
+            )
+            markup = InlineKeyboardMarkup([
+                [InlineKeyboardButton("🔄 Rescan", callback_data="sw#auto_rescan")],
+                [InlineKeyboardButton("📺 Change Season", callback_data="sw#auto_sel_season")],
+                [InlineKeyboardButton("❌ Cancel", callback_data="sw#auto_cancel")]
+            ])
+            await query.message.edit_text(text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
+            return await query.answer(f"Rescan complete: all {res['total_duplicates']} episodes already exist in database.")
+
         text = (
             f"📊 <b>AUTO SCAN RESULT</b>\n\n"
             f"🎬 <b>Series:</b> {auto_data['title']}\n"
@@ -2185,7 +2408,7 @@ async def wizard_callback(client: Client, query: CallbackQuery):
             f"{season_display}\n\n"
             f"📁 <b>Files scanned:</b> {res['total_scanned']}\n"
             f"✅ <b>Matching files:</b> {res['total_matched']}\n"
-            f"➕ <b>New files:</b> {res['total_new']}\n"
+            f"🆕 <b>New files:</b> {res['total_new']}\n"
             f"♻️ <b>Existing duplicates:</b> {res['total_duplicates']}\n"
             f"⏭ <b>Other season:</b> {res['total_other_season']}\n"
             f"❌ <b>Invalid:</b> {res['total_invalid']}\n\n"
@@ -2194,7 +2417,7 @@ async def wizard_callback(client: Client, query: CallbackQuery):
             f"🎞 <b>Qualities & Episodes:</b>\n{episodes_summary}"
         )
         markup = InlineKeyboardMarkup([
-            [InlineKeyboardButton("💾 Save Series", callback_data="sw#auto_save")],
+            [InlineKeyboardButton(f"💾 Save Series ({res['total_new']} New)", callback_data="sw#auto_save")],
             [InlineKeyboardButton("🔄 Rescan", callback_data="sw#auto_rescan")],
             [InlineKeyboardButton("❌ Cancel", callback_data="sw#auto_cancel")]
         ])
@@ -2228,7 +2451,7 @@ async def wizard_callback(client: Client, query: CallbackQuery):
         detected_seasons = sorted(list(set(f["season"] for f in valid_files)))
         detected_quals = sorted(list(set(f["quality"] for f in valid_files)))
 
-        logger.info(f"[AUTO_MOVE_ADD] save_start series={auto_data['title']} user_id={uid} new={total_new} duplicate={total_duplicates}")
+        logger.info(f"[AUTO_SERIES SAVE] series={auto_data['title']} user_id={uid} new={total_new} duplicate={total_duplicates}")
 
         try:
             if not existing_series_id:
@@ -2286,8 +2509,7 @@ async def wizard_callback(client: Client, query: CallbackQuery):
                     first_f["episode"],
                     first_f["quality"]
                 )
-                logger.info(f"[AUTO_SERIES_ADD] verified persistence series_id={series_id} saved_sample_count={len(saved_check)}")
-
+                logger.info(f"[AUTO_SERIES SAVE] verified persistence series_id={series_id} saved_sample_count={len(saved_check)}")
 
             if is_skip:
                 ep_lines = []
@@ -2325,7 +2547,7 @@ async def wizard_callback(client: Client, query: CallbackQuery):
             if not existing_series_id:
                 asyncio.create_task(send_series_announcement(client, series_id))
 
-            logger.info(f"[AUTO_MOVE_ADD] save_success series={auto_data['title']} files_added={added_count}")
+            logger.info(f"[AUTO_SERIES SAVE] series={auto_data['title']} season={season_display} episodes_added={added_count} duplicates={total_duplicates}")
 
             success_text = (
                 f"✅ <b>AUTO SERIES ADD COMPLETED</b>\n\n"
@@ -2356,8 +2578,9 @@ async def wizard_callback(client: Client, query: CallbackQuery):
         return await query.answer("Cancelled.")
 
     # ── Auto Movie Add Callbacks ─────────────────────────────────────────────
-    if action == "auto_movie_rescan":
-        movie_data = temp.AUTO_MOVIE.get(uid)
+    if action == "auto_movie_rescan" or action.startswith("am_rescan"):
+        session_id = action.split(":")[1] if ":" in action else uid
+        movie_data = temp.AUTO_MOVIE.get(session_id) or temp.AUTO_MOVIE.get(uid)
         if not movie_data:
             return await query.answer("Session expired. Send /automovieadd to start again.", show_alert=True)
 
@@ -2368,63 +2591,16 @@ async def wizard_callback(client: Client, query: CallbackQuery):
 
         res = await scan_sdatabase_for_movie(movie_data["title"], movie_data["year"], client=client)
         movie_data["scan"] = res
+        movie_data["grouped"] = _group_auto_movie_files(res)
 
-        rating_str = f"\n⭐ <b>Rating:</b> {movie_data['rating']}/10" if movie_data.get("rating") else ""
-
-        if res["total_matched"] == 0:
-            text_res = (
-                f"🎬 <b>Movie:</b> {movie_data['title']}\n"
-                f"📅 <b>Year:</b> {movie_data['year']}\n"
-                f"🎭 <b>Genre:</b> {movie_data['genre']}"
-                f"{rating_str}\n\n"
-                f"📊 <b>Scan Result</b>\n\n"
-                f"⚠️ <b>No matching movie files found in SDatabase.</b>\n\n"
-                f"📁 <b>Files scanned:</b> {res['total_scanned']}\n"
-                f"✅ <b>Matching files:</b> {res['total_matched']}\n"
-                f"➕ <b>New files:</b> {res['total_new']}\n"
-                f"♻️ <b>Existing duplicates:</b> {res['total_duplicates']}\n"
-                f"⚠️ <b>Unknown quality:</b> {res['total_unknown_quality']}"
-            )
-            markup = InlineKeyboardMarkup([
-                [InlineKeyboardButton("🔄 Rescan", callback_data="sw#auto_movie_rescan")],
-                [InlineKeyboardButton("❌ Cancel", callback_data="sw#auto_movie_cancel")]
-            ])
-            await query.message.edit_text(text_res, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
-            return await query.answer("Rescan complete: 0 matching files found.")
-
-        langs_lines = []
-        for lang, quals in res["organized"].items():
-            langs_lines.append(f"• <b>{lang}:</b> {', '.join(quals)}")
-        langs_summary = "\n".join(langs_lines) if langs_lines else "None"
-
-        match_list = res.get("all_matching_files") or res.get("valid_files") or []
-        all_quals = sorted(list(set(f["quality"] for f in match_list)))
-        quals_list = ", ".join(all_quals) if all_quals else "Unknown"
-
-        text_res = (
-            f"🎬 <b>Movie:</b> {movie_data['title']}\n"
-            f"📅 <b>Year:</b> {movie_data['year']}\n"
-            f"🎭 <b>Genre:</b> {movie_data['genre']}"
-            f"{rating_str}\n\n"
-            f"📊 <b>Scan Result</b>\n\n"
-            f"📁 <b>Files scanned:</b> {res['total_scanned']}\n"
-            f"✅ <b>Matching files:</b> {res['total_matched']}\n"
-            f"➕ <b>New files:</b> {res['total_new']}\n"
-            f"♻️ <b>Existing duplicates:</b> {res['total_duplicates']}\n"
-            f"⚠️ <b>Unknown quality:</b> {res['total_unknown_quality']}\n\n"
-            f"🌐 <b>Languages:</b>\n{langs_summary}\n"
-            f"🎞 <b>Qualities:</b> {quals_list}"
-        )
-        markup = InlineKeyboardMarkup([
-            [InlineKeyboardButton("💾 Save", callback_data="sw#auto_movie_save")],
-            [InlineKeyboardButton("🔄 Rescan", callback_data="sw#auto_movie_rescan")],
-            [InlineKeyboardButton("❌ Cancel", callback_data="sw#auto_movie_cancel")]
-        ])
+        text_res = _build_auto_movie_lang_text(movie_data)
+        markup = _build_auto_movie_lang_keyboard(session_id, movie_data)
         await query.message.edit_text(text_res, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
-        return await query.answer(f"Rescan complete: {res['total_new']} new files ready to import!")
+        return await query.answer(f"Rescan complete: {res['total_new']} new files ready to save.")
 
-    if action == "auto_movie_save":
-        movie_data = temp.AUTO_MOVIE.get(uid)
+    if action == "auto_movie_save" or action.startswith("am_save"):
+        session_id = action.split(":")[1] if ":" in action else uid
+        movie_data = temp.AUTO_MOVIE.get(session_id) or temp.AUTO_MOVIE.get(uid)
         if not movie_data or "scan" not in movie_data:
             return await query.answer("⚠️ Session expired. Send /automovieadd to start again.", show_alert=True)
 
@@ -2443,9 +2619,9 @@ async def wizard_callback(client: Client, query: CallbackQuery):
         if not valid_files:
             return await query.answer("⚠️ No new files to save.", show_alert=True)
 
-        from database.ia_filterdb import col, sec_col, MULTIPLE_DATABASE, clean_file_name
+        from database.ia_filterdb import col, sec_col, MULTIPLE_DATABASE, clean_file_name, is_file_already_saved
 
-        logger.info(f"[AUTO_MOVE_ADD] save_start movie={movie_data['title']} user_id={uid} new={total_new} duplicate={total_duplicates}")
+        logger.info(f"[AUTO_MOVIE SAVE] movie={movie_data['title']} user_id={uid} new={total_new} duplicate={total_duplicates}")
 
         try:
             added_count = 0
@@ -2453,6 +2629,11 @@ async def wizard_callback(client: Client, query: CallbackQuery):
             for f in valid_files:
                 file_id = f.get("file_id")
                 file_name = clean_file_name(f.get("file_name"))
+
+                if is_file_already_saved(file_id, file_name):
+                    dup_count += 1
+                    continue
+
                 file_doc = {
                     'file_id': file_id,
                     'file_name': file_name,
@@ -2472,17 +2653,18 @@ async def wizard_callback(client: Client, query: CallbackQuery):
                     else:
                         dup_count += 1
 
-            if uid in temp.AUTO_MOVIE:
-                del temp.AUTO_MOVIE[uid]
+            temp.AUTO_MOVIE.pop(session_id, None)
+            temp.AUTO_MOVIE.pop(uid, None)
 
-            logger.info(f"[AUTO_MOVE_ADD] save_success movie={movie_data['title']} files_added={added_count} duplicates_skipped={dup_count}")
+            logger.info(f"[AUTO_MOVIE SAVE] movie={movie_data['title']} added={added_count} duplicate={dup_count}")
 
             success_text = (
                 f"✅ <b>AUTO MOVIE ADD COMPLETED</b>\n\n"
                 f"🎬 <b>{movie_data['title']}</b>\n"
                 f"📅 <b>Year:</b> {movie_data['year']}\n\n"
                 f"📁 <b>Files Added:</b> {added_count}\n"
-                f"♻️ <b>Duplicates Skipped:</b> {dup_count}"
+                f"♻️ <b>Duplicates Skipped:</b> {dup_count}\n\n"
+                f"<i>All files are now indexed and available in the normal movie filter.</i>"
             )
             markup = InlineKeyboardMarkup([
                 [InlineKeyboardButton("🔎 Search Movie", switch_inline_query_current_chat=movie_data['title'])],
@@ -2491,21 +2673,154 @@ async def wizard_callback(client: Client, query: CallbackQuery):
             await query.message.edit_text(success_text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
             return await query.answer("🎉 Movie files saved successfully!")
         except Exception as e:
-            logger.error(f"[AUTO_MOVE_ADD] save_error movie={movie_data['title']} error={e}")
+            logger.error(f"[AUTO_MOVIE SAVE] movie={movie_data['title']} error={e}")
             return await query.answer(f"❌ Error while saving: {e}", show_alert=True)
 
-    if action == "auto_movie_cancel":
-        if hasattr(temp, "AUTO_MOVIE") and uid in temp.AUTO_MOVIE:
-            del temp.AUTO_MOVIE[uid]
+    if action == "auto_movie_cancel" or action.startswith("am_cancel"):
+        session_id = action.split(":")[1] if ":" in action else uid
+        temp.AUTO_MOVIE.pop(session_id, None)
+        temp.AUTO_MOVIE.pop(uid, None)
         await query.message.edit_text("❌ <b>Auto Movie Add cancelled.</b>", parse_mode=enums.ParseMode.HTML)
         return await query.answer("Cancelled.")
 
-    if action == "auto_close":
+    if action == "auto_close" or action == "am_close":
         try:
             await query.message.delete()
         except Exception:
             pass
         return await query.answer()
+
+
+@Client.on_callback_query(filters.regex(r"^am_"))
+async def auto_movie_hierarchical_callbacks(client: Client, query: CallbackQuery):
+    data = query.data
+    parts = data.split(":")
+    action = parts[0]
+    session_id = parts[1] if len(parts) > 1 else ""
+
+    movie_data = getattr(temp, "AUTO_MOVIE", {}).get(session_id)
+    if not movie_data:
+        movie_data = getattr(temp, "AUTO_MOVIE", {}).get(query.from_user.id)
+
+    if not movie_data:
+        return await query.answer("⚠️ Session expired. Please send IMDb link again.", show_alert=True)
+
+    uid = movie_data.get("user_id", query.from_user.id)
+    if query.from_user.id != uid and not _is_admin(query.from_user.id):
+        return await query.answer("⚠️ This is not your session.", show_alert=True)
+
+    if action == "am_lang":
+        lang = parts[2] if len(parts) > 2 else ""
+        qualities = list(movie_data.get("grouped", {}).get(lang, {}).keys())
+        if not qualities:
+            return await query.answer("❌ No qualities available for this language.", show_alert=True)
+        text = _build_auto_movie_qual_text(movie_data, lang)
+        markup = _build_auto_movie_qual_keyboard(session_id, lang, qualities)
+        await query.message.edit_text(text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
+        return await query.answer()
+
+    elif action == "am_qual":
+        lang = parts[2] if len(parts) > 2 else ""
+        qual = parts[3] if len(parts) > 3 else ""
+        files = movie_data.get("grouped", {}).get(lang, {}).get(qual, [])
+        if not files:
+            return await query.answer("❌ No files available for this quality.", show_alert=True)
+        text = _build_auto_movie_file_text(movie_data, lang, qual)
+        markup = _build_auto_movie_file_keyboard(session_id, lang, qual, files, page=0)
+        await query.message.edit_text(text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
+        return await query.answer()
+
+    elif action == "am_page":
+        lang = parts[2] if len(parts) > 2 else ""
+        qual = parts[3] if len(parts) > 3 else ""
+        page = int(parts[4]) if len(parts) > 4 and parts[4].isdigit() else 0
+        files = movie_data.get("grouped", {}).get(lang, {}).get(qual, [])
+        markup = _build_auto_movie_file_keyboard(session_id, lang, qual, files, page=page)
+        await query.message.edit_reply_markup(reply_markup=markup)
+        return await query.answer()
+
+    elif action == "am_back":
+        target = parts[2] if len(parts) > 2 else "lang"
+        if target == "lang":
+            text = _build_auto_movie_lang_text(movie_data)
+            markup = _build_auto_movie_lang_keyboard(session_id, movie_data)
+            await query.message.edit_text(text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
+            return await query.answer()
+
+    elif action == "am_cancel":
+        temp.AUTO_MOVIE.pop(session_id, None)
+        temp.AUTO_MOVIE.pop(uid, None)
+        await query.message.edit_text("❌ <b>Auto Movie Add cancelled.</b>", parse_mode=enums.ParseMode.HTML)
+        return await query.answer("Cancelled.")
+
+    elif action == "am_save":
+        res = movie_data.get("scan", {})
+        valid_new = res.get("valid_new_files", [])
+        if not valid_new:
+            return await query.answer("⚠️ No new files to save.", show_alert=True)
+
+        await query.message.edit_text(
+            f"💾 <b>Saving {len(valid_new)} movie files for {movie_data['title']}...</b>",
+            parse_mode=enums.ParseMode.HTML
+        )
+
+        from database.ia_filterdb import col, sec_col, MULTIPLE_DATABASE, clean_file_name, is_file_already_saved
+        added_count = 0
+        dup_count = 0
+        for f in valid_new:
+            fid = f.get("file_id")
+            fname = clean_file_name(f.get("file_name"))
+
+            if is_file_already_saved(fid, fname):
+                dup_count += 1
+                continue
+
+            file_doc = {
+                'file_id': fid,
+                'file_name': fname,
+                'file_size': f.get("file_size", 0),
+                'caption': f.get("caption")
+            }
+            try:
+                col.insert_one(file_doc)
+                if MULTIPLE_DATABASE:
+                    sec_col.insert_one(file_doc)
+                added_count += 1
+            except Exception as e:
+                logger.error(f"[AUTO_MOVIE SAVE ERROR] file_id={fid} error={e}")
+
+        temp.AUTO_MOVIE.pop(session_id, None)
+        temp.AUTO_MOVIE.pop(uid, None)
+
+        logger.info(f"[AUTO_MOVIE SAVE] movie={movie_data['title']} added={added_count} duplicate={dup_count}")
+
+        success_text = (
+            f"✅ <b>AUTO MOVIE ADD COMPLETED</b>\n\n"
+            f"🎬 <b>{movie_data['title']}</b>\n"
+            f"📅 <b>Year:</b> {movie_data['year']}\n\n"
+            f"📁 <b>Files Added:</b> {added_count}\n"
+            f"♻️ <b>Duplicates Skipped:</b> {dup_count}\n\n"
+            f"<i>All files are now indexed and available in the normal movie filter.</i>"
+        )
+        markup = InlineKeyboardMarkup([
+            [InlineKeyboardButton("🔎 Search Movie", switch_inline_query_current_chat=movie_data['title'])],
+            [InlineKeyboardButton("🏠 Close", callback_data="sw#auto_close")]
+        ])
+        await query.message.edit_text(success_text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
+        return await query.answer("🎉 Movie files saved successfully!")
+
+    elif action == "am_rescan":
+        await query.message.edit_text(
+            f"🔄 <b>Rescanning SDatabase for {movie_data['title']} ({movie_data['year']})...</b>",
+            parse_mode=enums.ParseMode.HTML
+        )
+        res = await scan_sdatabase_for_movie(movie_data["title"], movie_data["year"], client=client)
+        movie_data["scan"] = res
+        movie_data["grouped"] = _group_auto_movie_files(res)
+        text = _build_auto_movie_lang_text(movie_data)
+        markup = _build_auto_movie_lang_keyboard(session_id, movie_data)
+        await query.message.edit_text(text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
+        return await query.answer("Rescan complete.")
 
     if uid not in temp.SERIES_WIZARD:
         return await query.answer("No active wizard. Run /series first.", show_alert=True)
