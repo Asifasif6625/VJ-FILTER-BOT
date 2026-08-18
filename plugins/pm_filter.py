@@ -88,7 +88,12 @@ def is_button_owner(query: CallbackQuery, key: str) -> tuple[bool, str | None]:
             return False, "⚠️ This is not your button."
 
     # 5. Fail-closed if context expired or missing
-    if key not in FRESH and key not in temp.GETALL:
+    has_state = (
+        key in FRESH or 
+        key in temp.GETALL or 
+        (hasattr(temp, "MOVIE_STATE") and key in temp.MOVIE_STATE)
+    )
+    if not has_state:
         logger.info(
             f"[PM MOVIE OWNERSHIP]\n"
             f"callback_user_id={click_user}\n"
@@ -229,7 +234,346 @@ async def not_in_db_reason_alert(bot, query):
         "this mosve not availabe database",
         show_alert=True
     )
+# ─── Movie Filter Hierarchical Flow Helpers & Handlers ───────────────────────
+LANGUAGE_FLAGS = {
+    "Malayalam": "🇲🇾",
+    "English": "🇬🇧",
+    "Hindi": "🇮🇳",
+    "Tamil": "🇮🇳",
+    "Telugu": "🇮🇳",
+    "Kannada": "🇮🇳",
+    "Bengali": "🇮🇳",
+    "Marathi": "🇮🇳",
+    "Dual Audio": "🎙",
+    "Multi Audio": "🎧",
+    "German": "🇩🇪",
+    "Korean": "🇰🇷",
+    "Japanese": "🇯🇵",
+    "Spanish": "🇪🇸",
+    "French": "🇫🇷",
+    "Arabic": "🇸🇦",
+    "Russian": "🇷🇺",
+    "Chinese": "🇨🇳",
+    "Italian": "🇮🇹",
+    "Portuguese": "🇵🇹",
+    "Turkish": "🇹🇷",
+    "Thai": "🇹🇭",
+}
+
+def detect_file_languages(filename: str, caption: str = None) -> list:
+    from plugins.series import AUTO_LANGUAGE_MAP
+    raw = str(filename or "") + " " + str(caption or "")
+    raw = re.sub(r"\.(mkv|mp4|avi|mov|wmv|flv|webm|m4v|ts)$", "", raw, flags=re.I)
+    cleaned = ' '.join(filter(lambda x: not x.startswith('@') and not x.startswith('http') and not x.startswith('www.') and not x.startswith('t.me'), raw.split()))
     
+    f_words = re.split(r"[\s._\-\[\]\(\)\{\}\+]+", cleaned.lower())
+    detected = []
+    
+    if ("dual" in f_words and "audio" in f_words) or "dual" in f_words:
+        detected.append("Dual Audio")
+    if ("multi" in f_words and "audio" in f_words) or "multi" in f_words:
+        detected.append("Multi Audio")
+        
+    for w in f_words:
+        if w in AUTO_LANGUAGE_MAP:
+            lang = AUTO_LANGUAGE_MAP[w]
+            if lang not in detected:
+                detected.append(lang)
+                
+    if not detected:
+        detected.append("English")
+        
+    return detected
+
+def parse_movie_file_info(file_doc):
+    from plugins.series import extract_quality_from_filename
+    fname = file_doc.get("file_name", "")
+    quality = extract_quality_from_filename(fname)
+    langs = detect_file_languages(fname, file_doc.get("caption"))
+    primary_lang = langs[0] if langs else "English"
+    return primary_lang, quality
+
+def get_movie_languages(files):
+    langs = set()
+    for f in files:
+        flangs = detect_file_languages(f.get("file_name", ""), f.get("caption"))
+        for l in flangs:
+            langs.add(l)
+    preferred_order = ["Malayalam", "Tamil", "Hindi", "Telugu", "Kannada", "English", "Dual Audio", "Multi Audio"]
+    return sorted(list(langs), key=lambda x: (preferred_order.index(x) if x in preferred_order else 99, x))
+
+def get_movie_qualities(files, target_lang=None):
+    from plugins.series import extract_quality_from_filename
+    quals = set()
+    for f in files:
+        if target_lang:
+            flangs = detect_file_languages(f.get("file_name", ""), f.get("caption"))
+            if target_lang not in flangs:
+                continue
+        q = extract_quality_from_filename(f.get("file_name", ""))
+        quals.add(q)
+    quality_order = ["2160p", "4K", "1440p", "1080p", "720p", "480p", "360p", "HDRip", "WEB-DL", "BluRay", "DVDRip", "HEVC", "Unknown"]
+    return sorted(list(quals), key=lambda x: (quality_order.index(x) if x in quality_order else 99, x))
+
+def group_movie_files(files):
+    from plugins.series import extract_quality_from_filename
+    grouped = {}
+    for f in files:
+        fname = f.get("file_name", "")
+        fqual = extract_quality_from_filename(fname)
+        flangs = detect_file_languages(fname, f.get("caption"))
+        for lang in flangs:
+            if lang not in grouped:
+                grouped[lang] = {}
+            if fqual not in grouped[lang]:
+                grouped[lang][fqual] = []
+            if not any(x.get("file_id") == f.get("file_id") for x in grouped[lang][fqual]):
+                grouped[lang][fqual].append(f)
+    return grouped
+
+def build_movie_language_keyboard(key, grouped_data):
+    buttons = []
+    langs = list(grouped_data.keys())
+    preferred_order = ["Malayalam", "Tamil", "Hindi", "Telugu", "Kannada", "English", "Dual Audio", "Multi Audio"]
+    langs.sort(key=lambda x: (preferred_order.index(x) if x in preferred_order else 99, x))
+    
+    for i in range(0, len(langs), 2):
+        row = []
+        for l in langs[i:i+2]:
+            flag = LANGUAGE_FLAGS.get(l, "🌐")
+            count = sum(len(flist) for flist in grouped_data[l].values())
+            row.append(InlineKeyboardButton(f"{flag} {l} ({count})", callback_data=f"movie_lang#{key}#{l}"))
+        buttons.append(row)
+    buttons.append([InlineKeyboardButton("🔴 Close", callback_data=f"mvclose#{key}")])
+    return InlineKeyboardMarkup(buttons)
+
+def build_movie_quality_keyboard(key, lang, qualities_dict):
+    buttons = []
+    quality_order = ["2160p", "4K", "1440p", "1080p", "720p", "480p", "360p", "HDRip", "WEB-DL", "BluRay", "DVDRip", "HEVC", "Unknown"]
+    qualities_sorted = sorted(list(qualities_dict.keys()), key=lambda x: (quality_order.index(x) if x in quality_order else 99, x))
+    
+    for i in range(0, len(qualities_sorted), 2):
+        row = []
+        for q in qualities_sorted[i:i+2]:
+            count = len(qualities_dict[q])
+            row.append(InlineKeyboardButton(f"{q} ({count})", callback_data=f"movie_quality#{key}#{lang}#{q}"))
+        buttons.append(row)
+    buttons.append([InlineKeyboardButton("⬅️ Back", callback_data=f"mvback#{key}#langs")])
+    return InlineKeyboardMarkup(buttons)
+
+def build_movie_file_keyboard(key, lang, qual, files, page=0, pre="file"):
+    PAGE_SIZE = 10
+    total_files = len(files)
+    total_pages = max(1, math.ceil(total_files / PAGE_SIZE))
+    page = max(0, min(page, total_pages - 1))
+    
+    start_idx = page * PAGE_SIZE
+    end_idx = start_idx + PAGE_SIZE
+    current_page_files = files[start_idx:end_idx]
+    
+    buttons = []
+    for f in current_page_files:
+        f_size = get_size(f.get("file_size", 0))
+        cleaned_fn = ' '.join(filter(lambda x: not x.startswith('[') and not x.startswith('@') and not x.startswith('www.') and not x.startswith('t.me'), f.get("file_name", "").split()))
+        buttons.append([
+            InlineKeyboardButton(
+                f"📁 [{f_size}] {cleaned_fn[:45]}",
+                callback_data=f"{pre}#{f['file_id']}"
+            )
+        ])
+        
+    if total_pages > 1:
+        pag_row = []
+        if page > 0:
+            pag_row.append(InlineKeyboardButton("◀️ Prev", callback_data=f"movie_files#{key}#{lang}#{qual}#{page-1}"))
+        pag_row.append(InlineKeyboardButton(f"{page+1}/{total_pages}", callback_data="pages"))
+        if page < total_pages - 1:
+            pag_row.append(InlineKeyboardButton("Next ▶️", callback_data=f"movie_files#{key}#{lang}#{qual}#{page+1}"))
+        buttons.append(pag_row)
+        
+    buttons.append([
+        InlineKeyboardButton("⬅️ Quality", callback_data=f"movie_lang#{key}#{lang}"),
+        InlineKeyboardButton("⬅️ Language", callback_data=f"mvback#{key}#langs")
+    ])
+    return InlineKeyboardMarkup(buttons)
+
+
+@Client.on_callback_query(filters.regex(r"^(mvlang#|movie_lang#)"))
+async def movie_lang_callback(client: Client, query: CallbackQuery):
+    parts = query.data.split("#")
+    key = parts[1]
+    lang = parts[2]
+    is_owner, err_msg = is_button_owner(query, key)
+    if not is_owner:
+        return await query.answer(err_msg, show_alert=True)
+        
+    state = getattr(temp, "MOVIE_STATE", {}).get(key)
+    if not state:
+        return await query.answer("⚠️ Session expired. Please search again.", show_alert=True)
+        
+    qualities_dict = state.get("grouped", {}).get(lang, {})
+    if not qualities_dict:
+        return await query.answer("⚠️ No qualities found for this language.", show_alert=True)
+        
+    total_lang_files = sum(len(flist) for flist in qualities_dict.values())
+    logger.info(f"[MOVIE LANGUAGE]\nlanguage={lang}\nfiles={total_lang_files}")
+
+    title = state.get("title", "Movie")
+    year = state.get("year", "")
+    year_str = f" ({year})" if year and year != "N/A" else ""
+    rating = state.get("rating", "")
+    rating_str = f"\n⭐ <b>Rating:</b> {rating}/10" if rating else ""
+    
+    cap = (
+        f"🎬 <b>{title}{year_str}</b>"
+        f"{rating_str}\n\n"
+        f"🌐 <b>Language:</b> {lang}\n\n"
+        f"🎞 <b>Choose Quality:</b>"
+    )
+    markup = build_movie_quality_keyboard(key, lang, qualities_dict)
+    try:
+        if query.message.photo or query.message.caption:
+            await query.message.edit_caption(caption=cap, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
+        else:
+            await query.message.edit_text(text=cap, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
+    except MessageNotModified:
+        pass
+    await query.answer()
+
+@Client.on_callback_query(filters.regex(r"^(mvqual#|movie_quality#)"))
+async def movie_qual_callback(client: Client, query: CallbackQuery):
+    parts = query.data.split("#")
+    key = parts[1]
+    lang = parts[2]
+    qual = parts[3]
+    is_owner, err_msg = is_button_owner(query, key)
+    if not is_owner:
+        return await query.answer(err_msg, show_alert=True)
+        
+    state = getattr(temp, "MOVIE_STATE", {}).get(key)
+    if not state:
+        return await query.answer("⚠️ Session expired. Please search again.", show_alert=True)
+        
+    files = state.get("grouped", {}).get(lang, {}).get(qual, [])
+    if not files:
+        return await query.answer("⚠️ No files found for this quality.", show_alert=True)
+        
+    logger.info(f"[MOVIE QUALITY]\nlanguage={lang}\nquality={qual}\nfiles={len(files)}")
+
+    title = state.get("title", "Movie")
+    year = state.get("year", "")
+    year_str = f" ({year})" if year and year != "N/A" else ""
+    rating = state.get("rating", "")
+    rating_str = f"\n⭐ <b>Rating:</b> {rating}/10" if rating else ""
+    pre = state.get("pre", "file")
+    
+    cap = (
+        f"🎬 <b>{title}{year_str}</b>"
+        f"{rating_str}\n\n"
+        f"🌐 <b>Language:</b> {lang}\n"
+        f"🎞 <b>Quality:</b> {qual}\n\n"
+        f"📁 <b>Select File to Download:</b>"
+    )
+    markup = build_movie_file_keyboard(key, lang, qual, files, page=0, pre=pre)
+    try:
+        if query.message.photo or query.message.caption:
+            await query.message.edit_caption(caption=cap, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
+        else:
+            await query.message.edit_text(text=cap, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
+    except MessageNotModified:
+        pass
+    await query.answer()
+
+@Client.on_callback_query(filters.regex(r"^(mvpage#|movie_files#)"))
+async def movie_page_callback(client: Client, query: CallbackQuery):
+    parts = query.data.split("#")
+    key = parts[1]
+    lang = parts[2]
+    qual = parts[3]
+    page_str = parts[4] if len(parts) > 4 else "0"
+    is_owner, err_msg = is_button_owner(query, key)
+    if not is_owner:
+        return await query.answer(err_msg, show_alert=True)
+        
+    state = getattr(temp, "MOVIE_STATE", {}).get(key)
+    if not state:
+        return await query.answer("⚠️ Session expired. Please search again.", show_alert=True)
+        
+    files = state.get("grouped", {}).get(lang, {}).get(qual, [])
+    page = int(page_str) if page_str.isdigit() else 0
+    pre = state.get("pre", "file")
+    
+    markup = build_movie_file_keyboard(key, lang, qual, files, page=page, pre=pre)
+    try:
+        await query.message.edit_reply_markup(reply_markup=markup)
+    except MessageNotModified:
+        pass
+    await query.answer()
+
+@Client.on_callback_query(filters.regex(r"^mvback#"))
+async def movie_back_callback(client: Client, query: CallbackQuery):
+    parts = query.data.split("#")
+    key = parts[1]
+    target = parts[2]
+    
+    is_owner, err_msg = is_button_owner(query, key)
+    if not is_owner:
+        return await query.answer(err_msg, show_alert=True)
+        
+    state = getattr(temp, "MOVIE_STATE", {}).get(key)
+    if not state:
+        return await query.answer("⚠️ Session expired. Please search again.", show_alert=True)
+        
+    title = state.get("title", "Movie")
+    year = state.get("year", "")
+    year_str = f" ({year})" if year and year != "N/A" else ""
+    rating = state.get("rating", "")
+    rating_str = f"\n⭐ <b>Rating:</b> {rating}/10" if rating else ""
+    genre = state.get("genre", "")
+    genre_str = f"\n🎭 <b>Genre:</b> {genre}" if genre and genre != "N/A" else ""
+    
+    if target == "langs":
+        grouped = state.get("grouped", {})
+        langs_disp = ", ".join(grouped.keys())
+        cap = (
+            f"🎬 <b>{title}{year_str}</b>"
+            f"{rating_str}"
+            f"{genre_str}\n"
+            f"🌐 <b>Available Languages:</b> {langs_disp}\n\n"
+            f"🍿 <b>Choose Language:</b>"
+        )
+        markup = build_movie_language_keyboard(key, grouped)
+    elif target == "qual":
+        lang = parts[3] if len(parts) > 3 else list(state.get("grouped", {}).keys())[0]
+        qualities_dict = state.get("grouped", {}).get(lang, {})
+        cap = (
+            f"🎬 <b>{title}{year_str}</b>"
+            f"{rating_str}\n\n"
+            f"🌐 <b>Language:</b> {lang}\n\n"
+            f"🎞 <b>Choose Quality:</b>"
+        )
+        markup = build_movie_quality_keyboard(key, lang, qualities_dict)
+    else:
+        return await query.answer()
+        
+    try:
+        if query.message.photo or query.message.caption:
+            await query.message.edit_caption(caption=cap, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
+        else:
+            await query.message.edit_text(text=cap, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
+    except MessageNotModified:
+        pass
+    await query.answer()
+
+@Client.on_callback_query(filters.regex(r"^mvclose#"))
+async def movie_close_callback(client: Client, query: CallbackQuery):
+    try:
+        await query.message.delete()
+    except Exception:
+        pass
+    await query.answer("Closed.")
+
+
 @Client.on_callback_query(filters.regex(r"^next"))
 async def next_page(bot, query):
     ident, req, key, offset = query.data.split("_")
@@ -2957,7 +3301,8 @@ async def auto_filter(client, name, msg, reply_msg=None, ai_search=True, spoll=F
                 f"decision=MOVIE_FILTER"
             )
 
-            files, offset, total_results = await get_search_results(message.chat.id ,search, offset=0, filter=True)
+            files, offset, total_results = await get_search_results(message.chat.id, search, max_results=100, offset=0, filter=True)
+            logger.info(f"[MOVIE FILTER]\nquery={search}\nfiles={len(files)}")
             settings = await get_settings(message.chat.id)
             if not files:
                 no_db_btn = InlineKeyboardMarkup([[InlineKeyboardButton("🦨Reason", callback_data="not_in_db_reason")]])
@@ -3042,114 +3387,55 @@ async def auto_filter(client, name, msg, reply_msg=None, ai_search=True, spoll=F
     temp.GETALL[key] = files
     if req:
         temp.SHORT[req] = message.chat.id
-    if settings["button"]:
-        btn = [
-            [
-                InlineKeyboardButton(
-                    text=f"[{get_size(file['file_size'])}] {' '.join(filter(lambda x: not x.startswith('[') and not x.startswith('@') and not x.startswith('www.'), file['file_name'].split()))}", callback_data=f'{pre}#{file["file_id"]}'
-                ),
-            ]
-            for file in files
-        ]
-        btn.insert(0, 
-            [
-                InlineKeyboardButton(f'ǫᴜᴀʟɪᴛʏ', callback_data=f"qualities#{key}"),
-                InlineKeyboardButton("ᴇᴘɪsᴏᴅᴇs", callback_data=f"episodes#{key}"),
-                InlineKeyboardButton("sᴇᴀsᴏɴs",  callback_data=f"seasons#{key}")
-            ]
-        )
-        btn.insert(0, [
-            InlineKeyboardButton("𝐒𝐞𝐧𝐝 𝐀𝐥𝐥", callback_data=f"sendfiles#{key}"),
-            InlineKeyboardButton("ʟᴀɴɢᴜᴀɢᴇs", callback_data=f"languages#{key}"),
-            InlineKeyboardButton("ʏᴇᴀʀs", callback_data=f"years#{key}")
-        ])
-    else:
-        btn = []
-        btn.insert(0, 
-            [
-                InlineKeyboardButton(f'ǫᴜᴀʟɪᴛʏ', callback_data=f"qualities#{key}"),
-                InlineKeyboardButton("ᴇᴘɪsᴏᴅᴇs", callback_data=f"episodes#{key}"),
-                InlineKeyboardButton("sᴇᴀsᴏɴs",  callback_data=f"seasons#{key}")
-            ]
-        )
-        btn.insert(0, [
-            InlineKeyboardButton("𝐒𝐞𝐧𝐝 𝐀𝐥𝐥", callback_data=f"sendfiles#{key}"),
-            InlineKeyboardButton("ʟᴀɴɢᴜᴀɢᴇs", callback_data=f"languages#{key}"),
-            InlineKeyboardButton("ʏᴇᴀʀs", callback_data=f"years#{key}")
-        ])
-    if offset != "":
-        try:
-            if settings['max_btn']:
-                btn.append(
-                    [InlineKeyboardButton("𝐏𝐀𝐆𝐄", callback_data="pages"), InlineKeyboardButton(text=f"1/{math.ceil(int(total_results)/10)}",callback_data="pages"), InlineKeyboardButton(text="𝐍𝐄𝐗𝐓 ➪",callback_data=f"next_{req}_{key}_{offset}")]
-                )
-            else:
-                btn.append(
-                    [InlineKeyboardButton("𝐏𝐀𝐆𝐄", callback_data="pages"), InlineKeyboardButton(text=f"1/{math.ceil(int(total_results)/int(MAX_B_TN))}",callback_data="pages"), InlineKeyboardButton(text="𝐍𝐄𝐗𝐓 ➪",callback_data=f"next_{req}_{key}_{offset}")]
-                )
-        except KeyError:
-            await save_group_settings(message.chat.id, 'max_btn', True)
-            btn.append(
-                [InlineKeyboardButton("𝐏𝐀𝐆𝐄", callback_data="pages"), InlineKeyboardButton(text=f"1/{math.ceil(int(total_results)/10)}",callback_data="pages"), InlineKeyboardButton(text="𝐍𝐄𝐗𝐓 ➪",callback_data=f"next_{req}_{key}_{offset}")]
-            )
-    else:
-        btn.append(
-            [InlineKeyboardButton(text="𝐍𝐎 𝐌𝐎𝐑𝐄 𝐏𝐀𝐆𝐄𝐒 𝐀𝐕𝐀𝐈𝐋𝐀𝐁𝐋𝐄",callback_data="pages")]
-        )
-    imdb = await get_poster(search, file=(files[0])['file_name']) if settings["imdb"] else None
+
+    imdb = await get_poster(search, file=(files[0])['file_name']) if settings.get("imdb", True) else None
     cur_time = datetime.now(pytz.timezone('Asia/Kolkata')).time()
     time_difference = timedelta(hours=cur_time.hour, minutes=cur_time.minute, seconds=(cur_time.second+(cur_time.microsecond/1000000))) - timedelta(hours=curr_time.hour, minutes=curr_time.minute, seconds=(curr_time.second+(curr_time.microsecond/1000000)))
     remaining_seconds = "{:.2f}".format(time_difference.total_seconds())
-    TEMPLATE = script.IMDB_TEMPLATE_TXT
-    if imdb:
-        cap = TEMPLATE.format(
-            qurey=search,
-            title=imdb['title'],
-            votes=imdb['votes'],
-            aka=imdb["aka"],
-            seasons=imdb["seasons"],
-            box_office=imdb['box_office'],
-            localized_title=imdb['localized_title'],
-            kind=imdb['kind'],
-            imdb_id=imdb["imdb_id"],
-            cast=imdb["cast"],
-            runtime=imdb["runtime"],
-            countries=imdb["countries"],
-            certificates=imdb["certificates"],
-            languages=imdb["languages"],
-            director=imdb["director"],
-            writer=imdb["writer"],
-            producer=imdb["producer"],
-            composer=imdb["composer"],
-            cinematographer=imdb["cinematographer"],
-            music_team=imdb["music_team"],
-            distributors=imdb["distributors"],
-            release_date=imdb['release_date'],
-            year=imdb['year'],
-            genres=imdb['genres'],
-            poster=imdb['poster'],
-            plot=imdb['plot'],
-            rating=imdb['rating'],
-            url=imdb['url'],
-            **locals()
-        )
-        temp.IMDB_CAP[message.from_user.id] = cap
-        if not settings["button"]:
-            cap+="<b>\n\n<u>🍿 Your Movie Files 👇</u></b>\n"
-            for file in files:
-                cap += f"<b>\n📁 <a href='https://telegram.me/{temp.U_NAME}?start=files_{file['file_id']}'>[{get_size(file['file_size'])}] {' '.join(filter(lambda x: not x.startswith('[') and not x.startswith('@') and not x.startswith('www.'), file['file_name'].split()))}\n</a></b>"
-    else:
-        if settings["button"]:
-            cap = f"<b>Tʜᴇ Rᴇꜱᴜʟᴛꜱ Fᴏʀ ☞ {search}\n\nRᴇǫᴜᴇsᴛᴇᴅ Bʏ ☞ {message.from_user.mention}\n\nʀᴇsᴜʟᴛ sʜᴏᴡ ɪɴ ☞ {remaining_seconds} sᴇᴄᴏɴᴅs\n\nᴘᴏᴡᴇʀᴇᴅ ʙʏ ☞ : {message.chat.title} \n\n⚠️ ᴀꜰᴛᴇʀ 5 ᴍɪɴᴜᴛᴇꜱ ᴛʜɪꜱ ᴍᴇꜱꜱᴀɢᴇ ᴡɪʟʟ ʙᴇ ᴀᴜᴛᴏᴍᴀᴛɪᴄᴀʟʟʏ ᴅᴇʟᴇᴛᴇᴅ 🗑️\n\n</b>"
-        else:
-            cap = f"<b>Tʜᴇ Rᴇꜱᴜʟᴛꜱ Fᴏʀ ☞ {search}\n\nRᴇǫᴜᴇsᴛᴇᴅ Bʏ ☞ {message.from_user.mention}\n\nʀᴇsᴜʟᴛ sʜᴏᴡ ɪɴ ☞ {remaining_seconds} sᴇᴄᴏɴᴅs\n\nᴘᴏᴡᴇʀᴇᴅ ʙʏ ☞ : {message.chat.title} \n\n⚠️ ᴀꜰᴛᴇʀ 5 ᴍɪɴᴜᴛᴇꜱ ᴛʜɪꜱ ᴍᴇꜱꜱᴀɢᴇ ᴡɪʟʟ ʙᴇ ᴀᴜᴛᴏᴍᴀᴛɪᴄᴀʟʟʏ ᴅᴇʟᴇᴛᴇᴅ 🗑️\n\n</b>"
-            cap+="<b><u>🍿 Your Movie Files 👇</u></b>\n\n"
-            for file in files:
-                cap += f"<b>📁 <a href='https://telegram.me/{temp.U_NAME}?start=files_{file['file_id']}'>[{get_size(file['file_size'])}] {' '.join(filter(lambda x: not x.startswith('[') and not x.startswith('@') and not x.startswith('www.'), file['file_name'].split()))}\n\n</a></b>"
 
-    if imdb and imdb.get('poster'):
+    movie_title = (imdb.get('title') if imdb and imdb.get('title') else search.title())
+    movie_year = str(imdb.get('year') or '') if imdb else ''
+    movie_rating = str(imdb.get('rating') or '') if imdb else ''
+    movie_genre = imdb.get('genres') if imdb else ''
+    movie_poster = imdb.get('poster') if imdb else None
+
+    grouped = group_movie_files(files)
+    if not hasattr(temp, "MOVIE_STATE"):
+        temp.MOVIE_STATE = {}
+
+    temp.MOVIE_STATE[key] = {
+        "user": req,
+        "title": movie_title,
+        "year": movie_year,
+        "rating": movie_rating,
+        "genre": movie_genre,
+        "poster": movie_poster,
+        "imdb": imdb,
+        "grouped": grouped,
+        "all_files": files,
+        "search": search,
+        "pre": pre,
+        "chat_id": message.chat.id,
+        "created_at": time.time()
+    }
+
+    year_str = f" ({movie_year})" if movie_year and movie_year != "N/A" else ""
+    rating_str = f"\n⭐ <b>Rating:</b> {movie_rating}/10" if movie_rating else ""
+    genre_str = f"\n🎭 <b>Genre:</b> {movie_genre}" if movie_genre and movie_genre != "N/A" else ""
+    langs_disp = ", ".join(grouped.keys())
+
+    cap = (
+        f"🎬 <b>{movie_title}{year_str}</b>"
+        f"{rating_str}"
+        f"{genre_str}\n"
+        f"🌐 <b>Available Languages:</b> {langs_disp}\n\n"
+        f"🍿 <b>Choose Language:</b>"
+    )
+    btn_markup = build_movie_language_keyboard(key, grouped)
+
+    if movie_poster:
         try:
-            hehe = await message.reply_photo(photo=imdb.get('poster'), caption=cap, reply_markup=InlineKeyboardMarkup(btn))
+            hehe = await message.reply_photo(photo=movie_poster, caption=cap, reply_markup=btn_markup)
             if reply_msg:
                 await reply_msg.delete()
             try:
@@ -3163,13 +3449,12 @@ async def auto_filter(client, name, msg, reply_msg=None, ai_search=True, spoll=F
                 await hehe.delete()
                 await message.delete()
         except (MediaEmpty, PhotoInvalidDimensions, WebpageMediaEmpty):
-            pic = imdb.get('poster')
-            poster = pic.replace('.jpg', "._V1_UX360.jpg") 
-            hmm = await message.reply_photo(photo=poster, caption=cap, reply_markup=InlineKeyboardMarkup(btn))
+            poster_alt = movie_poster.replace('.jpg', "._V1_UX360.jpg") 
+            hmm = await message.reply_photo(photo=poster_alt, caption=cap, reply_markup=btn_markup)
             if reply_msg:
                 await reply_msg.delete()
             try:
-               if settings['auto_delete']:
+                if settings['auto_delete']:
                     await asyncio.sleep(300)
                     await hmm.delete()
                     await message.delete()
@@ -3181,9 +3466,9 @@ async def auto_filter(client, name, msg, reply_msg=None, ai_search=True, spoll=F
         except Exception as e:
             logger.exception(e) 
             if reply_msg:
-                fek = await reply_msg.edit_text(text=cap, reply_markup=InlineKeyboardMarkup(btn))
+                fek = await reply_msg.edit_text(text=cap, reply_markup=btn_markup)
             else:
-                fek = await message.reply_text(text=cap, reply_markup=InlineKeyboardMarkup(btn))
+                fek = await message.reply_text(text=cap, reply_markup=btn_markup)
             try:
                 if settings['auto_delete']:
                     await asyncio.sleep(300)
@@ -3196,9 +3481,9 @@ async def auto_filter(client, name, msg, reply_msg=None, ai_search=True, spoll=F
                 await message.delete()
     else:
         if reply_msg:
-            fuk = await reply_msg.edit_text(text=cap, reply_markup=InlineKeyboardMarkup(btn), disable_web_page_preview=True)
+            fuk = await reply_msg.edit_text(text=cap, reply_markup=btn_markup, disable_web_page_preview=True)
         else:
-            fuk = await message.reply_text(text=cap, reply_markup=InlineKeyboardMarkup(btn), disable_web_page_preview=True)
+            fuk = await message.reply_text(text=cap, reply_markup=btn_markup, disable_web_page_preview=True)
         
         try:
             if settings['auto_delete']:
