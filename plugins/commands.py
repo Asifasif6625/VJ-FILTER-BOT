@@ -1782,3 +1782,118 @@ async def send_series_files_to_user(client, user_id, files, query=None):
             parse_mode=enums.ParseMode.HTML
         )
         asyncio.create_task(delayed_delete(k, 240))
+
+
+# ─── MOVIE FILE DELIVERY HANDLER (DIRECT PM DELIVERY) ────────────────────────
+async def send_movie_files_to_user(client, user_id, files, query=None, movie_title=None, language=None, quality=None):
+    from utils import get_size, temp
+    from pyrogram.errors import FloodWait
+    import logging
+    import asyncio
+    
+    log = logging.getLogger(__name__)
+    if not files:
+        return 0
+        
+    async def delayed_delete(m, delay):
+        await asyncio.sleep(delay)
+        try:
+            await m.delete()
+        except Exception:
+            pass
+
+    async def _send_single_file(file_id_str, f_caption):
+        log.info(f"[MOVIE FILE SEND] file_id={file_id_str}")
+        while True:
+            try:
+                msg = await client.send_cached_media(
+                    chat_id=user_id,
+                    file_id=file_id_str,
+                    caption=f_caption,
+                    protect_content=False,
+                )
+                log.info(f"[MOVIE FILE SEND] SUCCESS file_id={file_id_str}")
+                asyncio.create_task(delayed_delete(msg, 240))
+                return msg
+            except FloodWait as e:
+                log.warning(f"[MOVIE FILE SEND] FloodWait for {e.value}s on {file_id_str}")
+                await asyncio.sleep(e.value + 1)
+            except Exception as e:
+                log.error(f"[MOVIE FILE SEND] ERROR: {e}")
+                return None
+
+    # 1. Deduplicate files (same file_id)
+    seen_ids = set()
+    ordered_files = []
+    for f in files:
+        fid = f.get("file_id")
+        if fid:
+            if fid in seen_ids:
+                continue
+            seen_ids.add(fid)
+        ordered_files.append(f)
+
+    log.info(f"[MOVIE SEND FILES]\ntitle={movie_title}\nlanguage={language}\nquality={quality}\ncount={len(ordered_files)}")
+
+    # 2. Send metadata tag ONCE if available
+    if movie_title and language and quality:
+        lang_clean = str(language).strip().replace(" ", "_")
+        lang_tag = f"#{lang_clean}" if not lang_clean.startswith("#") else lang_clean
+        qual_clean = str(quality).strip().replace(" ", "_")
+        qual_tag = f"#{qual_clean}" if not qual_clean.startswith("#") else qual_clean
+        metadata_text = f"🎬 <b>{movie_title}</b>\n{lang_tag}\n{qual_tag}"
+        try:
+            meta_msg = await client.send_message(
+                chat_id=user_id,
+                text=metadata_text,
+                parse_mode=enums.ParseMode.HTML,
+                protect_content=False,
+            )
+            asyncio.create_task(delayed_delete(meta_msg, 240))
+        except Exception as ex:
+            log.warning(f"Failed to send movie metadata message: {ex}")
+
+    # 3. Sequentially send each file
+    total_files = len(ordered_files)
+    sent_messages = []
+    bot_uname = temp.U_NAME if hasattr(temp, "U_NAME") and temp.U_NAME else "BotUsername"
+    for idx, file in enumerate(ordered_files, 1):
+        file_id_str = file.get("file_id")
+        if not file_id_str:
+            continue
+        file_name = file.get("file_name", "Movie File")
+        raw_size = file.get("file_size", 0)
+        file_size = get_size(raw_size) if raw_size else "Unknown Size"
+        lang_str = language or file.get("language", "Unknown")
+        
+        f_caption = (
+            f"⦿ <i>File name:</i> <code>{file_name}</code>\n"
+            f"⦿ <i>Size:</i> {file_size}\n"
+            f"⦿ <i>Language:</i> {lang_str}\n"
+            f"⦿ <i>File:</i> {idx} / {total_files}\n\n"
+            f"@{bot_uname}"
+        )
+        
+        msg = await _send_single_file(file_id_str, f_caption)
+        if msg:
+            sent_messages.append(msg)
+            await asyncio.sleep(0.3)
+
+    # 4. Send final delete notification
+    if sent_messages:
+        try:
+            k = await client.send_message(
+                chat_id=user_id,
+                text=(
+                    "<blockquote><b><u>❗️❗️❗️IMPORTANT❗️️❗️❗️</u></b>\n\n"
+                    "ᴛʜɪs ᴍᴇssᴀɢᴇ ᴡɪʟʟ ʙᴇ ᴅᴇʟᴇᴛᴇᴅ ɪɴ <b><u>4 mins</u> 🫥 <i></b>"
+                    "(ᴅᴜᴇ ᴛᴏ ᴄᴏᴘʏʀɪɢʜᴛ ɪssᴜᴇs)</i>.\n\n"
+                    "<b><i>ᴘʟᴇᴀsᴇ ғᴏʀᴡᴀʀᴅ ᴛʜᴇsᴇ ғɪʟᴇs ᴛᴏ sᴏᴍᴇᴡʜᴇʀᴇ ᴇʟsᴇ ᴀɴᴅ sᴛᴀʀᴛ ᴅᴏᴡɴʟᴏᴀᴅɪɴɢ ᴛʜᴇʀᴇ</b></i></blockquote>"
+                ),
+                parse_mode=enums.ParseMode.HTML
+            )
+            asyncio.create_task(delayed_delete(k, 240))
+        except Exception:
+            pass
+
+    return len(sent_messages)
