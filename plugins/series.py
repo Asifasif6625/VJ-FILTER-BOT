@@ -128,14 +128,13 @@ AUTO_LANGUAGE_MAP = {
 def extract_quality_from_filename(filename: str) -> str:
     """
     Extract accurate, normalized video quality from a filename.
-    Supports resolution, bit-depth, HDR/Dolby Vision, and source tags in priority order.
+    Supports resolution, bit-depth (10bit), HDR/Dolby Vision, and source tags in priority order.
     """
     if not filename:
         return "Unknown"
 
     text = str(filename)
     text = re.sub(r"\.(mkv|mp4|avi|mov|wmv|flv|webm|m4v|ts)$", "", text, flags=re.I)
-    # Normalize separators into spaces for reliable word boundary matching
     text = re.sub(r"[\._\-\+\[\]\(\)\{\}]", " ", text)
     text = " " + re.sub(r"\s+", " ", text).strip() + " "
 
@@ -164,32 +163,10 @@ def extract_quality_from_filename(filename: str) -> str:
     elif re.search(r"\bhd\b", text, re.I) and not re.search(r"\b(web\s*hd|hd\s*rip|hdtv)\b", text, re.I):
         res = "720p"
 
-    # 2. Detect Bit-Depth
-    bit_depth = None
-    if re.search(r"\b10\s*bit\b", text, re.I):
-        bit_depth = "10bit"
-    elif re.search(r"\b8\s*bit\b", text, re.I):
-        bit_depth = "8bit"
-
-    # 3. Detect HDR / Dolby Vision
-    hdr = None
-    if re.search(r"\b(dolby\s*vision|dovi|\bdv\b)", text, re.I):
-        hdr = "Dolby Vision"
-    elif re.search(r"\bhdr10\+\b", text, re.I):
-        hdr = "HDR10+"
-    elif re.search(r"\b(hdr10|hdr)\b", text, re.I):
-        hdr = "HDR"
-
-    # If resolution was found, build compound quality
     if res:
-        parts = [res]
-        if bit_depth:
-            parts.append(bit_depth)
-        if hdr:
-            parts.append(hdr)
-        return " ".join(parts)
+        return res
 
-    # 4. Fallback Source Tags if no resolution was found
+    # 2. Fallback Source Tags if no resolution was found
     if re.search(r"\b(web\s*hd|web\s*dl|webrip)\b", text, re.I):
         return "WEB-DL"
     if re.search(r"\b(bluray|bdrip|brrip)\b", text, re.I):
@@ -228,26 +205,43 @@ def parse_series_filename(filename: str, series_title: str, target_season: int =
     season_val = None
     episode_val = None
 
-    m = re.search(r"(?i)\b(?:s|season\s*)0?(\d{1,3})\s*e(?:p(?:isode)?)?\s*0?(\d{1,3})\b", token_text)
+    # Try combined S01E03 / S1E3 / S01.E03 / S01-E03 / S01_E03
+    m = re.search(r"(?i)(?:^|[^A-Z0-9])S(\d{1,3})\s*[\.\-_]?\s*E(\d{1,4})(?:[^A-Z0-9]|$)", token_text)
     if m:
         season_val = int(m.group(1))
         episode_val = int(m.group(2))
     else:
-        m = re.search(r"(?i)\b0?(\d{1,3})\s*x\s*0?(\d{1,3})\b", token_text)
+        # Try 01x03 / 1x03
+        m = re.search(r"(?i)(?:^|[^A-Z0-9])(\d{1,3})\s*x\s*(\d{1,4})(?:[^A-Z0-9]|$)", token_text)
         if m:
             season_val = int(m.group(1))
             episode_val = int(m.group(2))
         else:
-            m_s = re.search(r"(?i)\b(?:s|season\s*)0?(\d{1,3})\b", token_text)
-            m_e = re.search(r"(?i)\b(?:e|ep|episode\s*)0?(\d{1,3})\b", token_text)
+            # Clean resolution strings (e.g. 1080p, 720p, 480p) to avoid matching 1080 as episode/season
+            clean_for_ep = re.sub(r'(?i)\b(2160|1440|1080|720|576|480|360|240)p?\b', '', token_text)
+            
+            # S01 / Season 01
+            m_s = re.search(r"(?i)(?:^|[^A-Z0-9])(?:S|SEASON)\s*(\d{1,3})(?:[^A-Z0-9]|$)", clean_for_ep)
+            # E01 / Episode 01 / EP 01
+            m_e = re.search(r"(?i)(?:^|[^A-Z0-9])(?:E|EP|EPISODE)\s*(\d{1,4})(?:[^A-Z0-9]|$)", clean_for_ep)
             if m_s and m_e:
                 season_val = int(m_s.group(1))
                 episode_val = int(m_e.group(1))
+            elif m_e:
+                episode_val = int(m_e.group(1))
+                season_val = int(m_s.group(1)) if m_s else (target_season if target_season is not None else 1)
+            elif m_s and target_season is not None:
+                season_val = int(m_s.group(1))
+                m_num = re.search(r"(?:^|[^A-Z0-9])\[?(\d{1,3})\]?(?:[^A-Z0-9]|$)", clean_for_ep)
+                if m_num:
+                    episode_val = int(m_num.group(1))
 
-    if season_val is None and episode_val is not None and episode_val > 0:
-        season_val = target_season if target_season is not None else 1
+    if season_val is None and target_season is not None:
+        season_val = target_season
+    if season_val is None:
+        season_val = 1
 
-    if season_val is None or episode_val is None or episode_val <= 0:
+    if episode_val is None or episode_val <= 0:
         return {"status": "invalid", "reason": "missing_season_or_episode"}
 
     # 2. Series Title Match Validation
@@ -342,7 +336,9 @@ async def scan_sdatabase_for_series(title: str, season: int = None, series_id: s
         except Exception as e:
             logger.warning(f"Telegram channel search in SDATABASE_CHANNEL ({SDATABASE_CHANNEL}): {e}")
 
-    valid_files = []
+    valid_new_files = []
+    duplicate_files = []
+    all_matching_files = []
     total_scanned = len(docs)
     total_matched = 0
     total_new = 0
@@ -372,21 +368,7 @@ async def scan_sdatabase_for_series(title: str, season: int = None, series_id: s
         ep = parsed["episode"]
         qual = parsed["quality"]
 
-        logger.info(f"[AUTO S ADD SCAN] filename={fname} series={clean_title} season={s_val} episode={ep} quality={qual} language={lang} match=True reason={parsed.get('reason')}")
-
-        key = (lang, s_val, ep, qual, doc.get("file_id"))
-        if key in seen_file_keys:
-            continue
-        seen_file_keys.add(key)
-
-        if series_id:
-            is_dup = await check_episode_exists(series_id, lang, s_val, ep, qual)
-            if is_dup:
-                total_duplicates += 1
-                continue
-
-        total_new += 1
-        valid_files.append({
+        file_entry = {
             "language": lang,
             "season": s_val,
             "episode": ep,
@@ -395,13 +377,34 @@ async def scan_sdatabase_for_series(title: str, season: int = None, series_id: s
             "file_name": doc.get("file_name"),
             "file_size": doc.get("file_size", 0),
             "caption": doc.get("caption"),
-        })
+        }
+        all_matching_files.append(file_entry)
 
-    valid_files.sort(key=lambda x: (x["season"], x["language"], x["quality"], x["episode"]))
+        key = (lang, s_val, ep, qual, doc.get("file_id"))
+        if key in seen_file_keys:
+            continue
+        seen_file_keys.add(key)
 
-    # Grouped by season
+        is_dup = False
+        if series_id:
+            is_dup = await check_episode_exists(series_id, lang, s_val, ep, qual)
+
+        if is_dup:
+            total_duplicates += 1
+            duplicate_files.append(file_entry)
+            logger.info(f"[AUTO_MOVE_ADD] parsed file={fname} season={s_val} episode={ep} quality={qual} language={lang} duplicate=True")
+        else:
+            total_new += 1
+            valid_new_files.append(file_entry)
+            logger.info(f"[AUTO_MOVE_ADD] parsed file={fname} season={s_val} episode={ep} quality={qual} language={lang} new=True")
+
+    valid_new_files.sort(key=lambda x: (x["season"], x["language"], x["quality"], x["episode"]))
+    all_matching_files.sort(key=lambda x: (x["season"], x["language"], x["quality"], x["episode"]))
+
+    # Grouped by season from all matching files for display
+    display_source = all_matching_files if all_matching_files else valid_new_files
     organized_by_season = {}
-    for f in valid_files:
+    for f in display_source:
         s = f["season"]
         l = f["language"]
         q = f["quality"]
@@ -411,21 +414,26 @@ async def scan_sdatabase_for_series(title: str, season: int = None, series_id: s
             organized_by_season[s][l] = {}
         if q not in organized_by_season[s][l]:
             organized_by_season[s][l][q] = []
-        organized_by_season[s][l][q].append(f)
+        if not any(x["episode"] == f["episode"] for x in organized_by_season[s][l][q]):
+            organized_by_season[s][l][q].append(f)
 
     # Flat organized for single season display
     organized = {}
-    for f in valid_files:
+    for f in display_source:
         l = f["language"]
         q = f["quality"]
         if l not in organized:
             organized[l] = {}
         if q not in organized[l]:
             organized[l][q] = []
-        organized[l][q].append(f)
+        if not any(x["episode"] == f["episode"] for x in organized[l][q]):
+            organized[l][q].append(f)
 
     return {
-        "valid_files": valid_files,
+        "valid_files": valid_new_files,
+        "valid_new_files": valid_new_files,
+        "all_matching_files": all_matching_files,
+        "duplicate_files": duplicate_files,
         "organized": organized,
         "organized_by_season": organized_by_season,
         "total_scanned": total_scanned,
@@ -530,7 +538,9 @@ async def scan_sdatabase_for_movie(title: str, year: str = None, client: Client 
         except Exception as e:
             logger.warning(f"Telegram channel search in SDATABASE_CHANNEL ({SDATABASE_CHANNEL}): {e}")
 
-    valid_files = []
+    valid_new_files = []
+    duplicate_files = []
+    all_matching_files = []
     total_scanned = len(docs)
     total_matched = 0
     total_new = 0
@@ -555,6 +565,17 @@ async def scan_sdatabase_for_movie(title: str, year: str = None, client: Client 
             total_unknown_quality += 1
 
         fid = doc.get("file_id")
+        file_entry = {
+            "title": title,
+            "language": lang,
+            "quality": qual,
+            "file_id": fid,
+            "file_name": fname,
+            "file_size": doc.get("file_size", 0),
+            "caption": doc.get("caption"),
+        }
+        all_matching_files.append(file_entry)
+
         key = (lang, qual, fid)
         if key in seen_file_keys:
             continue
@@ -564,23 +585,18 @@ async def scan_sdatabase_for_movie(title: str, year: str = None, client: Client 
         is_dup = is_file_already_saved(fid, cleaned_fn)
         if is_dup:
             total_duplicates += 1
+            duplicate_files.append(file_entry)
             continue
 
         total_new += 1
-        valid_files.append({
-            "title": title,
-            "language": lang,
-            "quality": qual,
-            "file_id": fid,
-            "file_name": fname,
-            "file_size": doc.get("file_size", 0),
-            "caption": doc.get("caption"),
-        })
+        valid_new_files.append(file_entry)
 
-    valid_files.sort(key=lambda x: (x["language"], x["quality"]))
+    valid_new_files.sort(key=lambda x: (x["language"], x["quality"]))
+    all_matching_files.sort(key=lambda x: (x["language"], x["quality"]))
 
     organized = {}
-    for f in valid_files:
+    display_source = all_matching_files if all_matching_files else valid_new_files
+    for f in display_source:
         l = f["language"]
         q = f["quality"]
         if l not in organized:
@@ -589,7 +605,10 @@ async def scan_sdatabase_for_movie(title: str, year: str = None, client: Client 
             organized[l].append(q)
 
     return {
-        "valid_files": valid_files,
+        "valid_files": valid_new_files,
+        "valid_new_files": valid_new_files,
+        "all_matching_files": all_matching_files,
+        "duplicate_files": duplicate_files,
         "organized": organized,
         "total_scanned": total_scanned,
         "total_matched": total_matched,
@@ -1918,7 +1937,7 @@ async def wizard_callback(client: Client, query: CallbackQuery):
         res = await scan_sdatabase_for_series(auto_data["title"], season=None, series_id=auto_data.get("existing_series_id"), client=client)
         auto_data["scan"] = res
 
-        if res["total_new"] == 0 and res["total_duplicates"] == 0:
+        if res["total_matched"] == 0:
             text = (
                 f"📊 <b>AUTO SCAN RESULT</b>\n\n"
                 f"🎬 <b>Series:</b> {auto_data['title']}\n"
@@ -1948,11 +1967,14 @@ async def wizard_callback(client: Client, query: CallbackQuery):
                     ep_strs = [f"E{f['episode']:02d}" for f in flist]
                     lines.append(f"  • {lang} ({qual}): {', '.join(ep_strs)} ({len(flist)} files)")
 
-        episodes_summary = "\n".join(lines)
-        all_langs = sorted(list(set(f["language"] for f in res["valid_files"])))
-        all_seasons = sorted(list(set(f["season"] for f in res["valid_files"])))
+        episodes_summary = "\n".join(lines) if lines else "None"
+        match_list = res.get("all_matching_files") or res.get("valid_files") or []
+        all_langs = sorted(list(set(f["language"] for f in match_list)))
+        all_seasons = sorted(list(set(f["season"] for f in match_list)))
+        all_quals = sorted(list(set(f["quality"] for f in match_list)))
         seasons_str = ", ".join(f"S{s}" if s > 0 else "Direct" for s in all_seasons) if all_seasons else "None"
-        langs_list = ", ".join(all_langs)
+        langs_list = ", ".join(all_langs) if all_langs else "Unknown"
+        quals_list = ", ".join(all_quals) if all_quals else "Unknown"
 
         text = (
             f"📊 <b>AUTO SCAN RESULT</b>\n\n"
@@ -1964,7 +1986,8 @@ async def wizard_callback(client: Client, query: CallbackQuery):
             f"➕ <b>New files:</b> {res['total_new']}\n"
             f"♻️ <b>Existing duplicates:</b> {res['total_duplicates']}\n"
             f"❌ <b>Invalid:</b> {res['total_invalid']}\n\n"
-            f"🌐 <b>Languages:</b> {langs_list}\n\n"
+            f"🌐 <b>Languages:</b> {langs_list}\n"
+            f"🎞 <b>Qualities:</b> {quals_list}\n\n"
             f"🎞 <b>Qualities & Episodes:</b>\n{episodes_summary}"
         )
         markup = InlineKeyboardMarkup([
@@ -2017,7 +2040,7 @@ async def wizard_callback(client: Client, query: CallbackQuery):
         res = await scan_sdatabase_for_series(auto_data["title"], season_num, auto_data.get("existing_series_id"), client=client)
         auto_data["scan"] = res
 
-        if res["total_new"] == 0 and res["total_duplicates"] == 0:
+        if res["total_matched"] == 0:
             text = (
                 f"📊 <b>AUTO SCAN RESULT</b>\n\n"
                 f"🎬 <b>Series:</b> {auto_data['title']}\n"
@@ -2046,8 +2069,12 @@ async def wizard_callback(client: Client, query: CallbackQuery):
                 ep_strs = [f"E{f['episode']:02d}" for f in flist]
                 lines.append(f"• <b>{lang} / {qual}:</b> {', '.join(ep_strs)} ({len(flist)} files)")
 
-        episodes_summary = "\n".join(lines)
-        langs_list = ", ".join(res["organized"].keys())
+        episodes_summary = "\n".join(lines) if lines else "None"
+        match_list = res.get("all_matching_files") or res.get("valid_files") or []
+        all_langs = sorted(list(set(f["language"] for f in match_list)))
+        all_quals = sorted(list(set(f["quality"] for f in match_list)))
+        langs_list = ", ".join(all_langs) if all_langs else "Unknown"
+        quals_list = ", ".join(all_quals) if all_quals else "Unknown"
 
         text = (
             f"📊 <b>AUTO SCAN RESULT</b>\n\n"
@@ -2060,7 +2087,8 @@ async def wizard_callback(client: Client, query: CallbackQuery):
             f"♻️ <b>Existing duplicates:</b> {res['total_duplicates']}\n"
             f"⏭ <b>Other season:</b> {res['total_other_season']}\n"
             f"❌ <b>Invalid:</b> {res['total_invalid']}\n\n"
-            f"🌐 <b>Languages:</b> {langs_list}\n\n"
+            f"🌐 <b>Languages:</b> {langs_list}\n"
+            f"🎞 <b>Qualities:</b> {quals_list}\n\n"
             f"🎞 <b>Qualities & Episodes:</b>\n{episodes_summary}"
         )
         markup = InlineKeyboardMarkup([
@@ -2092,7 +2120,7 @@ async def wizard_callback(client: Client, query: CallbackQuery):
         res = await scan_sdatabase_for_series(auto_data["title"], season_num, auto_data.get("existing_series_id"), client=client)
         auto_data["scan"] = res
 
-        if res["total_new"] == 0 and res["total_duplicates"] == 0:
+        if res["total_matched"] == 0:
             text = (
                 f"📊 <b>AUTO SCAN RESULT</b>\n\n"
                 f"🎬 <b>Series:</b> {auto_data['title']}\n"
@@ -2123,11 +2151,14 @@ async def wizard_callback(client: Client, query: CallbackQuery):
                     for qual, flist in quals.items():
                         ep_strs = [f"E{f['episode']:02d}" for f in flist]
                         lines.append(f"  • {lang} ({qual}): {', '.join(ep_strs)} ({len(flist)} files)")
-            episodes_summary = "\n".join(lines)
-            all_langs = sorted(list(set(f["language"] for f in res["valid_files"])))
-            all_seasons = sorted(list(set(f["season"] for f in res["valid_files"])))
+            episodes_summary = "\n".join(lines) if lines else "None"
+            match_list = res.get("all_matching_files") or res.get("valid_files") or []
+            all_langs = sorted(list(set(f["language"] for f in match_list)))
+            all_seasons = sorted(list(set(f["season"] for f in match_list)))
+            all_quals = sorted(list(set(f["quality"] for f in match_list)))
             seasons_str = ", ".join(f"S{s}" if s > 0 else "Direct" for s in all_seasons) if all_seasons else "None"
-            langs_list = ", ".join(all_langs)
+            langs_list = ", ".join(all_langs) if all_langs else "Unknown"
+            quals_list = ", ".join(all_quals) if all_quals else "Unknown"
             season_display = f"📺 <b>Seasons Detected:</b> {seasons_str}"
         else:
             lines = []
@@ -2135,8 +2166,12 @@ async def wizard_callback(client: Client, query: CallbackQuery):
                 for qual, flist in quals.items():
                     ep_strs = [f"E{f['episode']:02d}" for f in flist]
                     lines.append(f"• <b>{lang} / {qual}:</b> {', '.join(ep_strs)} ({len(flist)} files)")
-            episodes_summary = "\n".join(lines)
-            langs_list = ", ".join(res["organized"].keys())
+            episodes_summary = "\n".join(lines) if lines else "None"
+            match_list = res.get("all_matching_files") or res.get("valid_files") or []
+            all_langs = sorted(list(set(f["language"] for f in match_list)))
+            all_quals = sorted(list(set(f["quality"] for f in match_list)))
+            langs_list = ", ".join(all_langs) if all_langs else "Unknown"
+            quals_list = ", ".join(all_quals) if all_quals else "Unknown"
             season_display = f"📺 <b>Season:</b> {season_num}"
 
         text = (
@@ -2150,7 +2185,8 @@ async def wizard_callback(client: Client, query: CallbackQuery):
             f"♻️ <b>Existing duplicates:</b> {res['total_duplicates']}\n"
             f"⏭ <b>Other season:</b> {res['total_other_season']}\n"
             f"❌ <b>Invalid:</b> {res['total_invalid']}\n\n"
-            f"🌐 <b>Languages:</b> {langs_list}\n\n"
+            f"🌐 <b>Languages:</b> {langs_list}\n"
+            f"🎞 <b>Qualities:</b> {quals_list}\n\n"
             f"🎞 <b>Qualities & Episodes:</b>\n{episodes_summary}"
         )
         markup = InlineKeyboardMarkup([
@@ -2163,112 +2199,135 @@ async def wizard_callback(client: Client, query: CallbackQuery):
 
     if action == "auto_save":
         auto_data = temp.AUTO_SERIES.get(uid)
-        if not auto_data or "scan" not in auto_data or not auto_data["scan"].get("valid_files"):
-            return await query.answer("⚠️ No valid scan data to save.", show_alert=True)
+        if not auto_data or "scan" not in auto_data:
+            return await query.answer("⚠️ Session expired. Send /series to start again.", show_alert=True)
 
         res = auto_data["scan"]
+        total_matched = res.get("total_matched", 0)
+        total_new = res.get("total_new", 0)
+        total_duplicates = res.get("total_duplicates", 0)
+        valid_files = res.get("valid_files") or res.get("valid_new_files") or []
+
+        if total_matched == 0:
+            return await query.answer("⚠️ No matching files found to save.", show_alert=True)
+
+        if total_new == 0 and total_duplicates > 0:
+            return await query.answer(f"⚠️ All {total_duplicates} files already exist in the database. Nothing new to save.", show_alert=True)
+
+        if not valid_files:
+            return await query.answer("⚠️ No new files to save.", show_alert=True)
+
         is_skip = auto_data.get("season_skip", False)
         existing_series_id = auto_data.get("existing_series_id")
 
-        detected_langs = sorted(list(set(f["language"] for f in res["valid_files"])))
-        detected_seasons = sorted(list(set(f["season"] for f in res["valid_files"])))
-        detected_quals = sorted(list(set(f["quality"] for f in res["valid_files"])))
+        detected_langs = sorted(list(set(f["language"] for f in valid_files)))
+        detected_seasons = sorted(list(set(f["season"] for f in valid_files)))
+        detected_quals = sorted(list(set(f["quality"] for f in valid_files)))
 
-        if not existing_series_id:
-            series_id = await create_series({
-                "name": auto_data["title"],
-                "year": auto_data["year"],
-                "genre": auto_data["genre"],
-                "rating": auto_data["rating"],
-                "description": auto_data["description"],
-                "poster": auto_data["poster"],
-                "languages": detected_langs,
-                "seasons": detected_seasons,
-                "qualities": detected_quals,
-                "season_modes": {},
-                "created_by": uid,
-            })
-        else:
-            series_id = existing_series_id
-            cur = await get_series(series_id)
-            new_langs = list(set((cur.get("languages") or []) + detected_langs))
-            new_seasons = sorted(list(set((cur.get("seasons") or []) + detected_seasons)))
-            new_quals = list(set((cur.get("qualities") or []) + detected_quals))
-            await update_series(series_id, {
-                "languages": new_langs,
-                "seasons": new_seasons,
-                "qualities": new_quals,
-            })
+        logger.info(f"[AUTO_MOVE_ADD] save_start series={auto_data['title']} user_id={uid} new={total_new} duplicate={total_duplicates}")
 
-        added_count = 0
-        for f in res["valid_files"]:
-            ok, _ = await add_series_file({
-                "series_id": series_id,
-                "language": f["language"],
-                "season": f["season"],
-                "episode": f["episode"],
-                "quality": f["quality"],
-                "file_id": f["file_id"],
-                "file_name": f["file_name"],
-                "file_size": f["file_size"],
-                "is_batch": False,
-            })
-            if ok:
-                added_count += 1
+        try:
+            if not existing_series_id:
+                series_id = await create_series({
+                    "name": auto_data["title"],
+                    "year": auto_data["year"],
+                    "genre": auto_data["genre"],
+                    "rating": auto_data["rating"],
+                    "description": auto_data["description"],
+                    "poster": auto_data["poster"],
+                    "languages": detected_langs,
+                    "seasons": detected_seasons,
+                    "qualities": detected_quals,
+                    "season_modes": {},
+                    "created_by": uid,
+                })
+            else:
+                series_id = existing_series_id
+                cur = await get_series(series_id)
+                new_langs = list(set((cur.get("languages") or []) + detected_langs))
+                new_seasons = sorted(list(set((cur.get("seasons") or []) + detected_seasons)))
+                new_quals = list(set((cur.get("qualities") or []) + detected_quals))
+                await update_series(series_id, {
+                    "languages": new_langs,
+                    "seasons": new_seasons,
+                    "qualities": new_quals,
+                })
 
-        if is_skip:
-            ep_lines = []
-            for s_num, langs in sorted(res["organized_by_season"].items()):
-                for lang, quals in langs.items():
+            added_count = 0
+            for f in valid_files:
+                ok, _ = await add_series_file({
+                    "series_id": series_id,
+                    "language": f["language"],
+                    "season": f["season"],
+                    "episode": f["episode"],
+                    "quality": f["quality"],
+                    "file_id": f["file_id"],
+                    "file_name": f["file_name"],
+                    "file_size": f["file_size"],
+                    "is_batch": False,
+                })
+                if ok:
+                    added_count += 1
+
+            if is_skip:
+                ep_lines = []
+                for s_num, langs in sorted(res["organized_by_season"].items()):
+                    for lang, quals in langs.items():
+                        for qual, flist in quals.items():
+                            min_ep = min(f["episode"] for f in flist)
+                            max_ep = max(f["episode"] for f in flist)
+                            s_tag = f"S{s_num:02d}" if s_num > 0 else "Direct"
+                            if min_ep == max_ep:
+                                ep_lines.append(f"• {s_tag} E{min_ep:02d} {lang} ({qual})")
+                            else:
+                                ep_lines.append(f"• {s_tag} E{min_ep:02d} – E{max_ep:02d} {lang} ({qual})")
+                ep_summary = "\n".join(ep_lines) if ep_lines else "None"
+                season_display = ", ".join(f"S{s}" if s > 0 else "Direct" for s in detected_seasons) if detected_seasons else "None"
+            else:
+                season = auto_data.get("season", 1)
+                ep_lines = []
+                for lang, quals in res["organized"].items():
                     for qual, flist in quals.items():
                         min_ep = min(f["episode"] for f in flist)
                         max_ep = max(f["episode"] for f in flist)
-                        s_tag = f"S{s_num:02d}" if s_num > 0 else "Direct"
                         if min_ep == max_ep:
-                            ep_lines.append(f"• {s_tag} E{min_ep:02d} {lang} ({qual})")
+                            ep_lines.append(f"• E{min_ep:02d} {lang} ({qual})")
                         else:
-                            ep_lines.append(f"• {s_tag} E{min_ep:02d} – E{max_ep:02d} {lang} ({qual})")
-            ep_summary = "\n".join(ep_lines)
-            season_display = ", ".join(f"S{s}" if s > 0 else "Direct" for s in detected_seasons)
-        else:
-            season = auto_data.get("season", 1)
-            ep_lines = []
-            for lang, quals in res["organized"].items():
-                for qual, flist in quals.items():
-                    min_ep = min(f["episode"] for f in flist)
-                    max_ep = max(f["episode"] for f in flist)
-                    if min_ep == max_ep:
-                        ep_lines.append(f"• E{min_ep:02d} {lang} ({qual})")
-                    else:
-                        ep_lines.append(f"• E{min_ep:02d} – E{max_ep:02d} {lang} ({qual})")
-            ep_summary = "\n".join(ep_lines)
-            season_display = str(season)
+                            ep_lines.append(f"• E{min_ep:02d} – E{max_ep:02d} {lang} ({qual})")
+                ep_summary = "\n".join(ep_lines) if ep_lines else "None"
+                season_display = str(season)
 
-        langs_summary = "\n".join(f"• {l}" for l in detected_langs)
+            langs_summary = "\n".join(f"• {l}" for l in detected_langs)
 
-        del temp.AUTO_SERIES[uid]
+            if uid in temp.AUTO_SERIES:
+                del temp.AUTO_SERIES[uid]
 
-        if not existing_series_id:
-            asyncio.create_task(send_series_announcement(client, series_id))
+            if not existing_series_id:
+                asyncio.create_task(send_series_announcement(client, series_id))
 
-        success_text = (
-            f"✅ <b>AUTO SERIES ADD COMPLETED</b>\n\n"
-            f"🎬 <b>{auto_data['title']}</b>\n"
-            f"📅 {auto_data['year']}\n\n"
-            f"📺 <b>Season(s):</b> {season_display}\n\n"
-            f"🌐 <b>Languages:</b>\n{langs_summary}\n\n"
-            f"📁 <b>Files Added:</b> {added_count}\n\n"
-            f"🎞 <b>Episodes:</b>\n{ep_summary}"
-        )
+            logger.info(f"[AUTO_MOVE_ADD] save_success series={auto_data['title']} files_added={added_count}")
 
-        markup = InlineKeyboardMarkup([
-            [InlineKeyboardButton("🔎 Search Series", switch_inline_query_current_chat=auto_data['title'])],
-            [InlineKeyboardButton("✏️ Edit Series", callback_data=f"edser#{series_id}")],
-            [InlineKeyboardButton("🏠 Close", callback_data="sw#auto_close")]
-        ])
+            success_text = (
+                f"✅ <b>AUTO SERIES ADD COMPLETED</b>\n\n"
+                f"🎬 <b>{auto_data['title']}</b>\n"
+                f"📅 {auto_data['year']}\n\n"
+                f"📺 <b>Season(s):</b> {season_display}\n\n"
+                f"🌐 <b>Languages:</b>\n{langs_summary}\n\n"
+                f"📁 <b>Files Added:</b> {added_count}\n\n"
+                f"🎞 <b>Episodes:</b>\n{ep_summary}"
+            )
 
-        await query.message.edit_text(success_text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
-        return await query.answer("🎉 Series files saved successfully!")
+            markup = InlineKeyboardMarkup([
+                [InlineKeyboardButton("🔎 Search Series", switch_inline_query_current_chat=auto_data['title'])],
+                [InlineKeyboardButton("✏️ Edit Series", callback_data=f"edser#{series_id}")],
+                [InlineKeyboardButton("🏠 Close", callback_data="sw#auto_close")]
+            ])
+
+            await query.message.edit_text(success_text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
+            return await query.answer("🎉 Series files saved successfully!")
+        except Exception as e:
+            logger.error(f"[AUTO_MOVE_ADD] save_error series={auto_data['title']} error={e}")
+            return await query.answer(f"❌ Error while saving: {e}", show_alert=True)
 
     if action == "auto_cancel":
         if uid in temp.AUTO_SERIES:
@@ -2292,7 +2351,7 @@ async def wizard_callback(client: Client, query: CallbackQuery):
 
         rating_str = f"\n⭐ <b>Rating:</b> {movie_data['rating']}/10" if movie_data.get("rating") else ""
 
-        if res["total_new"] == 0 and res["total_duplicates"] == 0:
+        if res["total_matched"] == 0:
             text_res = (
                 f"🎬 <b>Movie:</b> {movie_data['title']}\n"
                 f"📅 <b>Year:</b> {movie_data['year']}\n"
@@ -2318,6 +2377,10 @@ async def wizard_callback(client: Client, query: CallbackQuery):
             langs_lines.append(f"• <b>{lang}:</b> {', '.join(quals)}")
         langs_summary = "\n".join(langs_lines) if langs_lines else "None"
 
+        match_list = res.get("all_matching_files") or res.get("valid_files") or []
+        all_quals = sorted(list(set(f["quality"] for f in match_list)))
+        quals_list = ", ".join(all_quals) if all_quals else "Unknown"
+
         text_res = (
             f"🎬 <b>Movie:</b> {movie_data['title']}\n"
             f"📅 <b>Year:</b> {movie_data['year']}\n"
@@ -2329,7 +2392,8 @@ async def wizard_callback(client: Client, query: CallbackQuery):
             f"➕ <b>New files:</b> {res['total_new']}\n"
             f"♻️ <b>Existing duplicates:</b> {res['total_duplicates']}\n"
             f"⚠️ <b>Unknown quality:</b> {res['total_unknown_quality']}\n\n"
-            f"🌐 <b>Languages & Qualities:</b>\n{langs_summary}"
+            f"🌐 <b>Languages:</b>\n{langs_summary}\n"
+            f"🎞 <b>Qualities:</b> {quals_list}"
         )
         markup = InlineKeyboardMarkup([
             [InlineKeyboardButton("💾 Save", callback_data="sw#auto_movie_save")],
@@ -2341,51 +2405,74 @@ async def wizard_callback(client: Client, query: CallbackQuery):
 
     if action == "auto_movie_save":
         movie_data = temp.AUTO_MOVIE.get(uid)
-        if not movie_data or "scan" not in movie_data or not movie_data["scan"].get("valid_files"):
-            return await query.answer("⚠️ No valid scan data to save.", show_alert=True)
+        if not movie_data or "scan" not in movie_data:
+            return await query.answer("⚠️ Session expired. Send /automovieadd to start again.", show_alert=True)
 
         res = movie_data["scan"]
+        total_matched = res.get("total_matched", 0)
+        total_new = res.get("total_new", 0)
+        total_duplicates = res.get("total_duplicates", 0)
+        valid_files = res.get("valid_files") or res.get("valid_new_files") or []
+
+        if total_matched == 0:
+            return await query.answer("⚠️ No matching files found to save.", show_alert=True)
+
+        if total_new == 0 and total_duplicates > 0:
+            return await query.answer(f"⚠️ All {total_duplicates} files already exist in the database. Nothing new to save.", show_alert=True)
+
+        if not valid_files:
+            return await query.answer("⚠️ No new files to save.", show_alert=True)
+
         from database.ia_filterdb import col, sec_col, MULTIPLE_DATABASE, clean_file_name
 
-        added_count = 0
-        dup_count = 0
-        for f in res["valid_files"]:
-            file_id = f.get("file_id")
-            file_name = clean_file_name(f.get("file_name"))
-            file_doc = {
-                'file_id': file_id,
-                'file_name': file_name,
-                'file_size': f.get("file_size", 0),
-                'caption': f.get("caption")
-            }
-            try:
-                col.insert_one(file_doc)
-                added_count += 1
-            except Exception:
-                if MULTIPLE_DATABASE:
-                    try:
-                        sec_col.insert_one(file_doc)
-                        added_count += 1
-                    except Exception:
+        logger.info(f"[AUTO_MOVE_ADD] save_start movie={movie_data['title']} user_id={uid} new={total_new} duplicate={total_duplicates}")
+
+        try:
+            added_count = 0
+            dup_count = 0
+            for f in valid_files:
+                file_id = f.get("file_id")
+                file_name = clean_file_name(f.get("file_name"))
+                file_doc = {
+                    'file_id': file_id,
+                    'file_name': file_name,
+                    'file_size': f.get("file_size", 0),
+                    'caption': f.get("caption")
+                }
+                try:
+                    col.insert_one(file_doc)
+                    added_count += 1
+                except Exception:
+                    if MULTIPLE_DATABASE:
+                        try:
+                            sec_col.insert_one(file_doc)
+                            added_count += 1
+                        except Exception:
+                            dup_count += 1
+                    else:
                         dup_count += 1
-                else:
-                    dup_count += 1
 
-        del temp.AUTO_MOVIE[uid]
+            if uid in temp.AUTO_MOVIE:
+                del temp.AUTO_MOVIE[uid]
 
-        success_text = (
-            f"✅ <b>AUTO MOVIE ADD COMPLETED</b>\n\n"
-            f"🎬 <b>{movie_data['title']}</b>\n"
-            f"📅 <b>Year:</b> {movie_data['year']}\n\n"
-            f"📁 <b>Files Added:</b> {added_count}\n"
-            f"♻️ <b>Duplicates Skipped:</b> {dup_count}"
-        )
-        markup = InlineKeyboardMarkup([
-            [InlineKeyboardButton("🔎 Search Movie", switch_inline_query_current_chat=movie_data['title'])],
-            [InlineKeyboardButton("🏠 Close", callback_data="sw#auto_close")]
-        ])
-        await query.message.edit_text(success_text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
-        return await query.answer("🎉 Movie files saved successfully!")
+            logger.info(f"[AUTO_MOVE_ADD] save_success movie={movie_data['title']} files_added={added_count} duplicates_skipped={dup_count}")
+
+            success_text = (
+                f"✅ <b>AUTO MOVIE ADD COMPLETED</b>\n\n"
+                f"🎬 <b>{movie_data['title']}</b>\n"
+                f"📅 <b>Year:</b> {movie_data['year']}\n\n"
+                f"📁 <b>Files Added:</b> {added_count}\n"
+                f"♻️ <b>Duplicates Skipped:</b> {dup_count}"
+            )
+            markup = InlineKeyboardMarkup([
+                [InlineKeyboardButton("🔎 Search Movie", switch_inline_query_current_chat=movie_data['title'])],
+                [InlineKeyboardButton("🏠 Close", callback_data="sw#auto_close")]
+            ])
+            await query.message.edit_text(success_text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
+            return await query.answer("🎉 Movie files saved successfully!")
+        except Exception as e:
+            logger.error(f"[AUTO_MOVE_ADD] save_error movie={movie_data['title']} error={e}")
+            return await query.answer(f"❌ Error while saving: {e}", show_alert=True)
 
     if action == "auto_movie_cancel":
         if hasattr(temp, "AUTO_MOVIE") and uid in temp.AUTO_MOVIE:
@@ -4962,14 +5049,14 @@ async def process_series_deeplink(client: Client, message: Message, series_key: 
 # ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ 
 
 
-@Client.on_message(filters.command(["add_ano", "set_ano"]) & (filters.private | filters.group), group=1)
+@Client.on_message(filters.command(["add_ano", "set_ano"]))
 async def cmd_add_ano(client: Client, message: Message):
     is_admin = False
     if message.chat.type in [enums.ChatType.GROUP, enums.ChatType.SUPERGROUP]:
         admin_list = await client.get_chat_members(message.chat.id, filter=enums.ChatMembersFilter.ADMINISTRATORS)
         is_admin = any(admin.user.id == message.from_user.id for admin in admin_list if admin.user)
     else:
-        is_admin = _is_admin(message.from_user.id)
+        is_admin = _is_admin(message.from_user.id if message.from_user else 0)
 
     if not is_admin:
         return await message.reply_text("❌ You are not authorized to use this command.")
@@ -4986,77 +5073,70 @@ async def cmd_add_ano(client: Client, message: Message):
     try:
         channel_id = int(ch_input)
     except ValueError:
-        return await message.reply_text("❌ Invalid channel ID. Please provide a valid numeric channel ID (e.g. <code>-1001234567890</code>).", parse_mode=enums.ParseMode.HTML)
+        return await message.reply_text(
+            "❌ <b>Invalid Channel ID:</b> Please provide a valid numeric channel ID (e.g. <code>-1001234567890</code>).",
+            parse_mode=enums.ParseMode.HTML
+        )
+
+    channel_title = str(channel_id)
+    try:
+        chat = await client.get_chat(channel_id)
+        if chat and chat.title:
+            channel_title = chat.title
+        bot_member = await client.get_chat_member(channel_id, "me")
+        if bot_member.status not in [enums.ChatMemberStatus.ADMINISTRATOR, enums.ChatMemberStatus.OWNER]:
+            return await message.reply_text(
+                f"❌ <b>Permission Error:</b> The bot is not an <b>Administrator</b> in <b>{channel_title}</b> (<code>{channel_id}</code>).\n\n"
+                f"Please promote the bot to Admin with <i>Post Messages</i> permission.",
+                parse_mode=enums.ParseMode.HTML
+            )
+    except Exception as e:
+        logger.warning(f"[ANNOUNCEMENT] Channel access check failed for {channel_id}: {e}")
+        return await message.reply_text(
+            f"❌ <b>Channel Access Failed:</b>\n\n"
+            f"Could not access channel <code>{channel_id}</code>.\n"
+            f"<i>Error:</i> <code>{e}</code>\n\n"
+            f"Please ensure the bot has been added to the channel as an <b>Admin</b>.",
+            parse_mode=enums.ParseMode.HTML
+        )
 
     await set_announcement_channel(channel_id)
+    user_id = message.from_user.id if message.from_user else 0
+    logger.info(f"[ANNOUNCEMENT] add_channel={channel_id} title={channel_title} configured by user={user_id}")
     await message.reply_text(
-        f"✅ <b>Announcement Channel Saved</b>\n\n📢 <b>Channel:</b>\n<code>{channel_id}</code>",
+        f"✅ <b>Announcement Channel Configured</b>\n\n"
+        f"📢 <b>Channel:</b> <code>{channel_title}</code>\n"
+        f"🆔 <b>Channel ID:</b> <code>{channel_id}</code>\n"
+        f"⚡ <b>Announcement Status:</b> <code>Enabled</code>\n\n"
+        f"<i>New series additions will now be announced automatically to this channel.</i>",
         parse_mode=enums.ParseMode.HTML
     )
 
 
-@Client.on_message(filters.command(["del_ano", "delano", "del_announcement"]) & (filters.private | filters.group), group=1)
+@Client.on_message(filters.command(["del_ano", "delano", "del_announcement", "del_channel_ano"]))
 async def cmd_del_ano(client: Client, message: Message):
     is_admin = False
     if message.chat.type in [enums.ChatType.GROUP, enums.ChatType.SUPERGROUP]:
         admin_list = await client.get_chat_members(message.chat.id, filter=enums.ChatMembersFilter.ADMINISTRATORS)
         is_admin = any(admin.user.id == message.from_user.id for admin in admin_list if admin.user)
     else:
-        is_admin = _is_admin(message.from_user.id)
+        is_admin = _is_admin(message.from_user.id if message.from_user else 0)
 
     if not is_admin:
         return await message.reply_text("❌ You are not authorized to use this command.")
 
-    args = message.text.split(None, 1)
-    if len(args) < 2:
-        # Standalone /del_ano removes the currently configured announcement channel
-        channel_id = await get_announcement_channel()
-        if not channel_id:
-            return await message.reply_text("ℹ️ No announcement channel is currently configured.")
-        await delete_announcement_channel()
-        return await message.reply_text("✅ Announcement Channel Removed")
+    channel_id = await get_announcement_channel()
+    if not channel_id:
+        return await message.reply_text("ℹ️ <b>No announcement channel is currently configured.</b>", parse_mode=enums.ParseMode.HTML)
 
-    query_str = args[1].strip().strip('"').strip("'")
-
-    # 1. Resolve series
-    series = None
-    if re.fullmatch(r"[0-9a-fA-F]{24}", query_str):
-        series = await get_series(query_str)
-    if not series:
-        series = await get_series_by_key(query_str)
-    if not series:
-        norm = _normalize(query_str)
-        series = await get_series_by_name(norm)
-    if not series:
-        matches = await search_series(query_str)
-        if matches:
-            series = matches[0]
-
-    if not series:
-        return await message.reply_text(f"❌ No series found matching '<b>{query_str}</b>'.", parse_mode=enums.ParseMode.HTML)
-
-    sid = str(series["_id"])
-    sname = series.get("name", query_str)
-
-    # 2. Find and delete channel announcement message if possible
-    anno = await get_announcement(sid)
-    deleted_msg = False
-    if anno and anno.get("channel_id") and anno.get("message_id"):
-        try:
-            await client.delete_messages(chat_id=int(anno["channel_id"]), message_ids=int(anno["message_id"]))
-            deleted_msg = True
-            logger.info(f"[DEL_ANO] Deleted announcement message {anno['message_id']} from channel {anno['channel_id']}")
-        except Exception as e:
-            logger.warning(f"[DEL_ANO] Could not delete channel message: {e}")
-
-    # 3. Clear persistent announcement tracking
-    await delete_announcement(sid)
-
-    msg_status = "and message removed from channel." if deleted_msg else "and tracking state cleared."
-    await message.reply_text(
-        f"✅ <b>Announcement Removed</b>\n\n"
-        f"Series: <b>{sname}</b>\n"
-        f"Announcement tracking cleared {msg_status}",
+    await delete_announcement_channel()
+    user_id = message.from_user.id if message.from_user else 0
+    logger.info(f"[ANNOUNCEMENT] delete_channel={channel_id} removed by user={user_id}")
+    return await message.reply_text(
+        f"✅ <b>Announcement Channel Removed</b>\n\n"
+        f"📢 <b>Previous Channel:</b> <code>{channel_id}</code>\n"
+        f"⚡ <b>Announcement Status:</b> <code>Disabled</code>\n\n"
+        f"<i>Future automatic series announcements are now stopped.</i>",
         parse_mode=enums.ParseMode.HTML
     )
 
