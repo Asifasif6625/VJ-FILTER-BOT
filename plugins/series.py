@@ -13,7 +13,8 @@
 import re
 import logging
 import asyncio
-from datetime import datetime
+import time
+from datetime import datetime, timedelta
 
 from pyrogram import Client, filters, enums
 from pyrogram.types import (
@@ -628,8 +629,11 @@ async def scan_sdatabase_for_movie(title: str, year: str = None, client: Client 
 
 
 
-def _is_admin(user_id: int) -> bool:
-    return user_id in ADMINS
+def _is_admin(user_id: int | str) -> bool:
+    if not user_id:
+        return False
+    u_str = str(user_id).strip()
+    return user_id in ADMINS or u_str in [str(a).strip() for a in ADMINS]
 
 
 
@@ -2261,13 +2265,29 @@ async def wizard_callback(client: Client, query: CallbackQuery):
                     "season": f["season"],
                     "episode": f["episode"],
                     "quality": f["quality"],
-                    "file_id": f["file_id"],
-                    "file_name": f["file_name"],
-                    "file_size": f["file_size"],
+                    "chat_id": f.get("chat_id"),
+                    "message_id": f.get("message_id"),
+                    "file_id": f.get("file_id", ""),
+                    "file_name": f.get("file_name", ""),
+                    "file_size": f.get("file_size", 0),
+                    "caption": f.get("caption"),
                     "is_batch": False,
+                    "total_episodes": 1,
                 })
                 if ok:
                     added_count += 1
+
+            if valid_files:
+                first_f = valid_files[0]
+                saved_check = await get_series_files(
+                    series_id,
+                    first_f["language"],
+                    first_f["season"],
+                    first_f["episode"],
+                    first_f["quality"]
+                )
+                logger.info(f"[AUTO_SERIES_ADD] verified persistence series_id={series_id} saved_sample_count={len(saved_check)}")
+
 
             if is_skip:
                 ep_lines = []
@@ -4555,7 +4575,6 @@ async def series_user_nav(client: Client, query: CallbackQuery):
                     f"quality={qual}\n"
                     f"episode={ep}"
                 )
-
             # ── 10-Second Cooldown Protection (PM Series Quality Button) ──
             if query.message.chat.type == enums.ChatType.PRIVATE:
                 import math
@@ -4782,9 +4801,6 @@ async def cb_vser_page(client: Client, query: CallbackQuery):
 
 
 
-import logging
-logger = logging.getLogger(__name__)
-logger.info("[VIEWSERIES] handler registered")
 
 
 
@@ -4795,7 +4811,7 @@ async def cmd_serieslist(client: Client, message: Message):
         admin_list = await client.get_chat_members(message.chat.id, filter=enums.ChatMembersFilter.ADMINISTRATORS)
         is_admin = any(admin.user.id == message.from_user.id for admin in admin_list if admin.user)
     else:
-        is_admin = message.from_user.id in ADMINS
+        is_admin = _is_admin(message.from_user.id if message.from_user else 0)
     
     if not is_admin:
         return await message.reply_text("âŒ You are not authorized to use this command.")
@@ -5049,7 +5065,7 @@ async def process_series_deeplink(client: Client, message: Message, series_key: 
 # ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ 
 
 
-@Client.on_message(filters.command(["add_ano", "set_ano"]))
+@Client.on_message(filters.command(["add_ano", "set_ano", "addano", "setano"]))
 async def cmd_add_ano(client: Client, message: Message):
     is_admin = False
     if message.chat.type in [enums.ChatType.GROUP, enums.ChatType.SUPERGROUP]:
@@ -5061,44 +5077,75 @@ async def cmd_add_ano(client: Client, message: Message):
     if not is_admin:
         return await message.reply_text("❌ You are not authorized to use this command.")
 
-    args = message.text.split()
-    if len(args) < 2:
+    args = message.text.split(None, 1)
+    if len(args) < 2 or not args[1].strip():
         return await message.reply_text(
             "<b>Usage:</b> <code>/add_ano &lt;channel_id&gt;</code>\n\n"
-            "<b>Example:</b> <code>/add_ano -1001234567890</code>",
+            "<b>Example:</b> <code>/add_ano -1001234567890</code>\n"
+            "or: <code>/add_ano @channel_username</code>",
             parse_mode=enums.ParseMode.HTML
         )
 
-    ch_input = args[1].strip()
-    try:
-        channel_id = int(ch_input)
-    except ValueError:
-        return await message.reply_text(
-            "❌ <b>Invalid Channel ID:</b> Please provide a valid numeric channel ID (e.g. <code>-1001234567890</code>).",
-            parse_mode=enums.ParseMode.HTML
-        )
+    ch_raw = args[1].strip().strip('"').strip("'").strip("`").strip()
+
+    # Parse channel input (supports -100..., @username, or https://t.me/...)
+    channel_id = None
+    if ch_raw.startswith("https://t.me/") or ch_raw.startswith("http://t.me/"):
+        parts = ch_raw.rstrip("/").split("/")
+        if len(parts) >= 4 and parts[-2] == "c" and parts[-1].isdigit():
+            channel_id = int(f"-100{parts[-1]}")
+        elif len(parts) >= 4:
+            channel_id = f"@{parts[-1]}"
+        else:
+            channel_id = ch_raw
+    elif ch_raw.startswith("@"):
+        channel_id = ch_raw
+    else:
+        try:
+            channel_id = int(ch_raw)
+        except ValueError:
+            return await message.reply_text(
+                "❌ <b>Invalid Channel ID:</b> Please provide a valid numeric channel ID (e.g. <code>-1001234567890</code>) or @channel_username.",
+                parse_mode=enums.ParseMode.HTML
+            )
 
     channel_title = str(channel_id)
     try:
         chat = await client.get_chat(channel_id)
-        if chat and chat.title:
-            channel_title = chat.title
-        bot_member = await client.get_chat_member(channel_id, "me")
-        if bot_member.status not in [enums.ChatMemberStatus.ADMINISTRATOR, enums.ChatMemberStatus.OWNER]:
+        if chat:
+            channel_id = chat.id
+            if chat.title:
+                channel_title = chat.title
+    except Exception as e:
+        logger.warning(f"[ANNOUNCEMENT] get_chat failed for {channel_id}: {e}")
+        if not str(channel_id).lstrip("-").isdigit():
             return await message.reply_text(
-                f"❌ <b>Permission Error:</b> The bot is not an <b>Administrator</b> in <b>{channel_title}</b> (<code>{channel_id}</code>).\n\n"
-                f"Please promote the bot to Admin with <i>Post Messages</i> permission.",
+                f"❌ <b>Channel Access Failed:</b> Could not find or access channel <code>{channel_id}</code>.\n\n"
+                f"<i>Error:</i> <code>{e}</code>\n\n"
+                f"Please ensure the channel ID or @username is correct and the bot is an Admin.",
                 parse_mode=enums.ParseMode.HTML
             )
-    except Exception as e:
-        logger.warning(f"[ANNOUNCEMENT] Channel access check failed for {channel_id}: {e}")
-        return await message.reply_text(
-            f"❌ <b>Channel Access Failed:</b>\n\n"
-            f"Could not access channel <code>{channel_id}</code>.\n"
-            f"<i>Error:</i> <code>{e}</code>\n\n"
-            f"Please ensure the bot has been added to the channel as an <b>Admin</b>.",
-            parse_mode=enums.ParseMode.HTML
-        )
+
+    # Validate bot permissions in the channel safely
+    bot_id = client.me.id if (hasattr(client, "me") and client.me) else None
+    if not bot_id:
+        try:
+            me_obj = await client.get_me()
+            bot_id = me_obj.id
+        except Exception:
+            bot_id = None
+
+    if bot_id:
+        try:
+            member = await client.get_chat_member(channel_id, bot_id)
+            if member.status not in [enums.ChatMemberStatus.ADMINISTRATOR, enums.ChatMemberStatus.OWNER]:
+                return await message.reply_text(
+                    f"❌ <b>Permission Error:</b> The bot is not an <b>Administrator</b> in <b>{channel_title}</b> (<code>{channel_id}</code>).\n\n"
+                    f"Please promote the bot to Admin with <i>Post Messages</i> permission.",
+                    parse_mode=enums.ParseMode.HTML
+                )
+        except Exception as pe:
+            logger.info(f"[ANNOUNCEMENT] get_chat_member check bypassed: {pe}")
 
     await set_announcement_channel(channel_id)
     user_id = message.from_user.id if message.from_user else 0
@@ -5113,7 +5160,7 @@ async def cmd_add_ano(client: Client, message: Message):
     )
 
 
-@Client.on_message(filters.command(["del_ano", "delano", "del_announcement", "del_channel_ano"]))
+@Client.on_message(filters.command(["del_ano", "delano", "del_announcement", "del_channel_ano", "del_ano_channel"]))
 async def cmd_del_ano(client: Client, message: Message):
     is_admin = False
     if message.chat.type in [enums.ChatType.GROUP, enums.ChatType.SUPERGROUP]:
