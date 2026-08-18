@@ -46,13 +46,15 @@ class temp(object):
     BANNED_CHATS = []
     ME = None
     BOT = None
-    CURRENT=int(os.environ.get("SKIP", 2))
+    CURRENT = int(os.environ.get("SKIP", 2))
     CANCEL = False
     MELCOW = {}
     SERIES_WIZARD = {}
     SERIES_STATE = {}
     AUTO_SERIES = {}
     AUTO_MOVIE = {}
+    MOVIE_STATE = {}
+    WIZARD_SESSIONS = {}
     U_NAME = None
     B_NAME = None
     GETALL = {}
@@ -60,6 +62,97 @@ class temp(object):
     SETTINGS = {}
     IMDB_CAP = {}
     SERIES_PM_QUALITY_COOLDOWNS = {}
+
+
+def set_wizard_session(user_id: int, workflow: str, state: str, data: dict = None, chat_id: int = None):
+    """
+    Store or update an active wizard session for a user.
+    workflow: 'AUTO_MOVIE' | 'AUTO_SERIES' | 'SERIES_WIZARD' | 'THUMBNAIL'
+    state: e.g. 'WAIT_IMDB', 'SCANNING', 'RESULT', 'SAVING'
+    """
+    import time
+    session_info = {
+        "user_id": user_id,
+        "chat_id": chat_id or user_id,
+        "workflow": workflow,
+        "state": state,
+        "created_at": time.time(),
+        "data": data or {}
+    }
+    temp.WIZARD_SESSIONS[user_id] = session_info
+    logger.info(f"[SESSION SET] user_id={user_id} workflow={workflow} state={state}")
+    return session_info
+
+
+def get_wizard_session(user_id: int, max_age_seconds: int = 900) -> dict | None:
+    """
+    Retrieve active wizard session with automatic 15-minute stale session expiry.
+    """
+    import time
+    sess = temp.WIZARD_SESSIONS.get(user_id)
+    if not sess:
+        # Fallback to legacy dictionary checks
+        if getattr(temp, "AUTO_MOVIE", {}).get(user_id):
+            mdata = temp.AUTO_MOVIE[user_id]
+            return {"user_id": user_id, "workflow": "AUTO_MOVIE", "state": mdata.get("state", "UNKNOWN"), "data": mdata}
+        if getattr(temp, "AUTO_SERIES", {}).get(user_id):
+            sdata = temp.AUTO_SERIES[user_id]
+            return {"user_id": user_id, "workflow": "AUTO_SERIES", "state": sdata.get("state", "UNKNOWN"), "data": sdata}
+        if getattr(temp, "SERIES_WIZARD", {}).get(user_id):
+            wdata = temp.SERIES_WIZARD[user_id]
+            return {"user_id": user_id, "workflow": "SERIES_WIZARD", "state": wdata.get("state", "UNKNOWN"), "data": wdata}
+        return None
+
+    # Check timeout
+    created_at = sess.get("created_at", 0)
+    # If scanning or saving, allow longer timeout (30 min)
+    effective_max = 1800 if sess.get("state") in ("SCANNING", "SAVING") else max_age_seconds
+    if time.time() - created_at > effective_max:
+        logger.info(f"[SESSION EXPIRED] user_id={user_id} workflow={sess.get('workflow')} state={sess.get('state')}")
+        clear_wizard_session(user_id)
+        return None
+
+    return sess
+
+
+def clear_wizard_session(user_id: int):
+    """
+    Completely clear all session states across all wizard containers for a user.
+    """
+    temp.WIZARD_SESSIONS.pop(user_id, None)
+    if hasattr(temp, "AUTO_MOVIE"):
+        temp.AUTO_MOVIE.pop(user_id, None)
+    if hasattr(temp, "AUTO_SERIES"):
+        temp.AUTO_SERIES.pop(user_id, None)
+    if hasattr(temp, "SERIES_WIZARD"):
+        temp.SERIES_WIZARD.pop(user_id, None)
+    if hasattr(temp, "SETTING_SERIES_THUMB"):
+        temp.SETTING_SERIES_THUMB.pop(user_id, None)
+    logger.info(f"[SESSION CLEARED] user_id={user_id}")
+
+
+def cancel_wizard_session(user_id: int) -> str | None:
+    """
+    Cancel active session and return the cancelled workflow type name.
+    """
+    sess = get_wizard_session(user_id)
+    workflow = None
+    if sess:
+        workflow = sess.get("workflow")
+    elif hasattr(temp, "SETTING_SERIES_THUMB") and temp.SETTING_SERIES_THUMB.get(user_id):
+        workflow = "THUMBNAIL"
+    elif hasattr(temp, "AUTO_MOVIE") and temp.AUTO_MOVIE.get(user_id):
+        workflow = "AUTO_MOVIE"
+    elif hasattr(temp, "AUTO_SERIES") and temp.AUTO_SERIES.get(user_id):
+        workflow = "AUTO_SERIES"
+    elif hasattr(temp, "SERIES_WIZARD") and temp.SERIES_WIZARD.get(user_id):
+        workflow = "SERIES_WIZARD"
+
+    clear_wizard_session(user_id)
+    if workflow:
+        logger.info(f"[CANCEL WIZARD] user_id={user_id} workflow={workflow}")
+    return workflow
+
 
 
 async def pub_is_subscribed(bot, query, channel):
@@ -113,7 +206,7 @@ async def is_subscribed(bot, query):
 async def get_poster(query, bulk=False, id=False, file=None):
     try:
         query_str = str(query).strip()
-        imdb_url_match = re.search(r"(?:imdb\.com/title/)?(tt\d{5,10})", query_str, re.IGNORECASE)
+        imdb_url_match = re.search(r"(?:imdb\.com/title/)?(tt\d{5,12})", query_str, re.IGNORECASE)
 
         if id or (imdb_url_match and not bulk):
             if imdb_url_match:
