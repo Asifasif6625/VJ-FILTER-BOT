@@ -8,9 +8,15 @@ RUN apt update && apt upgrade -y
 RUN apt install git -y
 COPY requirements.txt /requirements.txt
 
+ENV PYTHONDONTWRITEBYTECODE=1
+
 RUN cd /
-RUN pip3 install -U pip && pip3 install -U -r requirements.txt
+RUN pip3 install --no-cache-dir -U pip && pip3 install --no-cache-dir -U -r requirements.txt
 RUN mkdir /VJ-FILTER-BOT
 WORKDIR /VJ-FILTER-BOT
-COPY . /VJ-FILTER-BOT
-CMD ["python", "bot.py"]
+COPY CloneTechVJ /VJ-FILTER-BOT/CloneTechVJ
+COPY database /VJ-FILTER-BOT/database
+COPY plugins /VJ-FILTER-BOT/plugins
+COPY TechVJ /VJ-FILTER-BOT/TechVJ
+COPY *.py logging.conf requirements.txt /VJ-FILTER-BOT/
+CMD ["python", "-B", "bot.py"]
