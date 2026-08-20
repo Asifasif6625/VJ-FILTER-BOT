@@ -344,13 +344,21 @@ async def search_series(query: str) -> list[dict]:
     # 3. Sort by score descending, then length difference, then name
     scored_results.sort(key=lambda x: (-x[0], abs(len(x[1].get("normalized_name", "")) - len(q_norm)), x[1].get("name", "")))
 
-    # 4. Deduplicate by unique series title
+    # 4. Deduplicate by (title + year) — NOT just title alone.
+    #    Series with the same name but different years must remain separate.
     seen = set()
     dedup = []
     for score, doc in scored_results:
         name_lower = doc.get("name", "").strip().lower()
-        if name_lower not in seen:
-            seen.add(name_lower)
+        year       = str(doc.get("year", "")).strip()
+        imdb_id    = str(doc.get("imdb_id", "")).strip()
+        # Primary key: imdb_id when present; otherwise (name, year)
+        if imdb_id:
+            dedup_key = imdb_id
+        else:
+            dedup_key = f"{name_lower}||{year}"
+        if dedup_key not in seen:
+            seen.add(dedup_key)
             dedup.append(doc)
             if len(dedup) == 10:
                 break
@@ -361,6 +369,7 @@ async def search_series(query: str) -> list[dict]:
         f"matched={bool(dedup)}"
     )
     return dedup
+
 
 # ─── Settings / Global Thumbnail ─────────────────────────────────────────────
 
