@@ -746,13 +746,25 @@ async def advantage_spoll_choker(bot, query):
     if gl == False:
         k = await manual_filters(bot, query.message, text=movie)
         if k == False:
+            # ── 1. Check Super Movie ──
+            try:
+                from plugins.series import process_super_movie_search
+                is_super_movie = await process_super_movie_search(bot, query.message.reply_to_message or query.message, movie, query.message)
+                if is_super_movie:
+                    return
+            except Exception as e:
+                logger.error(f"[SUPER MOVIE SEARCH ROUTING ERROR in spoll] {e}")
+
+            # ── 2. Check ia_filterdb ──
             files, offset, total_results = await get_search_results(query.message.chat.id, movie, offset=0, filter=True)
+            logger.info(f"[NORMAL MOVIE SEARCH]\nquery={movie}\ndb_files={len(files)}")
             if files:
                 k = (movie, files, offset, total_results)
                 ai_search = True
                 reply_msg = await query.message.edit_text(f"<b><i>Searching For {movie} 🔍</i></b>")
                 await auto_filter(bot, movie, query, reply_msg, ai_search, k)
             else:
+                # ── 3. Check Series ──
                 try:
                     from plugins.series import process_series_search
                     is_series = await process_series_search(bot, query.message.reply_to_message or query.message, movie, query.message)
@@ -760,6 +772,8 @@ async def advantage_spoll_choker(bot, query):
                         return
                 except Exception:
                     pass
+
+                # ── 4. No Results ──
                 reqstr1 = query.from_user.id if query.from_user else 0
                 reqstr = await bot.get_users(reqstr1)
                 if NO_RESULTS_MSG:
@@ -3274,7 +3288,7 @@ async def auto_filter(client, name, msg, reply_msg=None, ai_search=True, spoll=F
                 logger.error(f"[SUPER MOVIE SEARCH ROUTING ERROR] {e}")
             
             files, offset, total_results = await get_search_results(message.chat.id, search, max_results=100, offset=0, filter=True)
-            logger.info(f"[MOVIE SEARCH]\nquery={search}\ndb_files={len(files)}")
+            logger.info(f"[NORMAL MOVIE SEARCH]\nquery={search}\ndb_files={len(files)}")
             settings = await get_settings(message.chat.id)
 
             if not files:

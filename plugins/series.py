@@ -741,10 +741,10 @@ def _build_auto_movie_lang_text(movie_data):
             f"📁 <b>Files scanned:</b> {tot_scanned}\n"
             f"✅ <b>Matching files:</b> {tot_matched}\n"
             f"🆕 <b>New files:</b> 0\n"
-            f"⚠️ <b>Existing in database:</b> {tot_dup}\n\n"
+            f"⚠️ <b>Existing duplicates:</b> {tot_dup}\n\n"
+            f"⚠️ <i>All matching files already exist in the database. No new files to save.</i>\n\n"
             f"🌐 <b>Languages & Qualities:</b>\n\n"
-            f"{breakdown_str}\n\n"
-            f"<i>Click below to create the Super Movie Filter for this movie.</i>"
+            f"{breakdown_str}"
         )
 
     # 4. New files found (Scan Result)
@@ -770,30 +770,19 @@ def _build_auto_movie_lang_keyboard(session_id, movie_data):
     tot_dup = res.get("total_duplicates", 0)
 
     buttons = []
-    # 0 matching files
-    if tot_matched == 0:
+    # 0 matching files or all files already exist (no new files)
+    if tot_matched == 0 or tot_new == 0:
+        buttons.append([
+            InlineKeyboardButton("📦 Batch Add Files", callback_data=f"am_batch:{session_id}"),
+        ])
         buttons.append([
             InlineKeyboardButton("🔄 Rescan", callback_data=f"am_rescan:{session_id}"),
             InlineKeyboardButton("❌ Cancel", callback_data=f"am_cancel:{session_id}")
         ])
-    # Some new files (tot_new > 0 and tot_dup > 0)
-    elif tot_new > 0 and tot_dup > 0:
-        buttons.append([InlineKeyboardButton(f"💾 Save Super Movie ({tot_new} New)", callback_data=f"am_save:{session_id}")])
-        buttons.append([
-            InlineKeyboardButton("🔄 Rescan", callback_data=f"am_rescan:{session_id}"),
-            InlineKeyboardButton("❌ Cancel", callback_data=f"am_cancel:{session_id}")
-        ])
-    # All matching files are new (tot_new > 0 and tot_dup == 0)
-    elif tot_new > 0 and tot_dup == 0:
-        buttons.append([
-            InlineKeyboardButton("💾 Save Super Movie", callback_data=f"am_save:{session_id}"),
-            InlineKeyboardButton("❌ Cancel", callback_data=f"am_cancel:{session_id}")
-        ])
-    # All matching files already exist in ia_filterdb (tot_new == 0, tot_dup > 0)
+    # New files exist -> Show Save button
     else:
-        buttons.append([
-            InlineKeyboardButton("💾 Create Super Movie Filter", callback_data=f"am_save:{session_id}")
-        ])
+        buttons.append([InlineKeyboardButton(f"💾 Save Super Movie ({tot_new} New)", callback_data=f"am_save:{session_id}")])
+        buttons.append([InlineKeyboardButton("📦 Batch Add Files", callback_data=f"am_batch:{session_id}")])
         buttons.append([
             InlineKeyboardButton("🔄 Rescan", callback_data=f"am_rescan:{session_id}"),
             InlineKeyboardButton("❌ Cancel", callback_data=f"am_cancel:{session_id}")
@@ -1496,6 +1485,7 @@ async def cmd_automovieadd(client: Client, message: Message):
     }
     set_wizard_session(uid, workflow="AUTO_MOVIE", state="WAIT_IMDB", data=movie_state, chat_id=message.chat.id)
     temp.AUTO_MOVIE[uid] = movie_state
+    logger.info("[AUTO MOVIE]\nstate=WAIT_IMDB")
     await message.reply_text(
         "🎬 <b>Auto Movie Add — Movie Importer</b>\n\n"
         "Send IMDb Movie link or ID:\n\n"
@@ -1958,6 +1948,7 @@ async def wizard_text_handler(client: Client, message: Message):
                 "created_at": time.time(),
             })
             set_wizard_session(uid, workflow="AUTO_MOVIE", state="SCANNING", data=movie_data, chat_id=message.chat.id)
+            logger.info("[AUTO MOVIE]\nstate=SCANNING")
 
             await loading_msg.edit_text(
                 f"🔍 <b>Scanning database for {movie_data['title']} ({movie_data['year']})...</b>",
@@ -1971,6 +1962,7 @@ async def wizard_text_handler(client: Client, message: Message):
             temp.AUTO_MOVIE[session_id] = movie_data
             temp.AUTO_MOVIE[uid] = movie_data
             set_wizard_session(uid, workflow="AUTO_MOVIE", state="RESULT", data=movie_data, chat_id=message.chat.id)
+            logger.info("[AUTO MOVIE]\nstate=RESULT")
 
             logger.info(f"[AUTO_MOVIE SCAN]\ntitle={movie_data['title']}\nscanned={res['total_scanned']}\nmatched={res['total_matched']}\nnew={res['total_new']}\nduplicates={res['total_duplicates']}")
 
@@ -2215,6 +2207,7 @@ async def wizard_callback(client: Client, query: CallbackQuery):
             "admin_id": uid,
         }
         set_wizard_session(uid, workflow="AUTO_MOVIE", state="WAIT_IMDB", data=temp.AUTO_MOVIE[uid], chat_id=query.message.chat.id)
+        logger.info("[AUTO MOVIE]\nstate=WAIT_IMDB")
         await query.message.edit_text(
             "🎬 <b>Auto Movie Add — Movie Importer</b>\n\n"
             "Send IMDb Movie link or ID:\n\n"
@@ -2711,332 +2704,6 @@ async def wizard_callback(client: Client, query: CallbackQuery):
             pass
         return await query.answer()
 
-
-@Client.on_callback_query(filters.regex(r"^am_"))
-async def auto_movie_hierarchical_callbacks(client: Client, query: CallbackQuery):
-    data = query.data
-    parts = data.split(":")
-    action = parts[0]
-    session_id = parts[1] if len(parts) > 1 else ""
-
-    movie_data = getattr(temp, "AUTO_MOVIE", {}).get(session_id)
-    if not movie_data:
-        movie_data = getattr(temp, "AUTO_MOVIE", {}).get(query.from_user.id)
-
-    if not movie_data:
-        return await query.answer("⚠️ Session expired. Please send IMDb link again.", show_alert=True)
-
-    uid = movie_data.get("user_id", query.from_user.id)
-    if query.from_user.id != uid and not _is_admin(query.from_user.id):
-        return await query.answer("⚠️ This is not your session.", show_alert=True)
-
-    if action == "am_lang":
-        lang = parts[2] if len(parts) > 2 else ""
-        qualities = list(movie_data.get("grouped", {}).get(lang, {}).keys())
-        if not qualities:
-            return await query.answer("❌ No qualities available for this language.", show_alert=True)
-        text = _build_auto_movie_qual_text(movie_data, lang)
-        markup = _build_auto_movie_qual_keyboard(session_id, lang, qualities)
-        await query.message.edit_text(text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
-        return await query.answer()
-
-    elif action == "am_qual":
-        lang = parts[2] if len(parts) > 2 else ""
-        qual = parts[3] if len(parts) > 3 else ""
-        files = movie_data.get("grouped", {}).get(lang, {}).get(qual, [])
-        if not files:
-            return await query.answer("❌ No files available for this quality.", show_alert=True)
-        text = _build_auto_movie_file_text(movie_data, lang, qual)
-        markup = _build_auto_movie_file_keyboard(session_id, lang, qual, files, page=0)
-        await query.message.edit_text(text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
-        return await query.answer()
-
-    elif action == "am_page":
-        lang = parts[2] if len(parts) > 2 else ""
-        qual = parts[3] if len(parts) > 3 else ""
-        page = int(parts[4]) if len(parts) > 4 and parts[4].isdigit() else 0
-        files = movie_data.get("grouped", {}).get(lang, {}).get(qual, [])
-        markup = _build_auto_movie_file_keyboard(session_id, lang, qual, files, page=page)
-        await query.message.edit_reply_markup(reply_markup=markup)
-        return await query.answer()
-
-    elif action == "am_back":
-        target = parts[2] if len(parts) > 2 else "lang"
-        if target == "lang":
-            text = _build_auto_movie_lang_text(movie_data)
-            markup = _build_auto_movie_lang_keyboard(session_id, movie_data)
-            await query.message.edit_text(text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
-            return await query.answer()
-
-    elif action == "am_cancel":
-        temp.AUTO_MOVIE.pop(session_id, None)
-        temp.AUTO_MOVIE.pop(uid, None)
-        from utils import clear_wizard_session
-        clear_wizard_session(uid)
-        logger.info(f"[AUTO_MOVIE CANCEL]\nuser_id={uid}")
-        await query.message.edit_text("❌ <b>Auto Movie Add cancelled.</b>", parse_mode=enums.ParseMode.HTML)
-        return await query.answer("Cancelled.")
-
-    elif action == "am_rescan":
-        await query.message.edit_text(
-            f"🔄 <b>Rescanning database for {movie_data['title']} ({movie_data['year']})...</b>",
-            parse_mode=enums.ParseMode.HTML
-        )
-        res = await scan_sdatabase_for_movie(movie_data["title"], movie_data["year"], client=client)
-        movie_data["scan"] = res
-        movie_data["grouped"] = _group_auto_movie_files(res)
-        text_res = _build_auto_movie_lang_text(movie_data)
-        markup = _build_auto_movie_lang_keyboard(session_id, movie_data)
-        await query.message.edit_text(text_res, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
-        return await query.answer(f"Rescan complete: {res['total_new']} new files.")
-
-    elif action == "am_save":
-        res = movie_data.get("scan", {})
-        valid_new = res.get("valid_new_files", [])
-        tot_matched = res.get("total_matched", 0)
-        if tot_matched == 0 and not valid_new:
-            return await query.answer("⚠️ No matching movie files found to create filter.", show_alert=True)
-
-        if valid_new:
-            await query.message.edit_text(
-                f"💾 <b>Saving {len(valid_new)} new files and creating Super Movie Filter for {movie_data['title']}...</b>",
-                parse_mode=enums.ParseMode.HTML
-            )
-        else:
-            await query.message.edit_text(
-                f"💾 <b>Creating Super Movie Filter for {movie_data['title']}...</b>",
-                parse_mode=enums.ParseMode.HTML
-            )
-
-        from database.ia_filterdb import col, sec_col, MULTIPLE_DATABASE, clean_file_name, is_file_already_saved, get_search_results
-        from utils import clear_wizard_session
-        added_count = 0
-        dup_count = 0
-        for f in valid_new:
-            fid = f.get("file_id")
-            fname = clean_file_name(f.get("file_name"))
-
-            if is_file_already_saved(fid, fname):
-                dup_count += 1
-                continue
-
-            file_doc = {
-                'file_id': fid,
-                'file_name': fname,
-                'file_size': f.get("file_size", 0),
-                'caption': f.get("caption")
-            }
-            try:
-                col.insert_one(file_doc)
-                if MULTIPLE_DATABASE:
-                    try:
-                        sec_col.insert_one(file_doc)
-                    except Exception:
-                        pass
-                added_count += 1
-            except Exception as e:
-                logger.error(f"[AUTO_MOVIE SAVE ERROR] file_id={fid} error={e}")
-
-        from database.series_db import create_super_movie
-        grouped_files = movie_data.get("grouped", {})
-        langs = list(grouped_files.keys())
-        quals = list({q for l in grouped_files.values() for q in l.keys()})
-        try:
-            await create_super_movie({
-                "title": movie_data["title"],
-                "year": movie_data.get("year", "N/A"),
-                "rating": movie_data.get("rating", ""),
-                "genre": movie_data.get("genre", "N/A"),
-                "poster": movie_data.get("poster", ""),
-                "imdb_id": movie_data.get("imdb_id", ""),
-                "languages": langs,
-                "qualities": quals,
-                "created_by": uid
-            })
-            logger.info(f"[SUPER MOVIE CREATED] title={movie_data['title']} languages={len(langs)} qualities={len(quals)}")
-        except Exception as e:
-            logger.error(f"[SUPER MOVIE CREATION ERROR] {e}")
-
-        temp.AUTO_MOVIE.pop(session_id, None)
-        temp.AUTO_MOVIE.pop(uid, None)
-        clear_wizard_session(uid)
-
-        logger.info(f"[AUTO_MOVIE SAVE]\ntitle={movie_data['title']}\nsaved={added_count}\nduplicates={dup_count}")
-
-        # ── Critical Save Verification ──
-        clean_search_title = re.sub(r"[\.\_\-\:\+\/\\\[\]\(\)\{\}]+", " ", movie_data['title']).strip()
-        try:
-            verify_files, _, total_found = await get_search_results(query.message.chat.id, clean_search_title, offset=0, filter=True)
-            searchable_count = len(verify_files) if verify_files else 0
-        except Exception:
-            searchable_count = added_count
-        logger.info(f"[AUTO_MOVIE VERIFY]\ntitle={movie_data['title']}\nyear={movie_data.get('year')}\nsaved={added_count}\nsearch_results={searchable_count}")
-
-        success_text = (
-            f"✅ <b>MOVIE ADDED SUCCESSFULLY</b>\n\n"
-            f"🎬 <b>Movie:</b> {movie_data['title']} ({movie_data['year']})\n"
-            f"📁 <b>New files saved:</b> {added_count}\n\n"
-            f"<i>The movie is now indexed and searchable through the normal movie search.</i>"
-        )
-        markup = InlineKeyboardMarkup([
-            [InlineKeyboardButton("🔎 Search Movie", switch_inline_query_current_chat=movie_data['title'])],
-            [InlineKeyboardButton("🏠 Close", callback_data="sw#auto_close")]
-        ])
-        await query.message.edit_text(success_text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
-        return await query.answer("🎉 Movie files saved successfully!")
-
-
-@Client.on_callback_query(filters.regex(r"^(am_|sm_)"))
-async def auto_movie_hierarchical_callbacks(client: Client, query: CallbackQuery):
-    data = query.data
-    parts = data.split(":")
-    action = parts[0]
-    session_id = parts[1] if len(parts) > 1 else ""
-
-    movie_data = getattr(temp, "AUTO_MOVIE", {}).get(session_id)
-    if not movie_data:
-        movie_data = getattr(temp, "AUTO_MOVIE", {}).get(query.from_user.id)
-
-    if not movie_data:
-        return await query.answer("⚠️ Session expired. Please send IMDb link again.", show_alert=True)
-
-    uid = movie_data.get("user_id", query.from_user.id)
-    if query.from_user.id != uid and not _is_admin(query.from_user.id):
-        return await query.answer("⚠️ This is not your session.", show_alert=True)
-
-    if action == "am_lang":
-        lang = parts[2] if len(parts) > 2 else ""
-        qualities = list(movie_data.get("grouped", {}).get(lang, {}).keys())
-        if not qualities:
-            return await query.answer("❌ No qualities available for this language.", show_alert=True)
-        text = _build_auto_movie_qual_text(movie_data, lang)
-        markup = _build_auto_movie_qual_keyboard(session_id, lang, qualities)
-        await query.message.edit_text(text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
-        return await query.answer()
-
-    elif action == "am_qual":
-        lang = parts[2] if len(parts) > 2 else ""
-        qual = parts[3] if len(parts) > 3 else ""
-        files = movie_data.get("grouped", {}).get(lang, {}).get(qual, [])
-        if not files:
-            return await query.answer("❌ No files available for this quality.", show_alert=True)
-        text = _build_auto_movie_file_text(movie_data, lang, qual)
-        markup = _build_auto_movie_file_keyboard(session_id, lang, qual, files, page=0)
-        await query.message.edit_text(text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
-        return await query.answer()
-
-    elif action == "am_page":
-        lang = parts[2] if len(parts) > 2 else ""
-        qual = parts[3] if len(parts) > 3 else ""
-        page = int(parts[4]) if len(parts) > 4 and parts[4].isdigit() else 0
-        files = movie_data.get("grouped", {}).get(lang, {}).get(qual, [])
-        markup = _build_auto_movie_file_keyboard(session_id, lang, qual, files, page=page)
-        await query.message.edit_reply_markup(reply_markup=markup)
-        return await query.answer()
-
-    elif action == "am_back":
-        target = parts[2] if len(parts) > 2 else "lang"
-        if target == "lang":
-            text = _build_auto_movie_lang_text(movie_data)
-            markup = _build_auto_movie_lang_keyboard(session_id, movie_data)
-            await query.message.edit_text(text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
-            return await query.answer()
-
-    elif action == "am_cancel":
-        temp.AUTO_MOVIE.pop(session_id, None)
-        temp.AUTO_MOVIE.pop(uid, None)
-        from utils import clear_wizard_session
-        clear_wizard_session(uid)
-        logger.info(f"[AUTO_MOVIE CANCEL]\nuser_id={uid}")
-        await query.message.edit_text("❌ <b>Auto Movie Add cancelled.</b>", parse_mode=enums.ParseMode.HTML)
-        return await query.answer("Cancelled.")
-
-    elif action == "am_rescan":
-        await query.message.edit_text(
-            f"🔄 <b>Rescanning database for {movie_data['title']} ({movie_data['year']})...</b>",
-            parse_mode=enums.ParseMode.HTML
-        )
-        res = await scan_sdatabase_for_movie(movie_data["title"], movie_data["year"], client=client)
-        movie_data["scan"] = res
-        movie_data["grouped"] = _group_auto_movie_files(res)
-        text_res = _build_auto_movie_lang_text(movie_data)
-        markup = _build_auto_movie_lang_keyboard(session_id, movie_data)
-        await query.message.edit_text(text_res, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
-        return await query.answer(f"Rescan complete: {res['total_new']} new files.")
-
-    elif action == "am_save":
-        res = movie_data.get("scan", {})
-        valid_new = res.get("valid_new_files", [])
-        if not valid_new:
-            return await query.answer("⚠️ No new files to save.", show_alert=True)
-
-        await query.message.edit_text(
-            f"💾 <b>Saving {len(valid_new)} movie files for {movie_data['title']}...</b>",
-            parse_mode=enums.ParseMode.HTML
-        )
-
-        from database.ia_filterdb import col, sec_col, MULTIPLE_DATABASE, clean_file_name, is_file_already_saved
-        from utils import clear_wizard_session
-        added_count = 0
-        dup_count = 0
-        for f in valid_new:
-            fid = f.get("file_id")
-            fname = clean_file_name(f.get("file_name"))
-
-            if is_file_already_saved(fid, fname):
-                dup_count += 1
-                continue
-
-            file_doc = {
-                'file_id': fid,
-                'file_name': fname,
-                'file_size': f.get("file_size", 0),
-                'caption': f.get("caption")
-            }
-            try:
-                col.insert_one(file_doc)
-                if MULTIPLE_DATABASE:
-                    try:
-                        sec_col.insert_one(file_doc)
-                    except Exception:
-                        pass
-                added_count += 1
-            except Exception as e:
-                logger.error(f"[AUTO_MOVIE SAVE ERROR] file_id={fid} error={e}")
-
-        temp.AUTO_MOVIE.pop(session_id, None)
-        temp.AUTO_MOVIE.pop(uid, None)
-        clear_wizard_session(uid)
-
-        logger.info(f"[AUTO_MOVIE SAVE]\ntitle={movie_data['title']}\nsaved={added_count}\nduplicates={dup_count}")
-
-        success_text = (
-            f"✅ <b>MOVIE SAVED SUCCESSFULLY</b>\n\n"
-            f"🎬 <b>{movie_data['title']} ({movie_data['year']})</b>\n\n"
-            f"🆕 <b>New files saved:</b> {added_count}\n"
-            f"♻️ <b>Duplicates skipped:</b> {dup_count}\n\n"
-            f"<i>All files are now indexed and available in the Super Movie Filter.</i>"
-        )
-        markup = InlineKeyboardMarkup([
-            [InlineKeyboardButton("🔎 Search Movie", switch_inline_query_current_chat=movie_data['title'])],
-            [InlineKeyboardButton("🏠 Close", callback_data="sw#auto_close")]
-        ])
-        await query.message.edit_text(success_text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
-        return await query.answer("🎉 Movie files saved successfully!")
-
-    elif action == "am_rescan":
-        await query.message.edit_text(
-            f"🔄 <b>Rescanning SDatabase for {movie_data['title']} ({movie_data['year']})...</b>",
-            parse_mode=enums.ParseMode.HTML
-        )
-        res = await scan_sdatabase_for_movie(movie_data["title"], movie_data["year"], client=client)
-        movie_data["scan"] = res
-        movie_data["grouped"] = _group_auto_movie_files(res)
-        text = _build_auto_movie_lang_text(movie_data)
-        markup = _build_auto_movie_lang_keyboard(session_id, movie_data)
-        await query.message.edit_text(text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
-        return await query.answer("Rescan complete.")
-
     if uid not in temp.SERIES_WIZARD:
         return await query.answer("No active wizard. Run /series first.", show_alert=True)
 
@@ -3307,17 +2974,36 @@ async def auto_movie_hierarchical_callbacks(client: Client, query: CallbackQuery
                 target_list[:] = [target_list[-1]]
             if wiz["state"] == S_BATCH_LANG:
                 wiz["languages"] = list(set(wiz.get("languages", []) + target_list))
-                wiz["state"] = S_BATCH_SEASON
-                avail_seasons = await _get_edit_available_seasons(wiz)
-                if avail_seasons is not None and len(avail_seasons) == 0:
-                    return await query.answer("⚠️ No seasons with files found for this language.", show_alert=True)
-                show_skip = _should_show_skip_season(wiz) if avail_seasons is None else False
-                heading = "➕ <b>Add Episode</b>" if wiz.get("add_mode") == "episode" else "📁 <b>Add Files</b>"
-                await query.message.edit_text(
-                    f"{heading} — <b>{wiz['name']}</b>\n🌐 Language: <b>{', '.join(target_list)}</b>\n\nSelect <b>season</b>:",
-                    reply_markup=_season_keyboard(MAX_SEASONS, wiz.get("batch_seasons", []), show_skip=show_skip, available_seasons=avail_seasons),
-                    parse_mode=enums.ParseMode.HTML,
-                )
+                # ── Super Movie batch: skip season, go straight to quality ──
+                if wiz.get("is_super_movie"):
+                    wiz["state"] = S_BATCH_QUAL
+                    wiz["batch_seasons"] = [0]  # no season for movies
+                    used_qualities = await _get_used_qualities(wiz)
+                    is_first_time = (wiz.get("mode") == "add" and not wiz.get("series_id"))
+                    await query.message.edit_text(
+                        f"📁 <b>Add Files</b> — <b>{wiz['name']}</b>\n"
+                        f"🌐 Language: <b>{', '.join(target_list)}</b>\n\n"
+                        "Select <b>quality</b>:",
+                        reply_markup=_quality_keyboard(
+                            wiz.get("batch_qualities", []),
+                            already_saved=used_qualities,
+                            show_custom=is_first_time,
+                            custom_quals=wiz.get("custom_quals", [])
+                        ),
+                        parse_mode=enums.ParseMode.HTML,
+                    )
+                else:
+                    wiz["state"] = S_BATCH_SEASON
+                    avail_seasons = await _get_edit_available_seasons(wiz)
+                    if avail_seasons is not None and len(avail_seasons) == 0:
+                        return await query.answer("⚠️ No seasons with files found for this language.", show_alert=True)
+                    show_skip = _should_show_skip_season(wiz) if avail_seasons is None else False
+                    heading = "➕ <b>Add Episode</b>" if wiz.get("add_mode") == "episode" else "📁 <b>Add Files</b>"
+                    await query.message.edit_text(
+                        f"{heading} — <b>{wiz['name']}</b>\n🌐 Language: <b>{', '.join(target_list)}</b>\n\nSelect <b>season</b>:",
+                        reply_markup=_season_keyboard(MAX_SEASONS, wiz.get("batch_seasons", []), show_skip=show_skip, available_seasons=avail_seasons),
+                        parse_mode=enums.ParseMode.HTML,
+                    )
             else:
                 if wiz.get("series_id"):
                     await update_series(wiz["series_id"], {"languages": wiz["languages"]})
@@ -3537,13 +3223,23 @@ async def auto_movie_hierarchical_callbacks(client: Client, query: CallbackQuery
     # ── Batch confirm ─────────────────────────────────────────────────────────
     if action == "bconfirm":
         choice = parts[2] if len(parts) > 2 else "no"
+        is_super_movie_batch = wiz.get("is_super_movie", False)
+
         if choice == "no":
             wiz["batch_data"] = None
             wiz["state"] = S_BATCH_LANG
-            await query.message.edit_text(
-                "Batch cancelled. Use the menu to try again.",
-                reply_markup=_config_menu_keyboard(wiz.get("series_id"), wiz.get("from_viewseries", False)),
-            )
+            if is_super_movie_batch:
+                # Clear super-movie wizard and exit
+                del temp.SERIES_WIZARD[uid]
+                await query.message.edit_text(
+                    "Batch cancelled.",
+                    parse_mode=enums.ParseMode.HTML,
+                )
+            else:
+                await query.message.edit_text(
+                    "Batch cancelled. Use the menu to try again.",
+                    reply_markup=_config_menu_keyboard(wiz.get("series_id"), wiz.get("from_viewseries", False)),
+                )
             return await query.answer("Batch cancelled.")
 
         if choice == "yes":
@@ -3551,18 +3247,209 @@ async def auto_movie_hierarchical_callbacks(client: Client, query: CallbackQuery
             if not bd:
                 return await query.answer("⚠️ No batch data found.", show_alert=True)
 
+            # ══════════════════════════════════════════════════════════════════
+            # ── SUPER MOVIE BATCH SAVE ────────────────────────────────────────
+            # Files → ia_filterdb.col  |  Metadata → super_movies_col
+            # ══════════════════════════════════════════════════════════════════
+            if is_super_movie_batch:
+                from database.ia_filterdb import col as ia_col, sec_col, MULTIPLE_DATABASE, clean_file_name, is_file_already_saved
+
+                langs_to_add = wiz.get("batch_langs") or wiz.get("languages") or ["Unknown"]
+                quals_to_add = wiz.get("batch_qualities") or wiz.get("qualities") or ["Default"]
+                expected_count = bd["total_files"]
+
+                logger.info(
+                    f"[MOVIE BATCH START]\n"
+                    f"user_id={uid}\n"
+                    f"movie={wiz['name']}\n"
+                    f"year={wiz.get('year', 'N/A')}\n"
+                    f"languages={langs_to_add}\n"
+                    f"qualities={quals_to_add}\n"
+                    f"expected_files={expected_count}"
+                )
+
+                await query.message.edit_text(
+                    f"💾 <b>Saving {expected_count} files for {wiz['name']}...</b>",
+                    parse_mode=enums.ParseMode.HTML
+                )
+
+                added_files  = []
+                dup_files    = []
+                saved_file_ids = []
+
+                logger.info(
+                    f"[MOVIE BATCH SCAN]\n"
+                    f"user_id={uid}\n"
+                    f"movie={wiz['name']}\n"
+                    f"total_scanned={len(bd['files'])}"
+                )
+
+                for _, ep_chat_id, ep_msg_id, ep_file_id, ep_file_name, ep_file_size in bd["files"]:
+                    fname = clean_file_name(ep_file_name)
+                    if is_file_already_saved(ep_file_id, fname):
+                        dup_files.append(ep_file_name)
+                        logger.info(
+                            f"[MOVIE BATCH SCAN]\n"
+                            f"file={fname}\n"
+                            f"action=DUPLICATE_SKIPPED"
+                        )
+                        continue
+                    file_doc = {
+                        "file_id":   ep_file_id,
+                        "file_name": fname,
+                        "file_size": ep_file_size,
+                        "caption":   None,
+                    }
+                    try:
+                        ia_col.insert_one(file_doc)
+                        if MULTIPLE_DATABASE:
+                            try:
+                                sec_col.insert_one(file_doc)
+                            except Exception:
+                                pass
+                        added_files.append(ep_file_name)
+                        saved_file_ids.append(ep_file_id)
+                        logger.info(
+                            f"[MOVIE BATCH SAVE]\n"
+                            f"file={fname}\n"
+                            f"file_id={ep_file_id}\n"
+                            f"action=INSERTED"
+                        )
+                    except Exception as e:
+                        logger.warning(f"[MOVIE BATCH SAVE] insert error file={ep_file_name}: {e}")
+                        dup_files.append(ep_file_name)
+
+                # ── Create / update super_movies_col metadata ──
+                from database.series_db import create_super_movie
+                all_langs = list(set(wiz.get("languages", []) + langs_to_add))
+                all_quals = list(set(wiz.get("qualities", []) + quals_to_add))
+                movie_id = None
+                try:
+                    movie_id = await create_super_movie({
+                        "title":      wiz["name"],
+                        "year":       wiz.get("year", "N/A"),
+                        "genre":      wiz.get("genre", "N/A"),
+                        "rating":     wiz.get("rating", ""),
+                        "poster":     wiz.get("poster", ""),
+                        "imdb_id":    wiz.get("imdb_id", ""),
+                        "languages":  all_langs,
+                        "qualities":  all_quals,
+                        "created_by": uid,
+                    })
+                    logger.info(
+                        f"[MOVIE BATCH SAVE]\n"
+                        f"user_id={uid}\n"
+                        f"movie={wiz['name']}\n"
+                        f"movie_id={movie_id}\n"
+                        f"languages={all_langs}\n"
+                        f"qualities={all_quals}"
+                    )
+                except Exception as e:
+                    logger.error(f"[MOVIE BATCH SAVE] super_movies_col error: {e}")
+
+                # ── DB VERIFICATION ──
+                logger.info(
+                    f"[MOVIE BATCH VERIFY]\n"
+                    f"user_id={uid}\n"
+                    f"movie={wiz['name']}\n"
+                    f"expected={len(added_files)}\n"
+                    f"verifying ia_filterdb..."
+                )
+                verified_count = 0
+                for fid in saved_file_ids:
+                    if ia_col.find_one({"file_id": fid}):
+                        verified_count += 1
+
+                logger.info(
+                    f"[MOVIE BATCH VERIFY]\n"
+                    f"user_id={uid}\n"
+                    f"movie={wiz['name']}\n"
+                    f"expected={len(added_files)}\n"
+                    f"verified={verified_count}\n"
+                    f"result={'OK' if verified_count == len(added_files) else 'MISMATCH'}"
+                )
+
+                # Clear wizard
+                del temp.SERIES_WIZARD[uid]
+
+                if verified_count == len(added_files) and len(added_files) > 0:
+                    success_text = (
+                        f"✅ <b>Movie Batch Saved Successfully!</b>\n\n"
+                        f"🎬 <b>Movie:</b> {wiz['name']} ({wiz.get('year', 'N/A')})\n"
+                        f"🌐 <b>Languages:</b> {', '.join(langs_to_add)}\n"
+                        f"🎞 <b>Qualities:</b> {', '.join(quals_to_add)}\n\n"
+                        f"📊 <b>Files Found:</b> {expected_count}\n"
+                        f"📥 <b>New Files Saved:</b> {len(added_files)}\n"
+                        f"♻️ <b>Duplicates Skipped:</b> {len(dup_files)}\n\n"
+                        f"🔎 <b>Database Verified:</b> {verified_count}/{len(added_files)} ✅\n\n"
+                        f"<i>Users can now search: <code>{wiz['name']}</code></i>"
+                    )
+                    await query.message.edit_text(success_text, parse_mode=enums.ParseMode.HTML)
+                    return await query.answer("✅ Movie batch saved!")
+                elif len(added_files) == 0 and len(dup_files) > 0:
+                    # All were duplicates — that's OK if super_movie was updated
+                    await query.message.edit_text(
+                        f"ℹ️ <b>All files already exist in database.</b>\n\n"
+                        f"🎬 <b>Movie:</b> {wiz['name']}\n"
+                        f"♻️ <b>Duplicates:</b> {len(dup_files)}\n\n"
+                        f"Super Movie Filter metadata has been updated.\n"
+                        f"<i>Users can search: <code>{wiz['name']}</code></i>",
+                        parse_mode=enums.ParseMode.HTML,
+                    )
+                    return await query.answer("ℹ️ All files already existed.")
+                else:
+                    logger.error(
+                        f"[MOVIE BATCH VERIFY] FAILED\n"
+                        f"user_id={uid}\n"
+                        f"movie={wiz['name']}\n"
+                        f"expected={len(added_files)}\n"
+                        f"verified={verified_count}"
+                    )
+                    await query.message.edit_text(
+                        f"❌ <b>Movie batch save verification failed.</b>\n\n"
+                        f"🎬 <b>Movie:</b> {wiz['name']}\n"
+                        f"📊 <b>Expected:</b> {len(added_files)}\n"
+                        f"🔎 <b>Found in database:</b> {verified_count}\n\n"
+                        f"Please check logs and retry.",
+                        parse_mode=enums.ParseMode.HTML,
+                    )
+                    return await query.answer("❌ Verification failed.")
+
+            # ══════════════════════════════════════════════════════════════════
+            # ── SERIES BATCH SAVE ─────────────────────────────────────────────
+            # Episodes → sfiles_col via add_series_file()
+            # Batch metadata → sbatch_col via save_batch()
+            # ══════════════════════════════════════════════════════════════════
+            langs_to_add   = wiz.get("batch_langs")    or wiz.get("languages") or ["Unknown"]
+            seasons_to_add = wiz.get("batch_seasons")  or wiz.get("seasons")   or [0]
+            if not seasons_to_add:
+                seasons_to_add = [0]
+            quals_to_add = wiz.get("batch_qualities") or wiz.get("qualities") or ["Default"]
+            expected_eps = len(bd["files"])
+
+            logger.info(
+                f"[SERIES BATCH START]\n"
+                f"user_id={uid}\n"
+                f"series={wiz['name']}\n"
+                f"languages={langs_to_add}\n"
+                f"seasons={seasons_to_add}\n"
+                f"qualities={quals_to_add}\n"
+                f"expected_files={expected_eps}"
+            )
+
+            # ── Ensure series record exists ──
             if not wiz.get("series_id"):
                 series_id = await create_series({
-                    "name": wiz["name"],
-                    "year": wiz["year"],
-                    "genre": wiz["genre"],
-                    "rating": wiz.get("rating", ""),
+                    "name":        wiz["name"],
+                    "year":        wiz["year"],
+                    "genre":       wiz["genre"],
+                    "rating":      wiz.get("rating", ""),
                     "description": wiz["description"],
-                    "poster": wiz.get("poster", ""),
-                    "languages": wiz["languages"],
-                    "seasons": wiz["seasons"],
-                    "qualities": wiz["qualities"],
-                    "created_by": uid,
+                    "poster":      wiz.get("poster", ""),
+                    "languages":   wiz["languages"],
+                    "seasons":     wiz["seasons"],
+                    "qualities":   wiz["qualities"],
+                    "created_by":  uid,
                 })
                 wiz["series_id"] = series_id
                 _register_short_id(series_id)
@@ -3570,13 +3457,15 @@ async def auto_movie_hierarchical_callbacks(client: Client, query: CallbackQuery
             else:
                 series_id = wiz["series_id"]
 
-            langs_to_add = wiz.get("batch_langs") or wiz.get("languages") or ["Unknown"]
-            seasons_to_add = wiz.get("batch_seasons") or wiz.get("seasons") or [0]
-            if not seasons_to_add:
-                seasons_to_add = [0]
-            quals_to_add = wiz.get("batch_qualities") or wiz.get("qualities") or ["Default"]
+            logger.info(
+                f"[SERIES BATCH SCAN]\n"
+                f"user_id={uid}\n"
+                f"series_id={series_id}\n"
+                f"series={wiz['name']}\n"
+                f"total_scanned={len(bd['files'])}"
+            )
 
-            added_eps = []
+            added_eps   = []
             skipped_eps = []
 
             for lang in langs_to_add:
@@ -3587,43 +3476,77 @@ async def auto_movie_hierarchical_callbacks(client: Client, query: CallbackQuery
                                 is_dup = await check_episode_exists(series_id, lang, season, ep_num, quality)
                                 if is_dup:
                                     skipped_eps.append(ep_num)
-                                    logger.info(f"[SERIES SBATCH]\nuser_id={uid}\nseries_id={series_id}\nseason={season}\nepisode={ep_num}\nlanguage={lang}\nquality={quality}\naction=DUPLICATE_SKIPPED")
+                                    logger.info(
+                                        f"[SERIES BATCH SCAN]\n"
+                                        f"series_id={series_id}\n"
+                                        f"language={lang}\n"
+                                        f"season={season}\n"
+                                        f"episode={ep_num}\n"
+                                        f"quality={quality}\n"
+                                        f"action=DUPLICATE_SKIPPED"
+                                    )
                                 else:
                                     status, reason = await add_series_file({
-                                        "series_id":  series_id,
-                                        "language":   lang,
-                                        "season":     season,
-                                        "episode":    ep_num,
-                                        "quality":    quality,
-                                        "chat_id":    ep_chat_id,
-                                        "message_id": ep_msg_id,
-                                        "file_id":    ep_file_id,
-                                        "file_name":  ep_file_name,
-                                        "file_size":  ep_file_size,
-                                        "is_batch":   False,
-                                        "total_episodes": 1
+                                        "series_id":      series_id,
+                                        "language":       lang,
+                                        "season":         season,
+                                        "episode":        ep_num,
+                                        "quality":        quality,
+                                        "chat_id":        ep_chat_id,
+                                        "message_id":     ep_msg_id,
+                                        "file_id":        ep_file_id,
+                                        "file_name":      ep_file_name,
+                                        "file_size":      ep_file_size,
+                                        "is_batch":       False,
+                                        "total_episodes": 1,
                                     })
                                     if status:
                                         added_eps.append(ep_num)
-                                        logger.info(f"[SERIES SBATCH]\nuser_id={uid}\nseries_id={series_id}\nseason={season}\nepisode={ep_num}\nlanguage={lang}\nquality={quality}\naction=ADDED")
+                                        logger.info(
+                                            f"[SERIES BATCH SAVE]\n"
+                                            f"series_id={series_id}\n"
+                                            f"language={lang}\n"
+                                            f"season={season}\n"
+                                            f"episode={ep_num}\n"
+                                            f"quality={quality}\n"
+                                            f"action=INSERTED"
+                                        )
                                     else:
                                         skipped_eps.append(ep_num)
-                                        logger.info(f"[SERIES SBATCH]\nuser_id={uid}\nseries_id={series_id}\nseason={season}\nepisode={ep_num}\nlanguage={lang}\nquality={quality}\naction=DUPLICATE_SKIPPED")
+                                        logger.info(
+                                            f"[SERIES BATCH SAVE]\n"
+                                            f"series_id={series_id}\n"
+                                            f"language={lang}\n"
+                                            f"season={season}\n"
+                                            f"episode={ep_num}\n"
+                                            f"quality={quality}\n"
+                                            f"action=DUPLICATE_SKIPPED reason={reason}"
+                                        )
                             except Exception as e:
-                                logger.warning(f"add_series_file error for batch episode {ep_num}: {e}")
+                                logger.warning(
+                                    f"[SERIES BATCH SAVE] error\n"
+                                    f"series_id={series_id}\n"
+                                    f"episode={ep_num}\n"
+                                    f"error={e}"
+                                )
                                 skipped_eps.append(ep_num)
 
-                        await save_batch({
-                            "series_id": series_id,
-                            "language": lang,
-                            "season": season,
-                            "quality": quality,
-                            "chat_id": bd["chat_id"],
-                            "first_message_id": bd["first_msg_id"],
-                            "last_message_id": bd["last_msg_id"],
-                            "total_files": len(added_eps),
-                        })
+                        # ── Batch metadata record ──
+                        try:
+                            await save_batch({
+                                "series_id":        series_id,
+                                "language":         lang,
+                                "season":           season,
+                                "quality":          quality,
+                                "chat_id":          bd["chat_id"],
+                                "first_message_id": bd["first_msg_id"],
+                                "last_message_id":  bd["last_msg_id"],
+                                "total_files":      len(added_eps),
+                            })
+                        except Exception as e:
+                            logger.warning(f"[SERIES BATCH SAVE] save_batch metadata error: {e}")
 
+            # ── Update series metadata ──
             if len(added_eps) > 0:
                 is_explicit = bool(wiz.get("batch_seasons") and wiz["batch_seasons"] != [0])
                 mode = "explicit" if is_explicit else "skipped"
@@ -3632,38 +3555,97 @@ async def auto_movie_hierarchical_callbacks(client: Client, query: CallbackQuery
                 for l in langs_to_add:
                     wiz["season_modes"][l] = mode
 
-            all_langs = list(set(wiz.get("languages", []) + langs_to_add))
-            all_seasons = list(set(wiz.get("seasons", []) + seasons_to_add))
-            all_quals = list(set(wiz.get("qualities", []) + quals_to_add))
+            all_langs    = list(set(wiz.get("languages", []) + langs_to_add))
+            all_seasons  = list(set(wiz.get("seasons", []) + seasons_to_add))
+            all_quals    = list(set(wiz.get("qualities", []) + quals_to_add))
             wiz["languages"] = all_langs
-            wiz["seasons"] = all_seasons
+            wiz["seasons"]   = all_seasons
             wiz["qualities"] = all_quals
 
             await update_series(series_id, {
-                "languages": all_langs,
-                "seasons": all_seasons,
-                "qualities": all_quals,
+                "languages":   all_langs,
+                "seasons":     all_seasons,
+                "qualities":   all_quals,
                 "season_modes": wiz.get("season_modes", {}),
             })
 
             wiz["batch_data"] = None
-            wiz["state"] = S_DONE
-            logger.info(f"[SERIES SBATCH]\nuser_id={uid}\nseries_id={series_id}\ntotal_added={len(added_eps)}\ntotal_skipped={len(skipped_eps)}\naction=COMPLETED")
+            wiz["state"]      = S_DONE
 
-            unique_added = sorted(list(set(added_eps)))
+            # ── DB VERIFICATION ──────────────────────────────────────────────
+            logger.info(
+                f"[SERIES BATCH VERIFY]\n"
+                f"user_id={uid}\n"
+                f"series_id={series_id}\n"
+                f"series={wiz['name']}\n"
+                f"verifying sfiles_col..."
+            )
+
+            # Count records actually in sfiles_col for this batch context
+            from database.series_db import sfiles_col as _sfiles_verify
+            verify_query_base = {
+                "series_id": str(series_id),
+                "language":  {"$in": langs_to_add},
+                "season":    {"$in": [int(s) for s in seasons_to_add]},
+                "quality":   {"$in": quals_to_add},
+            }
+            try:
+                verified_ep_count = await _sfiles_verify.count_documents(verify_query_base)
+            except Exception as ve:
+                verified_ep_count = -1
+                logger.error(f"[SERIES BATCH VERIFY] count error: {ve}")
+
+            unique_added   = sorted(list(set(added_eps)))
             unique_skipped = sorted(list(set(skipped_eps)))
-            added_str = ", ".join(f"E{e:02d}" for e in unique_added) if unique_added else "None"
+            added_str   = ", ".join(f"E{e:02d}" for e in unique_added)   if unique_added   else "None"
             skipped_str = ", ".join(f"E{e:02d}" for e in unique_skipped) if unique_skipped else "None"
 
+            season_label = (
+                ", ".join(f"S{s:02d}" for s in sorted(seasons_to_add) if s > 0)
+                if any(s > 0 for s in seasons_to_add) else "Direct Episodes"
+            )
+
+            logger.info(
+                f"[SERIES BATCH VERIFY]\n"
+                f"user_id={uid}\n"
+                f"series_id={series_id}\n"
+                f"series={wiz['name']}\n"
+                f"expected={len(unique_added)}\n"
+                f"verified_in_db={verified_ep_count}\n"
+                f"result={'OK' if verified_ep_count >= len(unique_added) else 'MISMATCH'}"
+            )
+
+            if verified_ep_count >= len(unique_added) and len(unique_added) > 0:
+                verify_line = f"\n🔎 <b>Database Verified:</b> {verified_ep_count} records ✅"
+            elif verified_ep_count == -1:
+                verify_line = f"\n⚠️ <b>Verification query failed — check logs.</b>"
+            elif len(unique_added) == 0 and len(unique_skipped) > 0:
+                verify_line = f"\n♻️ <b>All files already existed — no new inserts.</b>"
+            else:
+                verify_line = (
+                    f"\n❌ <b>Verification mismatch!</b>\n"
+                    f"Expected: {len(unique_added)} | Found in DB: {verified_ep_count}\n"
+                    f"Please check logs."
+                )
+                logger.error(
+                    f"[SERIES BATCH VERIFY] MISMATCH\n"
+                    f"series_id={series_id}\n"
+                    f"expected={len(unique_added)}\n"
+                    f"found={verified_ep_count}"
+                )
+
             await query.message.edit_text(
-                f"✅ <b>Batch processing completed!</b>\n\n"
+                f"📦 <b>Batch Scan Result</b>\n\n"
                 f"📺 <b>Series:</b> {wiz['name']}\n"
-                f"🌐 <b>Languages:</b> {', '.join(langs_to_add)}\n"
-                f"📁 <b>Seasons:</b> {', '.join(str(s) for s in seasons_to_add) if seasons_to_add and seasons_to_add != [0] else 'None'}\n"
-                f"🎞 <b>Qualities:</b> {', '.join(quals_to_add)}\n\n"
-                f"✅ <b>Added ({len(added_eps)}):</b> {added_str}\n"
-                f"⚠️ <b>Already existed ({len(skipped_eps)}):</b> {skipped_str}\n\n"
-                f"Existing episodes were not modified.\nAdd more batches or save the series.",
+                f"🌐 <b>Language:</b> {', '.join(langs_to_add)}\n"
+                f"📁 <b>Season:</b> {season_label}\n"
+                f"🎞 <b>Quality:</b> {', '.join(quals_to_add)}\n\n"
+                f"📊 <b>Files Found:</b> {expected_eps}\n"
+                f"✅ <b>Valid Episodes Added:</b> {len(unique_added)}\n"
+                f"♻️ <b>Already Existing:</b> {len(unique_skipped)}\n"
+                f"{verify_line}\n\n"
+                f"<b>Episodes:</b>\n{added_str}\n\n"
+                f"Add more batches or save the series.",
                 reply_markup=_config_menu_keyboard(wiz.get("series_id"), wiz.get("from_viewseries", False)),
                 parse_mode=enums.ParseMode.HTML,
             )
@@ -3671,6 +3653,7 @@ async def auto_movie_hierarchical_callbacks(client: Client, query: CallbackQuery
 
     # ── Save Series ───────────────────────────────────────────────────────────
     if action == "save":
+
         if not wiz["name"]:
             return await query.answer("⚠️ Series name is missing.", show_alert=True)
         if not wiz["languages"]:
@@ -3726,6 +3709,220 @@ async def auto_movie_hierarchical_callbacks(client: Client, query: CallbackQuery
         return await query.answer("✅ Series saved!")
 
 
+# ══════════════════════════════════════════════════════════════════════════════
+# ─── AUTO MOVIE ADD CALLBACKS ────────────────────────────────────────────────
+# ══════════════════════════════════════════════════════════════════════════════
+
+@Client.on_callback_query(filters.regex(r"^am_"))
+async def auto_movie_hierarchical_callbacks(client: Client, query: CallbackQuery):
+    data = query.data
+    parts = data.split(":")
+    action = parts[0]
+    session_id = parts[1] if len(parts) > 1 else ""
+
+    movie_data = getattr(temp, "AUTO_MOVIE", {}).get(session_id)
+    if not movie_data:
+        movie_data = getattr(temp, "AUTO_MOVIE", {}).get(query.from_user.id)
+
+    if not movie_data:
+        return await query.answer("⚠️ Session expired. Please send IMDb link again.", show_alert=True)
+
+    uid = movie_data.get("user_id", query.from_user.id)
+    if query.from_user.id != uid and not _is_admin(query.from_user.id):
+        return await query.answer("⚠️ This is not your session.", show_alert=True)
+
+    if action == "am_lang":
+        lang = parts[2] if len(parts) > 2 else ""
+        qualities = list(movie_data.get("grouped", {}).get(lang, {}).keys())
+        if not qualities:
+            return await query.answer("❌ No qualities available for this language.", show_alert=True)
+        text = _build_auto_movie_qual_text(movie_data, lang)
+        markup = _build_auto_movie_qual_keyboard(session_id, lang, qualities)
+        await query.message.edit_text(text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
+        return await query.answer()
+
+    elif action == "am_qual":
+        lang = parts[2] if len(parts) > 2 else ""
+        qual = parts[3] if len(parts) > 3 else ""
+        files = movie_data.get("grouped", {}).get(lang, {}).get(qual, [])
+        if not files:
+            return await query.answer("❌ No files available for this quality.", show_alert=True)
+        text = _build_auto_movie_file_text(movie_data, lang, qual)
+        markup = _build_auto_movie_file_keyboard(session_id, lang, qual, files, page=0)
+        await query.message.edit_text(text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
+        return await query.answer()
+
+    elif action == "am_page":
+        lang = parts[2] if len(parts) > 2 else ""
+        qual = parts[3] if len(parts) > 3 else ""
+        page = int(parts[4]) if len(parts) > 4 and parts[4].isdigit() else 0
+        files = movie_data.get("grouped", {}).get(lang, {}).get(qual, [])
+        markup = _build_auto_movie_file_keyboard(session_id, lang, qual, files, page=page)
+        await query.message.edit_reply_markup(reply_markup=markup)
+        return await query.answer()
+
+    elif action == "am_back":
+        target = parts[2] if len(parts) > 2 else "lang"
+        if target == "lang":
+            text = _build_auto_movie_lang_text(movie_data)
+            markup = _build_auto_movie_lang_keyboard(session_id, movie_data)
+            await query.message.edit_text(text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
+            return await query.answer()
+
+    elif action == "am_cancel":
+        from utils import clear_wizard_session
+        clear_wizard_session(uid)
+        logger.info("[AUTO MOVIE]\nstate=CANCELLED")
+        await query.message.edit_text("❌ <b>Auto Movie Add cancelled.</b>", parse_mode=enums.ParseMode.HTML)
+        return await query.answer("Cancelled.")
+
+    elif action == "am_rescan":
+        await query.message.edit_text(
+            f"🔄 <b>Rescanning database for {movie_data['title']} ({movie_data['year']})...</b>",
+            parse_mode=enums.ParseMode.HTML
+        )
+        res = await scan_sdatabase_for_movie(movie_data["title"], movie_data["year"], client=client)
+        movie_data["scan"] = res
+        movie_data["grouped"] = _group_auto_movie_files(res)
+        text_res = _build_auto_movie_lang_text(movie_data)
+        markup = _build_auto_movie_lang_keyboard(session_id, movie_data)
+        await query.message.edit_text(text_res, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
+        return await query.answer(f"Rescan complete: {res['total_new']} new files.")
+
+    elif action == "am_save":
+        res = movie_data.get("scan", {})
+        valid_new = res.get("valid_new_files", [])
+        if not valid_new:
+            return await query.answer("⚠️ No new files to save.", show_alert=True)
+
+        await query.message.edit_text(
+            f"💾 <b>Saving {len(valid_new)} new files and creating Super Movie Filter for {movie_data['title']}...</b>",
+            parse_mode=enums.ParseMode.HTML
+        )
+
+        from database.ia_filterdb import col, sec_col, MULTIPLE_DATABASE, clean_file_name, is_file_already_saved
+        from utils import clear_wizard_session
+        added_count = 0
+        dup_count = 0
+        for f in valid_new:
+            fid = f.get("file_id")
+            fname = clean_file_name(f.get("file_name"))
+
+            if is_file_already_saved(fid, fname):
+                dup_count += 1
+                continue
+
+            file_doc = {
+                'file_id': fid,
+                'file_name': fname,
+                'file_size': f.get("file_size", 0),
+                'caption': f.get("caption")
+            }
+            try:
+                col.insert_one(file_doc)
+                if MULTIPLE_DATABASE:
+                    try:
+                        sec_col.insert_one(file_doc)
+                    except Exception:
+                        pass
+                added_count += 1
+            except Exception as e:
+                logger.error(f"[AUTO_MOVIE SAVE ERROR] file_id={fid} error={e}")
+
+        from database.series_db import create_super_movie
+        grouped_files = movie_data.get("grouped", {})
+        langs = list(grouped_files.keys())
+        quals = list({q for l in grouped_files.values() for q in l.keys()})
+        try:
+            await create_super_movie({
+                "title": movie_data["title"],
+                "year": movie_data.get("year", "N/A"),
+                "rating": movie_data.get("rating", ""),
+                "genre": movie_data.get("genre", "N/A"),
+                "poster": movie_data.get("poster", ""),
+                "imdb_id": movie_data.get("imdb_id", ""),
+                "languages": langs,
+                "qualities": quals,
+                "created_by": uid
+            })
+            logger.info(f"[SUPER MOVIE CREATED] title={movie_data['title']} languages={len(langs)} qualities={len(quals)}")
+        except Exception as e:
+            logger.error(f"[SUPER MOVIE CREATION ERROR] {e}")
+
+        clear_wizard_session(uid)
+
+        logger.info(
+            f"[AUTO MOVIE SAVE]\n"
+            f"title={movie_data['title']}\n"
+            f"files={added_count}"
+        )
+
+        success_text = (
+            f"✅ <b>SUPER MOVIE SAVED SUCCESSFULLY</b>\n\n"
+            f"🎬 <b>Movie:</b> {movie_data['title']} ({movie_data['year']})\n"
+            f"📁 <b>New files saved:</b> {added_count}\n\n"
+            f"<i>The movie is now saved as a Super Movie Filter.</i>"
+        )
+        markup = InlineKeyboardMarkup([
+            [InlineKeyboardButton("🔎 Search Movie", switch_inline_query_current_chat=movie_data['title'])],
+            [InlineKeyboardButton("🏠 Close", callback_data="sw#auto_close")]
+        ])
+        await query.message.edit_text(success_text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
+        return await query.answer("🎉 Movie files saved successfully!")
+
+    elif action == "am_batch":
+        # ── Batch Add Files flow for Super Movie ──────────────────────────────
+        # Sets up a SERIES_WIZARD session with is_super_movie=True
+        # Admin then runs /sbatch LINK1 LINK2 to add files from channel range
+        movie_title = movie_data.get("title", "Unknown Movie")
+        movie_year  = movie_data.get("year", "N/A")
+
+        # Build a fresh super-movie wizard session in SERIES_WIZARD
+        temp.SERIES_WIZARD[uid] = {
+            "mode":           "add",
+            "is_super_movie": True,
+            "state":          S_BATCH_LANG,
+            "name":           movie_title,
+            "year":           movie_year,
+            "genre":          movie_data.get("genre", "N/A"),
+            "description":    movie_data.get("overview", ""),
+            "languages":      [],
+            "seasons":        [],
+            "qualities":      [],
+            "series_id":      None,
+            "season_modes":   {},
+            "batch_langs":    [],
+            "batch_seasons":  [],
+            "batch_qualities":[],
+            "batch_data":     None,
+            # Carry over IMDb metadata so we can create_super_movie on save
+            "imdb_id":        movie_data.get("imdb_id", ""),
+            "poster":         movie_data.get("poster", ""),
+            "rating":         movie_data.get("rating", ""),
+        }
+
+        logger.info(
+            f"[SUPER MOVIE BATCH INIT]\n"
+            f"user_id={uid}\n"
+            f"title={movie_title}\n"
+            f"year={movie_year}"
+        )
+
+        is_first_time = True  # always first time for movie batch
+        await query.message.edit_text(
+            f"📦 <b>Batch Add Files</b> — <b>{movie_title} ({movie_year})</b>\n\n"
+            "Select <b>language</b> for this batch:\n"
+            "<i>Files will be saved directly to ia_filterdb and linked to the Super Movie.</i>",
+            reply_markup=_lang_keyboard(
+                [],
+                show_custom=is_first_time,
+                custom_langs=[]
+            ),
+            parse_mode=enums.ParseMode.HTML,
+        )
+        return await query.answer("Select language for batch.")
+
+
 
 
 
@@ -3765,14 +3962,20 @@ async def cmd_sbatch(client: Client, message: Message):
     if not _is_admin(uid):
         return await message.reply_text("❌ You are not authorized to use this command.")
 
-
-
-    if uid not in temp.SERIES_WIZARD or temp.SERIES_WIZARD[uid].get("state") != S_BATCH_WAIT:
-        return await message.reply_text(
-            "⚠️ Run <code>/seriesfil</code> first and configure language/season/quality "
-            "before sending a batch.",
-            parse_mode=enums.ParseMode.HTML,
-        )
+    # Accept both Series batch (S_BATCH_WAIT) and Super Movie batch (is_super_movie + S_BATCH_WAIT)
+    wiz_state = temp.SERIES_WIZARD.get(uid, {}).get("state") if uid in temp.SERIES_WIZARD else None
+    if uid not in temp.SERIES_WIZARD or wiz_state != S_BATCH_WAIT:
+        # Determine what hint to give
+        if uid in temp.SERIES_WIZARD:
+            wiz_type = "Super Movie" if temp.SERIES_WIZARD[uid].get("is_super_movie") else "Series"
+            hint = f"⚠️ Please complete the language/quality selection for your {wiz_type} batch first."
+        else:
+            hint = (
+                "⚠️ No active batch session found.\n\n"
+                "• For <b>Series batch</b>: run <code>/seriesfil</code> and configure language/season/quality\n"
+                "• For <b>Movie batch</b>: use Auto Movie Add and click 📦 Batch Add Files, then select language/quality"
+            )
+        return await message.reply_text(hint, parse_mode=enums.ParseMode.HTML)
 
 
 
@@ -3828,6 +4031,7 @@ async def cmd_sbatch(client: Client, message: Message):
 
 
     wiz = temp.SERIES_WIZARD[uid]
+    is_super_movie = wiz.get("is_super_movie", False)
     processing_msg = await message.reply_text(
         f"⏳ Scanning messages {msg1} → {msg2} ({total} total)...\nThis may take time depending on number of messages."
     )
@@ -3940,23 +4144,52 @@ async def cmd_sbatch(client: Client, message: Message):
     }
     wiz["state"] = S_BATCH_CONF
 
+    # Build preview text depending on movie vs series
+    if is_super_movie:
+        file_preview = "\n".join(
+            f"  [{idx+1}] {fname}"
+            for idx, (_, _, _, _, fname, _) in enumerate(mapped_files[:10])
+        )
+        if len(mapped_files) > 10:
+            file_preview += f"\n  ... and {len(mapped_files) - 10} more"
 
+        await processing_msg.edit_text(
+            f"📦 <b>Movie Batch Preview</b>\n\n"
+            f"🎬 <b>Movie:</b> {wiz['name']}\n"
+            f"🌐 <b>Languages:</b> {', '.join(wiz['batch_langs'])}\n"
+            f"🎞 <b>Qualities:</b> {', '.join(wiz['batch_qualities'])}\n\n"
+            f"📤 <b>First Message:</b> {msg1}\n"
+            f"📥 <b>Last Message:</b> {msg2}\n"
+            f"🔢 <b>Total Files:</b> {len(files_found)}\n"
+            f"⚠️ <b>Skipped:</b> {errors}\n\n"
+            f"<b>Files:</b>\n{file_preview}\n\n"
+            "Save this batch?",
+            reply_markup=_batch_confirm_keyboard(),
+            parse_mode=enums.ParseMode.HTML,
+        )
+    else:
+        ep_preview = "\n".join(
+            f"  Ep {ep_num:02d} — {fname}"
+            for ep_num, _, _, _, fname, _ in mapped_files[:10]
+        )
+        if len(mapped_files) > 10:
+            ep_preview += f"\n  ... and {len(mapped_files) - 10} more"
 
-    await processing_msg.edit_text(
-        f"📦 <b>Batch Preview</b>\n\n"
-        f"📺 <b>Series:</b> {wiz['name']}\n"
-        f"🌐 <b>Languages:</b> {', '.join(wiz['batch_langs'])}\n"
-        f"📁 <b>Seasons:</b> {', '.join(str(s) for s in wiz['batch_seasons']) if wiz['batch_seasons'] and wiz['batch_seasons'] != [0] else 'None'}\n"
-        f"🎞 <b>Qualities:</b> {', '.join(wiz['batch_qualities'])}\n\n"
-        f"📤 <b>First Message:</b> {msg1}\n"
-        f"📥 <b>Last Message:</b> {msg2}\n"
-        f"🔢 <b>Total Files:</b> {len(files_found)}\n"
-        f"⚠️ <b>Skipped:</b> {errors}\n\n"
-        f"<b>Episodes:</b>\n{ep_preview}\n\n"
-        "Save this batch?",
-        reply_markup=_batch_confirm_keyboard(),
-        parse_mode=enums.ParseMode.HTML,
-    )
+        await processing_msg.edit_text(
+            f"📦 <b>Batch Preview</b>\n\n"
+            f"📺 <b>Series:</b> {wiz['name']}\n"
+            f"🌐 <b>Languages:</b> {', '.join(wiz['batch_langs'])}\n"
+            f"📁 <b>Seasons:</b> {', '.join(str(s) for s in wiz['batch_seasons']) if wiz['batch_seasons'] and wiz['batch_seasons'] != [0] else 'None'}\n"
+            f"🎞 <b>Qualities:</b> {', '.join(wiz['batch_qualities'])}\n\n"
+            f"📤 <b>First Message:</b> {msg1}\n"
+            f"📥 <b>Last Message:</b> {msg2}\n"
+            f"🔢 <b>Total Files:</b> {len(files_found)}\n"
+            f"⚠️ <b>Skipped:</b> {errors}\n\n"
+            f"<b>Episodes:</b>\n{ep_preview}\n\n"
+            "Save this batch?",
+            reply_markup=_batch_confirm_keyboard(),
+            parse_mode=enums.ParseMode.HTML,
+        )
 
 
 
