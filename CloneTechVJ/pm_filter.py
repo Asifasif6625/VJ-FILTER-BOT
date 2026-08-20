@@ -132,6 +132,14 @@ async def advantage_spoll_choker(bot, query):
     movie = re.sub(r"[:\-]", " ", movie)
     movie = re.sub(r"\s+", " ", movie).strip()
     await query.answer(script.TOP_ALRT_MSG)
+    # ── 1. Super Movie Check ──
+    try:
+        from plugins.series import process_super_movie_search
+        is_super_movie = await process_super_movie_search(bot, query.message.reply_to_message or query.message, movie, query.message)
+        if is_super_movie:
+            return
+    except Exception:
+        pass
     files, offset, total_results = await get_search_results(query.message.chat.id, movie, offset=0, filter=True)
     if files:
         k = (movie, files, offset, total_results)
@@ -915,24 +923,48 @@ async def auto_filter(client, name, msg, reply_msg, ai_search, spoll=False):
             search = search.replace(":", "")
             search = search.replace(".", "")
             files, offset, total_results = await get_search_results(message.chat.id ,search, offset=0, filter=True)
+            # ── 1. Super Movie Check ──
+            try:
+                from plugins.series import process_super_movie_search
+                is_super_movie = await process_super_movie_search(client, message, search if search else name, reply_msg)
+                if is_super_movie:
+                    return
+            except Exception as e:
+                pass
+
+            # ── 2. ia_filterdb Search ──
+            files, offset, total_results = await get_search_results(message.chat.id, search, offset=0, filter=True)
             settings = await get_settings(message.chat.id)
             if not files:
+                # ── 3. Series Check ──
                 try:
                     from plugins.series import process_series_search
-                    from database.series_db import search_series, _normalize
-                    series_matches = await search_series(_normalize(name))
-                    if not series_matches:
-                        series_matches = await search_series(name)
-                    if series_matches:
-                        if hasattr(msg, "text") and msg.text and name == msg.text:
-                            return
-                        else:
-                            is_series = await process_series_search(client, message, name, reply_msg)
-                            if is_series:
-                                return
+                    is_series = await process_series_search(client, message, search if search else name, reply_msg)
+                    if is_series:
+                        return
                 except Exception as e:
                     pass
-                return await advantage_spell_chok(client, name, msg, reply_msg, ai_search)
+
+                # ── 4. No Results Message (No IMDb poster/metadata) ──
+                reqstr1 = message.from_user.id if (hasattr(message, "from_user") and message.from_user) else 0
+                reqstr = await client.get_users(reqstr1) if reqstr1 else None
+                if NO_RESULTS_MSG and reqstr:
+                    await client.send_message(chat_id=LOG_CHANNEL, text=(script.NORSLTS.format(reqstr.id, reqstr.mention, search)))
+                
+                no_db_btn = InlineKeyboardMarkup([[InlineKeyboardButton("🦨Reason", callback_data="not_in_db_reason")]])
+                msg_text = "<b>sᴏʀʀʏ ɴᴏ ꜰɪʟᴇs ᴡᴇʀᴇ ꜰᴏᴜɴᴅ ꜰᴏʀ ʏᴏᴜʀ ʀᴇǫᴜᴇꜱᴛ😕\n\nᴄʜᴇᴄᴋ ʏᴏᴜʀ sᴘᴇʟʟɪɴɢ ɪɴ ɢᴏᴏɢʟᴇ ᴀɴᴅ ᴛʀʏ ᴀɢᴀɪɴ 😃\n\nᴍᴏᴠɪᴇ ʀᴇǫᴜᴇꜱᴛ ꜰᴏʀᴍᴀᴛ 👇\n\nᴇxᴀᴍᴘʟᴇ : Uncharted or Uncharted 2022 or Uncharted En\n\nꜱᴇʀɪᴇꜱ ʀᴇǫᴜᴇꜱᴛ ꜰᴏʀᴍᴀᴛ 👇\n\nᴇxᴀᴍᴘʟᴇ : Loki S01 or Loki S01E04 or Lucifer S03E24\n\n🚯 ᴅᴏɴᴛ ᴜꜱᴇ ➠ ':(!,./)\n\n<i>🕐 This message will be deleted in 50 seconds.</i></b>"
+                if reply_msg:
+                    msg_obj = await reply_msg.edit_text(msg_text, reply_markup=no_db_btn)
+                else:
+                    msg_obj = await message.reply_text(msg_text, reply_markup=no_db_btn)
+                
+                await asyncio.sleep(50)
+                try:
+                    await msg_obj.delete()
+                    await message.delete()
+                except:
+                    pass
+                return
         else:
             return
     else:
