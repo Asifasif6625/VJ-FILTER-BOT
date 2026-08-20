@@ -4474,6 +4474,11 @@ async def _resolve_nav_step(user_id: int, full_id: str, sid: str, series: dict, 
 
 
 def _user_suggestions_keyboard(matches: list[dict], user_id: int) -> InlineKeyboardMarkup:
+    """
+    Build suggestion buttons for same-name or multi-result series.
+    Button label includes year so users can distinguish "Loki (2021)" vs "Loki (2025)".
+    Each button uses a UUID key → series_id stored in SERIES_STATE so no title collision.
+    """
     rows = []
     import uuid, logging
     log = logging.getLogger(__name__)
@@ -4482,16 +4487,23 @@ def _user_suggestions_keyboard(matches: list[dict], user_id: int) -> InlineKeybo
     if not hasattr(temp, "SERIES_STATE"):
         temp.SERIES_STATE = {}
     for m in matches:
-        sid = str(m["_id"])
+        sid  = str(m["_id"])
+        name = m.get("name", "Unknown")
+        year = m.get("year", "")
+        # Show "Name (Year)" so same-name series are distinguishable
+        label = f"{name} ({year})" if year else name
         key = str(uuid.uuid4())[:8]
         nav_state = {
-            "user": user_id,
-            "user_id": user_id,
-            "sid": sid,
+            "user":      user_id,
+            "user_id":   user_id,
+            "sid":       sid,
             "series_id": sid,
-            "full_id": sid,
-            "path": "SUGGESTION",
-            "is_direct": False
+            "full_id":   sid,
+            "title":     name,
+            "year":      year,
+            "imdb_id":   m.get("imdb_id", ""),
+            "path":      "SUGGESTION",
+            "is_direct": False,
         }
         temp.SERIES_STATE[key] = nav_state
         try:
@@ -4500,15 +4512,16 @@ def _user_suggestions_keyboard(matches: list[dict], user_id: int) -> InlineKeybo
         except Exception:
             pass
         log.info(
-            f"[SERIES SUGGESTION STATE]\n"
-            f"user_id={user_id}\n"
-            f"series_id={sid}\n"
-            f"sid={sid}\n"
-            f"full_id={sid}\n"
-            f"path=SUGGESTION\n"
-            f"is_direct=False"
+            f"[SERIES SUGGESTION]"
+            f"\nuser_id={user_id}"
+            f"\nseries_id={sid}"
+            f"\ntitle={name}"
+            f"\nyear={year}"
+            f"\nimdb_id={m.get('imdb_id','')}"
+            f"\nkey={key}"
+            f"\npath=SUGGESTION"
         )
-        rows.append([InlineKeyboardButton(to_series_font(m["name"]), callback_data=f"sr#{key}")])
+        rows.append([InlineKeyboardButton(to_series_font(label), callback_data=f"sr#{key}")])
     return InlineKeyboardMarkup(rows)
 
 
@@ -4535,16 +4548,23 @@ async def process_series_search(client: Client, message: Message, txt: str, repl
         )
         return False
 
+    # Deduplicate by (title, year) — NOT just title alone.
+    # "Loki (2021)" and "Loki (2025)" must both appear as separate suggestions.
     seen = set()
     unique_matches = []
     for m in matches:
-        name = m.get("name", "").strip()
-        name_lower = name.lower()
-        if name_lower not in seen:
-            seen.add(name_lower)
+        name     = m.get("name", "").strip()
+        year     = str(m.get("year", "")).strip()
+        imdb_id  = str(m.get("imdb_id", "")).strip()
+        if imdb_id:
+            dedup_key = imdb_id
+        else:
+            dedup_key = f"{name.lower()}||{year}"
+        if dedup_key not in seen:
+            seen.add(dedup_key)
             unique_matches.append(m)
 
-    matched_names = [m.get("name", "") for m in unique_matches]
+    matched_names = [f"{m.get('name','')} ({m.get('year','')})" for m in unique_matches]
     decision = "SERIES_DIRECT" if len(unique_matches) == 1 else "SERIES_SUGGESTIONS"
 
     logger.info(
@@ -4608,15 +4628,26 @@ async def process_series_search(client: Client, message: Message, txt: str, repl
         logger.info(
             f"[SEARCH ROUTING]\n"
             f"stage=SERIES\n"
-            f"decision=SERIES_SUGGESTIONS"
+            f"decision=SERIES_SUGGESTIONS\n"
+            f"count={len(unique_matches)}"
         )
+        for m in unique_matches:
+            logger.info(
+                f"[SERIES SUGGESTION]\n"
+                f"user_id={user_id}\n"
+                f"query={txt}\n"
+                f"title={m.get('name','')}\n"
+                f"year={m.get('year','')}\n"
+                f"series_id={str(m['_id'])}\n"
+                f"imdb_id={m.get('imdb_id','')}"
+            )
         from database.series_db import get_series_thumbnail
         poster = await get_series_thumbnail()
         
         for m in unique_matches:
             _register_short_id(str(m["_id"]))
             
-        text = f"🍿 <b>{to_series_font('Choose the series/movie you want to view')}:</b>\n\n⚡ <b>{to_series_font('Result Shown in')}:</b> {remaining_seconds} <i>{to_series_font('seconds')}</i>"
+        text = f"📺 <b>{to_series_font('Series Results')}:</b>\n\n⚡ <b>{to_series_font('Result Shown in')}:</b> {remaining_seconds} <i>{to_series_font('seconds')}</i>"
         rm = _user_suggestions_keyboard(unique_matches, user_id)
 
     if rm:
@@ -5380,6 +5411,21 @@ async def series_user_nav(client: Client, query: CallbackQuery):
     series = await get_series(full_id)
     if not series:
         return await query.answer("⚠️ Unable to process this Series request. Please search again.", show_alert=True)
+
+    # ── Log the exact series selected (critical for same-name debugging) ──
+    log.info(
+        f"[SERIES SELECT]\n"
+        f"user_id={query.from_user.id}\n"
+        f"key={key}\n"
+        f"series_id={full_id}\n"
+        f"title={series.get('name', '')}\n"
+        f"year={series.get('year', '')}\n"
+        f"imdb_id={series.get('imdb_id', '')}\n"
+        f"path={req.get('path', 'DIRECT')}\n"
+        f"callback_data={query.data}"
+    )
+
+
 
     lang = None
     season = None
