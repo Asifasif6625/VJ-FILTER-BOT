@@ -307,17 +307,22 @@ async def search_series(query: str) -> list[dict]:
         mongo_regex = re.compile(re.escape(q_norm), re.IGNORECASE)
 
     cursor = series_col.find(
-        {"normalized_name": mongo_regex, "status": "active"}
+        {"normalized_name": mongo_regex, "status": {"$ne": "deleted"}}
     ).limit(60)
 
     candidates = [doc async for doc in cursor]
     
     # Fallback to active series scan if regex yielded no candidates
     if not candidates:
-        cursor = series_col.find({"status": "active"}).limit(60)
+        cursor = series_col.find({"status": {"$ne": "deleted"}}).limit(60)
         candidates = [doc async for doc in cursor]
 
     if not candidates:
+        logger.info(
+            f"[SERIES SEARCH ROUTING]\n"
+            f"query={query}\n"
+            f"matched=False"
+        )
         return []
 
     # 2. Score candidates using fuzzy & multi-word matching
@@ -329,6 +334,11 @@ async def search_series(query: str) -> list[dict]:
             scored_results.append((score, doc))
 
     if not scored_results:
+        logger.info(
+            f"[SERIES SEARCH ROUTING]\n"
+            f"query={query}\n"
+            f"matched=False"
+        )
         return []
 
     # 3. Sort by score descending, then length difference, then name
@@ -344,7 +354,12 @@ async def search_series(query: str) -> list[dict]:
             dedup.append(doc)
             if len(dedup) == 10:
                 break
-                
+
+    logger.info(
+        f"[SERIES SEARCH ROUTING]\n"
+        f"query={query}\n"
+        f"matched={bool(dedup)}"
+    )
     return dedup
 
 # ─── Settings / Global Thumbnail ─────────────────────────────────────────────
@@ -773,20 +788,30 @@ async def search_super_movies(query: str) -> list[dict]:
         return []
 
     # 1. Exact match on normalized_name
-    doc = await super_movies_col.find_one({"normalized_name": q_norm, "status": "active"})
+    doc = await super_movies_col.find_one({"normalized_name": q_norm, "status": {"$ne": "deleted"}})
     if doc:
+        logger.info(
+            f"[SUPER MOVIE SEARCH]\n"
+            f"query={query}\n"
+            f"matched=True"
+        )
         return [doc]
 
     # 2. Match without trailing year (e.g. "Idhayam Murali 2026" -> "idhayam murali")
     q_no_year = re.sub(r"\b(19|20)\d{2}\b", "", q_norm).strip()
     q_no_year = re.sub(r"\s+", " ", q_no_year).strip()
     if q_no_year and q_no_year != q_norm:
-        doc = await super_movies_col.find_one({"normalized_name": q_no_year, "status": "active"})
+        doc = await super_movies_col.find_one({"normalized_name": q_no_year, "status": {"$ne": "deleted"}})
         if doc:
+            logger.info(
+                f"[SUPER MOVIE SEARCH]\n"
+                f"query={query}\n"
+                f"matched=True"
+            )
             return [doc]
 
     # 3. Match candidate if query tokens contain all main words of normalized_name
-    cursor = super_movies_col.find({"status": "active"}).limit(100)
+    cursor = super_movies_col.find({"status": {"$ne": "deleted"}}).limit(100)
     candidates = [d async for d in cursor]
     matched = []
     for cand in candidates:
@@ -799,4 +824,9 @@ async def search_super_movies(query: str) -> list[dict]:
         elif all(qt in cand_tokens for qt in q_tokens) and len(q_tokens) == len(cand_tokens):
             matched.append(cand)
 
+    logger.info(
+        f"[SUPER MOVIE SEARCH]\n"
+        f"query={query}\n"
+        f"matched={bool(matched)}"
+    )
     return matched
