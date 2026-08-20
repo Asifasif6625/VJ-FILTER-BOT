@@ -120,13 +120,34 @@ def clear_wizard_session(user_id: int):
     Completely clear all session states across all wizard containers for a user.
     """
     temp.WIZARD_SESSIONS.pop(user_id, None)
-    if hasattr(temp, "AUTO_MOVIE"):
+    if hasattr(temp, "AUTO_MOVIE") and isinstance(temp.AUTO_MOVIE, dict):
         temp.AUTO_MOVIE.pop(user_id, None)
-    if hasattr(temp, "AUTO_SERIES"):
+        # Purge any session_id keys owned by this user
+        keys_to_del = [
+            k for k, v in list(temp.AUTO_MOVIE.items())
+            if isinstance(v, dict) and (v.get("user_id") == user_id or v.get("admin_id") == user_id)
+        ]
+        for k in keys_to_del:
+            temp.AUTO_MOVIE.pop(k, None)
+    if hasattr(temp, "AUTO_SERIES") and isinstance(temp.AUTO_SERIES, dict):
         temp.AUTO_SERIES.pop(user_id, None)
-    if hasattr(temp, "SERIES_WIZARD"):
+        keys_to_del = [
+            k for k, v in list(temp.AUTO_SERIES.items())
+            if isinstance(v, dict) and (v.get("user_id") == user_id or v.get("admin_id") == user_id)
+        ]
+        for k in keys_to_del:
+            temp.AUTO_SERIES.pop(k, None)
+    if hasattr(temp, "AUTO_MOVIE_BATCH") and isinstance(temp.AUTO_MOVIE_BATCH, dict):
+        temp.AUTO_MOVIE_BATCH.pop(user_id, None)
+        keys_to_del = [
+            k for k, v in list(temp.AUTO_MOVIE_BATCH.items())
+            if isinstance(v, dict) and (v.get("user_id") == user_id or v.get("admin_id") == user_id)
+        ]
+        for k in keys_to_del:
+            temp.AUTO_MOVIE_BATCH.pop(k, None)
+    if hasattr(temp, "SERIES_WIZARD") and isinstance(temp.SERIES_WIZARD, dict):
         temp.SERIES_WIZARD.pop(user_id, None)
-    if hasattr(temp, "SETTING_SERIES_THUMB"):
+    if hasattr(temp, "SETTING_SERIES_THUMB") and isinstance(temp.SETTING_SERIES_THUMB, dict):
         temp.SETTING_SERIES_THUMB.pop(user_id, None)
     logger.info(f"[SESSION CLEARED] user_id={user_id}")
 
@@ -141,9 +162,11 @@ def cancel_wizard_session(user_id: int) -> str | None:
         workflow = sess.get("workflow")
     elif hasattr(temp, "SETTING_SERIES_THUMB") and temp.SETTING_SERIES_THUMB.get(user_id):
         workflow = "THUMBNAIL"
-    elif hasattr(temp, "AUTO_MOVIE") and temp.AUTO_MOVIE.get(user_id):
+    elif hasattr(temp, "AUTO_MOVIE_BATCH") and (user_id in temp.AUTO_MOVIE_BATCH or any(isinstance(v, dict) and (v.get("user_id") == user_id or v.get("admin_id") == user_id) for v in temp.AUTO_MOVIE_BATCH.values())):
+        workflow = "SUPER_MOVIE_BATCH"
+    elif hasattr(temp, "AUTO_MOVIE") and (user_id in temp.AUTO_MOVIE or any(isinstance(v, dict) and (v.get("user_id") == user_id or v.get("admin_id") == user_id) for v in temp.AUTO_MOVIE.values())):
         workflow = "AUTO_MOVIE"
-    elif hasattr(temp, "AUTO_SERIES") and temp.AUTO_SERIES.get(user_id):
+    elif hasattr(temp, "AUTO_SERIES") and (user_id in temp.AUTO_SERIES or any(isinstance(v, dict) and (v.get("user_id") == user_id or v.get("admin_id") == user_id) for v in temp.AUTO_SERIES.values())):
         workflow = "AUTO_SERIES"
     elif hasattr(temp, "SERIES_WIZARD") and temp.SERIES_WIZARD.get(user_id):
         workflow = "SERIES_WIZARD"
