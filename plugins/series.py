@@ -1689,22 +1689,16 @@ async def cmd_cancel(client: Client, message: Message):
 # ─── TEXT HANDLER — WIZARD STEPS ─────────────────────────────────────────────
 # ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ 
 
-@Client.on_message(filters.private & (filters.text | filters.photo) & ~filters.command(
-    ["seriesfil", "sbatch", "slink", "cancel", "start", "help", "settings",
-     "connect", "disconnect", "connections", "stats", "users", "chats",
-     "broadcast", "ban", "unban", "leave", "disable", "logs",
-     "delete", "deletefiles", "batch", "link", "pbatch", "plink",
-     "request", "filter", "filters", "del", "delall", "gfilter",
-     "gfilters", "delg", "delallg", "shortlink", "ping", "alive",
-     "id", "info", "rename", "genpassword", "song", "set_tutorial",
-     "set_thumb", "del_thumb", "view_thumb", "set_caption", "see_caption",
-     "del_caption", "json", "short", "carbon", "tts", "tr", "telegraph",
-     "font", "pin", "unpin", "purge", "whois", "share", "audiobook",
-     "stickerid", "video", "mp4", "covid", "stream", "index",
-     "setskip", "deleteall", "channel",
-     "viewseries", "serieslist", "delseries", "seriesdel",
-     "thumpseries", "delthumbseries", "ed_series"]
-), group=-1)
+async def _is_in_wizard_session_filter(_, __, message: Message) -> bool:
+    if not message.from_user:
+        return False
+    from utils import get_wizard_session
+    return get_wizard_session(message.from_user.id) is not None
+
+wizard_filter = filters.create(_is_in_wizard_session_filter)
+
+
+@Client.on_message(filters.private & (filters.text | filters.photo) & wizard_filter)
 async def wizard_text_handler(client: Client, message: Message):
     uid = message.from_user.id
     text = message.text.strip() if message.text else ""
@@ -6198,7 +6192,7 @@ async def process_movie_deeplink(client: Client, message: Message, movie_id: str
 # ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ 
 
 
-@Client.on_message(filters.command(["add_ano", "set_ano", "addano", "setano"]), group=-1)
+@Client.on_message(filters.command(["add_ano", "set_ano", "addano", "setano"]))
 async def cmd_add_ano(client: Client, message: Message):
     user_id = message.from_user.id if message.from_user else 0
     logger.info(f"[ADD_ANO] command received user_id={user_id} chat_id={message.chat.id} text={message.text!r}")
@@ -6308,7 +6302,7 @@ async def cmd_add_ano(client: Client, message: Message):
             pass
 
 
-@Client.on_message(filters.command(["del_ano", "delano", "del_announcement", "del_channel_ano", "del_ano_channel"]), group=-1)
+@Client.on_message(filters.command(["del_ano", "delano", "del_announcement", "del_channel_ano", "del_ano_channel"]))
 async def cmd_del_ano(client: Client, message: Message):
     user_id = message.from_user.id if message.from_user else 0
     logger.info(f"[DEL_ANO] command received user_id={user_id} chat_id={message.chat.id}")
@@ -6350,7 +6344,7 @@ async def cmd_del_ano(client: Client, message: Message):
             pass
 
 
-@Client.on_message(filters.command(["ano", "get_ano", "getano", "announcement_channel"]), group=-1)
+@Client.on_message(filters.command(["ano", "get_ano", "getano", "announcement_channel"]))
 async def cmd_get_ano(client: Client, message: Message):
     user_id = message.from_user.id if message.from_user else 0
     try:
