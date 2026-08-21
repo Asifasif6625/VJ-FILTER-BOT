@@ -1,4 +1,4 @@
-﻿# Don't Remove Credit @VJ_Bots
+# Don't Remove Credit @VJ_Bots
 # Subscribe YouTube Channel For Amazing Bot @Tech_VJ
 # Ask Doubt on telegram @KingVJ01
 
@@ -635,70 +635,31 @@ async def next_page(bot, query):
             InlineKeyboardButton("ʏᴇᴀʀs", callback_data=f"years#{key}")
         ])
     try:
-        if settings['max_btn']:
-            if 0 < offset <= 10:
-                off_set = 0
-            elif offset == 0:
-                off_set = None
-            else:
-                off_set = offset - 10
-            if n_offset == 0:
-                btn.append(
-                    [InlineKeyboardButton("⌫ 𝐁𝐀𝐂𝐊", callback_data=f"next_{req}_{key}_{off_set}"), InlineKeyboardButton(f"{math.ceil(int(offset)/10)+1} / {math.ceil(total/10)}", callback_data="pages")]
-                )
-            elif off_set is None:
-                btn.append([InlineKeyboardButton("𝐏𝐀𝐆𝐄", callback_data="pages"), InlineKeyboardButton(f"{math.ceil(int(offset)/10)+1} / {math.ceil(total/10)}", callback_data="pages"), InlineKeyboardButton("𝐍𝐄𝐗𝐓 ➪", callback_data=f"next_{req}_{key}_{n_offset}")])
-            else:
-                btn.append(
-                    [
-                        InlineKeyboardButton("⌫ 𝐁𝐀𝐂𝐊", callback_data=f"next_{req}_{key}_{off_set}"),
-                        InlineKeyboardButton(f"{math.ceil(int(offset)/10)+1} / {math.ceil(total/10)}", callback_data="pages"),
-                        InlineKeyboardButton("𝐍𝐄𝐗𝐓 ➪", callback_data=f"next_{req}_{key}_{n_offset}")
-                    ],
-                )
-        else:
-            if 0 < offset <= int(MAX_B_TN):
-                off_set = 0
-            elif offset == 0:
-                off_set = None
-            else:
-                off_set = offset - int(MAX_B_TN)
-            if n_offset == 0:
-                btn.append(
-                    [InlineKeyboardButton("⌫ 𝐁𝐀𝐂𝐊", callback_data=f"next_{req}_{key}_{off_set}"), InlineKeyboardButton(f"{math.ceil(int(offset)/int(MAX_B_TN))+1} / {math.ceil(total/int(MAX_B_TN))}", callback_data="pages")]
-                )
-            elif off_set is None:
-                btn.append([InlineKeyboardButton("𝐏𝐀𝐆𝐄", callback_data="pages"), InlineKeyboardButton(f"{math.ceil(int(offset)/int(MAX_B_TN))+1} / {math.ceil(total/int(MAX_B_TN))}", callback_data="pages"), InlineKeyboardButton("𝐍𝐄𝐗𝐓 ➪", callback_data=f"next_{req}_{key}_{n_offset}")])
-            else:
-                btn.append(
-                    [
-                        InlineKeyboardButton("⌫ 𝐁𝐀𝐂𝐊", callback_data=f"next_{req}_{key}_{off_set}"),
-                        InlineKeyboardButton(f"{math.ceil(int(offset)/int(MAX_B_TN))+1} / {math.ceil(total/int(MAX_B_TN))}", callback_data="pages"),
-                        InlineKeyboardButton("𝐍𝐄𝐗𝐓 ➪", callback_data=f"next_{req}_{key}_{n_offset}")
-                    ],
-                )
-    except KeyError:
-        await save_group_settings(query.message.chat.id, 'max_btn', True)
-        if 0 < offset <= 10:
-            off_set = 0
-        elif offset == 0:
-            off_set = None
-        else:
-            off_set = offset - 10
-        if n_offset == 0:
-            btn.append(
-                [InlineKeyboardButton("⌫ 𝐁𝐀𝐂𝐊", callback_data=f"next_{req}_{key}_{off_set}"), InlineKeyboardButton(f"{math.ceil(int(offset)/10)+1} / {math.ceil(total/10)}", callback_data="pages")]
-            )
-        elif off_set is None:
-            btn.append([InlineKeyboardButton("𝐏𝐀𝐆𝐄", callback_data="pages"), InlineKeyboardButton(f"{math.ceil(int(offset)/10)+1} / {math.ceil(total/10)}", callback_data="pages"), InlineKeyboardButton("𝐍𝐄𝐗𝐓 ➪", callback_data=f"next_{req}_{key}_{n_offset}")])
-        else:
-            btn.append(
-                [
-                    InlineKeyboardButton("⌫ 𝐁𝐀𝐂𝐊", callback_data=f"next_{req}_{key}_{off_set}"),
-                    InlineKeyboardButton(f"{math.ceil(int(offset)/10)+1} / {math.ceil(total/10)}", callback_data="pages"),
-                    InlineKeyboardButton("𝐍𝐄𝐗𝐓 ➪", callback_data=f"next_{req}_{key}_{n_offset}")
-                ],
-            )
+    page_limit = int(MAX_B_TN) if MAX_B_TN else 5
+    cur_page = (offset // page_limit) + 1
+    total_pages = math.ceil(total / page_limit) if total else 1
+
+    if 0 < offset <= page_limit:
+        off_set = 0
+    elif offset == 0:
+        off_set = None
+    else:
+        off_set = offset - page_limit
+
+    if n_offset == 0 or n_offset == "":
+        btn.append(
+            [InlineKeyboardButton("⌫ 𝐁𝐀𝐂𝐊", callback_data=f"next_{req}_{key}_{off_set}"), InlineKeyboardButton(f"{cur_page} / {total_pages}", callback_data="pages")]
+        )
+    elif off_set is None:
+        btn.append([InlineKeyboardButton("𝐏𝐀𝐆𝐄", callback_data="pages"), InlineKeyboardButton(f"{cur_page} / {total_pages}", callback_data="pages"), InlineKeyboardButton("𝐍𝐄𝐗𝐓 ➪", callback_data=f"next_{req}_{key}_{n_offset}")])
+    else:
+        btn.append(
+            [
+                InlineKeyboardButton("⌫ 𝐁𝐀𝐂𝐊", callback_data=f"next_{req}_{key}_{off_set}"),
+                InlineKeyboardButton(f"{cur_page} / {total_pages}", callback_data="pages"),
+                InlineKeyboardButton("𝐍𝐄𝐗𝐓 ➪", callback_data=f"next_{req}_{key}_{n_offset}")
+            ],
+        )
     if not settings["button"]:
         cur_time = datetime.now(pytz.timezone('Asia/Kolkata')).time()
         time_difference = timedelta(hours=cur_time.hour, minutes=cur_time.minute, seconds=(cur_time.second+(cur_time.microsecond/1000000))) - timedelta(hours=curr_time.hour, minutes=curr_time.minute, seconds=(curr_time.second+(curr_time.microsecond/1000000)))
@@ -3296,23 +3257,84 @@ async def auto_filter(client, name, msg, reply_msg=None, ai_search=True, spoll=F
                 )
 
             # -- 3. Normal Movie Filter (ia_filterdb) --
-            files, offset, total_results = await get_search_results(message.chat.id, search, max_results=100, offset=0, filter=True)
+            page_limit = int(MAX_B_TN) if MAX_B_TN else 5
+            files, offset, total_results = await get_search_results(message.chat.id, search, max_results=page_limit, offset=0, filter=True)
             logger.info(f"[NORMAL MOVIE SEARCH]\nquery={search}\ndb_files={len(files)}")
             settings = await get_settings(message.chat.id)
 
             if not files:
-                # -- 4. No results -> no-result message --
-                no_db_btn = InlineKeyboardMarkup([[InlineKeyboardButton(chr(0x1F9A8)+"Reason", callback_data="not_in_db_reason")]])
-                msg_text = "<b>s\u1d1fRRY N\u1d0f F\u026aL\u1d07s W\u1d07R\u1d07 F\u1d0f\u1d1fND F\u1d0fR Y\u1d0f\u1d1fR R\u1d07Q\u1d1f\u1d07sT\ud83d\ude15\n\n\u1d04H\u1d07\u1d04K Y\u1d0f\u1d1fR sP\u1d07LL\u026a\u0274G \u026a\u0274 G\u1d0f\u1d0f\u0262L\u1d07 \u1d00\u0274D TRY \u1d00\u0262\u1d00\u026a\u0274 \ud83d\ude03\n\n\u1d0f\u1d0f\u1d20\u026a\u1d07 R\u1d07Q\u1d1f\u1d07sT F\u1d0fRM\u1d00T \ud83d\udc47\n\n\u1d07x\u1d00\u1d0fPL\u1d07 : Uncharted or Uncharted 2022 or Uncharted En\n\ns\u1d07R\u026a\u1d07s R\u1d07Q\u1d1f\u1d07sT F\u1d0fRM\u1d00T \ud83d\udc47\n\n\u1d07x\u1d00\u1d0fPL\u1d07 : Loki S01 or Loki S01E04 or Lucifer S03E24\n\n\ud83d\udeaf D\u1d0f\u0274T \u1d1fs\u1d07 \u279a ':(!,./)\n\n<i>\ud83d\udd50 This message will be deleted in 50 seconds.</i></b>"
-                if reply_msg:
-                    msg_obj = await reply_msg.edit_text(msg_text, reply_markup=no_db_btn)
+                # -- 4. No files in database -> Check IMDb for details & poster --
+                imdb = None
+                try:
+                    imdb = await get_poster(search)
+                except Exception as ie:
+                    logger.warning(f"[No-files IMDb fetch error for '{search}']: {ie}")
+                    imdb = None
+
+                no_db_btn = InlineKeyboardMarkup([[InlineKeyboardButton(chr(0x1F9A8) + " Reason", callback_data="not_in_db_reason")]])
+
+                if imdb and (imdb.get('poster') or imdb.get('title')):
+                    imdb_title = imdb.get('title') or search
+                    imdb_year = imdb.get('year') or "N/A"
+                    imdb_rating = imdb.get('rating') or "N/A"
+                    imdb_genres = imdb.get('genres') or "N/A"
+
+                    imdb_cap = (
+                        f"<b>🎬 ᴛɪᴛʟᴇ :</b> <code>{imdb_title}</code>\n"
+                        f"<b>📅 ʏᴇᴀʀ :</b> <code>{imdb_year}</code>\n"
+                        f"<b>⭐ ʀᴀᴛɪɴɢ :</b> <code>{imdb_rating}/10</code>\n"
+                        f"<b>🎭 ɢᴇɴʀᴇs :</b> <code>{imdb_genres}</code>\n\n"
+                        f"<b>⚠️ ᴛʜɪs ᴍᴏᴠɪᴇ ɪs ɴᴏᴛ ᴀᴠᴀɪʟᴀʙʟᴇ ɪɴ ᴏᴜʀ ᴅᴀᴛᴀʙᴀsᴇ!</b>\n\n"
+                        f"<i>🕐 This message will be deleted in 50 seconds.</i>"
+                    )
+
+                    poster_url = imdb.get('poster')
+                    msg_obj = None
+                    if poster_url:
+                        try:
+                            if reply_msg:
+                                try:
+                                    await reply_msg.delete()
+                                except Exception:
+                                    pass
+                            msg_obj = await message.reply_photo(
+                                photo=poster_url,
+                                caption=imdb_cap,
+                                reply_markup=no_db_btn,
+                                parse_mode=enums.ParseMode.HTML
+                            )
+                        except Exception:
+                            if reply_msg:
+                                msg_obj = await reply_msg.edit_text(imdb_cap, reply_markup=no_db_btn, parse_mode=enums.ParseMode.HTML)
+                            else:
+                                msg_obj = await message.reply_text(imdb_cap, reply_markup=no_db_btn, parse_mode=enums.ParseMode.HTML)
+                    else:
+                        if reply_msg:
+                            msg_obj = await reply_msg.edit_text(imdb_cap, reply_markup=no_db_btn, parse_mode=enums.ParseMode.HTML)
+                        else:
+                            msg_obj = await message.reply_text(imdb_cap, reply_markup=no_db_btn, parse_mode=enums.ParseMode.HTML)
                 else:
-                    msg_obj = await message.reply_text(msg_text, reply_markup=no_db_btn)
+                    msg_text = (
+                        "<b>sᴏʀʀʏ ɴᴏ ꜰɪʟᴇs ᴡᴇʀᴇ ꜰᴏᴜɴᴅ ꜰᴏʀ ʏᴏᴜʀ ʀᴇǫᴜᴇꜱᴛ😕\n\n"
+                        "ᴄʜᴇᴄᴋ ʏᴏᴜʀ sᴘᴇʟʟɪɴɢ ɪɴ ɢᴏᴏɢʟᴇ ᴀɴᴅ ᴛʀʏ ᴀɢᴀɪɴ 😃\n\n"
+                        "ᴍᴏᴠɪᴇ ʀᴇǫᴜᴇꜱᴛ ꜰᴏʀᴍᴀᴛ 👇\n\n"
+                        "ᴇxᴀᴍᴘʟᴇ : Uncharted or Uncharted 2022 or Uncharted En\n\n"
+                        "ꜱᴇʀɪᴇꜱ ʀᴇǫᴜᴇꜱᴛ ꜰᴏʀᴍᴀᴛ 👇\n\n"
+                        "ᴇxᴀᴍᴘʟᴇ : Loki S01 or Loki S01E04 or Lucifer S03E24\n\n"
+                        "🚯 ᴅᴏɴᴛ ᴜꜱᴇ ➠ ':(!,./)\n\n"
+                        "<i>🕐 This message will be deleted in 50 seconds.</i></b>"
+                    )
+                    if reply_msg:
+                        msg_obj = await reply_msg.edit_text(msg_text, reply_markup=no_db_btn)
+                    else:
+                        msg_obj = await message.reply_text(msg_text, reply_markup=no_db_btn)
+
                 await asyncio.sleep(50)
                 try:
-                    await msg_obj.delete()
+                    if msg_obj:
+                        await msg_obj.delete()
                     await message.delete()
-                except:
+                except Exception:
                     pass
                 return
         else:

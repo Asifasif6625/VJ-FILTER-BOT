@@ -770,8 +770,7 @@ def _build_auto_movie_lang_keyboard(session_id, movie_data):
     tot_dup = res.get("total_duplicates", 0)
 
     buttons = []
-    # 0 matching files or all files already exist (no new files)
-    if tot_matched == 0 or tot_new == 0:
+    if tot_matched == 0:
         buttons.append([
             InlineKeyboardButton("📦 Batch Add Files", callback_data=f"am_batch:{session_id}"),
         ])
@@ -779,9 +778,9 @@ def _build_auto_movie_lang_keyboard(session_id, movie_data):
             InlineKeyboardButton("🔄 Rescan", callback_data=f"am_rescan:{session_id}"),
             InlineKeyboardButton("❌ Cancel", callback_data=f"am_cancel:{session_id}")
         ])
-    # New files exist -> Show Save button
     else:
-        buttons.append([InlineKeyboardButton(f"💾 Save Super Movie ({tot_new} New)", callback_data=f"am_save:{session_id}")])
+        save_label = f"💾 Save Super Movie ({tot_new} New)" if tot_new > 0 else "💾 Save Super Movie Filter"
+        buttons.append([InlineKeyboardButton(save_label, callback_data=f"am_save:{session_id}")])
         buttons.append([InlineKeyboardButton("📦 Batch Add Files", callback_data=f"am_batch:{session_id}")])
         buttons.append([
             InlineKeyboardButton("🔄 Rescan", callback_data=f"am_rescan:{session_id}"),
@@ -2276,18 +2275,17 @@ async def wizard_callback(client: Client, query: CallbackQuery):
 
         if res["total_matched"] > 0 and res["total_new"] == 0 and res["total_duplicates"] > 0:
             text = (
-                f"⚠️ <b>ALL MATCHING EPISODES ALREADY EXIST</b>\n\n"
+                f"📊 <b>AUTO SCAN RESULT</b>\n\n"
                 f"🎬 <b>Series:</b> {auto_data['title']}\n"
                 f"📅 <b>Year:</b> {auto_data['year']}\n"
                 f"📺 <b>Seasons Detected:</b> {seasons_str}\n\n"
                 f"📁 <b>Files scanned:</b> {res['total_scanned']}\n"
                 f"✅ <b>Matching files:</b> {res['total_matched']}\n"
-                f"♻️ <b>Already in database:</b> {res['total_duplicates']}\n"
-                f"🆕 <b>New files:</b> 0\n\n"
+                f"♻️ <b>Already in database:</b> {res['total_duplicates']}\n\n"
                 f"🌐 <b>Languages:</b> {langs_list}\n"
                 f"🎞 <b>Qualities:</b> {quals_list}\n\n"
                 f"🎞 <b>Qualities & Episodes:</b>\n{episodes_summary}\n\n"
-                f"ℹ️ <i>All matching episodes are already saved in the Series database.</i>"
+                f"✅ <i>Click below to create/sync the Series Filter for these files!</i>"
             )
             markup = InlineKeyboardMarkup([
                 [InlineKeyboardButton("💾 Save Series Filter", callback_data="sw#auto_save")],
@@ -2395,18 +2393,17 @@ async def wizard_callback(client: Client, query: CallbackQuery):
 
         if res["total_matched"] > 0 and res["total_new"] == 0 and res["total_duplicates"] > 0:
             text = (
-                f"⚠️ <b>ALL MATCHING EPISODES ALREADY EXIST</b>\n\n"
+                f"📊 <b>AUTO SCAN RESULT</b>\n\n"
                 f"🎬 <b>Series:</b> {auto_data['title']}\n"
                 f"📅 <b>Year:</b> {auto_data['year']}\n"
                 f"📺 <b>Season:</b> {season_num}\n\n"
                 f"📁 <b>Files scanned:</b> {res['total_scanned']}\n"
                 f"✅ <b>Matching files:</b> {res['total_matched']}\n"
-                f"♻️ <b>Already in database:</b> {res['total_duplicates']}\n"
-                f"🆕 <b>New files:</b> 0\n\n"
+                f"♻️ <b>Already in database:</b> {res['total_duplicates']}\n\n"
                 f"🌐 <b>Languages:</b> {langs_list}\n"
                 f"🎞 <b>Qualities:</b> {quals_list}\n\n"
                 f"🎞 <b>Qualities & Episodes:</b>\n{episodes_summary}\n\n"
-                f"ℹ️ <i>All matching episodes are already saved in the Series database.</i>"
+                f"✅ <i>Click below to create/sync the Series Filter for these files!</i>"
             )
             markup = InlineKeyboardMarkup([
                 [InlineKeyboardButton("💾 Save Series Filter", callback_data="sw#auto_save")],
@@ -2513,26 +2510,26 @@ async def wizard_callback(client: Client, query: CallbackQuery):
 
         if res["total_matched"] > 0 and res["total_new"] == 0 and res["total_duplicates"] > 0:
             text = (
-                f"⚠️ <b>ALL MATCHING EPISODES ALREADY EXIST</b>\n\n"
+                f"📊 <b>AUTO SCAN RESULT</b>\n\n"
                 f"🎬 <b>Series:</b> {auto_data['title']}\n"
                 f"📅 <b>Year:</b> {auto_data['year']}\n"
                 f"{season_display}\n\n"
                 f"📁 <b>Files scanned:</b> {res['total_scanned']}\n"
                 f"✅ <b>Matching files:</b> {res['total_matched']}\n"
-                f"♻️ <b>Already in database:</b> {res['total_duplicates']}\n"
-                f"🆕 <b>New files:</b> 0\n\n"
+                f"♻️ <b>Already in database:</b> {res['total_duplicates']}\n\n"
                 f"🌐 <b>Languages:</b> {langs_list}\n"
                 f"🎞 <b>Qualities:</b> {quals_list}\n\n"
                 f"🎞 <b>Qualities & Episodes:</b>\n{episodes_summary}\n\n"
-                f"ℹ️ <i>All matching episodes are already saved in the Series database.</i>"
+                f"✅ <i>Click below to create/sync the Series Filter for these files!</i>"
             )
             markup = InlineKeyboardMarkup([
+                [InlineKeyboardButton("💾 Save Series Filter", callback_data="sw#auto_save")],
                 [InlineKeyboardButton("🔄 Rescan", callback_data="sw#auto_rescan")],
                 [InlineKeyboardButton("📺 Change Season", callback_data="sw#auto_sel_season")],
                 [InlineKeyboardButton("❌ Cancel", callback_data="sw#auto_cancel")]
             ])
             await query.message.edit_text(text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
-            return await query.answer(f"Rescan complete: all {res['total_duplicates']} episodes already exist in database.")
+            return await query.answer(f"Rescan complete: {res['total_matched']} episodes detected.")
 
         text = (
             f"📊 <b>AUTO SCAN RESULT</b>\n\n"
@@ -2565,8 +2562,10 @@ async def wizard_callback(client: Client, query: CallbackQuery):
         res = auto_data["scan"]
         total_matched = res.get("total_matched", 0)
         total_new = res.get("total_new", 0)
-        all_match_files = res.get("all_matching_files") or res.get("valid_files") or []
-        files_for_metadata = valid_files if valid_files else all_match_files
+        total_duplicates = res.get("total_duplicates", 0)
+        valid_files = res.get("valid_files", []) or []
+        all_match_files = res.get("all_matching_files", []) or valid_files
+        files_for_metadata = all_match_files if all_match_files else valid_files
 
         if total_matched == 0 and not files_for_metadata:
             return await query.answer("⚠️ No matching files found to save.", show_alert=True)
@@ -2608,7 +2607,8 @@ async def wizard_callback(client: Client, query: CallbackQuery):
                 })
 
             added_count = 0
-            for f in valid_files:
+            target_files = all_match_files if all_match_files else valid_files
+            for f in target_files:
                 ok, _ = await add_series_file({
                     "series_id": series_id,
                     "language": f["language"],
@@ -2629,33 +2629,39 @@ async def wizard_callback(client: Client, query: CallbackQuery):
 
             if is_skip:
                 ep_lines = []
-                for s_num, langs in sorted(res["organized_by_season"].items()):
+                for s_num, langs in sorted(res.get("organized_by_season", {}).items()):
                     for lang, quals in langs.items():
                         for qual, flist in quals.items():
-                            min_ep = min(f["episode"] for f in flist)
-                            max_ep = max(f["episode"] for f in flist)
-                            s_tag = f"S{s_num:02d}" if s_num > 0 else "Direct"
-                            if min_ep == max_ep:
-                                ep_lines.append(f"• {s_tag} E{min_ep:02d} {lang} ({qual})")
-                            else:
-                                ep_lines.append(f"• {s_tag} E{min_ep:02d} – E{max_ep:02d} {lang} ({qual})")
+                            if flist:
+                                eps = [int(f["episode"]) for f in flist if f.get("episode") is not None]
+                                if eps:
+                                    min_ep = min(eps)
+                                    max_ep = max(eps)
+                                    s_tag = f"S{s_num:02d}" if s_num > 0 else "Direct"
+                                    if min_ep == max_ep:
+                                        ep_lines.append(f"• {s_tag} E{min_ep:02d} {lang} ({qual})")
+                                    else:
+                                        ep_lines.append(f"• {s_tag} E{min_ep:02d} – E{max_ep:02d} {lang} ({qual})")
                 ep_summary = "\n".join(ep_lines) if ep_lines else "None"
                 season_display = ", ".join(f"S{s}" if s > 0 else "Direct" for s in detected_seasons) if detected_seasons else "None"
             else:
                 season = auto_data.get("season", 1)
                 ep_lines = []
-                for lang, quals in res["organized"].items():
+                for lang, quals in res.get("organized", {}).items():
                     for qual, flist in quals.items():
-                        min_ep = min(f["episode"] for f in flist)
-                        max_ep = max(f["episode"] for f in flist)
-                        if min_ep == max_ep:
-                            ep_lines.append(f"• E{min_ep:02d} {lang} ({qual})")
-                        else:
-                            ep_lines.append(f"• E{min_ep:02d} – E{max_ep:02d} {lang} ({qual})")
+                        if flist:
+                            eps = [int(f["episode"]) for f in flist if f.get("episode") is not None]
+                            if eps:
+                                min_ep = min(eps)
+                                max_ep = max(eps)
+                                if min_ep == max_ep:
+                                    ep_lines.append(f"• E{min_ep:02d} {lang} ({qual})")
+                                else:
+                                    ep_lines.append(f"• E{min_ep:02d} – E{max_ep:02d} {lang} ({qual})")
                 ep_summary = "\n".join(ep_lines) if ep_lines else "None"
                 season_display = str(season)
 
-            langs_summary = "\n".join(f"• {l}" for l in detected_langs)
+            langs_summary = "\n".join(f"• {l}" for l in detected_langs) if detected_langs else "None"
 
             if uid in temp.AUTO_SERIES:
                 del temp.AUTO_SERIES[uid]
