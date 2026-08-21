@@ -3351,6 +3351,8 @@ async def wizard_callback(client: Client, query: CallbackQuery):
                         f"languages={all_langs}\n"
                         f"qualities={all_quals}"
                     )
+                    if movie_id:
+                        asyncio.create_task(send_movie_announcement(client, movie_id))
                 except Exception as e:
                     logger.error(f"[MOVIE BATCH SAVE] super_movies_col error: {e}")
 
@@ -3906,6 +3908,8 @@ async def auto_movie_hierarchical_callbacks(client: Client, query: CallbackQuery
                 f"languages={langs}\n"
                 f"qualities={quals}"
             )
+            if movie_id:
+                asyncio.create_task(send_movie_announcement(client, movie_id))
         except Exception as e:
             logger.error(f"[AUTO_MOVIE FILTER SYNC ERROR] {e}")
 
@@ -6004,6 +6008,107 @@ async def send_series_announcement(client: Client, series_id: str):
         logger.error(f"[SERIES ANNOUNCEMENT ERROR] Failed to send announcement for series {sid}: {e}")
 
 
+async def send_movie_announcement(client: Client, movie_id: str):
+    """
+    Automatically send an announcement for a newly created Super Movie to the configured channel.
+    Guaranteed to execute at most once per movie (persistent duplicate protection).
+    """
+    if not movie_id:
+        return
+    mid = str(movie_id).strip()
+
+    # 1. Check persistent duplicate protection
+    if await is_announcement_sent(mid):
+        logger.info(f"[MOVIE ANNOUNCEMENT] Movie {mid} already announced. Skipping.")
+        return
+
+    # 2. Check announcement channel configuration
+    channel_id = await get_announcement_channel()
+    if not channel_id:
+        logger.warning("[MOVIE ANNOUNCEMENT] ⚠️ Announcement channel is not configured.")
+        return
+
+    # 3. Retrieve super movie details
+    movie = await get_super_movie(mid)
+    if not movie or movie.get("status") == "deleted":
+        logger.warning(f"[MOVIE ANNOUNCEMENT] Super Movie {mid} not found or deleted.")
+        return
+
+    name = movie.get("title", "").strip()
+    if not name:
+        return
+
+    year = str(movie.get("year", ""))
+    rating = str(movie.get("rating", ""))
+    genre = str(movie.get("genre", ""))
+    languages = movie.get("languages") or []
+    qualities = movie.get("qualities") or []
+
+    # 4. Build announcement caption
+    caption_lines = [f"🎬 <b>{name}</b>\n"]
+    if year and year != "N/A":
+        caption_lines.append(f"📅 <b>Year:</b> {year}")
+    if languages:
+        langs_str = ", ".join(languages) if isinstance(languages, list) else str(languages)
+        caption_lines.append(f"🌐 <b>Language:</b> {langs_str}")
+    if qualities:
+        quals_str = ", ".join(qualities) if isinstance(qualities, list) else str(qualities)
+        caption_lines.append(f"🎞 <b>Quality:</b> {quals_str}")
+    if rating and rating != "N/A":
+        caption_lines.append(f"⭐ <b>Rating:</b> {rating}")
+    if genre and genre != "N/A":
+        caption_lines.append(f"🎭 <b>Genre:</b> {genre}")
+
+    caption = "\n".join(caption_lines)
+
+    # 5. Build Deep Link button
+    bot_username = temp.U_NAME if (hasattr(temp, "U_NAME") and temp.U_NAME) else getattr(getattr(client, "me", None), "username", None)
+    if bot_username:
+        bot_username = str(bot_username).lstrip("@")
+    else:
+        bot_username = "Bot"
+
+    deep_link = f"https://telegram.me/{bot_username}?start=movie_{mid}"
+    markup = InlineKeyboardMarkup([
+        [InlineKeyboardButton(f"📂 {to_series_font('Get Files')}", url=deep_link)]
+    ])
+
+    poster = movie.get("poster")
+    sent_msg = None
+
+    try:
+        if poster:
+            try:
+                sent_msg = await client.send_photo(
+                    chat_id=channel_id,
+                    photo=poster,
+                    caption=caption,
+                    reply_markup=markup,
+                    parse_mode=enums.ParseMode.HTML
+                )
+            except Exception as pe:
+                logger.warning(f"[MOVIE ANNOUNCEMENT] Failed to send photo poster: {pe}. Falling back to text message.")
+                sent_msg = await client.send_message(
+                    chat_id=channel_id,
+                    text=caption,
+                    reply_markup=markup,
+                    parse_mode=enums.ParseMode.HTML
+                )
+        else:
+            sent_msg = await client.send_message(
+                chat_id=channel_id,
+                text=caption,
+                reply_markup=markup,
+                parse_mode=enums.ParseMode.HTML
+            )
+
+        if sent_msg:
+            await save_announcement(mid, channel_id, sent_msg.id, series_key=name)
+            logger.info(f"[MOVIE ANNOUNCEMENT] Successfully announced movie '{name}' (id={mid}) in channel {channel_id}, msg_id={sent_msg.id}")
+    except Exception as e:
+        logger.error(f"[MOVIE ANNOUNCEMENT ERROR] Failed to send announcement for movie {mid}: {e}")
+
+
 async def process_series_deeplink(client: Client, message: Message, series_key: str):
     """
     Handle /start series_<series_key> deep link.
@@ -6057,6 +6162,19 @@ async def process_series_deeplink(client: Client, message: Message, series_key: 
         await message.reply_text("⚠️ No files available for this series.", parse_mode=enums.ParseMode.HTML)
 
 
+async def process_movie_deeplink(client: Client, message: Message, movie_id: str):
+    """
+    Handle /start movie_<movie_id> deep link.
+    Opens the Super Movie filter directly in PM with language & quality selection.
+    """
+    movie = await get_super_movie(movie_id)
+    if not movie:
+        return await message.reply_text("<b><i>⚠️ Movie not found or has been removed.</i></b>", parse_mode=enums.ParseMode.HTML)
+
+    movie_title = movie.get("title", "")
+    await process_super_movie_search(client, message, movie_title)
+
+
 # ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ 
 # ─── /add_ano & /del_ano — Admin Announcement Commands ───────────────────────
 # ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ 
@@ -6064,12 +6182,14 @@ async def process_series_deeplink(client: Client, message: Message, series_key: 
 
 @Client.on_message(filters.command(["add_ano", "set_ano", "addano", "setano"]))
 async def cmd_add_ano(client: Client, message: Message):
-    is_admin = False
-    if message.chat.type in [enums.ChatType.GROUP, enums.ChatType.SUPERGROUP]:
-        admin_list = await client.get_chat_members(message.chat.id, filter=enums.ChatMembersFilter.ADMINISTRATORS)
-        is_admin = any(admin.user.id == message.from_user.id for admin in admin_list if admin.user)
-    else:
-        is_admin = _is_admin(message.from_user.id if message.from_user else 0)
+    user_id = message.from_user.id if message.from_user else 0
+    is_admin = _is_admin(user_id)
+    if not is_admin and message.chat.type in [enums.ChatType.GROUP, enums.ChatType.SUPERGROUP]:
+        try:
+            admin_list = await client.get_chat_members(message.chat.id, filter=enums.ChatMembersFilter.ADMINISTRATORS)
+            is_admin = any(admin.user.id == user_id for admin in admin_list if admin.user)
+        except Exception:
+            pass
 
     if not is_admin:
         return await message.reply_text("❌ You are not authorized to use this command.")
@@ -6077,15 +6197,18 @@ async def cmd_add_ano(client: Client, message: Message):
     args = message.text.split(None, 1)
     if len(args) < 2 or not args[1].strip():
         return await message.reply_text(
+            "📢 <b>Announcement Channel Setup</b>\n\n"
             "<b>Usage:</b> <code>/add_ano &lt;channel_id&gt;</code>\n\n"
-            "<b>Example:</b> <code>/add_ano -1001234567890</code>\n"
-            "or: <code>/add_ano @channel_username</code>",
+            "<b>Examples:</b>\n"
+            "• <code>/add_ano -1001234567890</code>\n"
+            "• <code>/add_ano @channel_username</code>\n"
+            "• <code>/add_ano https://t.me/channel_username</code>\n\n"
+            "<i>Whenever a new Series or Super Movie filter is added, an announcement with poster & download button will automatically post to this channel!</i>",
             parse_mode=enums.ParseMode.HTML
         )
 
     ch_raw = args[1].strip().strip('"').strip("'").strip("`").strip()
 
-    # Parse channel input (supports -100..., @username, or https://t.me/...)
     channel_id = None
     if ch_raw.startswith("https://t.me/") or ch_raw.startswith("http://t.me/"):
         parts = ch_raw.rstrip("/").split("/")
@@ -6097,14 +6220,23 @@ async def cmd_add_ano(client: Client, message: Message):
             channel_id = ch_raw
     elif ch_raw.startswith("@"):
         channel_id = ch_raw
+    elif ch_raw.startswith("-100"):
+        try:
+            channel_id = int(ch_raw)
+        except ValueError:
+            channel_id = ch_raw
+    elif ch_raw.startswith("-"):
+        try:
+            channel_id = int(f"-100{ch_raw.lstrip('-')}")
+        except ValueError:
+            channel_id = ch_raw
+    elif ch_raw.isdigit():
+        channel_id = int(f"-100{ch_raw}")
     else:
         try:
             channel_id = int(ch_raw)
         except ValueError:
-            return await message.reply_text(
-                "❌ <b>Invalid Channel ID:</b> Please provide a valid numeric channel ID (e.g. <code>-1001234567890</code>) or @channel_username.",
-                parse_mode=enums.ParseMode.HTML
-            )
+            channel_id = ch_raw
 
     channel_title = str(channel_id)
     try:
@@ -6114,57 +6246,30 @@ async def cmd_add_ano(client: Client, message: Message):
             if chat.title:
                 channel_title = chat.title
     except Exception as e:
-        logger.warning(f"[ANNOUNCEMENT] get_chat failed for {channel_id}: {e}")
-        if not str(channel_id).lstrip("-").isdigit():
-            return await message.reply_text(
-                f"❌ <b>Channel Access Failed:</b> Could not find or access channel <code>{channel_id}</code>.\n\n"
-                f"<i>Error:</i> <code>{e}</code>\n\n"
-                f"Please ensure the channel ID or @username is correct and the bot is an Admin.",
-                parse_mode=enums.ParseMode.HTML
-            )
-
-    # Validate bot permissions in the channel safely
-    bot_id = client.me.id if (hasattr(client, "me") and client.me) else None
-    if not bot_id:
-        try:
-            me_obj = await client.get_me()
-            bot_id = me_obj.id
-        except Exception:
-            bot_id = None
-
-    if bot_id:
-        try:
-            member = await client.get_chat_member(channel_id, bot_id)
-            if member.status not in [enums.ChatMemberStatus.ADMINISTRATOR, enums.ChatMemberStatus.OWNER]:
-                return await message.reply_text(
-                    f"❌ <b>Permission Error:</b> The bot is not an <b>Administrator</b> in <b>{channel_title}</b> (<code>{channel_id}</code>).\n\n"
-                    f"Please promote the bot to Admin with <i>Post Messages</i> permission.",
-                    parse_mode=enums.ParseMode.HTML
-                )
-        except Exception as pe:
-            logger.info(f"[ANNOUNCEMENT] get_chat_member check bypassed: {pe}")
+        logger.warning(f"[ANNOUNCEMENT] get_chat notice for {channel_id}: {e}")
 
     await set_announcement_channel(channel_id)
-    user_id = message.from_user.id if message.from_user else 0
     logger.info(f"[ANNOUNCEMENT] add_channel={channel_id} title={channel_title} configured by user={user_id}")
     await message.reply_text(
-        f"✅ <b>Announcement Channel Configured</b>\n\n"
+        f"✅ <b>Announcement Channel Configured Successfully!</b>\n\n"
         f"📢 <b>Channel:</b> <code>{channel_title}</code>\n"
         f"🆔 <b>Channel ID:</b> <code>{channel_id}</code>\n"
-        f"⚡ <b>Announcement Status:</b> <code>Enabled</code>\n\n"
-        f"<i>New series additions will now be announced automatically to this channel.</i>",
+        f"⚡ <b>Status:</b> <code>Enabled</code>\n\n"
+        f"🎉 <i>All future Series & Super Movie filter additions will now be announced automatically to this channel with posters and download buttons!</i>",
         parse_mode=enums.ParseMode.HTML
     )
 
 
 @Client.on_message(filters.command(["del_ano", "delano", "del_announcement", "del_channel_ano", "del_ano_channel"]))
 async def cmd_del_ano(client: Client, message: Message):
-    is_admin = False
-    if message.chat.type in [enums.ChatType.GROUP, enums.ChatType.SUPERGROUP]:
-        admin_list = await client.get_chat_members(message.chat.id, filter=enums.ChatMembersFilter.ADMINISTRATORS)
-        is_admin = any(admin.user.id == message.from_user.id for admin in admin_list if admin.user)
-    else:
-        is_admin = _is_admin(message.from_user.id if message.from_user else 0)
+    user_id = message.from_user.id if message.from_user else 0
+    is_admin = _is_admin(user_id)
+    if not is_admin and message.chat.type in [enums.ChatType.GROUP, enums.ChatType.SUPERGROUP]:
+        try:
+            admin_list = await client.get_chat_members(message.chat.id, filter=enums.ChatMembersFilter.ADMINISTRATORS)
+            is_admin = any(admin.user.id == user_id for admin in admin_list if admin.user)
+        except Exception:
+            pass
 
     if not is_admin:
         return await message.reply_text("❌ You are not authorized to use this command.")
@@ -6174,13 +6279,42 @@ async def cmd_del_ano(client: Client, message: Message):
         return await message.reply_text("ℹ️ <b>No announcement channel is currently configured.</b>", parse_mode=enums.ParseMode.HTML)
 
     await delete_announcement_channel()
-    user_id = message.from_user.id if message.from_user else 0
     logger.info(f"[ANNOUNCEMENT] delete_channel={channel_id} removed by user={user_id}")
     return await message.reply_text(
         f"✅ <b>Announcement Channel Removed</b>\n\n"
         f"📢 <b>Previous Channel:</b> <code>{channel_id}</code>\n"
         f"⚡ <b>Announcement Status:</b> <code>Disabled</code>\n\n"
-        f"<i>Future automatic series announcements are now stopped.</i>",
+        f"<i>Future automatic filter announcements are now stopped.</i>",
+        parse_mode=enums.ParseMode.HTML
+    )
+
+
+@Client.on_message(filters.command(["ano", "get_ano", "getano", "announcement_channel"]))
+async def cmd_get_ano(client: Client, message: Message):
+    user_id = message.from_user.id if message.from_user else 0
+    is_admin = _is_admin(user_id)
+    if not is_admin and message.chat.type in [enums.ChatType.GROUP, enums.ChatType.SUPERGROUP]:
+        try:
+            admin_list = await client.get_chat_members(message.chat.id, filter=enums.ChatMembersFilter.ADMINISTRATORS)
+            is_admin = any(admin.user.id == user_id for admin in admin_list if admin.user)
+        except Exception:
+            pass
+
+    if not is_admin:
+        return await message.reply_text("❌ You are not authorized to use this command.")
+
+    channel_id = await get_announcement_channel()
+    if not channel_id:
+        return await message.reply_text(
+            "ℹ️ <b>No Announcement Channel Configured.</b>\n\n"
+            "Use <code>/add_ano &lt;channel_id&gt;</code> to set one up.",
+            parse_mode=enums.ParseMode.HTML
+        )
+
+    return await message.reply_text(
+        f"📢 <b>Current Announcement Channel:</b>\n\n"
+        f"🆔 <b>Channel ID:</b> <code>{channel_id}</code>\n"
+        f"⚡ <b>Status:</b> <code>Active</code>",
         parse_mode=enums.ParseMode.HTML
     )
 

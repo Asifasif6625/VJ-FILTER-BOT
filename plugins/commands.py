@@ -240,13 +240,19 @@ async def start(client, message):
         return
     # --- END SERIES GROUP TO PM FLOW ---
 
-    # --- SERIES DEEP LINK PM FLOW ---
+    # --- SERIES & MOVIE DEEP LINK PM FLOW ---
     if data.startswith("series_"):
         series_key = data.split("_", 1)[1]
         from plugins.series import process_series_deeplink
         await process_series_deeplink(client, message, series_key)
         return
-    # --- END SERIES DEEP LINK PM FLOW ---
+
+    if data.startswith("movie_") or data.startswith("smovie_"):
+        movie_key = data.split("_", 1)[1]
+        from plugins.series import process_movie_deeplink
+        await process_movie_deeplink(client, message, movie_key)
+        return
+    # --- END SERIES & MOVIE DEEP LINK PM FLOW ---
     
     # Global Force Subscribe intercepted bypassed as requested
     
