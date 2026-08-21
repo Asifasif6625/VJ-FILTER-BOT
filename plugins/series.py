@@ -1768,41 +1768,37 @@ async def wizard_text_handler(client: Client, message: Message):
         auto_data = sess.get("data") or temp.AUTO_SERIES.get(uid, {})
         if sess.get("state") == "WAIT_IMDB" or auto_data.get("state") == "WAIT_IMDB":
             if not text:
-                return await message.reply_text("⚠️ Please send a valid IMDb link or ID.")
+                return await message.reply_text("⚠️ Please send a valid IMDb link, ID, or Series Name.")
 
             m_imdb = re.search(r"(?:imdb\.com/title/)?(tt\d{5,12})", text, re.I)
-            if not m_imdb:
-                return await message.reply_text(
-                    "❌ <b>Invalid IMDb link or ID.</b>\n\n"
-                    "Please provide a valid IMDb URL (e.g. <code>https://www.imdb.com/title/tt9288030/</code>) or ID (<code>tt9288030</code>).",
-                    parse_mode=enums.ParseMode.HTML,
-                )
+            imdb_id = m_imdb.group(1).lower() if m_imdb else None
 
-            imdb_id = m_imdb.group(1).lower()
-            logger.info(f"[AUTO_SERIES IMDb] accepted id={imdb_id}")
             try:
                 await message.delete()
-                logger.info(f"[AUTO_SERIES IMDb] user message deleted")
+                logger.info(f"[AUTO_SERIES] user message deleted")
             except Exception as de:
-                logger.warning(f"[AUTO_SERIES IMDb] could not delete user message: {de}")
+                logger.warning(f"[AUTO_SERIES] could not delete user message: {de}")
 
             loading_msg = await client.send_message(chat_id=message.chat.id, text="⏳ Fetching IMDb Series metadata, please wait...")
 
             info = None
             try:
-                info = await get_poster(imdb_id, id=True)
-                if info:
-                    logger.info(f"[AUTO_SERIES IMDb]\nuser_id={uid}\nimdb_id={imdb_id}\ntitle={info.get('title')}\nkind={info.get('kind')}")
+                if imdb_id:
+                    info = await get_poster(imdb_id, id=True)
                 else:
-                    logger.warning(f"[AUTO_SERIES IMDb] id={imdb_id} status=failed")
+                    info = await get_poster(text)
+                if info:
+                    logger.info(f"[AUTO_SERIES IMDb]\nuser_id={uid}\nimdb_id={info.get('imdb_id')}\ntitle={info.get('title')}\nkind={info.get('kind')}")
+                else:
+                    logger.warning(f"[AUTO_SERIES IMDb] query={text} status=failed")
             except Exception as e:
-                logger.error(f"[AUTO_SERIES IMDb] id={imdb_id} error={e}")
+                logger.error(f"[AUTO_SERIES IMDb] query={text} error={e}")
                 info = None
 
             if not info or not info.get("title"):
                 return await loading_msg.edit_text(
-                    f"❌ <b>Could not retrieve IMDb data for <code>{imdb_id}</code>.</b>\n"
-                    "Please try again later or check the IMDb link, or send /cancel to abort.",
+                    f"❌ <b>Could not retrieve IMDb data for <code>{text}</code>.</b>\n\n"
+                    "Please provide a valid IMDb URL (e.g. <code>https://www.imdb.com/title/tt9288030/</code>) or ID (<code>tt9288030</code>), or send /cancel to abort.",
                     parse_mode=enums.ParseMode.HTML,
                 )
 
@@ -1883,41 +1879,37 @@ async def wizard_text_handler(client: Client, message: Message):
         movie_data = sess.get("data") or temp.AUTO_MOVIE.get(uid, {})
         if sess.get("state") == "WAIT_IMDB" or movie_data.get("state") == "WAIT_IMDB":
             if not text:
-                return await message.reply_text("⚠️ Please send a valid IMDb link or ID.")
+                return await message.reply_text("⚠️ Please send a valid IMDb link, ID, or Movie Name.")
 
             m_imdb = re.search(r"(?:imdb\.com/title/)?(tt\d{5,12})", text, re.I)
-            if not m_imdb:
-                return await message.reply_text(
-                    "❌ <b>Invalid IMDb link or ID.</b>\n\n"
-                    "Please provide a valid IMDb URL (e.g. <code>https://www.imdb.com/title/tt0111161/</code>) or ID (<code>tt0111161</code>).",
-                    parse_mode=enums.ParseMode.HTML,
-                )
+            imdb_id = m_imdb.group(1).lower() if m_imdb else None
 
-            imdb_id = m_imdb.group(1).lower()
-            logger.info(f"[AUTO_MOVIE IMDb] accepted id={imdb_id}")
             try:
                 await message.delete()
-                logger.info(f"[AUTO_MOVIE IMDb] user message deleted")
+                logger.info(f"[AUTO_MOVIE] user message deleted")
             except Exception as de:
-                logger.warning(f"[AUTO_MOVIE IMDb] could not delete user message: {de}")
+                logger.warning(f"[AUTO_MOVIE] could not delete user message: {de}")
 
             loading_msg = await client.send_message(chat_id=message.chat.id, text="⏳ Fetching IMDb Movie metadata, please wait...")
 
             info = None
             try:
-                info = await get_poster(imdb_id, id=True)
-                if info:
-                    logger.info(f"[AUTO_MOVIE IMDb]\nuser_id={uid}\nimdb_id={imdb_id}\ntitle={info.get('title')}\nyear={info.get('year')}\nkind={info.get('kind')}\ntype=MOVIE")
+                if imdb_id:
+                    info = await get_poster(imdb_id, id=True)
                 else:
-                    logger.warning(f"[AUTO_MOVIE IMDb] id={imdb_id} status=failed")
+                    info = await get_poster(text)
+                if info:
+                    logger.info(f"[AUTO_MOVIE IMDb]\nuser_id={uid}\nimdb_id={info.get('imdb_id')}\ntitle={info.get('title')}\nyear={info.get('year')}\nkind={info.get('kind')}\ntype=MOVIE")
+                else:
+                    logger.warning(f"[AUTO_MOVIE IMDb] query={text} status=failed")
             except Exception as e:
-                logger.error(f"[AUTO_MOVIE IMDb] id={imdb_id} error={e}")
+                logger.error(f"[AUTO_MOVIE IMDb] query={text} error={e}")
                 info = None
 
             if not info or not info.get("title"):
                 return await loading_msg.edit_text(
-                    f"❌ <b>Could not retrieve IMDb data for <code>{imdb_id}</code>.</b>\n"
-                    "Please try again later or check the IMDb link, or send /cancel to abort.",
+                    f"❌ <b>Could not retrieve IMDb data for <code>{text}</code>.</b>\n\n"
+                    "Please provide a valid IMDb URL (e.g. <code>https://www.imdb.com/title/tt0111161/</code>) or ID (<code>tt0111161</code>), or send /cancel to abort.",
                     parse_mode=enums.ParseMode.HTML,
                 )
 
