@@ -77,8 +77,12 @@ def is_file_already_saved(file_id, file_name):
             
     return False
 
-async def get_search_results(chat_id, query, file_type=None, max_results=10, offset=0, filter=False):
+async def get_search_results(chat_id, query, file_type=None, max_results=5, offset=0, filter=False):
     """For given query return (results, next_offset)"""
+    try:
+        max_results = int(max_results)
+    except Exception:
+        max_results = 5
     
     query = query.strip()
     if not query:
@@ -100,7 +104,10 @@ async def get_search_results(chat_id, query, file_type=None, max_results=10, off
         for file in cursor1:
             files.append(file)
         for file in cursor2:
+            if len(files) >= max_results:
+                break
             files.append(file)
+        files = files[:max_results]
     else:
         cursor = col.find(filter).sort('$natural', -1).skip(offset).limit(max_results)
         
@@ -108,7 +115,7 @@ async def get_search_results(chat_id, query, file_type=None, max_results=10, off
             files.append(file)
 
     total_results = col.count_documents(filter) if not MULTIPLE_DATABASE else (col.count_documents(filter) + sec_col.count_documents(filter))
-    next_offset = "" if (offset + max_results) >= total_results else (offset + max_results)
+    next_offset = "" if (offset + len(files)) >= total_results or (offset + max_results) >= total_results else (offset + max_results)
 
     return files, next_offset, total_results
 
