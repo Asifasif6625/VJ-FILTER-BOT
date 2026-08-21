@@ -252,7 +252,10 @@ async def get_poster(query, bulk=False, id=False, file=None):
 
             movieid = None
             try:
-                search_results = imdb.search_movie(title.lower(), results=10)
+                search_results = await asyncio.wait_for(
+                    asyncio.to_thread(imdb.search_movie, title.lower(), results=10),
+                    timeout=8.0
+                )
                 if search_results:
                     if year:
                         filtered = list(filter(lambda k: str(k.get('year')) == str(year), search_results))
@@ -303,7 +306,10 @@ async def get_poster(query, bulk=False, id=False, file=None):
 
         movie = None
         try:
-            movie = imdb.get_movie(movieid)
+            movie = await asyncio.wait_for(
+                asyncio.to_thread(imdb.get_movie, movieid),
+                timeout=8.0
+            )
         except Exception as e:
             logger.warning(f"Cinemagoer get_movie error for {movieid}: {e}")
 
