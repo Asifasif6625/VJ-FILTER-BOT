@@ -423,22 +423,28 @@ async def delete_announcement_channel():
     await settings_col.delete_one({"_id": "announcement_channel"})
 
 async def is_announcement_sent(series_id: str) -> bool:
-    """Check if an announcement has already been sent for a series."""
+    """Check if an announcement has already been sent for a series or movie."""
     sid = str(series_id).strip()
     existing = await announcements_col.find_one({"series_id": sid})
     if existing:
         return True
-    # Also check series document flag
+    # Also check series or movie document flag
     try:
         sdoc = await series_col.find_one({"_id": ObjectId(sid)})
         if sdoc and sdoc.get("announcement_sent"):
             return True
     except Exception:
         pass
+    try:
+        mdoc = await super_movies_col.find_one({"_id": ObjectId(sid)})
+        if mdoc and mdoc.get("announcement_sent"):
+            return True
+    except Exception:
+        pass
     return False
 
 async def get_announcement(series_id: str) -> dict | None:
-    """Fetch the persistent announcement record for a series."""
+    """Fetch the persistent announcement record for a series or movie."""
     sid = str(series_id).strip()
     return await announcements_col.find_one({"series_id": sid})
 
@@ -459,6 +465,13 @@ async def save_announcement(series_id: str, channel_id: int | str, message_id: i
     )
     try:
         await series_col.update_one(
+            {"_id": ObjectId(sid)},
+            {"$set": {"announcement_sent": True, "announcement_message_id": message_id}}
+        )
+    except Exception:
+        pass
+    try:
+        await super_movies_col.update_one(
             {"_id": ObjectId(sid)},
             {"$set": {"announcement_sent": True, "announcement_message_id": message_id}}
         )
