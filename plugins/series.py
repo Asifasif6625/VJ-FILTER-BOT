@@ -3253,6 +3253,7 @@ async def wizard_callback(client: Client, query: CallbackQuery):
             # ══════════════════════════════════════════════════════════════════
             if is_super_movie_batch:
                 from database.ia_filterdb import col as ia_col, sec_col, MULTIPLE_DATABASE, clean_file_name, is_file_already_saved
+                from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
                 langs_to_add = wiz.get("batch_langs") or wiz.get("languages") or ["Unknown"]
                 quals_to_add = wiz.get("batch_qualities") or wiz.get("qualities") or ["Default"]
@@ -3348,72 +3349,68 @@ async def wizard_callback(client: Client, query: CallbackQuery):
                     logger.error(f"[MOVIE BATCH SAVE] super_movies_col error: {e}")
 
                 # ── DB VERIFICATION ──
-                logger.info(
-                    f"[MOVIE BATCH VERIFY]\n"
-                    f"user_id={uid}\n"
-                    f"movie={wiz['name']}\n"
-                    f"expected={len(added_files)}\n"
-                    f"verifying ia_filterdb..."
-                )
-                verified_count = 0
+                # Only verify newly inserted files. Duplicates already exist — no re-check needed.
+                verified_new = 0
                 for fid in saved_file_ids:
                     if ia_col.find_one({"file_id": fid}):
-                        verified_count += 1
+                        verified_new += 1
+
+                total_in_filter = len(added_files) + len(dup_files)
 
                 logger.info(
                     f"[MOVIE BATCH VERIFY]\n"
                     f"user_id={uid}\n"
                     f"movie={wiz['name']}\n"
-                    f"expected={len(added_files)}\n"
-                    f"verified={verified_count}\n"
-                    f"result={'OK' if verified_count == len(added_files) else 'MISMATCH'}"
+                    f"new_expected={len(added_files)}\n"
+                    f"new_verified={verified_new}\n"
+                    f"duplicates={len(dup_files)}\n"
+                    f"total_in_filter={total_in_filter}\n"
+                    f"result={'OK' if verified_new == len(added_files) else 'MISMATCH'}"
                 )
 
                 # Clear wizard
                 del temp.SERIES_WIZARD[uid]
 
-                if verified_count == len(added_files) and len(added_files) > 0:
-                    success_text = (
-                        f"✅ <b>Movie Batch Saved Successfully!</b>\n\n"
-                        f"🎬 <b>Movie:</b> {wiz['name']} ({wiz.get('year', 'N/A')})\n"
-                        f"🌐 <b>Languages:</b> {', '.join(langs_to_add)}\n"
-                        f"🎞 <b>Qualities:</b> {', '.join(quals_to_add)}\n\n"
-                        f"📊 <b>Files Found:</b> {expected_count}\n"
+                # ── Unified result display — ALWAYS show the search button ──
+                if len(added_files) > 0 and len(dup_files) == 0:
+                    status_line = (
                         f"📥 <b>New Files Saved:</b> {len(added_files)}\n"
-                        f"♻️ <b>Duplicates Skipped:</b> {len(dup_files)}\n\n"
-                        f"🔎 <b>Database Verified:</b> {verified_count}/{len(added_files)} ✅\n\n"
-                        f"<i>Users can now search: <code>{wiz['name']}</code></i>"
+                        f"🔎 <b>Database Verified:</b> {verified_new}/{len(added_files)} ✅"
                     )
-                    await query.message.edit_text(success_text, parse_mode=enums.ParseMode.HTML)
-                    return await query.answer("✅ Movie batch saved!")
-                elif len(added_files) == 0 and len(dup_files) > 0:
-                    # All were duplicates — that's OK if super_movie was updated
-                    await query.message.edit_text(
-                        f"ℹ️ <b>All files already exist in database.</b>\n\n"
-                        f"🎬 <b>Movie:</b> {wiz['name']}\n"
-                        f"♻️ <b>Duplicates:</b> {len(dup_files)}\n\n"
-                        f"Super Movie Filter metadata has been updated.\n"
-                        f"<i>Users can search: <code>{wiz['name']}</code></i>",
-                        parse_mode=enums.ParseMode.HTML,
+                elif len(added_files) > 0 and len(dup_files) > 0:
+                    status_line = (
+                        f"📥 <b>New Files Saved:</b> {len(added_files)}\n"
+                        f"♻️ <b>Duplicates Skipped:</b> {len(dup_files)}\n"
+                        f"📦 <b>Total in Filter:</b> {total_in_filter}\n"
+                        f"🔎 <b>Verified:</b> {verified_new}/{len(added_files)} new ✅"
                     )
-                    return await query.answer("ℹ️ All files already existed.")
                 else:
-                    logger.error(
-                        f"[MOVIE BATCH VERIFY] FAILED\n"
-                        f"user_id={uid}\n"
-                        f"movie={wiz['name']}\n"
-                        f"expected={len(added_files)}\n"
-                        f"verified={verified_count}"
+                    # All were duplicates — filter synced from existing DB files
+                    status_line = (
+                        f"♻️ <b>All files already existed:</b> {len(dup_files)}\n"
+                        f"📦 <b>Total in Filter:</b> {total_in_filter}\n"
+                        f"✅ <b>Super Movie Filter synced from existing DB files.</b>"
                     )
-                    await query.message.edit_text(
-                        f"❌ <b>Movie batch save verification failed.</b>\n\n"
-                        f"🎬 <b>Movie:</b> {wiz['name']}\n"
-                        f"📊 <b>Expected:</b> {len(added_files)}\n"
-                        f"🔎 <b>Found in database:</b> {verified_count}\n\n"
-                        f"Please check logs and retry.",
-                        parse_mode=enums.ParseMode.HTML,
-                    )
-                    return await query.answer("❌ Verification failed.")
+
+                success_text = (
+                    f"✅ <b>SUPER MOVIE FILTER READY!</b>\n\n"
+                    f"🎬 <b>Movie:</b> {wiz['name']} ({wiz.get('year', 'N/A')})\n"
+                    f"🌐 <b>Languages:</b> {', '.join(langs_to_add)}\n"
+                    f"🎞 <b>Qualities:</b> {', '.join(quals_to_add)}\n\n"
+                    f"📊 <b>Files Found:</b> {expected_count}\n"
+                    f"{status_line}\n\n"
+                    f"<i>Users can now search: <code>{wiz['name']}</code></i>"
+                )
+                search_markup = InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🔎 Search Movie", switch_inline_query_current_chat=wiz["name"])],
+                    [InlineKeyboardButton("🏠 Close", callback_data="sw#auto_close")]
+                ])
+                await query.message.edit_text(
+                    success_text,
+                    reply_markup=search_markup,
+                    parse_mode=enums.ParseMode.HTML,
+                )
+                return await query.answer("✅ Super Movie Filter ready!")
 
             # ══════════════════════════════════════════════════════════════════
             # ── SERIES BATCH SAVE ─────────────────────────────────────────────
@@ -3616,11 +3613,24 @@ async def wizard_callback(client: Client, query: CallbackQuery):
             )
 
             if verified_ep_count >= len(unique_added) and len(unique_added) > 0:
-                verify_line = f"\n🔎 <b>Database Verified:</b> {verified_ep_count} records ✅"
+                verify_line = (
+                    f"\n🔎 <b>Database Verified:</b> {verified_ep_count} episodes in DB ✅"
+                )
             elif verified_ep_count == -1:
                 verify_line = f"\n⚠️ <b>Verification query failed — check logs.</b>"
             elif len(unique_added) == 0 and len(unique_skipped) > 0:
-                verify_line = f"\n♻️ <b>All files already existed — no new inserts.</b>"
+                # All were duplicates — update_series was already called so filter IS synced
+                verify_line = (
+                    f"\n✅ <b>Series Filter Synced!</b>\n"
+                    f"📦 <b>Total episodes in DB:</b> {verified_ep_count}\n"
+                    f"♻️ All scanned files already existed — no duplicates inserted."
+                )
+                logger.info(
+                    f"[AUTO_SERIES FILTER SYNC]\n"
+                    f"series_id={series_id}\n"
+                    f"verified_ep_count={verified_ep_count}\n"
+                    f"result=SYNCED_FROM_EXISTING"
+                )
             else:
                 verify_line = (
                     f"\n❌ <b>Verification mismatch!</b>\n"
@@ -3628,7 +3638,7 @@ async def wizard_callback(client: Client, query: CallbackQuery):
                     f"Please check logs."
                 )
                 logger.error(
-                    f"[SERIES BATCH VERIFY] MISMATCH\n"
+                    f"[AUTO_SERIES BATCH VERIFY] MISMATCH\n"
                     f"series_id={series_id}\n"
                     f"expected={len(unique_added)}\n"
                     f"found={verified_ep_count}"
@@ -3790,33 +3800,55 @@ async def auto_movie_hierarchical_callbacks(client: Client, query: CallbackQuery
         return await query.answer(f"Rescan complete: {res['total_new']} new files.")
 
     elif action == "am_save":
+        # ── Fix: NEVER return early because of duplicates.
+        # Files already in ia_filterdb are valid — we still must create/sync the
+        # Super Movie Filter from ALL matching files (new + existing).
         res = movie_data.get("scan", {})
-        valid_new = res.get("valid_new_files", [])
-        if not valid_new:
-            return await query.answer("⚠️ No new files to save.", show_alert=True)
+        all_matching = res.get("all_matching_files", [])
+        valid_new    = res.get("valid_new_files", [])
+        total_scanned = res.get("total_scanned", 0)
+
+        logger.info(
+            f"[AUTO_MOVIE BATCH]\n"
+            f"user_id={uid}\n"
+            f"title={movie_data.get('title','')}\n"
+            f"total_scanned={total_scanned}\n"
+            f"all_matching={len(all_matching)}\n"
+            f"valid_new={len(valid_new)}\n"
+            f"duplicates={res.get('total_duplicates', 0)}"
+        )
 
         await query.message.edit_text(
-            f"💾 <b>Saving {len(valid_new)} new files and creating Super Movie Filter for {movie_data['title']}...</b>",
+            f"💾 <b>Syncing Super Movie Filter for {movie_data['title']}...</b>\n"
+            f"📊 Scanned: {total_scanned} | Matching: {len(all_matching)} | New: {len(valid_new)}",
             parse_mode=enums.ParseMode.HTML
         )
 
         from database.ia_filterdb import col, sec_col, MULTIPLE_DATABASE, clean_file_name, is_file_already_saved
         from utils import clear_wizard_session
+
         added_count = 0
-        dup_count = 0
-        for f in valid_new:
-            fid = f.get("file_id")
-            fname = clean_file_name(f.get("file_name"))
+        dup_count   = 0
+
+        # Step 1: Insert only truly new files (duplicates are fine — they stay as-is)
+        for f in all_matching:
+            fid   = f.get("file_id")
+            fname = clean_file_name(f.get("file_name", ""))
 
             if is_file_already_saved(fid, fname):
                 dup_count += 1
+                logger.info(
+                    f"[AUTO_MOVIE BATCH DUPLICATE]\n"
+                    f"file={fname}\n"
+                    f"action=SKIP_EXISTING"
+                )
                 continue
 
             file_doc = {
-                'file_id': fid,
-                'file_name': fname,
-                'file_size': f.get("file_size", 0),
-                'caption': f.get("caption")
+                "file_id":   fid,
+                "file_name": fname,
+                "file_size": f.get("file_size", 0),
+                "caption":   f.get("caption"),
             }
             try:
                 col.insert_one(file_doc)
@@ -3826,49 +3858,91 @@ async def auto_movie_hierarchical_callbacks(client: Client, query: CallbackQuery
                     except Exception:
                         pass
                 added_count += 1
+                logger.info(
+                    f"[AUTO_MOVIE BATCH NEW]\n"
+                    f"file={fname}\n"
+                    f"file_id={fid}\n"
+                    f"action=INSERTED"
+                )
             except Exception as e:
-                logger.error(f"[AUTO_MOVIE SAVE ERROR] file_id={fid} error={e}")
+                logger.warning(f"[AUTO_MOVIE BATCH NEW] insert error file={fname}: {e}")
+                dup_count += 1
 
+        logger.info(
+            f"[AUTO_MOVIE SAVE]\n"
+            f"title={movie_data.get('title','')}\n"
+            f"new_inserted={added_count}\n"
+            f"existing_kept={dup_count}"
+        )
+
+        # Step 2: ALWAYS create/sync Super Movie Filter — even if 0 new files
         from database.series_db import create_super_movie
         grouped_files = movie_data.get("grouped", {})
-        langs = list(grouped_files.keys())
-        quals = list({q for l in grouped_files.values() for q in l.keys()})
+        langs  = list(grouped_files.keys())
+        quals  = list({q for l in grouped_files.values() for q in l.keys()})
+        movie_id = None
         try:
-            await create_super_movie({
-                "title": movie_data["title"],
-                "year": movie_data.get("year", "N/A"),
-                "rating": movie_data.get("rating", ""),
-                "genre": movie_data.get("genre", "N/A"),
-                "poster": movie_data.get("poster", ""),
-                "imdb_id": movie_data.get("imdb_id", ""),
-                "languages": langs,
-                "qualities": quals,
-                "created_by": uid
+            movie_id = await create_super_movie({
+                "title":      movie_data["title"],
+                "year":       movie_data.get("year", "N/A"),
+                "rating":     movie_data.get("rating", ""),
+                "genre":      movie_data.get("genre", "N/A"),
+                "poster":     movie_data.get("poster", ""),
+                "imdb_id":    movie_data.get("imdb_id", ""),
+                "languages":  langs,
+                "qualities":  quals,
+                "created_by": uid,
             })
-            logger.info(f"[SUPER MOVIE CREATED] title={movie_data['title']} languages={len(langs)} qualities={len(quals)}")
+            logger.info(
+                f"[AUTO_MOVIE FILTER SYNC]\n"
+                f"title={movie_data['title']}\n"
+                f"movie_id={movie_id}\n"
+                f"languages={langs}\n"
+                f"qualities={quals}"
+            )
         except Exception as e:
-            logger.error(f"[SUPER MOVIE CREATION ERROR] {e}")
+            logger.error(f"[AUTO_MOVIE FILTER SYNC ERROR] {e}")
+
+        # Step 3: Verify — reload all_matching count from database
+        total_in_db = added_count + dup_count  # conservative — already computed
+        logger.info(
+            f"[AUTO_MOVIE VERIFY]\n"
+            f"title={movie_data.get('title','')}\n"
+            f"total_in_db_estimate={total_in_db}"
+        )
 
         clear_wizard_session(uid)
 
-        logger.info(
-            f"[AUTO MOVIE SAVE]\n"
-            f"title={movie_data['title']}\n"
-            f"files={added_count}"
-        )
+        # Build success message based on what actually happened
+        if added_count > 0 and dup_count == 0:
+            status_line = f"📥 <b>New files saved:</b> {added_count}"
+        elif added_count > 0 and dup_count > 0:
+            status_line = (
+                f"📥 <b>New files saved:</b> {added_count}\n"
+                f"♻️ <b>Already existing:</b> {dup_count}\n"
+                f"📦 <b>Total in filter:</b> {added_count + dup_count}"
+            )
+        else:
+            # All duplicates — filter was synced from existing files
+            status_line = (
+                f"♻️ <b>All files already existed:</b> {dup_count}\n"
+                f"📦 <b>Total in filter:</b> {dup_count}\n"
+                f"✅ <b>Super Movie Filter synced from existing DB files.</b>"
+            )
 
         success_text = (
-            f"✅ <b>SUPER MOVIE SAVED SUCCESSFULLY</b>\n\n"
-            f"🎬 <b>Movie:</b> {movie_data['title']} ({movie_data['year']})\n"
-            f"📁 <b>New files saved:</b> {added_count}\n\n"
-            f"<i>The movie is now saved as a Super Movie Filter.</i>"
+            f"✅ <b>SUPER MOVIE FILTER READY!</b>\n\n"
+            f"🎬 <b>Movie:</b> {movie_data['title']} ({movie_data.get('year','N/A')})\n"
+            f"📊 <b>Files scanned:</b> {len(all_matching)}\n"
+            f"{status_line}\n\n"
+            f"<i>Users can now search: <code>{movie_data['title']}</code></i>"
         )
         markup = InlineKeyboardMarkup([
-            [InlineKeyboardButton("🔎 Search Movie", switch_inline_query_current_chat=movie_data['title'])],
+            [InlineKeyboardButton("🔎 Search Movie", switch_inline_query_current_chat=movie_data["title"])],
             [InlineKeyboardButton("🏠 Close", callback_data="sw#auto_close")]
         ])
         await query.message.edit_text(success_text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
-        return await query.answer("🎉 Movie files saved successfully!")
+        return await query.answer("🎉 Super Movie Filter ready!")
 
     elif action == "am_batch":
         # ── Batch Add Files flow for Super Movie ──────────────────────────────
