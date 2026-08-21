@@ -28,6 +28,14 @@ BUTTONS1 = {}
 BUTTONS2 = {}
 SPELL_CHECK = {}
 
+@Client.on_callback_query(filters.regex(r"^not_in_db_reason$"))
+async def not_in_db_reason_alert(bot, query):
+    """Show a popup alert when user clicks the Reason button for movie not in db."""
+    await query.answer(
+        "this movie not available in database",
+        show_alert=True
+    )
+
 @Client.on_message(filters.group & filters.text & filters.incoming)
 async def give_filter(client, message):
     ai_search = True
@@ -932,37 +940,82 @@ async def auto_filter(client, name, msg, reply_msg, ai_search, spoll=False):
             except Exception as e:
                 pass
 
-            # ── 2. ia_filterdb Search ──
-            files, offset, total_results = await get_search_results(message.chat.id, search, offset=0, filter=True)
+            # ── 2. Series Check (BEFORE ia_filterdb) ──
+            try:
+                from plugins.series import process_series_search
+                is_series = await process_series_search(client, message, search if search else name, reply_msg)
+                if is_series:
+                    return
+            except Exception as e:
+                pass
+
+            # ── 3. ia_filterdb Search ──
+            page_limit = int(MAX_B_TN) if MAX_B_TN else 5
+            files, offset, total_results = await get_search_results(message.chat.id, search, max_results=page_limit, offset=0, filter=True)
             settings = await get_settings(message.chat.id)
             if not files:
-                # ── 3. Series Check ──
+                # ── 4. No files in DB -> Check IMDb for details & poster ──
+                imdb = None
                 try:
-                    from plugins.series import process_series_search
-                    is_series = await process_series_search(client, message, search if search else name, reply_msg)
-                    if is_series:
-                        return
-                except Exception as e:
-                    pass
+                    imdb = await get_poster(search)
+                except Exception:
+                    imdb = None
 
-                # ── 4. No Results Message (No IMDb poster/metadata) ──
-                reqstr1 = message.from_user.id if (hasattr(message, "from_user") and message.from_user) else 0
-                reqstr = await client.get_users(reqstr1) if reqstr1 else None
-                if NO_RESULTS_MSG and reqstr:
-                    await client.send_message(chat_id=LOG_CHANNEL, text=(script.NORSLTS.format(reqstr.id, reqstr.mention, search)))
-                
-                no_db_btn = InlineKeyboardMarkup([[InlineKeyboardButton("🦨Reason", callback_data="not_in_db_reason")]])
-                msg_text = "<b>sᴏʀʀʏ ɴᴏ ꜰɪʟᴇs ᴡᴇʀᴇ ꜰᴏᴜɴᴅ ꜰᴏʀ ʏᴏᴜʀ ʀᴇǫᴜᴇꜱᴛ😕\n\nᴄʜᴇᴄᴋ ʏᴏᴜʀ sᴘᴇʟʟɪɴɢ ɪɴ ɢᴏᴏɢʟᴇ ᴀɴᴅ ᴛʀʏ ᴀɢᴀɪɴ 😃\n\nᴍᴏᴠɪᴇ ʀᴇǫᴜᴇꜱᴛ ꜰᴏʀᴍᴀᴛ 👇\n\nᴇxᴀᴍᴘʟᴇ : Uncharted or Uncharted 2022 or Uncharted En\n\nꜱᴇʀɪᴇꜱ ʀᴇǫᴜᴇꜱᴛ ꜰᴏʀᴍᴀᴛ 👇\n\nᴇxᴀᴍᴘʟᴇ : Loki S01 or Loki S01E04 or Lucifer S03E24\n\n🚯 ᴅᴏɴᴛ ᴜꜱᴇ ➠ ':(!,./)\n\n<i>🕐 This message will be deleted in 50 seconds.</i></b>"
-                if reply_msg:
-                    msg_obj = await reply_msg.edit_text(msg_text, reply_markup=no_db_btn)
+                no_db_btn = InlineKeyboardMarkup([[InlineKeyboardButton(chr(0x1F9A8) + " Reason", callback_data="not_in_db_reason")]])
+
+                if imdb and (imdb.get('poster') or imdb.get('title')):
+                    imdb_title = imdb.get('title') or search
+                    imdb_year = imdb.get('year') or "N/A"
+                    imdb_rating = imdb.get('rating') or "N/A"
+                    imdb_genres = imdb.get('genres') or "N/A"
+
+                    imdb_cap = (
+                        f"<b>🎬 ᴛɪᴛʟᴇ :</b> <code>{imdb_title}</code>\n"
+                        f"<b>📅 ʏᴇᴀʀ :</b> <code>{imdb_year}</code>\n"
+                        f"<b>⭐ ʀᴀᴛɪɴɢ :</b> <code>{imdb_rating}/10</code>\n"
+                        f"<b>🎭 ɢᴇɴʀᴇs :</b> <code>{imdb_genres}</code>\n\n"
+                        f"<b>⚠️ ᴛʜɪs ᴍᴏᴠɪᴇ ɪs ɴᴏᴛ ᴀᴠᴀɪʟᴀʙʟᴇ ɪɴ ᴏᴜʀ ᴅᴀᴛᴀʙᴀsᴇ!</b>\n\n"
+                        f"<i>🕐 This message will be deleted in 50 seconds.</i>"
+                    )
+
+                    poster_url = imdb.get('poster')
+                    msg_obj = None
+                    if poster_url:
+                        try:
+                            if reply_msg:
+                                try:
+                                    await reply_msg.delete()
+                                except Exception:
+                                    pass
+                            msg_obj = await message.reply_photo(
+                                photo=poster_url,
+                                caption=imdb_cap,
+                                reply_markup=no_db_btn,
+                                parse_mode=enums.ParseMode.HTML
+                            )
+                        except Exception:
+                            if reply_msg:
+                                msg_obj = await reply_msg.edit_text(imdb_cap, reply_markup=no_db_btn, parse_mode=enums.ParseMode.HTML)
+                            else:
+                                msg_obj = await message.reply_text(imdb_cap, reply_markup=no_db_btn, parse_mode=enums.ParseMode.HTML)
+                    else:
+                        if reply_msg:
+                            msg_obj = await reply_msg.edit_text(imdb_cap, reply_markup=no_db_btn, parse_mode=enums.ParseMode.HTML)
+                        else:
+                            msg_obj = await message.reply_text(imdb_cap, reply_markup=no_db_btn, parse_mode=enums.ParseMode.HTML)
                 else:
-                    msg_obj = await message.reply_text(msg_text, reply_markup=no_db_btn)
-                
+                    msg_text = "<b>sᴏʀʀʏ ɴᴏ ꜰɪʟᴇs ᴡᴇʀᴇ ꜰᴏᴜɴᴅ ꜰᴏʀ ʏᴏᴜʀ ʀᴇǫᴜᴇꜱᴛ😕\n\nᴄʜᴇᴄᴋ ʏᴏᴜʀ sᴘᴇʟʟɪɴɢ ɪɴ ɢᴏᴏɢʟᴇ ᴀɴᴅ ᴛʀʏ ᴀɢᴀɪɴ 😃\n\nᴍᴏᴠɪᴇ ʀᴇǫᴜᴇꜱᴛ ꜰᴏʀᴍᴀᴛ 👇\n\nᴇxᴀᴍᴘʟᴇ : Uncharted or Uncharted 2022 or Uncharted En\n\nꜱᴇʀɪᴇꜱ ʀᴇǫᴜᴇꜱᴛ ꜰᴏʀᴍᴀᴛ 👇\n\nᴇxᴀᴍᴘʟᴇ : Loki S01 or Loki S01E04 or Lucifer S03E24\n\n🚯 ᴅᴏɴᴛ ᴜꜱᴇ ➠ ':(!,./)\n\n<i>🕐 This message will be deleted in 50 seconds.</i></b>"
+                    if reply_msg:
+                        msg_obj = await reply_msg.edit_text(msg_text, reply_markup=no_db_btn)
+                    else:
+                        msg_obj = await message.reply_text(msg_text, reply_markup=no_db_btn)
+
                 await asyncio.sleep(50)
                 try:
-                    await msg_obj.delete()
+                    if msg_obj:
+                        await msg_obj.delete()
                     await message.delete()
-                except:
+                except Exception:
                     pass
                 return
         else:
