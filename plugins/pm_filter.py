@@ -634,7 +634,7 @@ async def next_page(bot, query):
             InlineKeyboardButton("ʟᴀɴɢᴜᴀɢᴇs", callback_data=f"languages#{key}"),
             InlineKeyboardButton("ʏᴇᴀʀs", callback_data=f"years#{key}")
         ])
-    try:
+
     page_limit = int(MAX_B_TN) if MAX_B_TN else 5
     cur_page = (offset // page_limit) + 1
     total_pages = math.ceil(total / page_limit) if total else 1
