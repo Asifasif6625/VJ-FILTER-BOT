@@ -1704,23 +1704,26 @@ async def cmd_cancel(client: Client, message: Message):
      "setskip", "deleteall", "channel",
      "viewseries", "serieslist", "delseries", "seriesdel",
      "thumpseries", "delthumbseries", "ed_series"]
-), group=1)
+), group=-1)
 async def wizard_text_handler(client: Client, message: Message):
     uid = message.from_user.id
     text = message.text.strip() if message.text else ""
 
-    # Check for direct /cancel text in wizard
-    if text.lower().startswith("/cancel"):
-        from utils import cancel_wizard_session
-        workflow = cancel_wizard_session(uid)
-        if workflow == "AUTO_MOVIE":
-            return await message.reply_text("❌ <b>Auto Movie Add cancelled.</b>", parse_mode=enums.ParseMode.HTML)
-        elif workflow in ("AUTO_SERIES", "SERIES_WIZARD"):
-            return await message.reply_text("❌ <b>Auto Series Add cancelled.</b>", parse_mode=enums.ParseMode.HTML)
-        elif workflow:
-            return await message.reply_text("❌ <b>Action cancelled.</b>", parse_mode=enums.ParseMode.HTML)
-        else:
-            return await message.reply_text("No active wizard or session to cancel.")
+    # Check for commands in wizard
+    if text.startswith("/"):
+        if text.lower().startswith("/cancel"):
+            from utils import cancel_wizard_session
+            workflow = cancel_wizard_session(uid)
+            logger.info(f"[WIZARD CANCEL]\nuser_id={uid}\nworkflow={workflow}")
+            if workflow == "AUTO_MOVIE":
+                return await message.reply_text("❌ <b>Auto Movie Add cancelled.</b>", parse_mode=enums.ParseMode.HTML)
+            elif workflow in ("AUTO_SERIES", "SERIES_WIZARD"):
+                return await message.reply_text("❌ <b>Auto Series Add cancelled.</b>", parse_mode=enums.ParseMode.HTML)
+            elif workflow:
+                return await message.reply_text("❌ <b>Action cancelled.</b>", parse_mode=enums.ParseMode.HTML)
+            else:
+                return await message.reply_text("No active wizard or session to cancel.")
+        return
 
     from utils import get_wizard_session, clear_wizard_session, set_wizard_session
     sess = get_wizard_session(uid)
@@ -1728,6 +1731,8 @@ async def wizard_text_handler(client: Client, message: Message):
         return
 
     workflow = sess.get("workflow")
+    state = sess.get("state")
+    logger.info(f"[WIZARD]\nworkflow={workflow}\nstate={state}\nuser_id={uid}")
 
     # ── Thumbnail Wizard Handler ─────────────────────────────────────────────
     if workflow == "THUMBNAIL" or (hasattr(temp, "SETTING_SERIES_THUMB") and temp.SETTING_SERIES_THUMB.get(uid)):
@@ -2161,6 +2166,8 @@ async def wizard_callback(client: Client, query: CallbackQuery):
 
     # ── Auto S Add & Menu Entry Callbacks ────────────────────────────────────
     if action == "start_manual":
+        await query.answer()
+        from utils import set_wizard_session
         temp.SERIES_WIZARD[uid] = {
             "mode": "add",
             "state": S_NAME,
@@ -2171,25 +2178,34 @@ async def wizard_callback(client: Client, query: CallbackQuery):
             "batch_langs": [], "batch_seasons": [], "batch_qualities": [],
             "batch_data": None,
         }
+        set_wizard_session(uid, workflow="SERIES_WIZARD", state=S_NAME, data=temp.SERIES_WIZARD[uid], chat_id=query.message.chat.id)
+        logger.info(f"[AUTO MENU]\naction=CLICK\nbutton=MANUAL\nuser_id={uid}")
         await query.message.edit_text(
             f"🎬 <b>Create New Series</b>\n\n"
             f"Hey {query.from_user.mention}, please send the <b>series name</b>.",
-            reply_markup=None,
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("❌ Cancel", callback_data="sw#auto_cancel")
+            ]]),
             parse_mode=enums.ParseMode.HTML,
         )
-        return await query.answer()
+        return
 
     if action == "start_auto":
+        await query.answer()
         from utils import set_wizard_session
         temp.AUTO_SERIES[uid] = {
             "state": "WAIT_IMDB",
+            "user_id": uid,
             "admin_id": uid,
+            "created_at": time.time(),
         }
         set_wizard_session(uid, workflow="AUTO_SERIES", state="WAIT_IMDB", data=temp.AUTO_SERIES[uid], chat_id=query.message.chat.id)
+        logger.info(f"[AUTO MENU]\naction=CLICK\nbutton=AUTO_SERIES\nuser_id={uid}")
+        logger.info(f"[AUTO SERIES]\naction=START\nuser_id={uid}")
         await query.message.edit_text(
             "🤖 <b>Auto Series Add — Series Importer</b>\n\n"
             "🎬 <b>Send IMDb Series link or ID:</b>\n\n"
-            "Examples:\n"
+            "<b>Examples:</b>\n"
             "<code>https://www.imdb.com/title/tt9288030/</code>\n"
             "<code>tt9288030</code>",
             reply_markup=InlineKeyboardMarkup([[
@@ -2197,29 +2213,34 @@ async def wizard_callback(client: Client, query: CallbackQuery):
             ]]),
             parse_mode=enums.ParseMode.HTML,
         )
-        return await query.answer()
+        return
 
     if action == "start_auto_movie":
+        await query.answer()
         from utils import set_wizard_session
         temp.AUTO_MOVIE[uid] = {
             "state": "WAIT_IMDB",
+            "user_id": uid,
             "admin_id": uid,
+            "created_at": time.time(),
+            "files": [],
+            "grouped": {},
         }
         set_wizard_session(uid, workflow="AUTO_MOVIE", state="WAIT_IMDB", data=temp.AUTO_MOVIE[uid], chat_id=query.message.chat.id)
-        logger.info("[AUTO MOVIE]\nstate=WAIT_IMDB")
+        logger.info(f"[AUTO MENU]\naction=CLICK\nbutton=AUTO_MOVIE\nuser_id={uid}")
+        logger.info(f"[AUTO MOVIE]\naction=START\nuser_id={uid}")
         await query.message.edit_text(
-            "🎬 <b>Auto Movie Add — Movie Importer</b>\n\n"
-            "Send IMDb Movie link or ID:\n\n"
-            "Example:\n"
+            "🎬 <b>AUTO MOVIE ADD</b>\n\n"
+            "Send IMDb Movie URL or IMDb ID.\n\n"
+            "<b>Examples:</b>\n"
             "<code>https://www.imdb.com/title/tt35723557/</code>\n"
-            "or\n"
             "<code>tt35723557</code>",
             reply_markup=InlineKeyboardMarkup([[
                 InlineKeyboardButton("❌ Cancel", callback_data="sw#auto_movie_cancel")
             ]]),
             parse_mode=enums.ParseMode.HTML,
         )
-        return await query.answer()
+        return
 
     if action == "auto_season_skip":
         auto_data = temp.AUTO_SERIES.get(uid)
@@ -2693,13 +2714,10 @@ async def wizard_callback(client: Client, query: CallbackQuery):
             logger.error(f"[AUTO_MOVE_ADD] save_error series={auto_data['title']} error={e}")
             return await query.answer(f"❌ Error while saving: {e}", show_alert=True)
 
-    if action == "auto_cancel" or action == "auto_movie_cancel":
-        if uid in temp.AUTO_SERIES:
-            del temp.AUTO_SERIES[uid]
-        if uid in temp.AUTO_MOVIE:
-            del temp.AUTO_MOVIE[uid]
-        from utils import clear_wizard_session
-        clear_wizard_session(uid)
+    if action in ("auto_cancel", "auto_movie_cancel", "cancel_wizard"):
+        from utils import cancel_wizard_session
+        workflow = cancel_wizard_session(uid)
+        logger.info(f"[WIZARD CANCEL]\nuser_id={uid}\nworkflow={workflow}")
         await query.message.edit_text("❌ <b>Action cancelled.</b>", parse_mode=enums.ParseMode.HTML)
         return await query.answer("Cancelled.")
 
@@ -3788,9 +3806,9 @@ async def auto_movie_hierarchical_callbacks(client: Client, query: CallbackQuery
             return await query.answer()
 
     elif action == "am_cancel":
-        from utils import clear_wizard_session
-        clear_wizard_session(uid)
-        logger.info("[AUTO MOVIE]\nstate=CANCELLED")
+        from utils import cancel_wizard_session
+        workflow = cancel_wizard_session(uid)
+        logger.info(f"[WIZARD CANCEL]\nuser_id={uid}\nworkflow={workflow}")
         await query.message.edit_text("❌ <b>Auto Movie Add cancelled.</b>", parse_mode=enums.ParseMode.HTML)
         return await query.answer("Cancelled.")
 
@@ -6183,140 +6201,189 @@ async def process_movie_deeplink(client: Client, message: Message, movie_id: str
 @Client.on_message(filters.command(["add_ano", "set_ano", "addano", "setano"]))
 async def cmd_add_ano(client: Client, message: Message):
     user_id = message.from_user.id if message.from_user else 0
-    is_admin = _is_admin(user_id)
-    if not is_admin and message.chat.type in [enums.ChatType.GROUP, enums.ChatType.SUPERGROUP]:
+    logger.info(f"[ADD_ANO] command received user_id={user_id} chat_id={message.chat.id} text={message.text!r}")
+
+    try:
+        is_admin = _is_admin(user_id)
+        if not is_admin and message.chat.type in [enums.ChatType.GROUP, enums.ChatType.SUPERGROUP]:
+            try:
+                admin_list = await client.get_chat_members(message.chat.id, filter=enums.ChatMembersFilter.ADMINISTRATORS)
+                is_admin = any(admin.user.id == user_id for admin in admin_list if admin.user)
+            except Exception:
+                pass
+
+        if not is_admin:
+            logger.warning(f"[ADD_ANO] unauthorized attempt by user_id={user_id}")
+            return await message.reply_text("❌ You are not authorized to use this command.")
+
+        args = message.text.split(None, 1)
+        if len(args) < 2 or not args[1].strip():
+            return await message.reply_text(
+                "📢 <b>Announcement Channel Setup</b>\n\n"
+                "<b>Usage:</b>\n"
+                "<code>/add_ano @channelusername</code>\n"
+                "or\n"
+                "<code>/add_ano -1001234567890</code>\n"
+                "or\n"
+                "<code>/add_ano https://t.me/channelusername</code>\n\n"
+                "<i>The bot must be added to the channel and have permission to post messages.</i>",
+                parse_mode=enums.ParseMode.HTML
+            )
+
+        ch_raw = args[1].strip().strip('"').strip("'").strip("`").strip()
+
+        channel_id = None
+        if ch_raw.startswith("https://t.me/") or ch_raw.startswith("http://t.me/"):
+            parts = ch_raw.rstrip("/").split("/")
+            if len(parts) >= 4 and parts[-2] == "c" and parts[-1].isdigit():
+                channel_id = int(f"-100{parts[-1]}")
+            elif len(parts) >= 4:
+                channel_id = f"@{parts[-1]}"
+            else:
+                channel_id = ch_raw
+        elif ch_raw.startswith("@"):
+            channel_id = ch_raw
+        elif ch_raw.startswith("-100"):
+            try:
+                channel_id = int(ch_raw)
+            except ValueError:
+                channel_id = ch_raw
+        elif ch_raw.startswith("-"):
+            try:
+                channel_id = int(f"-100{ch_raw.lstrip('-')}")
+            except ValueError:
+                channel_id = ch_raw
+        elif ch_raw.isdigit():
+            channel_id = int(f"-100{ch_raw}")
+        else:
+            try:
+                channel_id = int(ch_raw)
+            except ValueError:
+                channel_id = ch_raw
+
+        logger.info(f"[ADD_ANO] resolved channel={channel_id}")
+
         try:
-            admin_list = await client.get_chat_members(message.chat.id, filter=enums.ChatMembersFilter.ADMINISTRATORS)
-            is_admin = any(admin.user.id == user_id for admin in admin_list if admin.user)
-        except Exception:
-            pass
+            chat = await client.get_chat(channel_id)
+        except Exception as ge:
+            logger.error(f"[ADD_ANO ERROR] get_chat failed for {channel_id}: {ge}")
+            return await message.reply_text(
+                "❌ <b>Unable to access this channel.</b>\n\n"
+                "<b>Possible reasons:</b>\n"
+                "• Bot is not a member/admin of the channel\n"
+                "• Invalid channel ID\n"
+                "• Invalid username\n"
+                "• Telegram permissions problem\n\n"
+                f"<i>Error details:</i> <code>{ge}</code>",
+                parse_mode=enums.ParseMode.HTML
+            )
 
-    if not is_admin:
-        return await message.reply_text("❌ You are not authorized to use this command.")
+        if not chat:
+            logger.error(f"[ADD_ANO ERROR] get_chat returned None for {channel_id}")
+            return await message.reply_text("❌ <b>Could not access channel information.</b>", parse_mode=enums.ParseMode.HTML)
 
-    args = message.text.split(None, 1)
-    if len(args) < 2 or not args[1].strip():
-        return await message.reply_text(
-            "📢 <b>Announcement Channel Setup</b>\n\n"
-            "<b>Usage:</b> <code>/add_ano &lt;channel_id&gt;</code>\n\n"
-            "<b>Examples:</b>\n"
-            "• <code>/add_ano -1001234567890</code>\n"
-            "• <code>/add_ano @channel_username</code>\n"
-            "• <code>/add_ano https://t.me/channel_username</code>\n\n"
-            "<i>Whenever a new Series or Super Movie filter is added, an announcement with poster & download button will automatically post to this channel!</i>",
+        real_channel_id = chat.id
+        channel_title = chat.title or str(real_channel_id)
+        logger.info(f"[ADD_ANO] channel verified id={real_channel_id} title={channel_title}")
+
+        await set_announcement_channel(real_channel_id)
+        logger.info(f"[ADD_ANO SUCCESS] user={user_id} channel={real_channel_id}")
+
+        await message.reply_text(
+            f"✅ <b>Announcement Channel Configured!</b>\n\n"
+            f"📢 <b>Channel:</b> <code>{channel_title}</code>\n"
+            f"🆔 <b>ID:</b> <code>{real_channel_id}</code>\n"
+            f"⚡ <b>Status:</b> <code>Enabled</code>\n\n"
+            f"🎉 <i>New Series & Super Movie filters will now be announced automatically to this channel.</i>",
             parse_mode=enums.ParseMode.HTML
         )
-
-    ch_raw = args[1].strip().strip('"').strip("'").strip("`").strip()
-
-    channel_id = None
-    if ch_raw.startswith("https://t.me/") or ch_raw.startswith("http://t.me/"):
-        parts = ch_raw.rstrip("/").split("/")
-        if len(parts) >= 4 and parts[-2] == "c" and parts[-1].isdigit():
-            channel_id = int(f"-100{parts[-1]}")
-        elif len(parts) >= 4:
-            channel_id = f"@{parts[-1]}"
-        else:
-            channel_id = ch_raw
-    elif ch_raw.startswith("@"):
-        channel_id = ch_raw
-    elif ch_raw.startswith("-100"):
-        try:
-            channel_id = int(ch_raw)
-        except ValueError:
-            channel_id = ch_raw
-    elif ch_raw.startswith("-"):
-        try:
-            channel_id = int(f"-100{ch_raw.lstrip('-')}")
-        except ValueError:
-            channel_id = ch_raw
-    elif ch_raw.isdigit():
-        channel_id = int(f"-100{ch_raw}")
-    else:
-        try:
-            channel_id = int(ch_raw)
-        except ValueError:
-            channel_id = ch_raw
-
-    channel_title = str(channel_id)
-    try:
-        chat = await client.get_chat(channel_id)
-        if chat:
-            channel_id = chat.id
-            if chat.title:
-                channel_title = chat.title
     except Exception as e:
-        logger.warning(f"[ANNOUNCEMENT] get_chat notice for {channel_id}: {e}")
-
-    await set_announcement_channel(channel_id)
-    logger.info(f"[ANNOUNCEMENT] add_channel={channel_id} title={channel_title} configured by user={user_id}")
-    await message.reply_text(
-        f"✅ <b>Announcement Channel Configured Successfully!</b>\n\n"
-        f"📢 <b>Channel:</b> <code>{channel_title}</code>\n"
-        f"🆔 <b>Channel ID:</b> <code>{channel_id}</code>\n"
-        f"⚡ <b>Status:</b> <code>Enabled</code>\n\n"
-        f"🎉 <i>All future Series & Super Movie filter additions will now be announced automatically to this channel with posters and download buttons!</i>",
-        parse_mode=enums.ParseMode.HTML
-    )
+        logger.exception(f"[ADD_ANO FATAL ERROR] {e}")
+        try:
+            await message.reply_text(
+                f"❌ <b>/add_ano failed</b>\n\n<code>{e}</code>",
+                parse_mode=enums.ParseMode.HTML
+            )
+        except Exception:
+            pass
 
 
 @Client.on_message(filters.command(["del_ano", "delano", "del_announcement", "del_channel_ano", "del_ano_channel"]))
 async def cmd_del_ano(client: Client, message: Message):
     user_id = message.from_user.id if message.from_user else 0
-    is_admin = _is_admin(user_id)
-    if not is_admin and message.chat.type in [enums.ChatType.GROUP, enums.ChatType.SUPERGROUP]:
+    logger.info(f"[DEL_ANO] command received user_id={user_id} chat_id={message.chat.id}")
+
+    try:
+        is_admin = _is_admin(user_id)
+        if not is_admin and message.chat.type in [enums.ChatType.GROUP, enums.ChatType.SUPERGROUP]:
+            try:
+                admin_list = await client.get_chat_members(message.chat.id, filter=enums.ChatMembersFilter.ADMINISTRATORS)
+                is_admin = any(admin.user.id == user_id for admin in admin_list if admin.user)
+            except Exception:
+                pass
+
+        if not is_admin:
+            logger.warning(f"[DEL_ANO] unauthorized attempt by user_id={user_id}")
+            return await message.reply_text("❌ You are not authorized to use this command.")
+
+        channel_id = await get_announcement_channel()
+        if not channel_id:
+            return await message.reply_text("ℹ️ <b>No announcement channel is currently configured.</b>", parse_mode=enums.ParseMode.HTML)
+
+        await delete_announcement_channel()
+        logger.info(f"[DEL_ANO SUCCESS] user={user_id} channel={channel_id}")
+        return await message.reply_text(
+            f"❌ <b>Announcement channel disabled.</b>\n\n"
+            f"📢 <b>Previous Channel:</b> <code>{channel_id}</code>\n"
+            f"⚡ <b>Status:</b> <code>Disabled</code>\n\n"
+            f"<i>No future automatic announcements will be sent.</i>",
+            parse_mode=enums.ParseMode.HTML
+        )
+    except Exception as e:
+        logger.exception(f"[DEL_ANO FATAL ERROR] {e}")
         try:
-            admin_list = await client.get_chat_members(message.chat.id, filter=enums.ChatMembersFilter.ADMINISTRATORS)
-            is_admin = any(admin.user.id == user_id for admin in admin_list if admin.user)
+            await message.reply_text(
+                f"❌ <b>/del_ano failed</b>\n\n<code>{e}</code>",
+                parse_mode=enums.ParseMode.HTML
+            )
         except Exception:
             pass
-
-    if not is_admin:
-        return await message.reply_text("❌ You are not authorized to use this command.")
-
-    channel_id = await get_announcement_channel()
-    if not channel_id:
-        return await message.reply_text("ℹ️ <b>No announcement channel is currently configured.</b>", parse_mode=enums.ParseMode.HTML)
-
-    await delete_announcement_channel()
-    logger.info(f"[ANNOUNCEMENT] delete_channel={channel_id} removed by user={user_id}")
-    return await message.reply_text(
-        f"✅ <b>Announcement Channel Removed</b>\n\n"
-        f"📢 <b>Previous Channel:</b> <code>{channel_id}</code>\n"
-        f"⚡ <b>Announcement Status:</b> <code>Disabled</code>\n\n"
-        f"<i>Future automatic filter announcements are now stopped.</i>",
-        parse_mode=enums.ParseMode.HTML
-    )
 
 
 @Client.on_message(filters.command(["ano", "get_ano", "getano", "announcement_channel"]))
 async def cmd_get_ano(client: Client, message: Message):
     user_id = message.from_user.id if message.from_user else 0
-    is_admin = _is_admin(user_id)
-    if not is_admin and message.chat.type in [enums.ChatType.GROUP, enums.ChatType.SUPERGROUP]:
-        try:
-            admin_list = await client.get_chat_members(message.chat.id, filter=enums.ChatMembersFilter.ADMINISTRATORS)
-            is_admin = any(admin.user.id == user_id for admin in admin_list if admin.user)
-        except Exception:
-            pass
+    try:
+        is_admin = _is_admin(user_id)
+        if not is_admin and message.chat.type in [enums.ChatType.GROUP, enums.ChatType.SUPERGROUP]:
+            try:
+                admin_list = await client.get_chat_members(message.chat.id, filter=enums.ChatMembersFilter.ADMINISTRATORS)
+                is_admin = any(admin.user.id == user_id for admin in admin_list if admin.user)
+            except Exception:
+                pass
 
-    if not is_admin:
-        return await message.reply_text("❌ You are not authorized to use this command.")
+        if not is_admin:
+            return await message.reply_text("❌ You are not authorized to use this command.")
 
-    channel_id = await get_announcement_channel()
-    if not channel_id:
+        channel_id = await get_announcement_channel()
+        if not channel_id:
+            return await message.reply_text(
+                "ℹ️ <b>No Announcement Channel Configured.</b>\n\n"
+                "Use <code>/add_ano &lt;channel_id&gt;</code> to set one up.",
+                parse_mode=enums.ParseMode.HTML
+            )
+
         return await message.reply_text(
-            "ℹ️ <b>No Announcement Channel Configured.</b>\n\n"
-            "Use <code>/add_ano &lt;channel_id&gt;</code> to set one up.",
+            f"📢 <b>Current Announcement Channel:</b>\n\n"
+            f"🆔 <b>Channel ID:</b> <code>{channel_id}</code>\n"
+            f"⚡ <b>Status:</b> <code>Active</code>",
             parse_mode=enums.ParseMode.HTML
         )
+    except Exception as e:
+        logger.exception(f"[GET_ANO ERROR] {e}")
 
-    return await message.reply_text(
-        f"📢 <b>Current Announcement Channel:</b>\n\n"
-        f"🆔 <b>Channel ID:</b> <code>{channel_id}</code>\n"
-        f"⚡ <b>Status:</b> <code>Active</code>",
-        parse_mode=enums.ParseMode.HTML
-    )
+
+logger.info("[ANNOUNCEMENT] command handlers registered")
 
 
 
