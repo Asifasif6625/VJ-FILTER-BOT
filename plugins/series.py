@@ -6198,7 +6198,7 @@ async def process_movie_deeplink(client: Client, message: Message, movie_id: str
 # ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ 
 
 
-@Client.on_message(filters.command(["add_ano", "set_ano", "addano", "setano"]))
+@Client.on_message(filters.command(["add_ano", "set_ano", "addano", "setano"]), group=-1)
 async def cmd_add_ano(client: Client, message: Message):
     user_id = message.from_user.id if message.from_user else 0
     logger.info(f"[ADD_ANO] command received user_id={user_id} chat_id={message.chat.id} text={message.text!r}")
@@ -6308,7 +6308,7 @@ async def cmd_add_ano(client: Client, message: Message):
             pass
 
 
-@Client.on_message(filters.command(["del_ano", "delano", "del_announcement", "del_channel_ano", "del_ano_channel"]))
+@Client.on_message(filters.command(["del_ano", "delano", "del_announcement", "del_channel_ano", "del_ano_channel"]), group=-1)
 async def cmd_del_ano(client: Client, message: Message):
     user_id = message.from_user.id if message.from_user else 0
     logger.info(f"[DEL_ANO] command received user_id={user_id} chat_id={message.chat.id}")
@@ -6350,7 +6350,7 @@ async def cmd_del_ano(client: Client, message: Message):
             pass
 
 
-@Client.on_message(filters.command(["ano", "get_ano", "getano", "announcement_channel"]))
+@Client.on_message(filters.command(["ano", "get_ano", "getano", "announcement_channel"]), group=-1)
 async def cmd_get_ano(client: Client, message: Message):
     user_id = message.from_user.id if message.from_user else 0
     try:
