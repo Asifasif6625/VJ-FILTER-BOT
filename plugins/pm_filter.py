@@ -1,4 +1,4 @@
-# Don't Remove Credit @VJ_Bots
+﻿# Don't Remove Credit @VJ_Bots
 # Subscribe YouTube Channel For Amazing Bot @Tech_VJ
 # Ask Doubt on telegram @KingVJ01
 
@@ -3157,22 +3157,6 @@ async def cb_handler(client: Client, query: CallbackQuery):
             reply_markup=reply_markup,
             parse_mode=enums.ParseMode.HTML
         )
-    elif query.data == "gujarati_info":
-        btn = [[
-            InlineKeyboardButton("⟸ Bᴀᴄᴋ", callback_data="start"),
-            InlineKeyboardButton("Cᴏɴᴛᴀᴄᴛ", url="telegram.me/KingVj01")
-        ]]
-        await client.edit_message_media(
-            query.message.chat.id, 
-            query.message.id, 
-            InputMediaPhoto(random.choice(PICS))
-        )
-        reply_markup = InlineKeyboardMarkup(btn)
-        await query.message.edit_text(
-            text=(script.GUJARATI_INFO),
-            reply_markup=reply_markup,
-            parse_mode=enums.ParseMode.HTML
-        )
     elif query.data.startswith("setgs"):
         ident, set_type, status, grp_id = query.data.split("#")
         grpid = await active_connection(str(query.from_user.id))
@@ -3278,7 +3262,7 @@ async def auto_filter(client, name, msg, reply_msg=None, ai_search=True, spoll=F
             search = re.sub(r"(?i)\b(pl(i|e)*?(s|z+|ease|se|ese|(e+)s(e)?)|((send|snd|giv(e)?|gib)(\sme)?)|movie(s)?|new|latest|bro|bruh|broh|helo|that|find|dubbed|link|venum|iruka|pannunga|pannungga|anuppunga|anupunga|anuppungga|anupungga|film|undo|kitti|kitty|tharu|kittumo|kittum|movie|any(one)|with\ssubtitle(s)?|upload|full|print|file)\b", " ", search)
             search = re.sub(r"\s+", " ", search).strip()
 
-            # ── 1. Check if explicitly added Super Movie ──
+            # -- 1. Check Super Movie Filter --
             try:
                 from plugins.series import process_super_movie_search
                 is_super_movie = await process_super_movie_search(client, message, search if search else name, reply_msg)
@@ -3286,36 +3270,44 @@ async def auto_filter(client, name, msg, reply_msg=None, ai_search=True, spoll=F
                     return
             except Exception as e:
                 logger.error(f"[SUPER MOVIE SEARCH ROUTING ERROR] {e}")
-            
+
+            # -- 2. Check Series Filter BEFORE ia_filterdb movie search --
+            # process_series_search returns False immediately if no series matches,
+            # so normal movies are not affected.
+            try:
+                from plugins.series import process_series_search
+                is_series = await process_series_search(client, message, search if search else name, reply_msg)
+                if is_series:
+                    logger.info(
+                        f"[SEARCH ROUTING]\n"
+                        f"query={search}\n"
+                        f"decision=SERIES_FILTER"
+                    )
+                    return
+            except Exception as e:
+                logger.error(
+                    f"[SEARCH ROUTING ERROR]\n"
+                    f"user_id={user_id}\n"
+                    f"chat_type={chat_type}\n"
+                    f"query={name}\n"
+                    f"stage=SERIES_CHECK\n"
+                    f"exception={e}",
+                    exc_info=True
+                )
+
+            # -- 3. Normal Movie Filter (ia_filterdb) --
             files, offset, total_results = await get_search_results(message.chat.id, search, max_results=100, offset=0, filter=True)
             logger.info(f"[NORMAL MOVIE SEARCH]\nquery={search}\ndb_files={len(files)}")
             settings = await get_settings(message.chat.id)
 
             if not files:
-                # ── 2. If no movie files in ia_filterdb, check Series Filter ──
-                try:
-                    from plugins.series import process_series_search
-                    is_series = await process_series_search(client, message, search if search else name, reply_msg)
-                    if is_series:
-                        return
-                except Exception as e:
-                    logger.error(
-                        f"[SEARCH ROUTING ERROR]\n"
-                        f"user_id={user_id}\n"
-                        f"chat_type={chat_type}\n"
-                        f"query={name}\n"
-                        f"exception={e}",
-                        exc_info=True
-                    )
-
-                # ── Not a series either -> normal no-result message (NO IMDb poster!) ──
-                no_db_btn = InlineKeyboardMarkup([[InlineKeyboardButton("🦨Reason", callback_data="not_in_db_reason")]])
-                msg_text = "<b>sᴏʀʀʏ ɴᴏ ꜰɪʟᴇs ᴡᴇʀᴇ ꜰᴏᴜɴᴅ ꜰᴏʀ ʏᴏᴜʀ ʀᴇǫᴜᴇꜱᴛ😕\n\nᴄʜᴇᴄᴋ ʏᴏᴜʀ sᴘᴇʟʟɪɴɢ ɪɴ ɢᴏᴏɢʟᴇ ᴀɴᴅ ᴛʀʏ ᴀɢᴀɪɴ 😃\n\nᴍᴏᴠɪᴇ ʀᴇǫᴜᴇꜱᴛ ꜰᴏʀᴍᴀᴛ 👇\n\nᴇxᴀᴍᴘʟᴇ : Uncharted or Uncharted 2022 or Uncharted En\n\nꜱᴇʀɪᴇꜱ ʀᴇǫᴜᴇꜱᴛ ꜰᴏʀᴍᴀᴛ 👇\n\nᴇxᴀᴍᴘʟᴇ : Loki S01 or Loki S01E04 or Lucifer S03E24\n\n🚯 ᴅᴏɴᴛ ᴜꜱᴇ ➠ ':(!,./)\n\n<i>🕐 This message will be deleted in 50 seconds.</i></b>"
+                # -- 4. No results -> no-result message --
+                no_db_btn = InlineKeyboardMarkup([[InlineKeyboardButton(chr(0x1F9A8)+"Reason", callback_data="not_in_db_reason")]])
+                msg_text = "<b>s\u1d1fRRY N\u1d0f F\u026aL\u1d07s W\u1d07R\u1d07 F\u1d0f\u1d1fND F\u1d0fR Y\u1d0f\u1d1fR R\u1d07Q\u1d1f\u1d07sT\ud83d\ude15\n\n\u1d04H\u1d07\u1d04K Y\u1d0f\u1d1fR sP\u1d07LL\u026a\u0274G \u026a\u0274 G\u1d0f\u1d0f\u0262L\u1d07 \u1d00\u0274D TRY \u1d00\u0262\u1d00\u026a\u0274 \ud83d\ude03\n\n\u1d0f\u1d0f\u1d20\u026a\u1d07 R\u1d07Q\u1d1f\u1d07sT F\u1d0fRM\u1d00T \ud83d\udc47\n\n\u1d07x\u1d00\u1d0fPL\u1d07 : Uncharted or Uncharted 2022 or Uncharted En\n\ns\u1d07R\u026a\u1d07s R\u1d07Q\u1d1f\u1d07sT F\u1d0fRM\u1d00T \ud83d\udc47\n\n\u1d07x\u1d00\u1d0fPL\u1d07 : Loki S01 or Loki S01E04 or Lucifer S03E24\n\n\ud83d\udeaf D\u1d0f\u0274T \u1d1fs\u1d07 \u279a ':(!,./)\n\n<i>\ud83d\udd50 This message will be deleted in 50 seconds.</i></b>"
                 if reply_msg:
                     msg_obj = await reply_msg.edit_text(msg_text, reply_markup=no_db_btn)
                 else:
                     msg_obj = await message.reply_text(msg_text, reply_markup=no_db_btn)
-                
                 await asyncio.sleep(50)
                 try:
                     await msg_obj.delete()
