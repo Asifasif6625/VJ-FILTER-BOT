@@ -2265,7 +2265,12 @@ async def wizard_text_handler(client: Client, message: Message):
 @Client.on_callback_query(filters.regex(r"^sw#"), group=-10)
 async def wizard_callback(client: Client, query: CallbackQuery):
     uid = query.from_user.id if query.from_user else 0
-    print(f">>> [SERIES BUTTON CLICK] user={uid} data={query.data}", flush=True)
+    print(
+        f"### SW CALLBACK RECEIVED "
+        f"user={uid} "
+        f"data={query.data}",
+        flush=True
+    )
     logger.info(f"[SERIES BUTTON CLICK] user={uid} data={query.data}")
 
     try:
@@ -2317,104 +2322,287 @@ async def _handle_wizard_callback(client: Client, query: CallbackQuery):
 
     # ── Auto S Add & Menu Entry Callbacks ────────────────────────────────────
     if action == "start_manual":
+        print(
+            f"### MANUAL START REACHED user={uid}",
+            flush=True
+        )
+        # STEP 1: Immediately answer the callback
         await query.answer()
-        chat_id = (query.message.chat.id if query.message and query.message.chat else None) or (query.from_user.id if query.from_user else uid)
-        try:
-            await query.message.delete()
-        except Exception:
-            pass
 
-        import html
-        user_first = (query.from_user.first_name if query.from_user else "") or "Admin"
-        user_first_safe = html.escape(user_first)
+        chat_id = (query.message.chat.id if query.message and query.message.chat else None) or (query.from_user.id if query.from_user else uid)
+
+        # STEP 2: Create the wizard session
+        from utils import set_wizard_session, get_wizard_session
+        temp.SERIES_WIZARD[uid] = {
+            "mode": "add",
+            "state": S_NAME,
+            "name": "",
+            "year": "",
+            "genre": "",
+            "description": "",
+            "rating": "",
+            "poster": None,
+            "languages": [],
+            "seasons": [],
+            "qualities": [],
+            "series_id": None,
+            "season_modes": {},
+            "batch_langs": [],
+            "batch_seasons": [],
+            "batch_qualities": [],
+            "batch_data": None,
+        }
+        set_wizard_session(
+            uid,
+            workflow="SERIES_WIZARD",
+            state=S_NAME,
+            data=temp.SERIES_WIZARD[uid],
+            chat_id=chat_id
+        )
+
+        sess = get_wizard_session(uid)
+        session_exists = sess is not None
+        log_start = (
+            f"[WIZARD START]\n"
+            f"user_id={uid}\n"
+            f"workflow=SERIES_WIZARD\n"
+            f"state={S_NAME}\n"
+            f"session_exists={session_exists}"
+        )
+        print(log_start, flush=True)
+        logger.info(log_start)
+
+        if not session_exists:
+            return await query.message.reply_text("❌ Failed to start wizard session. Please try again.")
+
+        # STEP 3: Send the NEW wizard prompt message
         text = (
-            f"🎬 <b>Create New Series (Manual Adding)</b>\n\n"
-            f"Hey <b>{user_first_safe}</b>, please send the <b>series name</b>."
+            "🎬 <b>Create New Series</b>\n\n"
+            "Please send the <b>series name</b>."
         )
         markup = InlineKeyboardMarkup([[
             InlineKeyboardButton("❌ Cancel", callback_data="sw#auto_cancel")
         ]])
-        pmsg = await client.send_message(chat_id=chat_id, text=text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
+        try:
+            pmsg = await client.send_message(chat_id=chat_id, text=text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
+        except Exception:
+            pmsg = await query.message.reply_text(text=text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
 
-        from utils import set_wizard_session
-        temp.SERIES_WIZARD[uid] = {
-            "mode": "add",
-            "state": S_NAME,
-            "name": "", "year": "", "genre": "", "description": "",
-            "languages": [], "seasons": [], "qualities": [],
-            "series_id": None,
-            "season_modes": {},
-            "batch_langs": [], "batch_seasons": [], "batch_qualities": [],
-            "batch_data": None,
-            "prompt_msg_id": pmsg.id if pmsg else None,
-        }
-        set_wizard_session(uid, workflow="SERIES_WIZARD", state=S_NAME, data=temp.SERIES_WIZARD[uid], chat_id=chat_id)
-        logger.info(f"[AUTO MENU]\naction=CLICK\nbutton=MANUAL\nuser_id={uid}")
-        return
+        # STEP 4: Verify the prompt was successfully sent
+        if not pmsg:
+            raise RuntimeError("Wizard prompt message was not created")
 
-    if action == "start_auto":
-        await query.answer()
-        chat_id = (query.message.chat.id if query.message and query.message.chat else None) or (query.from_user.id if query.from_user else uid)
+        print(
+            f"### PROMPT SENT "
+            f"workflow=SERIES_WIZARD "
+            f"user={uid}",
+            flush=True
+        )
+        prompt_log = (
+            f"[WIZARD PROMPT CREATED]\n"
+            f"workflow=SERIES_WIZARD\n"
+            f"user_id={uid}\n"
+            f"message_id={pmsg.id}"
+        )
+        print(prompt_log, flush=True)
+        logger.info(prompt_log)
+
+        temp.SERIES_WIZARD[uid]["prompt_message_id"] = pmsg.id
+        temp.SERIES_WIZARD[uid]["prompt_msg_id"] = pmsg.id
+        if sess and isinstance(sess.get("data"), dict):
+            sess["data"]["prompt_message_id"] = pmsg.id
+            sess["data"]["prompt_msg_id"] = pmsg.id
+
+        # STEP 5: Only then optionally remove/edit the old management menu
         try:
             await query.message.delete()
         except Exception:
             pass
 
+        logger.info(f"[AUTO MENU]\naction=CLICK\nbutton=MANUAL\nuser_id={uid}")
+        return
+
+    if action == "start_auto":
+        print(
+            f"### AUTO SERIES START REACHED user={uid}",
+            flush=True
+        )
+        # STEP 1: Immediately answer the callback
+        await query.answer()
+
+        chat_id = (query.message.chat.id if query.message and query.message.chat else None) or (query.from_user.id if query.from_user else uid)
+
+        # STEP 2: Create the wizard session
+        from utils import set_wizard_session, get_wizard_session
+        temp.AUTO_SERIES[uid] = {
+            "state": "WAIT_IMDB",
+            "user_id": uid,
+            "admin_id": uid,
+            "created_at": time.time(),
+        }
+        set_wizard_session(
+            uid,
+            workflow="AUTO_SERIES",
+            state="WAIT_IMDB",
+            data=temp.AUTO_SERIES[uid],
+            chat_id=chat_id
+        )
+
+        sess = get_wizard_session(uid)
+        session_exists = sess is not None
+        log_start = (
+            f"[WIZARD START]\n"
+            f"user_id={uid}\n"
+            f"workflow=AUTO_SERIES\n"
+            f"state=WAIT_IMDB\n"
+            f"session_exists={session_exists}"
+        )
+        print(log_start, flush=True)
+        logger.info(log_start)
+
+        if not session_exists:
+            return await query.message.reply_text("❌ Failed to start wizard session. Please try again.")
+
+        # STEP 3: Send the NEW wizard prompt message
         text = (
             "🤖 <b>Auto Series Add — Series Importer</b>\n\n"
             "🎬 <b>Send IMDb Series link or ID:</b>\n\n"
-            "<b>Examples:</b>\n"
+            "Examples:\n\n"
             "<code>https://www.imdb.com/title/tt9288030/</code>\n"
             "<code>tt9288030</code>"
         )
         markup = InlineKeyboardMarkup([[
             InlineKeyboardButton("❌ Cancel", callback_data="sw#auto_cancel")
         ]])
-        pmsg = await client.send_message(chat_id=chat_id, text=text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
+        try:
+            pmsg = await client.send_message(chat_id=chat_id, text=text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
+        except Exception:
+            pmsg = await query.message.reply_text(text=text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
 
-        from utils import set_wizard_session
-        temp.AUTO_SERIES[uid] = {
-            "state": "WAIT_IMDB",
-            "user_id": uid,
-            "admin_id": uid,
-            "created_at": time.time(),
-            "prompt_msg_id": pmsg.id if pmsg else None,
-        }
-        set_wizard_session(uid, workflow="AUTO_SERIES", state="WAIT_IMDB", data=temp.AUTO_SERIES[uid], chat_id=chat_id)
-        logger.info(f"[AUTO SERIES]\naction=START\nuser_id={uid}")
-        return
+        # STEP 4: Verify the prompt was successfully sent
+        if not pmsg:
+            raise RuntimeError("Wizard prompt message was not created")
 
-    if action == "start_auto_movie":
-        await query.answer()
-        chat_id = (query.message.chat.id if query.message and query.message.chat else None) or (query.from_user.id if query.from_user else uid)
+        print(
+            f"### PROMPT SENT "
+            f"workflow=AUTO_SERIES "
+            f"user={uid}",
+            flush=True
+        )
+        prompt_log = (
+            f"[WIZARD PROMPT CREATED]\n"
+            f"workflow=AUTO_SERIES\n"
+            f"user_id={uid}\n"
+            f"message_id={pmsg.id}"
+        )
+        print(prompt_log, flush=True)
+        logger.info(prompt_log)
+
+        temp.AUTO_SERIES[uid]["prompt_message_id"] = pmsg.id
+        temp.AUTO_SERIES[uid]["prompt_msg_id"] = pmsg.id
+        if sess and isinstance(sess.get("data"), dict):
+            sess["data"]["prompt_message_id"] = pmsg.id
+            sess["data"]["prompt_msg_id"] = pmsg.id
+
+        # STEP 5: Only then optionally remove/edit the old management menu
         try:
             await query.message.delete()
         except Exception:
             pass
 
-        text = (
-            "🎬 <b>AUTO MOVIE ADD — Movie Importer</b>\n\n"
-            "Send IMDb Movie URL or IMDb ID:\n\n"
-            "<b>Examples:</b>\n"
-            "<code>https://www.imdb.com/title/tt35723557/</code>\n"
-            "<code>tt35723557</code>"
-        )
-        markup = InlineKeyboardMarkup([[
-            InlineKeyboardButton("❌ Cancel", callback_data="sw#auto_cancel")
-        ]])
-        pmsg = await client.send_message(chat_id=chat_id, text=text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
+        logger.info(f"[AUTO SERIES]\naction=START\nuser_id={uid}")
+        return
 
-        from utils import set_wizard_session
+    if action == "start_auto_movie":
+        print(
+            f"### AUTO MOVIE START REACHED user={uid}",
+            flush=True
+        )
+        # STEP 1: Immediately answer the callback
+        await query.answer()
+
+        chat_id = (query.message.chat.id if query.message and query.message.chat else None) or (query.from_user.id if query.from_user else uid)
+
+        # STEP 2: Create the wizard session
+        from utils import set_wizard_session, get_wizard_session
         temp.AUTO_MOVIE[uid] = {
             "state": "WAIT_IMDB",
             "user_id": uid,
             "admin_id": uid,
             "created_at": time.time(),
             "files": [],
-            "grouped": {},
-            "prompt_msg_id": pmsg.id if pmsg else None,
+            "grouped": {}
         }
-        set_wizard_session(uid, workflow="AUTO_MOVIE", state="WAIT_IMDB", data=temp.AUTO_MOVIE[uid], chat_id=chat_id)
+        set_wizard_session(
+            uid,
+            workflow="AUTO_MOVIE",
+            state="WAIT_IMDB",
+            data=temp.AUTO_MOVIE[uid],
+            chat_id=chat_id
+        )
+
+        sess = get_wizard_session(uid)
+        session_exists = sess is not None
+        log_start = (
+            f"[WIZARD START]\n"
+            f"user_id={uid}\n"
+            f"workflow=AUTO_MOVIE\n"
+            f"state=WAIT_IMDB\n"
+            f"session_exists={session_exists}"
+        )
+        print(log_start, flush=True)
+        logger.info(log_start)
+
+        if not session_exists:
+            return await query.message.reply_text("❌ Failed to start wizard session. Please try again.")
+
+        # STEP 3: Send the NEW wizard prompt message
+        text = (
+            "🎬 <b>AUTO MOVIE ADD</b>\n\n"
+            "Send IMDb Movie URL or IMDb ID.\n\n"
+            "Examples:\n\n"
+            "<code>https://www.imdb.com/title/tt35723557/</code>\n"
+            "<code>tt35723557</code>"
+        )
+        markup = InlineKeyboardMarkup([[
+            InlineKeyboardButton("❌ Cancel", callback_data="sw#auto_cancel")
+        ]])
+        try:
+            pmsg = await client.send_message(chat_id=chat_id, text=text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
+        except Exception:
+            pmsg = await query.message.reply_text(text=text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
+
+        # STEP 4: Verify the prompt was successfully sent
+        if not pmsg:
+            raise RuntimeError("Wizard prompt message was not created")
+
+        print(
+            f"### PROMPT SENT "
+            f"workflow=AUTO_MOVIE "
+            f"user={uid}",
+            flush=True
+        )
+        prompt_log = (
+            f"[WIZARD PROMPT CREATED]\n"
+            f"workflow=AUTO_MOVIE\n"
+            f"user_id={uid}\n"
+            f"message_id={pmsg.id}"
+        )
+        print(prompt_log, flush=True)
+        logger.info(prompt_log)
+
+        temp.AUTO_MOVIE[uid]["prompt_message_id"] = pmsg.id
+        temp.AUTO_MOVIE[uid]["prompt_msg_id"] = pmsg.id
+        if sess and isinstance(sess.get("data"), dict):
+            sess["data"]["prompt_message_id"] = pmsg.id
+            sess["data"]["prompt_msg_id"] = pmsg.id
+
+        # STEP 5: Only then optionally remove/edit the old management menu
+        try:
+            await query.message.delete()
+        except Exception:
+            pass
+
         logger.info(f"[AUTO MOVIE]\naction=START\nuser_id={uid}")
         return
 
