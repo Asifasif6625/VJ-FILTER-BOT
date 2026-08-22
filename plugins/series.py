@@ -5702,7 +5702,6 @@ async def series_user_nav(client: Client, query: CallbackQuery):
     if not series:
         return await query.answer("⚠️ Unable to process this Series request. Please search again.", show_alert=True)
 
-    # ── Log the exact series selected (critical for same-name debugging) ──
     log.info(
         f"[SERIES SELECT]\n"
         f"user_id={query.from_user.id}\n"
@@ -5721,7 +5720,6 @@ async def series_user_nav(client: Client, query: CallbackQuery):
     path_type = req.get("path", "DIRECT" if req.get("is_direct") else "SUGGESTION")
     is_direct_val = bool(req.get("is_direct", (path_type == "DIRECT")))
     
-    # ── Send file (Quality selected) ──────────────────────────────────
     if len(parts) >= 8 and parts[2] == "l" and parts[4] == "s" and parts[6] == "q":
         try:
             import time
@@ -5739,7 +5737,6 @@ async def series_user_nav(client: Client, query: CallbackQuery):
             
             req_key = str(_uuid.uuid4())[:8]
 
-            # Trace working suggestion vs direct test
             if path_type == "SUGGESTION":
                 log.info(
                     f"[SERIES SUGGESTION WORKING]\n"
@@ -5921,95 +5918,196 @@ async def series_user_nav(client: Client, query: CallbackQuery):
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# ─── /serieslist —” Admin: list all series ────────────────────────────────────
-# ═════════════════════════════════════════════════════════════════════════════
-
-
+# ─── /serieslist /seriesview /viewseries —” Unified Series & Movie Manager ──────
+# ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ 
 
 import math
 
+async def send_filter_manager(message_or_query, ftype: str = "series", page: int = 0):
+    from database.series_db import list_all_series, list_all_super_movies
 
+    all_series = await list_all_series()
+    all_movies = await list_all_super_movies()
 
-async def send_series_list(message_or_query, unique_series, page=0):
-    per_page = 10
-    total_pages = math.ceil(len(unique_series) / per_page)
-    if total_pages == 0:
-        total_pages = 1
-        
+    seen_s = set()
+    unique_series = []
+    for s in all_series:
+        nm = s.get("name", "").strip().lower()
+        if nm and nm not in seen_s:
+            seen_s.add(nm)
+            unique_series.append(s)
+    unique_series.sort(key=lambda x: x.get("name", "").lower())
+
+    seen_m = set()
+    unique_movies = []
+    for m in all_movies:
+        nm = m.get("title", "").strip().lower()
+        if nm and nm not in seen_m:
+            seen_m.add(nm)
+            unique_movies.append(m)
+    unique_movies.sort(key=lambda x: x.get("title", "").lower())
+
+    per_page = 8
+    items = unique_series if ftype == "series" else unique_movies
+    total_pages = max(1, math.ceil(len(items) / per_page))
+    page = max(0, min(page, total_pages - 1))
+
     start_idx = page * per_page
     end_idx = start_idx + per_page
-    
-    page_series = unique_series[start_idx:end_idx]
-    
-    text = f"📁š <b>Added Series —” Page {page + 1}/{total_pages}</b>\n\n"
-    for i, s in enumerate(page_series, start=start_idx + 1):
-        text += f"{i}. {s['name']}\n"
-    text += f"\nTotal: {len(unique_series)} Series"
-    
+    page_items = items[start_idx:end_idx]
+
+    tab_title = "Series Filters" if ftype == "series" else "Super Movie Filters"
+    text = (
+        f"📂 <b>{tab_title}</b> (Page {page + 1}/{total_pages})\n\n"
+        f"📺 <b>Total Series:</b> {len(unique_series)}\n"
+        f"🎬 <b>Total Movies:</b> {len(unique_movies)}\n\n"
+        f"<i>Select any item below to view or edit:</i>"
+    )
+
     rows = []
-    for s in page_series:
-        series_id = str(s["_id"])
-        rows.append([InlineKeyboardButton(f"âœï¸ {s['name']}", callback_data=f"edser#{series_id}")])
-        
-    nav_buttons = []
+    s_btn_text = f"📺 Series ({len(unique_series)})" + (" ✅" if ftype == "series" else "")
+    m_btn_text = f"🎬 Movies ({len(unique_movies)})" + (" ✅" if ftype == "movie" else "")
+    rows.append([
+        InlineKeyboardButton(s_btn_text, callback_data="vser#ser#0"),
+        InlineKeyboardButton(m_btn_text, callback_data="vser#mov#0"),
+    ])
+
+    if ftype == "series":
+        for s in page_items:
+            sid = str(s["_id"])
+            rows.append([InlineKeyboardButton(f"📺 {to_series_font(s.get('name', 'Series'))}", callback_data=f"edser#{sid}")])
+    else:
+        for m in page_items:
+            mid = str(m["_id"])
+            rows.append([InlineKeyboardButton(f"🎬 {to_series_font(m.get('title', 'Movie'))}", callback_data=f"edmov#{mid}")])
+
+    nav = []
     if page > 0:
-        nav_buttons.append(InlineKeyboardButton("⬅️ Previous", callback_data=f"vser#{page - 1}"))
+        nav.append(InlineKeyboardButton("⬅️ Previous", callback_data=f"vser#{'ser' if ftype == 'series' else 'mov'}#{page - 1}"))
     if page < total_pages - 1:
-        nav_buttons.append(InlineKeyboardButton("Next âž¡ï¸", callback_data=f"vser#{page + 1}"))
-        
-    if nav_buttons:
-        rows.append(nav_buttons)
-        
-    rows.append([InlineKeyboardButton("🔴 Cancel", callback_data="vser#close")])
-        
+        nav.append(InlineKeyboardButton("Next ➡️", callback_data=f"vser#{'ser' if ftype == 'series' else 'mov'}#{page + 1}"))
+    if nav:
+        rows.append(nav)
+
+    rows.append([InlineKeyboardButton("❌ Close", callback_data="vser#close")])
     markup = InlineKeyboardMarkup(rows)
-    
+
     if isinstance(message_or_query, Message):
         await message_or_query.reply_text(text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
     else:
-        await message_or_query.message.edit_text(text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
+        try:
+            await message_or_query.message.edit_text(text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
+        except Exception:
+            pass
 
 
-
+async def send_series_list(message_or_query, unique_series, page=0):
+    await send_filter_manager(message_or_query, ftype="series", page=page)
 
 
 @Client.on_callback_query(filters.regex(r"^vser#"))
 async def cb_vser_page(client: Client, query: CallbackQuery):
     if not _is_admin(query.from_user.id):
-        return await query.answer("âŒ You are not authorized.", show_alert=True)
-        
-    action = query.data.split("#")[1]
+        return await query.answer("❌ You are not authorized.", show_alert=True)
+
+    parts = query.data.split("#")
+    action = parts[1] if len(parts) > 1 else ""
+
     if action in ["close", "cancel"]:
         try:
             await query.message.delete()
         except Exception:
             pass
         return await query.answer()
-        
-    page = int(action)
-    from database.series_db import list_all_series
-    all_series = await list_all_series()
-    
-    seen = set()
-    unique_series = []
-    for s in all_series:
-        name = s.get("name", "").strip()
-        name_lower = name.lower()
-        if name_lower not in seen:
-            seen.add(name_lower)
-            unique_series.append(s)
+
+    if action in ["ser", "mov"]:
+        page = int(parts[2]) if len(parts) > 2 and parts[2].isdigit() else 0
+        ftype = "series" if action == "ser" else "movie"
+        await send_filter_manager(query, ftype=ftype, page=page)
+        return await query.answer()
+
+    if action.isdigit():
+        page = int(action)
+        await send_filter_manager(query, ftype="series", page=page)
+        return await query.answer()
+
+    await query.answer()
 
 
+@Client.on_callback_query(filters.regex(r"^edmov#"))
+async def cb_edmov(client: Client, query: CallbackQuery):
+    if not _is_admin(query.from_user.id):
+        return await query.answer("❌ You are not authorized.", show_alert=True)
 
-    unique_series.sort(key=lambda x: x.get("name", "").lower())
-    await send_series_list(query, unique_series, page=page)
+    movie_id = query.data.split("#")[1]
+    from database.series_db import get_super_movie
+    movie = await get_super_movie(movie_id)
+    if not movie or movie.get("status") == "deleted":
+        return await query.answer("Movie Filter not found or deleted.", show_alert=True)
+
+    title = movie.get("title", "")
+    year = str(movie.get("year", "N/A"))
+    rating = str(movie.get("rating", "N/A"))
+    genre = str(movie.get("genre", "N/A"))
+    langs = ", ".join(movie.get("languages", [])) or "None"
+    quals = ", ".join(movie.get("qualities", [])) or "None"
+    file_count = len(movie.get("file_ids", []))
+
+    text = (
+        f"🎬 <b>{to_series_font(title)}</b>\n\n"
+        f"📅 <b>Year:</b> {year}\n"
+        f"⭐ <b>Rating:</b> {rating}\n"
+        f"🎭 <b>Genre:</b> {to_series_font(genre)}\n"
+        f"🌐 <b>Languages:</b> {to_series_font(langs)}\n"
+        f"🎞 <b>Qualities:</b> {to_series_font(quals)}\n"
+        f"📦 <b>Linked Files:</b> {file_count}\n\n"
+        f"<i>Manage this Super Movie Filter:</i>"
+    )
+
+    markup = InlineKeyboardMarkup([
+        [InlineKeyboardButton("📢 Send Announcement", callback_data=f"anomov#{movie_id}")],
+        [InlineKeyboardButton("🗑 Delete Movie Filter", callback_data=f"delmov#{movie_id}")],
+        [InlineKeyboardButton("⬅️ Back to Movies", callback_data="vser#mov#0")]
+    ])
+
+    try:
+        await query.message.edit_text(text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
+    except Exception:
+        pass
+    await query.answer()
 
 
+@Client.on_callback_query(filters.regex(r"^delmov#"))
+async def cb_delmov(client: Client, query: CallbackQuery):
+    if not _is_admin(query.from_user.id):
+        return await query.answer("❌ You are not authorized.", show_alert=True)
+
+    movie_id = query.data.split("#")[1]
+    from database.series_db import delete_super_movie
+    await delete_super_movie(movie_id)
+    await query.answer("🗑 Movie Filter Deleted!", show_alert=True)
+    await send_filter_manager(query, ftype="movie", page=0)
 
 
+@Client.on_callback_query(filters.regex(r"^anomov#"))
+async def cb_anomov(client: Client, query: CallbackQuery):
+    if not _is_admin(query.from_user.id):
+        return await query.answer("❌ You are not authorized.", show_alert=True)
+
+    movie_id = query.data.split("#")[1]
+    channel_id = await get_announcement_channel()
+    if not channel_id:
+        return await query.answer("❌ No announcement channel set! Use /add_ano <channel_id>", show_alert=True)
+
+    try:
+        await send_movie_announcement(client, movie_id, force=True)
+        await query.answer("📢 Announcement sent successfully to channel!", show_alert=True)
+    except Exception as e:
+        logger.error(f"[MANUAL MOVIE ANNOUNCEMENT ERROR] {e}")
+        await query.answer(f"❌ Error sending announcement: {e}", show_alert=True)
 
 
-@Client.on_message(filters.command(["serieslist", "viewseries"]), group=1)
+@Client.on_message(filters.command(["serieslist", "viewseries", "seriesview", "viewmovies", "movielist", "filters"]), group=1)
 async def cmd_serieslist(client: Client, message: Message):
     is_admin = False
     if message.chat.type in [enums.ChatType.GROUP, enums.ChatType.SUPERGROUP]:
@@ -6017,44 +6115,15 @@ async def cmd_serieslist(client: Client, message: Message):
         is_admin = any(admin.user.id == message.from_user.id for admin in admin_list if admin.user)
     else:
         is_admin = _is_admin(message.from_user.id if message.from_user else 0)
-    
+
     if not is_admin:
-        return await message.reply_text("âŒ You are not authorized to use this command.")
+        return await message.reply_text("❌ You are not authorized to use this command.")
+
+    cmd = message.command[0].lower() if message.command else "viewseries"
+    ftype = "movie" if cmd in ["viewmovies", "movielist"] else "series"
+    await send_filter_manager(message, ftype=ftype, page=0)
 
 
-
-    from database.series_db import list_all_series
-    all_series = await list_all_series()
-    
-    logger.info("[VIEWSERIES] fetched series count=%s", len(all_series))
-    
-    if not all_series:
-        return await message.reply_text(
-            "No Series have been added yet.",
-            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔴 Cancel", callback_data="vser#close")]])
-        )
-
-
-
-    seen = set()
-    unique_series = []
-    for s in all_series:
-        name = s.get("name", "").strip()
-        name_lower = name.lower()
-        if name_lower not in seen:
-            seen.add(name_lower)
-            unique_series.append(s)
-
-
-
-    unique_series.sort(key=lambda x: x.get("name", "").lower())
-    await send_series_list(message, unique_series, page=0)
-
-
-
-
-
-# ═════════════════════════════════════════════════════════════════════════════
 # ─── /seriesdel —” Admin: delete a series ─────────────────────────────────────
 # ═════════════════════════════════════════════════════════════════════════════
 
@@ -6187,6 +6256,16 @@ async def send_series_announcement(client: Client, series_id: str, force: bool =
     sent_msg = None
     target_chat = int(channel_id) if str(channel_id).lstrip("-").isdigit() else str(channel_id)
 
+    # Resolve peer in Pyrogram internal cache
+    try:
+        chat_obj = await client.get_chat(target_chat)
+        if chat_obj and chat_obj.id:
+            target_chat = chat_obj.id
+    except Exception as ce:
+        logger.warning(f"[ANNOUNCEMENT GET_CHAT] target={target_chat} warning={ce}")
+
+    print(f">>> [ANNOUNCEMENT SENDING] type=SERIES title={name} channel={target_chat}", flush=True)
+
     try:
         if poster:
             try:
@@ -6198,7 +6277,7 @@ async def send_series_announcement(client: Client, series_id: str, force: bool =
                     parse_mode=enums.ParseMode.HTML
                 )
             except Exception as pe:
-                logger.warning(f"[SERIES ANNOUNCEMENT] Failed to send photo poster: {pe}. Falling back to text message.")
+                logger.warning(f"[SERIES ANNOUNCEMENT] send_photo failed ({pe}), falling back to send_message")
                 sent_msg = await client.send_message(
                     chat_id=target_chat,
                     text=caption,
@@ -6215,8 +6294,10 @@ async def send_series_announcement(client: Client, series_id: str, force: bool =
 
         if sent_msg:
             await save_announcement(sid, target_chat, sent_msg.id, series_key=series_key)
+            print(f">>> [SERIES ANNOUNCEMENT SUCCESS] channel={target_chat} msg_id={sent_msg.id}", flush=True)
             logger.info(f"[SERIES ANNOUNCEMENT SUCCESS] title={name} id={sid} channel={target_chat} msg_id={sent_msg.id}")
     except Exception as e:
+        print(f">>> [SERIES ANNOUNCEMENT ERROR] channel={target_chat} error={e}", flush=True)
         logger.error(f"[SERIES ANNOUNCEMENT ERROR] Failed to send announcement for series {sid}: {e}", exc_info=True)
 
 
@@ -6289,6 +6370,16 @@ async def send_movie_announcement(client: Client, movie_id: str, force: bool = F
     sent_msg = None
     target_chat = int(channel_id) if str(channel_id).lstrip("-").isdigit() else str(channel_id)
 
+    # Resolve peer in Pyrogram internal cache
+    try:
+        chat_obj = await client.get_chat(target_chat)
+        if chat_obj and chat_obj.id:
+            target_chat = chat_obj.id
+    except Exception as ce:
+        logger.warning(f"[ANNOUNCEMENT GET_CHAT] target={target_chat} warning={ce}")
+
+    print(f">>> [ANNOUNCEMENT SENDING] type=MOVIE title={name} channel={target_chat}", flush=True)
+
     try:
         if poster:
             try:
@@ -6300,7 +6391,7 @@ async def send_movie_announcement(client: Client, movie_id: str, force: bool = F
                     parse_mode=enums.ParseMode.HTML
                 )
             except Exception as pe:
-                logger.warning(f"[MOVIE ANNOUNCEMENT] Failed to send photo poster: {pe}. Falling back to text message.")
+                logger.warning(f"[MOVIE ANNOUNCEMENT] send_photo failed ({pe}), falling back to send_message")
                 sent_msg = await client.send_message(
                     chat_id=target_chat,
                     text=caption,
@@ -6317,8 +6408,10 @@ async def send_movie_announcement(client: Client, movie_id: str, force: bool = F
 
         if sent_msg:
             await save_announcement(mid, target_chat, sent_msg.id, series_key=name)
+            print(f">>> [MOVIE ANNOUNCEMENT SUCCESS] channel={target_chat} msg_id={sent_msg.id}", flush=True)
             logger.info(f"[MOVIE ANNOUNCEMENT SUCCESS] title={name} id={mid} channel={target_chat} msg_id={sent_msg.id}")
     except Exception as e:
+        print(f">>> [MOVIE ANNOUNCEMENT ERROR] channel={target_chat} error={e}", flush=True)
         logger.error(f"[MOVIE ANNOUNCEMENT ERROR] Failed to send announcement for movie {mid}: {e}", exc_info=True)
 
 
