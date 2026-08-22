@@ -1729,7 +1729,11 @@ async def wizard_text_handler(client: Client, message: Message):
                 return await message.reply_text("❌ <b>Action cancelled.</b>", parse_mode=enums.ParseMode.HTML)
             else:
                 return await message.reply_text("No active wizard or session to cancel.")
-        return
+        elif text.lower().startswith("/skip"):
+            # Allow /skip to pass through to the wizard state handlers!
+            pass
+        else:
+            return
 
     sess = get_wizard_session(uid)
     # Fallback session support
@@ -1795,11 +1799,18 @@ async def wizard_text_handler(client: Client, message: Message):
             m_imdb = re.search(r"(?:imdb\.com/title/)?(tt\d{5,12})", text, re.I)
             imdb_id = m_imdb.group(1).lower() if m_imdb else None
 
+            prompt_msg_id = auto_data.get("prompt_msg_id") or sess.get("data", {}).get("prompt_msg_id")
             try:
                 await message.delete()
                 logger.info(f"[AUTO_SERIES] user message deleted")
             except Exception as de:
                 logger.warning(f"[AUTO_SERIES] could not delete user message: {de}")
+
+            if prompt_msg_id:
+                try:
+                    await client.delete_messages(message.chat.id, prompt_msg_id)
+                except Exception:
+                    pass
 
             loading_msg = await client.send_message(chat_id=message.chat.id, text="⏳ Fetching IMDb Series metadata, please wait...")
 
@@ -1906,11 +1917,18 @@ async def wizard_text_handler(client: Client, message: Message):
             m_imdb = re.search(r"(?:imdb\.com/title/)?(tt\d{5,12})", text, re.I)
             imdb_id = m_imdb.group(1).lower() if m_imdb else None
 
+            prompt_msg_id = movie_data.get("prompt_msg_id") or sess.get("data", {}).get("prompt_msg_id")
             try:
                 await message.delete()
                 logger.info(f"[AUTO_MOVIE] user message deleted")
             except Exception as de:
                 logger.warning(f"[AUTO_MOVIE] could not delete user message: {de}")
+
+            if prompt_msg_id:
+                try:
+                    await client.delete_messages(message.chat.id, prompt_msg_id)
+                except Exception:
+                    pass
 
             loading_msg = await client.send_message(chat_id=message.chat.id, text="⏳ Fetching IMDb Movie metadata, please wait...")
 
@@ -2008,12 +2026,22 @@ async def wizard_text_handler(client: Client, message: Message):
                     f"Please send a different name, or /cancel to abort.",
                     parse_mode=enums.ParseMode.HTML,
                 )
+        prompt_msg_id = wiz.get("prompt_msg_id") or sess.get("data", {}).get("prompt_msg_id")
+        try:
+            await message.delete()
+        except Exception:
+            pass
+        if prompt_msg_id:
+            try:
+                await client.delete_messages(message.chat.id, prompt_msg_id)
+            except Exception:
+                pass
+
         wiz["name"] = text
         wiz["state"] = S_YEAR
         await message.reply_text(
             f"✅ Name set to: <b>{text}</b>\n\n"
             f"Now send the <b>release year</b> (e.g. <code>2023</code>) or send /skip.",
-            reply_to_message_id=message.id,
             parse_mode=enums.ParseMode.HTML,
         )
 
@@ -2220,23 +2248,7 @@ async def _handle_wizard_callback(client: Client, query: CallbackQuery):
         except Exception:
             pass
 
-        from utils import set_wizard_session, get_wizard_session
-        temp.SERIES_WIZARD[uid] = {
-            "mode": "add",
-            "state": S_NAME,
-            "name": "", "year": "", "genre": "", "description": "",
-            "languages": [], "seasons": [], "qualities": [],
-            "series_id": None,
-            "season_modes": {},
-            "batch_langs": [], "batch_seasons": [], "batch_qualities": [],
-            "batch_data": None,
-        }
         chat_id = query.message.chat.id if query.message and query.message.chat else uid
-        set_wizard_session(uid, workflow="SERIES_WIZARD", state=S_NAME, data=temp.SERIES_WIZARD[uid], chat_id=chat_id)
-        sess = get_wizard_session(uid)
-        logger.info(f"[MANUAL SERIES SESSION CHECK] user={uid} session={sess}")
-        logger.info(f"[AUTO MENU]\naction=CLICK\nbutton=MANUAL\nuser_id={uid}")
-        
         import html
         user_first = (query.from_user.first_name if query.from_user else "") or "Admin"
         user_first_safe = html.escape(user_first)
@@ -2247,7 +2259,22 @@ async def _handle_wizard_callback(client: Client, query: CallbackQuery):
         markup = InlineKeyboardMarkup([[
             InlineKeyboardButton("❌ Cancel", callback_data="sw#auto_cancel")
         ]])
-        await client.send_message(chat_id=chat_id, text=text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
+        pmsg = await client.send_message(chat_id=chat_id, text=text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
+
+        from utils import set_wizard_session
+        temp.SERIES_WIZARD[uid] = {
+            "mode": "add",
+            "state": S_NAME,
+            "name": "", "year": "", "genre": "", "description": "",
+            "languages": [], "seasons": [], "qualities": [],
+            "series_id": None,
+            "season_modes": {},
+            "batch_langs": [], "batch_seasons": [], "batch_qualities": [],
+            "batch_data": None,
+            "prompt_msg_id": pmsg.id if pmsg else None,
+        }
+        set_wizard_session(uid, workflow="SERIES_WIZARD", state=S_NAME, data=temp.SERIES_WIZARD[uid], chat_id=chat_id)
+        logger.info(f"[AUTO MENU]\naction=CLICK\nbutton=MANUAL\nuser_id={uid}")
         return
 
     if action == "start_auto":
@@ -2257,19 +2284,7 @@ async def _handle_wizard_callback(client: Client, query: CallbackQuery):
         except Exception:
             pass
 
-        from utils import set_wizard_session, get_wizard_session
-        temp.AUTO_SERIES[uid] = {
-            "state": "WAIT_IMDB",
-            "user_id": uid,
-            "admin_id": uid,
-            "created_at": time.time(),
-        }
         chat_id = query.message.chat.id if query.message and query.message.chat else uid
-        set_wizard_session(uid, workflow="AUTO_SERIES", state="WAIT_IMDB", data=temp.AUTO_SERIES[uid], chat_id=chat_id)
-        sess = get_wizard_session(uid)
-        logger.info(f"[AUTO SERIES SESSION CHECK] user={uid} session={sess}")
-        logger.info(f"[AUTO MENU]\naction=CLICK\nbutton=AUTO_SERIES\nuser_id={uid}")
-        logger.info(f"[AUTO SERIES]\naction=START\nuser_id={uid}")
         text = (
             "🤖 <b>Auto Series Add — Series Importer</b>\n\n"
             "🎬 <b>Send IMDb Series link or ID:</b>\n\n"
@@ -2280,7 +2295,18 @@ async def _handle_wizard_callback(client: Client, query: CallbackQuery):
         markup = InlineKeyboardMarkup([[
             InlineKeyboardButton("❌ Cancel", callback_data="sw#auto_cancel")
         ]])
-        await client.send_message(chat_id=chat_id, text=text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
+        pmsg = await client.send_message(chat_id=chat_id, text=text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
+
+        from utils import set_wizard_session
+        temp.AUTO_SERIES[uid] = {
+            "state": "WAIT_IMDB",
+            "user_id": uid,
+            "admin_id": uid,
+            "created_at": time.time(),
+            "prompt_msg_id": pmsg.id if pmsg else None,
+        }
+        set_wizard_session(uid, workflow="AUTO_SERIES", state="WAIT_IMDB", data=temp.AUTO_SERIES[uid], chat_id=chat_id)
+        logger.info(f"[AUTO SERIES]\naction=START\nuser_id={uid}")
         return
 
     if action == "start_auto_movie":
@@ -2290,21 +2316,7 @@ async def _handle_wizard_callback(client: Client, query: CallbackQuery):
         except Exception:
             pass
 
-        from utils import set_wizard_session, get_wizard_session
-        temp.AUTO_MOVIE[uid] = {
-            "state": "WAIT_IMDB",
-            "user_id": uid,
-            "admin_id": uid,
-            "created_at": time.time(),
-            "files": [],
-            "grouped": {},
-        }
         chat_id = query.message.chat.id if query.message and query.message.chat else uid
-        set_wizard_session(uid, workflow="AUTO_MOVIE", state="WAIT_IMDB", data=temp.AUTO_MOVIE[uid], chat_id=chat_id)
-        sess = get_wizard_session(uid)
-        logger.info(f"[AUTO MOVIE SESSION CHECK] user={uid} session={sess}")
-        logger.info(f"[AUTO MENU]\naction=CLICK\nbutton=AUTO_MOVIE\nuser_id={uid}")
-        logger.info(f"[AUTO MOVIE]\naction=START\nuser_id={uid}")
         text = (
             "🎬 <b>AUTO MOVIE ADD — Movie Importer</b>\n\n"
             "Send IMDb Movie URL or IMDb ID:\n\n"
@@ -2315,7 +2327,20 @@ async def _handle_wizard_callback(client: Client, query: CallbackQuery):
         markup = InlineKeyboardMarkup([[
             InlineKeyboardButton("❌ Cancel", callback_data="sw#auto_cancel")
         ]])
-        await client.send_message(chat_id=chat_id, text=text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
+        pmsg = await client.send_message(chat_id=chat_id, text=text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
+
+        from utils import set_wizard_session
+        temp.AUTO_MOVIE[uid] = {
+            "state": "WAIT_IMDB",
+            "user_id": uid,
+            "admin_id": uid,
+            "created_at": time.time(),
+            "files": [],
+            "grouped": {},
+            "prompt_msg_id": pmsg.id if pmsg else None,
+        }
+        set_wizard_session(uid, workflow="AUTO_MOVIE", state="WAIT_IMDB", data=temp.AUTO_MOVIE[uid], chat_id=chat_id)
+        logger.info(f"[AUTO MOVIE]\naction=START\nuser_id={uid}")
         return
 
     if action == "auto_season_skip":
@@ -2795,10 +2820,10 @@ async def _handle_wizard_callback(client: Client, query: CallbackQuery):
 
             langs_summary = "\n".join(f"• {l}" for l in detected_langs) if detected_langs else "None"
 
-            # Announcement sent ONLY after filter is verified
-            if verified:
+            # Announcement sent when series filter is created/synced
+            if series_id:
                 try:
-                    await send_series_announcement(client, series_id)
+                    await send_series_announcement(client, series_id, force=True)
                 except Exception as ae:
                     logger.error(f"[AUTO_SERIES ANNOUNCEMENT ERROR] {ae}")
 
@@ -2906,50 +2931,6 @@ async def _handle_wizard_callback(client: Client, query: CallbackQuery):
             if uid in temp.SERIES_WIZARD:
                 del temp.SERIES_WIZARD[uid]
             await query.message.edit_text("❌ Series configuration cancelled.")
-        return await query.answer()
-
-    # ── Save ──────────────────────────────────────────────────────────────────
-    if action == "save":
-        if not wiz.get("name"):
-            return await query.answer("⚠️ Series name is missing.", show_alert=True)
-        if not wiz.get("languages"):
-            return await query.answer("⚠️ Please add at least one file/language before saving.", show_alert=True)
-
-        if not wiz.get("series_id"):
-            series_id = await create_series({
-                "name": wiz["name"],
-                "year": wiz.get("year", ""),
-                "genre": wiz.get("genre", ""),
-                "rating": wiz.get("rating", ""),
-                "description": wiz.get("description", ""),
-                "poster": wiz.get("poster"),
-                "languages": wiz.get("languages", []),
-                "seasons": wiz.get("seasons", []),
-                "qualities": wiz.get("qualities", []),
-                "season_modes": wiz.get("season_modes", {}),
-            })
-            wiz["series_id"] = series_id
-            logger.info(f"[SERIES ADD]\nuser_id={uid}\nseries_id={series_id}\naction=SERIES_SAVED")
-            try:
-                await send_series_announcement(client, series_id)
-            except Exception as ae:
-                logger.error(f"[MANUAL_SERIES ANNOUNCEMENT ERROR] {ae}")
-        else:
-            await update_series(wiz["series_id"], {
-                "languages": wiz.get("languages", []),
-                "seasons": wiz.get("seasons", []),
-                "qualities": wiz.get("qualities", []),
-                "season_modes": wiz.get("season_modes", {}),
-            })
-            logger.info(f"[SERIES EDIT]\nuser_id={uid}\nseries_id={wiz['series_id']}\naction=SERIES_SAVED")
-
-        if uid in temp.SERIES_WIZARD:
-            del temp.SERIES_WIZARD[uid]
-
-        await query.message.edit_text(
-            f"✅ <b>Series saved successfully!</b>\n\n<b>{wiz['name']}</b> is now live.",
-            parse_mode=enums.ParseMode.HTML,
-        )
         return await query.answer()
 
     # ── Config Menu shortcuts ─────────────────────────────────────────────────
@@ -4088,10 +4069,10 @@ async def _handle_auto_movie_hierarchical_callbacks(client: Client, query: Callb
                 f"files={linked_files_count}"
             )
 
-            # Step 5: Announcement sent ONLY after filter is verified
-            if verified and movie_id:
+            # Step 5: Announcement sent when movie filter is created/synced
+            if movie_id:
                 try:
-                    await send_movie_announcement(client, movie_id)
+                    await send_movie_announcement(client, movie_id, force=True)
                 except Exception as ae:
                     logger.error(f"[AUTO_MOVIE ANNOUNCEMENT ERROR] {ae}")
 
