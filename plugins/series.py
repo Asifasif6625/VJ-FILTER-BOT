@@ -2015,15 +2015,15 @@ async def wizard_text_handler(client: Client, message: Message):
     # ── Series Name ──────────────────────────────────────────────────────────
     if state == S_NAME:
         if not text:
-            return await message.reply_text("Please enter a valid series name.")
+            return await client.send_message(chat_id=chat_id, text="Please enter a valid series name.")
         
         # Check duplicate if in add mode
         if wiz["mode"] == "add":
             existing = await get_series_by_name(text)
             if existing:
-                return await message.reply_text(
-                    f"⚠️ A series named <b>{text}</b> already exists.\n"
-                    f"Please send a different name, or /cancel to abort.",
+                return await client.send_message(
+                    chat_id=chat_id,
+                    text=f"⚠️ A series named <b>{text}</b> already exists.\n\nPlease send a different name, or /cancel to abort.",
                     parse_mode=enums.ParseMode.HTML,
                 )
         prompt_msg_id = wiz.get("prompt_msg_id") or sess.get("data", {}).get("prompt_msg_id")
@@ -2033,85 +2033,154 @@ async def wizard_text_handler(client: Client, message: Message):
             pass
         if prompt_msg_id:
             try:
-                await client.delete_messages(message.chat.id, prompt_msg_id)
+                await client.delete_messages(chat_id, prompt_msg_id)
             except Exception:
                 pass
 
         wiz["name"] = text
         wiz["state"] = S_YEAR
-        await message.reply_text(
-            f"✅ Name set to: <b>{text}</b>\n\n"
-            f"Now send the <b>release year</b> (e.g. <code>2023</code>) or send /skip.",
+        pmsg = await client.send_message(
+            chat_id=chat_id,
+            text=f"✅ Name set to: <b>{text}</b>\n\nNow send the <b>release year</b> (e.g. <code>2023</code>) or send /skip.",
             parse_mode=enums.ParseMode.HTML,
         )
+        wiz["prompt_msg_id"] = pmsg.id if pmsg else None
+        return
 
     # ── Year ─────────────────────────────────────────────────────────────────
     elif state == S_YEAR:
+        try:
+            await message.delete()
+        except Exception:
+            pass
+        prompt_msg_id = wiz.get("prompt_msg_id")
+        if prompt_msg_id:
+            try:
+                await client.delete_messages(chat_id, prompt_msg_id)
+            except Exception:
+                pass
+
         if text.lower() == "/skip":
             wiz["year"] = ""
         else:
             wiz["year"] = text
         wiz["state"] = S_GENRE
-        await message.reply_text(
-            f"📅 Year saved.\n\nNow send the <b>genre(s)</b> (e.g. <code>Action, Drama, Sci-Fi</code>) or send /skip.",
-            reply_to_message_id=message.id,
+        pmsg = await client.send_message(
+            chat_id=chat_id,
+            text=f"📅 Year saved: <b>{wiz['year'] or 'Skipped'}</b>\n\nNow send the <b>genre(s)</b> (e.g. <code>Action, Drama, Sci-Fi</code>) or send /skip.",
             parse_mode=enums.ParseMode.HTML,
         )
+        wiz["prompt_msg_id"] = pmsg.id if pmsg else None
+        return
 
     # ── Genre ────────────────────────────────────────────────────────────────
     elif state == S_GENRE:
+        try:
+            await message.delete()
+        except Exception:
+            pass
+        prompt_msg_id = wiz.get("prompt_msg_id")
+        if prompt_msg_id:
+            try:
+                await client.delete_messages(chat_id, prompt_msg_id)
+            except Exception:
+                pass
+
         if text.lower() == "/skip":
             wiz["genre"] = ""
         else:
             wiz["genre"] = text
         wiz["state"] = S_RATING
-        await message.reply_text(
-            f"🎭 Genre saved.\n\nNow send the <b>IMDb rating</b> (e.g. <code>8.5/10</code>) or send /skip.",
-            reply_to_message_id=message.id,
+        pmsg = await client.send_message(
+            chat_id=chat_id,
+            text=f"🎭 Genre saved: <b>{wiz['genre'] or 'Skipped'}</b>\n\nNow send the <b>IMDb rating</b> (e.g. <code>8.5/10</code>) or send /skip.",
             parse_mode=enums.ParseMode.HTML,
         )
+        wiz["prompt_msg_id"] = pmsg.id if pmsg else None
+        return
 
     # ── Rating ───────────────────────────────────────────────────────────────
     elif state == S_RATING:
+        try:
+            await message.delete()
+        except Exception:
+            pass
+        prompt_msg_id = wiz.get("prompt_msg_id")
+        if prompt_msg_id:
+            try:
+                await client.delete_messages(chat_id, prompt_msg_id)
+            except Exception:
+                pass
+
         if text.lower() == "/skip":
             wiz["rating"] = ""
         else:
             wiz["rating"] = text
         wiz["state"] = S_DESC
-        await message.reply_text(
-            f"⭐ Rating saved.\n\nNow send a <b>short description</b> or send /skip.",
-            reply_to_message_id=message.id,
+        pmsg = await client.send_message(
+            chat_id=chat_id,
+            text=f"⭐ Rating saved: <b>{wiz['rating'] or 'Skipped'}</b>\n\nNow send a <b>short description</b> or send /skip.",
             parse_mode=enums.ParseMode.HTML,
         )
+        wiz["prompt_msg_id"] = pmsg.id if pmsg else None
+        return
 
     # ── Description ───────────────────────────────────────────────────────────
     elif state == S_DESC:
+        try:
+            await message.delete()
+        except Exception:
+            pass
+        prompt_msg_id = wiz.get("prompt_msg_id")
+        if prompt_msg_id:
+            try:
+                await client.delete_messages(chat_id, prompt_msg_id)
+            except Exception:
+                pass
+
         if text.lower() == "/skip":
             wiz["description"] = ""
         else:
             wiz["description"] = text
         wiz["state"] = S_POSTER
-        await message.reply_text(
-            f"📝 Description saved.\n\nNow send a <b>poster / banner image</b> or send /skip.",
-            reply_to_message_id=message.id,
+        pmsg = await client.send_message(
+            chat_id=chat_id,
+            text=f"📝 Description saved.\n\nNow send a <b>poster / banner image</b> or send /skip.",
             parse_mode=enums.ParseMode.HTML,
         )
+        wiz["prompt_msg_id"] = pmsg.id if pmsg else None
+        return
 
     # ── Poster ────────────────────────────────────────────────────────────────
     elif state == S_POSTER:
+        try:
+            await message.delete()
+        except Exception:
+            pass
+        prompt_msg_id = wiz.get("prompt_msg_id")
+        if prompt_msg_id:
+            try:
+                await client.delete_messages(chat_id, prompt_msg_id)
+            except Exception:
+                pass
+
         if message.photo:
             wiz["poster"] = message.photo.file_id
         elif text.lower() == "/skip":
             wiz["poster"] = ""
         else:
-            return await message.reply_text("Please send a photo or /skip.")
+            pmsg = await client.send_message(chat_id=chat_id, text="Please send a photo or /skip.")
+            wiz["prompt_msg_id"] = pmsg.id if pmsg else None
+            return
 
         wiz["state"] = S_DONE
-        await message.reply_text(
-            _series_card(wiz) + "\n\n⚙️ <b>Series Configuration</b>\nChoose an option to edit or click Save:",
+        await client.send_message(
+            chat_id=chat_id,
+            text=_series_card(wiz) + "\n\n⚙️ <b>Series Configuration</b>\nChoose an option to edit or click Save:",
             reply_markup=_config_menu_keyboard(wiz.get("series_id"), wiz.get("from_viewseries", False)),
             parse_mode=enums.ParseMode.HTML,
         )
+        return
 
     # ── Custom Language Input ────────────────────────────────────────────────
     elif state == S_CUSTOM_LANG_WAIT:
