@@ -1693,16 +1693,30 @@ async def cmd_cancel(client: Client, message: Message):
 async def _is_in_wizard_session_filter(_, __, message: Message) -> bool:
     if not message.from_user:
         return False
-    from utils import get_wizard_session
-    return get_wizard_session(message.from_user.id) is not None
+    from utils import get_wizard_session, temp
+    uid = message.from_user.id
+    if get_wizard_session(uid) is not None:
+        return True
+    if (uid in getattr(temp, "AUTO_SERIES", {}) or 
+        uid in getattr(temp, "AUTO_MOVIE", {}) or 
+        uid in getattr(temp, "SERIES_WIZARD", {}) or
+        uid in getattr(temp, "AUTO_MOVIE_BATCH", {}) or
+        getattr(temp, "SETTING_SERIES_THUMB", {}).get(uid)):
+        return True
+    return False
 
 wizard_filter = filters.create(_is_in_wizard_session_filter)
 
 
-@Client.on_message(filters.private & (filters.text | filters.photo) & wizard_filter)
+@Client.on_message(
+    filters.private & (filters.text | filters.photo) & wizard_filter,
+    group=-10
+)
 async def wizard_text_handler(client: Client, message: Message):
-    uid = message.from_user.id
+    uid = message.from_user.id if message.from_user else 0
     text = message.text.strip() if message.text else ""
+
+    from utils import get_wizard_session, clear_wizard_session, set_wizard_session, temp
 
     # Check for commands in wizard
     if text.startswith("/"):
@@ -1720,14 +1734,24 @@ async def wizard_text_handler(client: Client, message: Message):
                 return await message.reply_text("No active wizard or session to cancel.")
         return
 
-    from utils import get_wizard_session, clear_wizard_session, set_wizard_session
     sess = get_wizard_session(uid)
+    # Fallback session support
+    if not sess:
+        if getattr(temp, "AUTO_SERIES", {}).get(uid):
+            sess = {"user_id": uid, "workflow": "AUTO_SERIES", "state": temp.AUTO_SERIES[uid].get("state", "WAIT_IMDB"), "data": temp.AUTO_SERIES[uid]}
+        elif getattr(temp, "AUTO_MOVIE", {}).get(uid):
+            sess = {"user_id": uid, "workflow": "AUTO_MOVIE", "state": temp.AUTO_MOVIE[uid].get("state", "WAIT_IMDB"), "data": temp.AUTO_MOVIE[uid]}
+        elif getattr(temp, "SERIES_WIZARD", {}).get(uid):
+            sess = {"user_id": uid, "workflow": "SERIES_WIZARD", "state": temp.SERIES_WIZARD[uid].get("state", S_NAME), "data": temp.SERIES_WIZARD[uid]}
+        elif getattr(temp, "AUTO_MOVIE_BATCH", {}).get(uid):
+            sess = {"user_id": uid, "workflow": "SUPER_MOVIE_BATCH", "state": temp.AUTO_MOVIE_BATCH[uid].get("state", "WAIT_INPUT"), "data": temp.AUTO_MOVIE_BATCH[uid]}
+
     if not sess:
         return
 
     workflow = sess.get("workflow")
     state = sess.get("state")
-    logger.info(f"[WIZARD]\nworkflow={workflow}\nstate={state}\nuser_id={uid}")
+    logger.info(f"[WIZARD INPUT] user={uid} workflow={workflow} state={state} text={text}")
 
     # ── Thumbnail Wizard Handler ─────────────────────────────────────────────
     if workflow == "THUMBNAIL" or (hasattr(temp, "SETTING_SERIES_THUMB") and temp.SETTING_SERIES_THUMB.get(uid)):
@@ -2138,12 +2162,26 @@ async def wizard_text_handler(client: Client, message: Message):
 # ─── CALLBACK HANDLER — WIZARD BUTTONS ───────────────────────────────────────
 # ══════════════════════════════════════════════════════════════════════════════
 
-@Client.on_callback_query(filters.regex(r"^sw#"))
+@Client.on_callback_query(filters.regex(r"^sw#"), group=-10)
 async def wizard_callback(client: Client, query: CallbackQuery):
-    uid = query.from_user.id
-    if not _is_admin(uid):
-        return await query.answer("❌ Not authorized.", show_alert=True)
+    uid = query.from_user.id if query.from_user else 0
+    logger.info(f"[SERIES BUTTON CLICK] user={uid} data={query.data}")
 
+    try:
+        if not _is_admin(uid):
+            return await query.answer("❌ Not authorized.", show_alert=True)
+
+        return await _handle_wizard_callback(client, query)
+    except Exception as e:
+        logger.exception(f"[WIZARD CALLBACK ERROR] user={uid} data={query.data} error={e}")
+        try:
+            await query.answer(f"❌ Error: {e}", show_alert=True)
+        except Exception:
+            pass
+
+
+async def _handle_wizard_callback(client: Client, query: CallbackQuery):
+    uid = query.from_user.id
     data = query.data
     parts = data.split("#")
     action = parts[1] if len(parts) > 1 else ""
@@ -2154,7 +2192,7 @@ async def wizard_callback(client: Client, query: CallbackQuery):
     # ── Auto S Add & Menu Entry Callbacks ────────────────────────────────────
     if action == "start_manual":
         await query.answer()
-        from utils import set_wizard_session
+        from utils import set_wizard_session, get_wizard_session
         temp.SERIES_WIZARD[uid] = {
             "mode": "add",
             "state": S_NAME,
@@ -2166,6 +2204,8 @@ async def wizard_callback(client: Client, query: CallbackQuery):
             "batch_data": None,
         }
         set_wizard_session(uid, workflow="SERIES_WIZARD", state=S_NAME, data=temp.SERIES_WIZARD[uid], chat_id=query.message.chat.id)
+        sess = get_wizard_session(uid)
+        logger.info(f"[MANUAL SERIES SESSION CHECK] user={uid} session={sess}")
         logger.info(f"[AUTO MENU]\naction=CLICK\nbutton=MANUAL\nuser_id={uid}")
         await query.message.edit_text(
             f"🎬 <b>Create New Series</b>\n\n"
@@ -2179,7 +2219,7 @@ async def wizard_callback(client: Client, query: CallbackQuery):
 
     if action == "start_auto":
         await query.answer()
-        from utils import set_wizard_session
+        from utils import set_wizard_session, get_wizard_session
         temp.AUTO_SERIES[uid] = {
             "state": "WAIT_IMDB",
             "user_id": uid,
@@ -2187,6 +2227,8 @@ async def wizard_callback(client: Client, query: CallbackQuery):
             "created_at": time.time(),
         }
         set_wizard_session(uid, workflow="AUTO_SERIES", state="WAIT_IMDB", data=temp.AUTO_SERIES[uid], chat_id=query.message.chat.id)
+        sess = get_wizard_session(uid)
+        logger.info(f"[AUTO SERIES SESSION CHECK] user={uid} session={sess}")
         logger.info(f"[AUTO MENU]\naction=CLICK\nbutton=AUTO_SERIES\nuser_id={uid}")
         logger.info(f"[AUTO SERIES]\naction=START\nuser_id={uid}")
         await query.message.edit_text(
@@ -2204,7 +2246,7 @@ async def wizard_callback(client: Client, query: CallbackQuery):
 
     if action == "start_auto_movie":
         await query.answer()
-        from utils import set_wizard_session
+        from utils import set_wizard_session, get_wizard_session
         temp.AUTO_MOVIE[uid] = {
             "state": "WAIT_IMDB",
             "user_id": uid,
@@ -2214,6 +2256,8 @@ async def wizard_callback(client: Client, query: CallbackQuery):
             "grouped": {},
         }
         set_wizard_session(uid, workflow="AUTO_MOVIE", state="WAIT_IMDB", data=temp.AUTO_MOVIE[uid], chat_id=query.message.chat.id)
+        sess = get_wizard_session(uid)
+        logger.info(f"[AUTO MOVIE SESSION CHECK] user={uid} session={sess}")
         logger.info(f"[AUTO MENU]\naction=CLICK\nbutton=AUTO_MOVIE\nuser_id={uid}")
         logger.info(f"[AUTO MOVIE]\naction=START\nuser_id={uid}")
         await query.message.edit_text(
@@ -2223,7 +2267,7 @@ async def wizard_callback(client: Client, query: CallbackQuery):
             "<code>https://www.imdb.com/title/tt35723557/</code>\n"
             "<code>tt35723557</code>",
             reply_markup=InlineKeyboardMarkup([[
-                InlineKeyboardButton("❌ Cancel", callback_data="sw#auto_movie_cancel")
+                InlineKeyboardButton("❌ Cancel", callback_data="sw#auto_cancel")
             ]]),
             parse_mode=enums.ParseMode.HTML,
         )
@@ -3797,8 +3841,22 @@ async def wizard_callback(client: Client, query: CallbackQuery):
 # ─── AUTO MOVIE ADD CALLBACKS ────────────────────────────────────────────────
 # ══════════════════════════════════════════════════════════════════════════════
 
-@Client.on_callback_query(filters.regex(r"^am_"))
+@Client.on_callback_query(filters.regex(r"^am_"), group=-10)
 async def auto_movie_hierarchical_callbacks(client: Client, query: CallbackQuery):
+    uid = query.from_user.id if query.from_user else 0
+    logger.info(f"[SERIES BUTTON CLICK] user={uid} data={query.data}")
+
+    try:
+        return await _handle_auto_movie_hierarchical_callbacks(client, query)
+    except Exception as e:
+        logger.exception(f"[AUTO MOVIE CALLBACK ERROR] user={uid} data={query.data} error={e}")
+        try:
+            await query.answer(f"❌ Error: {e}", show_alert=True)
+        except Exception:
+            pass
+
+
+async def _handle_auto_movie_hierarchical_callbacks(client: Client, query: CallbackQuery):
     data = query.data
     parts = data.split(":")
     action = parts[0]
@@ -6520,6 +6578,9 @@ logger.info(
     "add_ano_handler=REGISTERED "
     "del_ano_handler=REGISTERED"
 )
+logger.info("[SERIES] wizard_callback REGISTERED group=-10")
+logger.info("[SERIES] auto_movie_callback REGISTERED group=-10")
+logger.info("[SERIES] wizard_text_handler REGISTERED group=-10")
 
 
 
