@@ -55,6 +55,7 @@ class temp(object):
     AUTO_MOVIE = {}
     AUTO_MOVIE_BATCH = {}
     MOVIE_STATE = {}
+    MOVIE_EDIT = {}
     WIZARD_SESSIONS = {}
     U_NAME = None
     B_NAME = None
