@@ -6598,7 +6598,7 @@ async def send_filter_manager(message_or_query, ftype: str = "series", page: int
     else:
         for m in page_items:
             mid = str(m["_id"])
-            rows.append([InlineKeyboardButton(f"🎬 {to_series_font(m.get('title', 'Movie'))}", callback_data=f"edmov#{mid}")])
+            rows.append([InlineKeyboardButton(f"🎬 {to_series_font(m.get('title', 'Movie'))}", callback_data=f"emovie_select#{mid}")])
 
     nav = []
     if page > 0:
@@ -6699,7 +6699,7 @@ def _movie_edit_keyboard(movie_id: str) -> InlineKeyboardMarkup:
         ],
         [
             InlineKeyboardButton("🗑 Delete Filter", callback_data=f"emovie_delete#{movie_id}"),
-            InlineKeyboardButton("⬅️ Back", callback_data="emovie_list#0")
+            InlineKeyboardButton("⬅️ Back", callback_data="vser#mov#0")
         ]
     ])
 
@@ -7807,6 +7807,177 @@ async def send_movie_announcement(client: Client, movie_id: str, force: bool = F
             f"key={announcement_key}"
         )
         return False
+
+
+async def process_series_deeplink(client: Client, message: Message, series_key: str):
+    """
+    Handle /start series_<key_or_id> deep link from announcement channel button.
+    """
+    logger.info(f"[SERIES DEEPLINK START]\nuser_id={message.from_user.id if message.from_user else 0}\nkey={series_key}")
+    series = None
+    if re.fullmatch(r"[0-9a-fA-F]{24}", series_key):
+        series = await get_series(series_key)
+    if not series:
+        series = await get_series_by_key(series_key)
+    if not series:
+        s_clean = series_key.replace("_", " ").strip()
+        series = await get_series_by_name(s_clean)
+    if not series:
+        matches = await search_series(series_key.replace("_", " "))
+        if matches:
+            series = matches[0]
+
+    if not series or series.get("status") == "deleted":
+        return await message.reply_text("❌ <b>Series not found or has been removed.</b>", parse_mode=enums.ParseMode.HTML)
+
+    user_id = message.from_user.id if message.from_user else 0
+    series_id = str(series["_id"])
+    _register_short_id(series_id)
+
+    key = f"{message.chat.id}-{message.id}"
+    nav_state = {
+        "series_id": series_id,
+        "user_id": user_id,
+        "chat_id": message.chat.id,
+        "full_id": series_id,
+        "path": "DIRECT",
+        "is_direct": True
+    }
+    if not hasattr(temp, "SERIES_STATE"):
+        temp.SERIES_STATE = {}
+    temp.SERIES_STATE[key] = nav_state
+    try:
+        from database.series_db import save_temp_request
+        await save_temp_request(key, nav_state)
+    except Exception:
+        pass
+
+    text, rm = await _resolve_nav_step(user_id, series_id, key, series, is_private=True)
+    poster = series.get("poster")
+    if rm:
+        await _send_or_edit(message, text, rm, poster=poster)
+    else:
+        await message.reply_text(text, parse_mode=enums.ParseMode.HTML)
+
+
+async def process_movie_deeplink(client: Client, message: Message, movie_key: str):
+    """
+    Handle /start movie_<id_or_title> deep link from announcement channel button.
+    """
+    logger.info(f"[MOVIE DEEPLINK START]\nuser_id={message.from_user.id if message.from_user else 0}\nkey={movie_key}")
+    movie = None
+    if re.fullmatch(r"[0-9a-fA-F]{24}", movie_key):
+        movie = await get_super_movie(movie_key)
+    if not movie:
+        m_clean = movie_key.replace("_", " ").strip()
+        matches = await search_super_movies(m_clean)
+        if matches:
+            movie = matches[0]
+
+    if not movie or movie.get("status") == "deleted":
+        return await message.reply_text("❌ <b>Movie not found or has been removed.</b>", parse_mode=enums.ParseMode.HTML)
+
+    user_id = message.from_user.id if message.from_user else 0
+    movie_title = movie.get("title", "Movie")
+    movie_year = str(movie.get("year", ""))
+    movie_rating = str(movie.get("rating", ""))
+    movie_genre = str(movie.get("genre", ""))
+    movie_poster = movie.get("poster", "")
+    file_ids = movie.get("file_ids") or []
+
+    # Retrieve all files using linked file_ids and title search
+    files = []
+    seen_fids = set()
+    from database.ia_filterdb import col, sec_col, MULTIPLE_DATABASE, get_search_results
+
+    if file_ids:
+        q = {"file_id": {"$in": file_ids}}
+        for doc in col.find(q):
+            fid = doc.get("file_id")
+            if fid and fid not in seen_fids:
+                seen_fids.add(fid)
+                files.append(doc)
+        if MULTIPLE_DATABASE:
+            for doc in sec_col.find(q):
+                fid = doc.get("file_id")
+                if fid and fid not in seen_fids:
+                    seen_fids.add(fid)
+                    files.append(doc)
+
+    clean_title = re.sub(r"[\.\_\-\:\+\/\\\[\]\(\)\{\}]+", " ", movie_title).strip()
+    title_files, _, _ = await get_search_results(message.chat.id, clean_title, max_results=300, offset=0, filter=True)
+    for tf in (title_files or []):
+        tf_id = tf.get("file_id")
+        if tf_id and tf_id not in seen_fids:
+            seen_fids.add(tf_id)
+            files.append(tf)
+
+    if not files:
+        raw_files, _, _ = await get_search_results(message.chat.id, movie_key.replace("_", " "), max_results=300, offset=0, filter=True)
+        if raw_files:
+            for rf in raw_files:
+                rf_id = rf.get("file_id")
+                if rf_id and rf_id not in seen_fids:
+                    seen_fids.add(rf_id)
+                    files.append(rf)
+
+    if not files:
+        return await message.reply_text("❌ <b>No files found for this movie.</b>", parse_mode=enums.ParseMode.HTML)
+
+    from utils import get_settings, temp
+    settings = await get_settings(message.chat.id)
+    pre = 'filep' if settings.get('file_secure') else 'file'
+    key = f"{message.chat.id}-{message.id}"
+    req = user_id
+
+    from plugins.pm_filter import group_movie_files, build_movie_language_keyboard
+
+    grouped = group_movie_files(files)
+    if not grouped:
+        return await message.reply_text("❌ <b>No files available.</b>", parse_mode=enums.ParseMode.HTML)
+
+    if not hasattr(temp, "MOVIE_STATE"):
+        temp.MOVIE_STATE = {}
+
+    import time
+    temp.MOVIE_STATE[key] = {
+        "key": key,
+        "owner_id": req,
+        "user": req,
+        "title": movie_title,
+        "year": movie_year,
+        "rating": movie_rating,
+        "genre": movie_genre,
+        "poster": movie_poster,
+        "grouped": grouped,
+        "files": files,
+        "all_files": files,
+        "search": movie_title,
+        "pre": pre,
+        "chat_id": message.chat.id,
+        "created_at": time.time()
+    }
+
+    year_str = f" ({movie_year})" if movie_year and movie_year != "N/A" else ""
+    rating_str = f"\n⭐ <b>Rating:</b> {movie_rating}/10" if movie_rating and movie_rating != "N/A" else ""
+    genre_str = f"\n🎭 <b>Genre:</b> {movie_genre}" if movie_genre and movie_genre != "N/A" else ""
+
+    cap = (
+        f"🎬 <b>{movie_title}{year_str}</b>"
+        f"{rating_str}"
+        f"{genre_str}\n\n"
+        f"🌐 <b>Select Language:</b>"
+    )
+    reply_markup = build_movie_language_keyboard(key, grouped)
+
+    if movie_poster:
+        try:
+            await message.reply_photo(photo=movie_poster, caption=cap, reply_markup=reply_markup, parse_mode=enums.ParseMode.HTML)
+            return
+        except Exception:
+            pass
+
+    await message.reply_text(cap, reply_markup=reply_markup, parse_mode=enums.ParseMode.HTML)
 
 
 def resolve_telegram_channel_identifier(raw: str):
