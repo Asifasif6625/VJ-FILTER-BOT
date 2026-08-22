@@ -880,12 +880,28 @@ def _is_admin(user_id: int | str) -> bool:
         return False
     try:
         from info import ADMINS, AUTH_USERS
-        admin_list = [str(a).strip() for a in (ADMINS or [])] + [str(u).strip() for u in (AUTH_USERS or [])]
+        admin_list = [str(a).strip() for a in (ADMINS or []) if a] + [str(u).strip() for u in (AUTH_USERS or []) if u]
         u_str = str(user_id).strip()
-        return u_str in admin_list or int(user_id) in (ADMINS or []) or int(user_id) in (AUTH_USERS or [])
+        if u_str in admin_list:
+            return True
+        try:
+            u_int = int(user_id)
+            for a in (ADMINS or []):
+                if str(a).lstrip("-").isdigit() and int(a) == u_int:
+                    return True
+            for u in (AUTH_USERS or []):
+                if str(u).lstrip("-").isdigit() and int(u) == u_int:
+                    return True
+        except Exception:
+            pass
+        return False
     except Exception:
-        u_str = str(user_id).strip()
-        return user_id in ADMINS or u_str in [str(a).strip() for a in ADMINS]
+        try:
+            from info import ADMINS
+            u_str = str(user_id).strip()
+            return u_str in [str(a).strip() for a in (ADMINS or []) if a]
+        except Exception:
+            return False
 
 
 
@@ -1428,7 +1444,7 @@ async def cmd_delthumbseries(client: Client, message: Message):
 # ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═  
 
 
-@Client.on_message(filters.command(["series", "seires", "seres", "sereis", "seris", "seriesmenu", "smenu", "movieseries", "seriesmovie"]), group=-1)
+@Client.on_message(filters.command(["series"]), group=-1)
 async def cmd_series_menu(client: Client, message: Message):
     uid = message.from_user.id if message.from_user else (message.sender_chat.id if message.sender_chat else 0)
     logger.info(f"[SERIES COMMAND] user_id={uid}")
@@ -1466,64 +1482,6 @@ async def cmd_series_menu(client: Client, message: Message):
         "🎬 <b>Series & Movie Management</b>\n\nChoose an option below to proceed:",
         reply_markup=markup,
         parse_mode=enums.ParseMode.HTML
-    )
-
-
-@Client.on_message(filters.command(["automovieadd", "movieautoadd", "automovie", "movieadd", "addmovie", "automov"]), group=-1)
-async def cmd_automovieadd(client: Client, message: Message):
-    uid = message.from_user.id if message.from_user else 0
-    if not _is_admin(uid):
-        return await message.reply_text("❌ You are not authorized to use this command.")
-
-    from utils import clear_wizard_session, set_wizard_session
-    clear_wizard_session(uid)
-    movie_state = {
-        "state": "WAIT_IMDB",
-        "admin_id": uid,
-        "user_id": uid,
-        "chat_id": message.chat.id,
-    }
-    set_wizard_session(uid, workflow="AUTO_MOVIE", state="WAIT_IMDB", data=movie_state, chat_id=message.chat.id)
-    temp.AUTO_MOVIE[uid] = movie_state
-    logger.info("[AUTO MOVIE]\nstate=WAIT_IMDB")
-    await message.reply_text(
-        "🎬 <b>Auto Movie Add — Movie Importer</b>\n\n"
-        "Send IMDb Movie link or ID:\n\n"
-        "Example:\n"
-        "<code>https://www.imdb.com/title/tt35723557/</code>\n"
-        "or\n"
-        "<code>tt35723557</code>",
-        reply_markup=InlineKeyboardMarkup([[
-            InlineKeyboardButton("❌ Cancel", callback_data="sw#auto_movie_cancel")
-        ]]),
-        parse_mode=enums.ParseMode.HTML,
-    )
-
-
-@Client.on_message(filters.command(["seriesfil", "addseries", "seriesadd"]), group=-1)
-async def cmd_seriesfil(client: Client, message: Message):
-    uid = message.from_user.id if message.from_user else 0
-    if not _is_admin(uid):
-        return await message.reply_text("❌ You are not authorized to use this command.")
-
-    uid = message.from_user.id
-    temp.SERIES_WIZARD[uid] = {
-        "mode": "add",
-        "state": S_NAME,
-        "name": "", "year": "", "genre": "", "description": "",
-        "languages": [], "seasons": [], "qualities": [],
-        "series_id": None,
-        "season_modes": {},
-        # batch session
-        "batch_langs": [], "batch_seasons": [], "batch_qualities": [],
-        "batch_data": None,
-    }
-    await message.reply_text(
-        f"🎬 <b>Create New Series</b>\n\n"
-        f"Hey {message.from_user.mention}, please send the <b>series name</b>.",
-        reply_to_message_id=message.id,
-        reply_markup=ForceReply(selective=True),
-        parse_mode=enums.ParseMode.HTML,
     )
 
 
@@ -2168,8 +2126,18 @@ async def wizard_callback(client: Client, query: CallbackQuery):
     logger.info(f"[SERIES BUTTON CLICK] user={uid} data={query.data}")
 
     try:
-        if not _is_admin(uid):
-            return await query.answer("❌ Not authorized.", show_alert=True)
+        is_authorized = _is_admin(uid)
+        if not is_authorized and query.message and query.message.chat and query.message.chat.type in [enums.ChatType.GROUP, enums.ChatType.SUPERGROUP]:
+            try:
+                member = await query.message.chat.get_member(uid)
+                if member and member.status in [enums.ChatMemberStatus.ADMINISTRATOR, enums.ChatMemberStatus.OWNER]:
+                    is_authorized = True
+            except Exception:
+                pass
+
+        if not is_authorized:
+            logger.warning(f"[SERIES BUTTON UNAUTHORIZED] user={uid} data={query.data}")
+            return await query.answer("❌ Not authorized. Add your user ID to ADMINS in info.py.", show_alert=True)
 
         return await _handle_wizard_callback(client, query)
     except Exception as e:
