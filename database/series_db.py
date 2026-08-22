@@ -430,79 +430,153 @@ async def delete_announcement_channel():
     """Delete the configured announcement channel setting."""
     await settings_col.delete_one({"_id": "announcement_channel"})
 
-async def is_announcement_sent(series_id: str) -> bool:
+async def is_announcement_sent(announcement_key: str, filter_type: str = None, filter_id: str = None) -> bool:
     """Check if an announcement has already been sent for a series or movie."""
-    sid = str(series_id).strip()
-    existing = await announcements_col.find_one({"series_id": sid})
+    key = str(announcement_key).strip()
+    f_id = str(filter_id).strip() if filter_id else ""
+    f_type = str(filter_type).strip().lower() if filter_type else ""
+
+    if not f_type:
+        if key.startswith("series:"):
+            f_type = "series"
+            f_id = key.split(":", 1)[1]
+        elif key.startswith("movie:"):
+            f_type = "movie"
+            f_id = key.split(":", 1)[1]
+        else:
+            f_id = key
+
+    # 1. Check announcements collection by announcement_key or legacy series_id
+    query_conditions = [
+        {"announcement_key": key, "sent": True},
+        {"announcement_key": key}
+    ]
+    if f_id:
+        query_conditions.extend([
+            {"series_id": f_id, "sent": True},
+            {"series_id": f_id},
+            {"filter_id": f_id, "sent": True},
+            {"filter_id": f_id}
+        ])
+    existing = await announcements_col.find_one({"$or": query_conditions})
     if existing:
         return True
-    # Also check series or movie document flag
-    try:
-        sdoc = await series_col.find_one({"_id": ObjectId(sid)})
-        if sdoc and sdoc.get("announcement_sent"):
-            return True
-    except Exception:
-        pass
-    try:
-        mdoc = await super_movies_col.find_one({"_id": ObjectId(sid)})
-        if mdoc and mdoc.get("announcement_sent"):
-            return True
-    except Exception:
-        pass
+
+    # 2. Check series_col or super_movies_col document flag
+    if f_type in ("series", "") and f_id:
+        try:
+            sdoc = await series_col.find_one({"_id": ObjectId(f_id)})
+            if sdoc and sdoc.get("announcement_sent"):
+                return True
+        except Exception:
+            pass
+
+    if f_type in ("movie", "") and f_id:
+        try:
+            mdoc = await super_movies_col.find_one({"_id": ObjectId(f_id)})
+            if mdoc and mdoc.get("announcement_sent"):
+                return True
+        except Exception:
+            pass
+
     return False
 
-async def get_announcement(series_id: str) -> dict | None:
+async def get_announcement(identifier: str, filter_type: str = None) -> dict | None:
     """Fetch the persistent announcement record for a series or movie."""
-    sid = str(series_id).strip()
-    return await announcements_col.find_one({"series_id": sid})
+    raw = str(identifier).strip()
+    return await announcements_col.find_one({
+        "$or": [
+            {"announcement_key": raw},
+            {"series_id": raw},
+            {"filter_id": raw}
+        ]
+    })
 
-async def save_announcement(series_id: str, channel_id: int | str, message_id: int, series_key: str = "") -> str:
+async def save_announcement(filter_id: str, channel_id: int | str, message_id: int, filter_type: str = "series", series_key: str = "") -> str:
     """Save an announcement tracking record."""
-    sid = str(series_id).strip()
+    fid = str(filter_id).strip()
+    ftype = str(filter_type).strip().lower() if filter_type else ("movie" if fid.startswith("movie:") else "series")
+
+    if fid.startswith(f"{ftype}:"):
+        actual_id = fid.split(":", 1)[1]
+        announcement_key = fid
+    else:
+        actual_id = fid
+        announcement_key = f"{ftype}:{actual_id}"
+
     doc = {
-        "series_id": sid,
+        "announcement_key": announcement_key,
+        "filter_type": ftype,
+        "filter_id": actual_id,
+        "series_id": actual_id,  # backward compatibility
         "channel_id": channel_id,
         "message_id": message_id,
         "series_key": series_key,
+        "sent": True,
         "sent_at": datetime.utcnow()
     }
     await announcements_col.update_one(
-        {"series_id": sid},
+        {"$or": [{"announcement_key": announcement_key}, {"series_id": actual_id}]},
         {"$set": doc},
         upsert=True
     )
-    try:
-        await series_col.update_one(
-            {"_id": ObjectId(sid)},
-            {"$set": {"announcement_sent": True, "announcement_message_id": message_id}}
-        )
-    except Exception:
-        pass
-    try:
-        await super_movies_col.update_one(
-            {"_id": ObjectId(sid)},
-            {"$set": {"announcement_sent": True, "announcement_message_id": message_id}}
-        )
-    except Exception:
-        pass
-    return sid
+    if ftype == "series":
+        try:
+            await series_col.update_one(
+                {"_id": ObjectId(actual_id)},
+                {"$set": {"announcement_sent": True, "announcement_message_id": message_id}}
+            )
+        except Exception:
+            pass
+    elif ftype == "movie":
+        try:
+            await super_movies_col.update_one(
+                {"_id": ObjectId(actual_id)},
+                {"$set": {"announcement_sent": True, "announcement_message_id": message_id}}
+            )
+        except Exception:
+            pass
+    return actual_id
 
-async def delete_announcement(series_id: str) -> dict | None:
+async def delete_announcement(identifier: str, filter_type: str = None) -> dict | None:
     """
     Delete an announcement record for a series and clear its tracking flag.
     Returns the deleted announcement record if it existed.
     """
-    sid = str(series_id).strip()
-    doc = await announcements_col.find_one({"series_id": sid})
+    raw = str(identifier).strip()
+    doc = await announcements_col.find_one({
+        "$or": [
+            {"announcement_key": raw},
+            {"series_id": raw},
+            {"filter_id": raw}
+        ]
+    })
     if doc:
-        await announcements_col.delete_one({"series_id": sid})
-    try:
-        await series_col.update_one(
-            {"_id": ObjectId(sid)},
-            {"$unset": {"announcement_sent": "", "announcement_message_id": ""}}
-        )
-    except Exception:
-        pass
+        await announcements_col.delete_many({
+            "$or": [
+                {"announcement_key": doc.get("announcement_key") or raw},
+                {"series_id": doc.get("series_id") or raw},
+                {"filter_id": doc.get("filter_id") or raw}
+            ]
+        })
+        actual_id = doc.get("filter_id") or doc.get("series_id") or raw
+        ftype = doc.get("filter_type") or ("movie" if "movie:" in raw else "series")
+        if ftype == "series":
+            try:
+                await series_col.update_one(
+                    {"_id": ObjectId(actual_id)},
+                    {"$unset": {"announcement_sent": "", "announcement_message_id": ""}}
+                )
+            except Exception:
+                pass
+        elif ftype == "movie":
+            try:
+                await super_movies_col.update_one(
+                    {"_id": ObjectId(actual_id)},
+                    {"$unset": {"announcement_sent": "", "announcement_message_id": ""}}
+                )
+            except Exception:
+                pass
     return doc
 
 
@@ -796,7 +870,11 @@ async def create_super_movie(data: dict) -> str:
         "updated_at": datetime.utcnow(),
         "status": "active",
     }
-    existing = await super_movies_col.find_one({"normalized_name": doc["normalized_name"], "year": doc["year"], "status": {"$ne": "deleted"}})
+    existing = None
+    if doc.get("imdb_id"):
+        existing = await super_movies_col.find_one({"imdb_id": doc["imdb_id"], "status": {"$ne": "deleted"}})
+    if not existing:
+        existing = await super_movies_col.find_one({"normalized_name": doc["normalized_name"], "year": doc["year"], "status": {"$ne": "deleted"}})
     if not existing and doc["year"] == "N/A":
         existing = await super_movies_col.find_one({"normalized_name": doc["normalized_name"], "status": {"$ne": "deleted"}})
     if existing:
@@ -901,3 +979,282 @@ async def delete_super_movie(movie_id: str) -> bool:
         return res.modified_count > 0
     except Exception:
         return False
+
+
+async def update_super_movie(movie_id: str, fields: dict) -> bool:
+    """Update metadata of an existing Super Movie."""
+    try:
+        data = dict(fields)
+        if "title" in data and data["title"]:
+            clean_name = clean_series_title(data["title"])
+            data["title"] = clean_name
+            data["normalized_name"] = _normalize(clean_name)
+        data["updated_at"] = datetime.utcnow()
+        res = await super_movies_col.update_one(
+            {"_id": ObjectId(movie_id)},
+            {"$set": data}
+        )
+        return res.modified_count > 0 or res.matched_count > 0
+    except Exception as e:
+        logger.error(f"[UPDATE SUPER MOVIE ERROR] movie_id={movie_id}: {e}")
+        return False
+
+
+async def find_matching_super_movie(file_name: str, caption: str = "") -> dict | None:
+    """
+    Find an existing Super Movie Filter matching a given file name or caption.
+    Uses IMDb ID, normalized title + year, or fuzzy token match.
+    """
+    if not file_name:
+        return None
+
+    # 1. Check IMDb ID in caption or filename (e.g. tt1234567)
+    imdb_match = re.search(r"\b(tt\d{7,8})\b", f"{file_name} {caption}")
+    if imdb_match:
+        imdb_id = imdb_match.group(1)
+        doc = await super_movies_col.find_one({"imdb_id": imdb_id, "status": {"$ne": "deleted"}})
+        if doc:
+            return doc
+
+    # 2. Extract year from filename if present
+    year_match = re.search(r"\b(19\d{2}|20\d{2})\b", file_name)
+    file_year = year_match.group(1) if year_match else None
+
+    # Clean title part before the year (if year exists)
+    if file_year and year_match:
+        title_part = file_name[:year_match.start()].strip()
+    else:
+        title_part = file_name
+
+    clean_name = clean_series_title(title_part)
+    norm_name = _normalize(clean_name)
+
+    if norm_name:
+        # Check exact normalized_name + year
+        if file_year:
+            doc = await super_movies_col.find_one({
+                "normalized_name": norm_name,
+                "year": file_year,
+                "status": {"$ne": "deleted"}
+            })
+            if doc:
+                return doc
+
+        # Check normalized_name without year
+        doc = await super_movies_col.find_one({
+            "normalized_name": norm_name,
+            "status": {"$ne": "deleted"}
+        })
+        if doc:
+            m_year = doc.get("year", "N/A")
+            if not file_year or m_year == "N/A" or file_year == str(m_year):
+                return doc
+
+    # 3. Use search_super_movies candidate tokens matching
+    candidates = await search_super_movies(title_part or file_name)
+    if candidates:
+        for cand in candidates:
+            c_year = str(cand.get("year", "N/A"))
+            if not file_year or c_year == "N/A" or file_year == c_year:
+                return cand
+        return candidates[0]
+
+    return None
+
+
+async def sync_movie_filter_for_files(file_docs, *, trigger="file_add"):
+    """
+    Central helper to automatically synchronize new movie files into existing Super Movie Filter(s).
+    Additive, idempotent, preserves all existing file_ids and metadata.
+    """
+    if not file_docs:
+        return
+    if isinstance(file_docs, dict):
+        file_docs = [file_docs]
+
+    from plugins.pm_filter import detect_file_languages
+    from plugins.series import extract_quality_from_filename
+
+    # Group file_docs by matching Super Movie
+    matched_updates = {}
+
+    for fdoc in file_docs:
+        try:
+            fid = fdoc.get("file_id")
+            if not fid:
+                continue
+            fname = fdoc.get("file_name", "")
+            caption = fdoc.get("caption", "") or ""
+
+            langs = detect_file_languages(fname, caption)
+            qual = extract_quality_from_filename(fname)
+
+            movie = await find_matching_super_movie(fname, caption)
+            if not movie:
+                logger.info(f"[AUTO MOVIE FILTER SYNC SKIP]\nreason=no_existing_filter\nfile_name={fname}\ntrigger={trigger}")
+                continue
+
+            mid = str(movie["_id"])
+            if mid not in matched_updates:
+                matched_updates[mid] = {
+                    "movie": movie,
+                    "new_file_ids": [],
+                    "new_langs": set(),
+                    "new_quals": set()
+                }
+
+            existing_fids = set(movie.get("file_ids") or [])
+            if fid not in existing_fids and fid not in matched_updates[mid]["new_file_ids"]:
+                matched_updates[mid]["new_file_ids"].append(fid)
+            
+            for l in langs:
+                if l and l not in (movie.get("languages") or []):
+                    matched_updates[mid]["new_langs"].add(l)
+            if qual and qual != "Unknown" and qual not in (movie.get("qualities") or []):
+                matched_updates[mid]["new_quals"].add(qual)
+        except Exception as fe:
+            logger.error(f"[AUTO MOVIE FILTER SYNC ERROR]\nfile_id={fdoc.get('file_id')}\nerror={fe}", exc_info=True)
+
+    for mid, info in matched_updates.items():
+        try:
+            movie = info["movie"]
+            new_fids = info["new_file_ids"]
+            new_langs = list(info["new_langs"])
+            new_quals = list(info["new_quals"])
+            existing_fids = movie.get("file_ids") or []
+            title = movie.get("title", "")
+            year = movie.get("year", "N/A")
+
+            if not new_fids and not new_langs and not new_quals:
+                logger.info(
+                    f"[AUTO MOVIE FILTER SYNC]\n"
+                    f"movie_id={mid}\n"
+                    f"title={title}\n"
+                    f"year={year}\n"
+                    f"new_files=0\n"
+                    f"reason=already_linked\n"
+                    f"trigger={trigger}"
+                )
+                continue
+
+            update_op = {
+                "$set": {
+                    "updated_at": datetime.utcnow()
+                }
+            }
+            if new_fids:
+                update_op["$addToSet"] = {"file_ids": {"$each": new_fids}}
+            
+            merged_langs = list(dict.fromkeys((movie.get("languages") or []) + new_langs))
+            merged_quals = list(dict.fromkeys((movie.get("qualities") or []) + new_quals))
+            update_op["$set"]["languages"] = merged_langs
+            update_op["$set"]["qualities"] = merged_quals
+
+            await super_movies_col.update_one({"_id": ObjectId(mid)}, update_op)
+
+            total_files = len(existing_fids) + len(new_fids)
+            logger.info(
+                f"[AUTO MOVIE FILTER SYNC]\n"
+                f"movie_id={mid}\n"
+                f"title={title}\n"
+                f"year={year}\n"
+                f"new_files={len(new_fids)}\n"
+                f"existing_files={len(existing_fids)}\n"
+                f"total_files={total_files}\n"
+                f"new_languages={', '.join(new_langs) or 'None'}\n"
+                f"new_qualities={', '.join(new_quals) or 'None'}\n"
+                f"trigger={trigger}"
+            )
+
+            verify_doc = await get_super_movie(mid)
+            if verify_doc:
+                v_fids = verify_doc.get("file_ids") or []
+                all_present = all(nf in v_fids for nf in new_fids)
+                if all_present:
+                    logger.info(
+                        f"[AUTO MOVIE FILTER SYNC VERIFY]\n"
+                        f"result=SUCCESS\n"
+                        f"movie_id={mid}\n"
+                        f"files={len(v_fids)}"
+                    )
+                else:
+                    logger.error(
+                        f"[AUTO MOVIE FILTER SYNC VERIFY]\n"
+                        f"result=FAILED\n"
+                        f"movie_id={mid}\n"
+                        f"expected={total_files}\n"
+                        f"found={len(v_fids)}"
+                    )
+        except Exception as e:
+            logger.error(
+                f"[AUTO MOVIE FILTER SYNC ERROR]\n"
+                f"movie_id={mid}\n"
+                f"title={info.get('movie', {}).get('title', '')}\n"
+                f"error={e}",
+                exc_info=True
+            )
+
+
+async def sync_existing_movie_filter(movie_id: str) -> dict:
+    """
+    Admin helper to resync an existing Super Movie Filter by searching ia_filterdb
+    for matching title/year files, merging all file IDs, rebuilding languages & qualities.
+    """
+    movie = await get_super_movie(movie_id)
+    if not movie or movie.get("status") == "deleted":
+        return {"success": False, "error": "Movie not found"}
+
+    title = movie.get("title", "")
+    clean_title = clean_series_title(title)
+    
+    from database.ia_filterdb import col, sec_col, MULTIPLE_DATABASE, get_search_results
+    from plugins.pm_filter import detect_file_languages
+    from plugins.series import extract_quality_from_filename
+
+    matched_files = []
+    seen_fids = set()
+
+    files, _, _ = await get_search_results(0, clean_title, max_results=500, offset=0, filter=True)
+    for f in (files or []):
+        fid = f.get("file_id")
+        if fid and fid not in seen_fids:
+            seen_fids.add(fid)
+            matched_files.append(f)
+
+    existing_fids = movie.get("file_ids") or []
+    for fid in existing_fids:
+        if fid not in seen_fids:
+            seen_fids.add(fid)
+            doc = col.find_one({"file_id": fid}) or (sec_col.find_one({"file_id": fid}) if MULTIPLE_DATABASE else None)
+            if doc:
+                matched_files.append(doc)
+
+    all_fids = list(seen_fids)
+    all_langs = list(movie.get("languages") or [])
+    all_quals = list(movie.get("qualities") or [])
+
+    for f in matched_files:
+        fn = f.get("file_name", "")
+        cap = f.get("caption", "") or ""
+        flangs = detect_file_languages(fn, cap)
+        fqual = extract_quality_from_filename(fn)
+        for l in flangs:
+            if l and l not in all_langs:
+                all_langs.append(l)
+        if fqual and fqual != "Unknown" and fqual not in all_quals:
+            all_quals.append(fqual)
+
+    await super_movies_col.update_one(
+        {"_id": ObjectId(movie_id)},
+        {
+            "$set": {
+                "file_ids": all_fids,
+                "languages": all_langs,
+                "qualities": all_quals,
+                "updated_at": datetime.utcnow()
+            }
+        }
+    )
+
+    logger.info(f"[AUTO MOVIE FILTER SYNC]\nmovie_id={movie_id}\ntitle={title}\ntotal_files={len(all_fids)}\ntrigger=admin_resync")
+    return {"success": True, "total_files": len(all_fids), "languages": all_langs, "qualities": all_quals}

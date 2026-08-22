@@ -39,6 +39,11 @@ async def save_file(media):
     try:
         col.insert_one(file)
         print(f"{file_name} is successfully saved.")
+        try:
+            from database.series_db import sync_movie_filter_for_files
+            await sync_movie_filter_for_files([file], trigger="ia_filterdb_col")
+        except Exception as se:
+            print(f"[AUTO MOVIE FILTER SYNC ERROR] {se}")
         return True, 1
     except DuplicateKeyError:
         print(f"{file_name} is already saved.")
@@ -48,6 +53,11 @@ async def save_file(media):
             try:
                 sec_col.insert_one(file)
                 print(f"{file_name} is successfully saved.")
+                try:
+                    from database.series_db import sync_movie_filter_for_files
+                    await sync_movie_filter_for_files([file], trigger="ia_filterdb_sec_col")
+                except Exception as se:
+                    print(f"[AUTO MOVIE FILTER SYNC ERROR] {se}")
                 return True, 1
             except DuplicateKeyError:
                 print(f"{file_name} is already saved.")
