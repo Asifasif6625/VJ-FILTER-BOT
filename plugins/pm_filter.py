@@ -190,7 +190,11 @@ async def pm_text(bot, message):
     from utils import get_wizard_session, temp
     if get_wizard_session(user_id) is not None:
         return
-    if user_id in getattr(temp, "AUTO_SERIES", {}) or user_id in getattr(temp, "AUTO_MOVIE", {}) or user_id in getattr(temp, "SERIES_WIZARD", {}) or getattr(temp, "SETTING_SERIES_THUMB", {}).get(user_id):
+    if (user_id in getattr(temp, "AUTO_SERIES", {}) or 
+        user_id in getattr(temp, "AUTO_MOVIE", {}) or 
+        user_id in getattr(temp, "SERIES_WIZARD", {}) or 
+        user_id in getattr(temp, "AUTO_MOVIE_BATCH", {}) or 
+        getattr(temp, "SETTING_SERIES_THUMB", {}).get(user_id)):
         return
         
     # ── English-only guard ──
