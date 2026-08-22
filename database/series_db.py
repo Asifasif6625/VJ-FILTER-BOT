@@ -416,7 +416,11 @@ async def set_announcement_channel(channel_id: int | str):
 async def get_announcement_channel() -> int | str | None:
     """Retrieve the configured announcement channel ID."""
     doc = await settings_col.find_one({"_id": "announcement_channel"})
-    return doc.get("channel_id") if doc else None
+    cid = doc.get("channel_id") if doc else None
+    if not cid:
+        from os import environ
+        cid = environ.get("ANNOUNCEMENT_CHANNEL") or environ.get("ANO_CHANNEL")
+    return cid
 
 async def delete_announcement_channel():
     """Delete the configured announcement channel setting."""
