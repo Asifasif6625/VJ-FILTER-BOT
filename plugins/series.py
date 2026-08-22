@@ -495,17 +495,23 @@ def parse_movie_filename(filename: str, movie_title: str, movie_year: str = None
     detected_quality = extract_quality_from_filename(raw_name)
 
     # 5. Language Detection
-    detected_lang = "English"
     f_words = re.split(r"[\s._\-\[\]\(\)\{\}\+]+", cleaned.lower())
-    if "dual" in f_words and "audio" in f_words:
+    is_multi_kw = ("multi" in f_words or "multiaudio" in f_words or "multi-audio" in cleaned.lower() or "multi audio" in cleaned.lower())
+    is_dual_kw = (("dual" in f_words and "audio" in f_words) or "dualaudio" in f_words or "dual-audio" in cleaned.lower())
+
+    found_langs = set()
+    for w in f_words:
+        if w in AUTO_LANGUAGE_MAP:
+            found_langs.add(AUTO_LANGUAGE_MAP[w])
+
+    if is_multi_kw or len(found_langs) >= 2:
+        detected_lang = "Multi"
+    elif is_dual_kw:
         detected_lang = "Dual Audio"
-    elif "multi" in f_words and "audio" in f_words:
-        detected_lang = "Multi Audio"
+    elif len(found_langs) == 1:
+        detected_lang = list(found_langs)[0]
     else:
-        for w in f_words:
-            if w in AUTO_LANGUAGE_MAP:
-                detected_lang = AUTO_LANGUAGE_MAP[w]
-                break
+        detected_lang = "English"
 
     return {
         "status": "matched",

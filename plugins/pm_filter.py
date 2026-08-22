@@ -272,18 +272,21 @@ def detect_file_languages(filename: str, caption: str = None) -> list:
     f_words = re.split(r"[\s._\-\[\]\(\)\{\}\+]+", cleaned.lower())
     detected = []
     
-    if ("dual" in f_words and "audio" in f_words) or "dual" in f_words:
-        detected.append("Dual Audio")
-    if ("multi" in f_words and "audio" in f_words) or "multi" in f_words:
-        detected.append("Multi Audio")
-        
+    is_multi_kw = ("multi" in f_words or "multiaudio" in f_words or "multi-audio" in cleaned.lower() or "multi audio" in cleaned.lower())
+    is_dual_kw = (("dual" in f_words and "audio" in f_words) or "dualaudio" in f_words or "dual-audio" in cleaned.lower())
+    
+    found_langs = set()
     for w in f_words:
         if w in AUTO_LANGUAGE_MAP:
-            lang = AUTO_LANGUAGE_MAP[w]
-            if lang not in detected:
-                detected.append(lang)
-                
-    if not detected:
+            found_langs.add(AUTO_LANGUAGE_MAP[w])
+
+    if is_multi_kw or len(found_langs) >= 2:
+        detected.append("Multi")
+    elif is_dual_kw:
+        detected.append("Dual Audio")
+    elif len(found_langs) == 1:
+        detected.append(list(found_langs)[0])
+    else:
         detected.append("English")
         
     return detected
@@ -302,7 +305,7 @@ def get_movie_languages(files):
         flangs = detect_file_languages(f.get("file_name", ""), f.get("caption"))
         for l in flangs:
             langs.add(l)
-    preferred_order = ["Malayalam", "Tamil", "Hindi", "Telugu", "Kannada", "English", "Dual Audio", "Multi Audio"]
+    preferred_order = ["Malayalam", "Tamil", "Hindi", "Telugu", "Kannada", "English", "Multi", "Dual Audio", "Multi Audio"]
     return sorted(list(langs), key=lambda x: (preferred_order.index(x) if x in preferred_order else 99, x))
 
 def get_movie_qualities(files, target_lang=None):
@@ -338,7 +341,7 @@ def build_movie_language_keyboard(key, grouped_data):
     from plugins.series import to_series_font
     buttons = []
     langs = list(grouped_data.keys())
-    preferred_order = ["Malayalam", "Tamil", "Hindi", "Telugu", "Kannada", "English", "Dual Audio", "Multi Audio"]
+    preferred_order = ["Malayalam", "Tamil", "Hindi", "Telugu", "Kannada", "English", "Multi", "Dual Audio", "Multi Audio"]
     langs.sort(key=lambda x: (preferred_order.index(x) if x in preferred_order else 99, x))
     
     for i in range(0, len(langs), 2):
