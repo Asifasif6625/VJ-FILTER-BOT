@@ -2193,10 +2193,12 @@ async def _handle_wizard_callback(client: Client, query: CallbackQuery):
 
     # ── Auto S Add & Menu Entry Callbacks ────────────────────────────────────
     if action == "start_manual":
+        await query.answer()
         try:
-            await query.answer("Opening Manual Series Creator...")
+            await query.message.delete()
         except Exception:
             pass
+
         from utils import set_wizard_session, get_wizard_session
         temp.SERIES_WIZARD[uid] = {
             "mode": "add",
@@ -2218,27 +2220,22 @@ async def _handle_wizard_callback(client: Client, query: CallbackQuery):
         user_first = (query.from_user.first_name if query.from_user else "") or "Admin"
         user_first_safe = html.escape(user_first)
         text = (
-            f"🎬 <b>Create New Series</b>\n\n"
+            f"🎬 <b>Create New Series (Manual Adding)</b>\n\n"
             f"Hey <b>{user_first_safe}</b>, please send the <b>series name</b>."
         )
         markup = InlineKeyboardMarkup([[
             InlineKeyboardButton("❌ Cancel", callback_data="sw#auto_cancel")
         ]])
-        try:
-            await query.edit_message_text(text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
-        except Exception:
-            try:
-                await query.message.edit_text(text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
-            except Exception as edit_e:
-                logger.warning(f"[START_MANUAL EDIT FALLBACK] {edit_e}")
-                await client.send_message(chat_id=chat_id, text=text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
+        await client.send_message(chat_id=chat_id, text=text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
         return
 
     if action == "start_auto":
+        await query.answer()
         try:
-            await query.answer("Opening Auto Series Importer...")
+            await query.message.delete()
         except Exception:
             pass
+
         from utils import set_wizard_session, get_wizard_session
         temp.AUTO_SERIES[uid] = {
             "state": "WAIT_IMDB",
@@ -2262,21 +2259,16 @@ async def _handle_wizard_callback(client: Client, query: CallbackQuery):
         markup = InlineKeyboardMarkup([[
             InlineKeyboardButton("❌ Cancel", callback_data="sw#auto_cancel")
         ]])
-        try:
-            await query.edit_message_text(text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
-        except Exception:
-            try:
-                await query.message.edit_text(text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
-            except Exception as edit_e:
-                logger.warning(f"[START_AUTO EDIT FALLBACK] {edit_e}")
-                await client.send_message(chat_id=chat_id, text=text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
+        await client.send_message(chat_id=chat_id, text=text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
         return
 
     if action == "start_auto_movie":
+        await query.answer()
         try:
-            await query.answer("Opening Auto Movie Importer...")
+            await query.message.delete()
         except Exception:
             pass
+
         from utils import set_wizard_session, get_wizard_session
         temp.AUTO_MOVIE[uid] = {
             "state": "WAIT_IMDB",
@@ -2293,8 +2285,8 @@ async def _handle_wizard_callback(client: Client, query: CallbackQuery):
         logger.info(f"[AUTO MENU]\naction=CLICK\nbutton=AUTO_MOVIE\nuser_id={uid}")
         logger.info(f"[AUTO MOVIE]\naction=START\nuser_id={uid}")
         text = (
-            "🎬 <b>AUTO MOVIE ADD</b>\n\n"
-            "Send IMDb Movie URL or IMDb ID.\n\n"
+            "🎬 <b>AUTO MOVIE ADD — Movie Importer</b>\n\n"
+            "Send IMDb Movie URL or IMDb ID:\n\n"
             "<b>Examples:</b>\n"
             "<code>https://www.imdb.com/title/tt35723557/</code>\n"
             "<code>tt35723557</code>"
@@ -2302,14 +2294,7 @@ async def _handle_wizard_callback(client: Client, query: CallbackQuery):
         markup = InlineKeyboardMarkup([[
             InlineKeyboardButton("❌ Cancel", callback_data="sw#auto_cancel")
         ]])
-        try:
-            await query.edit_message_text(text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
-        except Exception:
-            try:
-                await query.message.edit_text(text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
-            except Exception as edit_e:
-                logger.warning(f"[START_AUTO_MOVIE EDIT FALLBACK] {edit_e}")
-                await client.send_message(chat_id=chat_id, text=text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
+        await client.send_message(chat_id=chat_id, text=text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
         return
 
     if action == "auto_season_skip":
@@ -4954,26 +4939,42 @@ async def process_super_movie_search(client: Client, message: Message, txt: str,
     movie_poster = movie.get("poster", "")
     file_ids = movie.get("file_ids") or []
 
-    # 1. Retrieve files using linked file_ids if available
+    # 1. Retrieve files using linked file_ids and title search (merging all matching files)
     files = []
-    if file_ids:
-        from database.ia_filterdb import col, sec_col, MULTIPLE_DATABASE
-        q = {"file_id": {"$in": file_ids}}
-        files = list(col.find(q))
-        if MULTIPLE_DATABASE:
-            sec_files = list(sec_col.find(q))
-            existing_fids = {f.get("file_id") for f in files}
-            for sf in sec_files:
-                if sf.get("file_id") not in existing_fids:
-                    files.append(sf)
+    seen_fids = set()
+    from database.ia_filterdb import col, sec_col, MULTIPLE_DATABASE, get_search_results
 
-    # 2. Fallback to title search only for legacy Super Movie records without file_ids
+    if file_ids:
+        q = {"file_id": {"$in": file_ids}}
+        for doc in col.find(q):
+            fid = doc.get("file_id")
+            if fid and fid not in seen_fids:
+                seen_fids.add(fid)
+                files.append(doc)
+        if MULTIPLE_DATABASE:
+            for doc in sec_col.find(q):
+                fid = doc.get("file_id")
+                if fid and fid not in seen_fids:
+                    seen_fids.add(fid)
+                    files.append(doc)
+
+    clean_title = re.sub(r"[\.\_\-\:\+\/\\\[\]\(\)\{\}]+", " ", movie_title).strip()
+    title_files, _, _ = await get_search_results(message.chat.id, clean_title, max_results=300, offset=0, filter=True)
+    for tf in (title_files or []):
+        tf_id = tf.get("file_id")
+        if tf_id and tf_id not in seen_fids:
+            seen_fids.add(tf_id)
+            files.append(tf)
+
     if not files:
-        clean_title = re.sub(r"[\.\_\-\:\+\/\\\[\]\(\)\{\}]+", " ", movie_title).strip()
-        files, _, _ = await get_search_results(message.chat.id, clean_title, max_results=100, offset=0, filter=True)
-        if not files:
-            files, _, _ = await get_search_results(message.chat.id, txt, max_results=100, offset=0, filter=True)
-    
+        raw_files, _, _ = await get_search_results(message.chat.id, txt, max_results=300, offset=0, filter=True)
+        if raw_files:
+            for rf in raw_files:
+                rf_id = rf.get("file_id")
+                if rf_id and rf_id not in seen_fids:
+                    seen_fids.add(rf_id)
+                    files.append(rf)
+
     if not files:
         return False
 
@@ -6110,27 +6111,15 @@ async def cmd_seriesdel(client: Client, message: Message):
 # ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ 
 
 
-async def send_series_announcement(client: Client, series_id: str):
+async def send_series_announcement(client: Client, series_id: str, force: bool = False):
     """
     Automatically send an announcement for a newly created series to the configured channel.
-    Guaranteed to execute at most once per series (persistent duplicate protection).
     """
     if not series_id:
         return
     sid = str(series_id).strip()
 
-    # 1. Check persistent duplicate protection
-    if await is_announcement_sent(sid):
-        logger.info(f"[ANNOUNCEMENT SKIP] reason=already_sent filter=series:{sid}")
-        return
-
-    # 2. Check announcement channel configuration
-    channel_id = await get_announcement_channel()
-    if not channel_id:
-        logger.info(f"[ANNOUNCEMENT SKIP] reason=no_channel_configured series_id={sid}")
-        return
-
-    # 3. Retrieve series details
+    # 1. Retrieve series details
     series = await get_series(sid)
     if not series or series.get("status") == "deleted":
         logger.warning(f"[SERIES ANNOUNCEMENT] Series {sid} not found or deleted.")
@@ -6140,6 +6129,12 @@ async def send_series_announcement(client: Client, series_id: str):
     if not name:
         return
 
+    # 2. Check announcement channel configuration
+    channel_id = await get_announcement_channel()
+    if not channel_id:
+        logger.warning(f"[ANNOUNCEMENT SKIP] No announcement channel configured! Set it via /add_ano <channel_id>")
+        return
+
     series_key = series.get("series_key") or make_series_key(name)
     year = series.get("year")
     rating = series.get("rating")
@@ -6147,23 +6142,27 @@ async def send_series_announcement(client: Client, series_id: str):
     languages = series.get("languages") or []
     if not languages:
         languages = await list_series_languages(sid)
+    seasons = series.get("seasons") or []
 
-    # 4. Build announcement caption
-    caption_lines = [f"📺 <b>{name}</b>\n"]
+    # 3. Build announcement caption with custom font
+    caption_lines = [f"📺 <b>{to_series_font(name)}</b>\n"]
     if year and str(year).strip() != "N/A" and str(year).strip() != "":
-        caption_lines.append(f"📅 <b>Year:</b> {year}")
+        caption_lines.append(f"📅 <b>{to_series_font('Year')}:</b> {year}")
     if rating and str(rating).strip() != "N/A" and str(rating).strip() != "":
         r_str = f"{rating}/10" if "/10" not in str(rating) else str(rating)
-        caption_lines.append(f"⭐ <b>Rating:</b> {r_str}")
+        caption_lines.append(f"⭐ <b>{to_series_font('Rating')}:</b> {r_str}")
     if genre and str(genre).strip() != "N/A" and str(genre).strip() != "":
-        caption_lines.append(f"🎭 <b>Genre:</b> {genre}")
+        caption_lines.append(f"🎭 <b>{to_series_font('Genre')}:</b> {to_series_font(genre)}")
     if languages:
         langs_str = ", ".join(languages) if isinstance(languages, list) else str(languages)
-        caption_lines.append(f"🌐 <b>Language:</b> {langs_str}")
+        caption_lines.append(f"🌐 <b>{to_series_font('Language')}:</b> {to_series_font(langs_str)}")
+    if seasons and seasons != [0]:
+        s_str = ", ".join(f"Season {s}" for s in seasons if s > 0)
+        caption_lines.append(f"📁 <b>{to_series_font('Seasons')}:</b> {to_series_font(s_str)}")
 
     caption = "\n".join(caption_lines)
 
-    # 5. Build Deep Link button
+    # 4. Build Deep Link button with custom font
     bot_username = temp.U_NAME if (hasattr(temp, "U_NAME") and temp.U_NAME) else getattr(getattr(client, "me", None), "username", None)
     if not bot_username:
         try:
@@ -6177,7 +6176,7 @@ async def send_series_announcement(client: Client, series_id: str):
 
     deep_link = f"https://t.me/{bot_username}?start=series_{series_key}"
     markup = InlineKeyboardMarkup([
-        [InlineKeyboardButton("⬇️ DOWNLOAD", url=deep_link)]
+        [InlineKeyboardButton(f"⬇️ {to_series_font('DOWNLOAD')}", url=deep_link)]
     ])
 
     poster = series.get("poster")
@@ -6217,27 +6216,15 @@ async def send_series_announcement(client: Client, series_id: str):
         logger.error(f"[SERIES ANNOUNCEMENT ERROR] Failed to send announcement for series {sid}: {e}", exc_info=True)
 
 
-async def send_movie_announcement(client: Client, movie_id: str):
+async def send_movie_announcement(client: Client, movie_id: str, force: bool = False):
     """
     Automatically send an announcement for a newly created Super Movie to the configured channel.
-    Guaranteed to execute at most once per movie (persistent duplicate protection).
     """
     if not movie_id:
         return
     mid = str(movie_id).strip()
 
-    # 1. Check persistent duplicate protection
-    if await is_announcement_sent(mid):
-        logger.info(f"[ANNOUNCEMENT SKIP] reason=already_sent filter=movie:{mid}")
-        return
-
-    # 2. Check announcement channel configuration
-    channel_id = await get_announcement_channel()
-    if not channel_id:
-        logger.info(f"[ANNOUNCEMENT SKIP] reason=no_channel_configured movie_id={mid}")
-        return
-
-    # 3. Retrieve super movie details
+    # 1. Retrieve super movie details
     movie = await get_super_movie(mid)
     if not movie or movie.get("status") == "deleted":
         logger.warning(f"[MOVIE ANNOUNCEMENT] Super Movie {mid} not found or deleted.")
@@ -6247,31 +6234,37 @@ async def send_movie_announcement(client: Client, movie_id: str):
     if not name:
         return
 
+    # 2. Check announcement channel configuration
+    channel_id = await get_announcement_channel()
+    if not channel_id:
+        logger.warning(f"[ANNOUNCEMENT SKIP] No announcement channel configured! Set it via /add_ano <channel_id>")
+        return
+
     year = str(movie.get("year", ""))
     rating = str(movie.get("rating", ""))
     genre = str(movie.get("genre", ""))
     languages = movie.get("languages") or []
     qualities = movie.get("qualities") or []
 
-    # 4. Build announcement caption
-    caption_lines = [f"🎬 <b>{name}</b>\n"]
+    # 3. Build announcement caption with Custom Font (to_series_font)
+    caption_lines = [f"🎬 <b>{to_series_font(name)}</b>\n"]
     if year and year != "N/A":
-        caption_lines.append(f"📅 <b>Year:</b> {year}")
+        caption_lines.append(f"📅 <b>{to_series_font('Year')}:</b> {year}")
     if rating and rating != "N/A":
         r_str = f"{rating}/10" if "/10" not in str(rating) else str(rating)
-        caption_lines.append(f"⭐ <b>Rating:</b> {r_str}")
+        caption_lines.append(f"⭐ <b>{to_series_font('Rating')}:</b> {r_str}")
     if genre and genre != "N/A":
-        caption_lines.append(f"🎭 <b>Genre:</b> {genre}")
+        caption_lines.append(f"🎭 <b>{to_series_font('Genre')}:</b> {to_series_font(genre)}")
     if languages:
         langs_str = ", ".join(languages) if isinstance(languages, list) else str(languages)
-        caption_lines.append(f"🌐 <b>Language:</b> {langs_str}")
+        caption_lines.append(f"🌐 <b>{to_series_font('Language')}:</b> {to_series_font(langs_str)}")
     if qualities:
         quals_str = ", ".join(qualities) if isinstance(qualities, list) else str(qualities)
-        caption_lines.append(f"🎞 <b>Quality:</b> {quals_str}")
+        caption_lines.append(f"🎞 <b>{to_series_font('Quality')}:</b> {to_series_font(quals_str)}")
 
     caption = "\n".join(caption_lines)
 
-    # 5. Build Deep Link button
+    # 4. Build Deep Link button with custom font
     bot_username = temp.U_NAME if (hasattr(temp, "U_NAME") and temp.U_NAME) else getattr(getattr(client, "me", None), "username", None)
     if not bot_username:
         try:
@@ -6285,7 +6278,7 @@ async def send_movie_announcement(client: Client, movie_id: str):
 
     deep_link = f"https://t.me/{bot_username}?start=movie_{mid}"
     markup = InlineKeyboardMarkup([
-        [InlineKeyboardButton("⬇️ DOWNLOAD", url=deep_link)]
+        [InlineKeyboardButton(f"⬇️ {to_series_font('DOWNLOAD')}", url=deep_link)]
     ])
 
     poster = movie.get("poster")
