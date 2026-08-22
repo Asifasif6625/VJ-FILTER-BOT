@@ -879,3 +879,21 @@ async def search_super_movies(query: str) -> list[dict]:
         f"matched={bool(matched)}"
     )
     return matched
+
+
+async def list_all_super_movies() -> list[dict]:
+    """List all active Super Movie records."""
+    cursor = super_movies_col.find({"status": {"$ne": "deleted"}})
+    return [doc async for doc in cursor]
+
+
+async def delete_super_movie(movie_id: str) -> bool:
+    """Soft-delete a Super Movie record."""
+    try:
+        res = await super_movies_col.update_one(
+            {"_id": ObjectId(movie_id)},
+            {"$set": {"status": "deleted", "updated_at": datetime.utcnow()}}
+        )
+        return res.modified_count > 0
+    except Exception:
+        return False
