@@ -1498,7 +1498,7 @@ async def filter_qualities_cb_handler(client: Client, query: CallbackQuery):
                 
 @Client.on_callback_query()
 async def cb_handler(client: Client, query: CallbackQuery):
-    if query.data and query.data.startswith(("sr#", "sw#", "edser#", "vser#", "series_", "send_fsall#")):
+    if query.data and query.data.startswith(("sr#", "sw#", "edser#", "vser#", "series_", "send_fsall#", "am_")):
         query.continue_propagation()
         return
     if query.data == "close_data":
