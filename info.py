@@ -65,6 +65,10 @@ DELETE_CHANNELS = [int(dch) if id_pattern.search(dch) else dch for dch in enviro
 sdatabase_channel = environ.get('SDATABASE_CHANNEL', '-1004445286622')
 SDATABASE_CHANNEL = int(sdatabase_channel) if sdatabase_channel and id_pattern.search(sdatabase_channel) else None
 
+# Announcement Channel for Series and Movie Announcements
+announcement_channel = environ.get('ANNOUNCEMENT_CHANNEL', environ.get('ANO_CHANNEL', ''))
+ANNOUNCEMENT_CHANNEL = int(announcement_channel) if announcement_channel and id_pattern.search(announcement_channel) else (announcement_channel or None)
+
 # If True, shows IMDB poster when no files are found. If False, shows normal text.
 NOFILEREQ = bool(environ.get('NOFILEREQ', True))
 
