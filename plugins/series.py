@@ -65,6 +65,21 @@ from database.series_db import (
 
 logger = logging.getLogger(__name__)
 
+
+def _is_admin(user_id: int) -> bool:
+    if not user_id:
+        return False
+    try:
+        uid = int(user_id)
+        admin_str_set = {str(a).strip() for a in ADMINS if str(a).strip()}
+        if str(uid) in admin_str_set:
+            return True
+        admin_ids = [int(a) for a in ADMINS if str(a).lstrip("-").isdigit()]
+        return uid in admin_ids
+    except Exception:
+        return False
+
+
 from utils import temp, get_poster
 
 # ─── Wizard State Names ───────────────────────────────────────────────────────
