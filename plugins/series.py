@@ -5715,8 +5715,6 @@ async def series_user_nav(client: Client, query: CallbackQuery):
         f"callback_data={query.data}"
     )
 
-
-
     lang = None
     season = None
     qual = None
