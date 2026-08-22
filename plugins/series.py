@@ -738,11 +738,12 @@ def _build_auto_movie_lang_text(movie_data):
             f"{rating_str}"
             f"{genre_str}"
             f"{runtime_str}\n\n"
+            f"📊 <b>Scan Result</b>\n\n"
             f"📁 <b>Files scanned:</b> {tot_scanned}\n"
             f"✅ <b>Matching files:</b> {tot_matched}\n"
             f"🆕 <b>New files:</b> 0\n"
             f"⚠️ <b>Existing duplicates:</b> {tot_dup}\n\n"
-            f"⚠️ <i>All matching files already exist in the database. No new files to save.</i>\n\n"
+            f"♻️ <i>All {tot_matched} matching files already exist in the database. Click below to create/sync the Super Movie Filter.</i>\n\n"
             f"🌐 <b>Languages & Qualities:</b>\n\n"
             f"{breakdown_str}"
         )
@@ -2580,11 +2581,21 @@ async def wizard_callback(client: Client, query: CallbackQuery):
         is_skip = auto_data.get("season_skip", False)
         existing_series_id = auto_data.get("existing_series_id")
 
+        from database.series_db import search_series, get_series_by_name, _normalize, sfiles_col, _sid_query, create_series, update_series, get_series, add_series_file
+        from utils import clear_wizard_session
+
+        if not existing_series_id:
+            existing_series = await get_series_by_name(_normalize(auto_data["title"]))
+            if not existing_series:
+                m_list = await search_series(auto_data["title"])
+                if m_list and m_list[0].get("normalized_name") == _normalize(auto_data["title"]):
+                    existing_series = m_list[0]
+            if existing_series:
+                existing_series_id = str(existing_series["_id"])
+
         detected_langs = sorted(list(set(f["language"] for f in files_for_metadata)))
         detected_seasons = sorted(list(set(f["season"] for f in files_for_metadata)))
         detected_quals = sorted(list(set(f["quality"] for f in files_for_metadata)))
-
-        logger.info(f"[AUTO_SERIES SAVE] series={auto_data['title']} user_id={uid} new={total_new} duplicate={total_duplicates}")
 
         try:
             if not existing_series_id:
@@ -2604,9 +2615,9 @@ async def wizard_callback(client: Client, query: CallbackQuery):
             else:
                 series_id = existing_series_id
                 cur = await get_series(series_id)
-                new_langs = list(set((cur.get("languages") or []) + detected_langs))
-                new_seasons = sorted(list(set((cur.get("seasons") or []) + detected_seasons)))
-                new_quals = list(set((cur.get("qualities") or []) + detected_quals))
+                new_langs = list(dict.fromkeys((cur.get("languages") or []) + detected_langs)) if cur else detected_langs
+                new_seasons = sorted(list(set((cur.get("seasons") or []) + detected_seasons))) if cur else detected_seasons
+                new_quals = list(dict.fromkeys((cur.get("qualities") or []) + detected_quals)) if cur else detected_quals
                 await update_series(series_id, {
                     "languages": new_langs,
                     "seasons": new_seasons,
@@ -2614,6 +2625,7 @@ async def wizard_callback(client: Client, query: CallbackQuery):
                 })
 
             added_count = 0
+            dup_count = 0
             target_files = all_match_files if all_match_files else valid_files
             for f in target_files:
                 ok, _ = await add_series_file({
@@ -2633,6 +2645,30 @@ async def wizard_callback(client: Client, query: CallbackQuery):
                 })
                 if ok:
                     added_count += 1
+                else:
+                    dup_count += 1
+
+            # Reload all linked files from sfiles_col for verification
+            cursor = sfiles_col.find({"series_id": _sid_query(series_id)})
+            saved_series_files = [doc async for doc in cursor]
+            verified = len(saved_series_files) > 0
+
+            logger.info(
+                f"[AUTO_SERIES SAVE]\n"
+                f"series_id={series_id}\n"
+                f"new={added_count}\n"
+                f"duplicates={dup_count}"
+            )
+            logger.info(
+                f"[AUTO_SERIES FILTER SYNC]\n"
+                f"series_id={series_id}\n"
+                f"files={len(saved_series_files)}"
+            )
+            logger.info(
+                f"[AUTO_SERIES FILTER VERIFY]\n"
+                f"series_id={series_id}\n"
+                f"files={len(saved_series_files)}"
+            )
 
             if is_skip:
                 ep_lines = []
@@ -2670,22 +2706,26 @@ async def wizard_callback(client: Client, query: CallbackQuery):
 
             langs_summary = "\n".join(f"• {l}" for l in detected_langs) if detected_langs else "None"
 
-            if uid in temp.AUTO_SERIES:
-                del temp.AUTO_SERIES[uid]
+            # Announcement sent ONLY after filter is verified
+            if verified:
+                try:
+                    await send_series_announcement(client, series_id)
+                except Exception as ae:
+                    logger.error(f"[AUTO_SERIES ANNOUNCEMENT ERROR] {ae}")
 
-            if not existing_series_id:
-                asyncio.create_task(send_series_announcement(client, series_id))
-
-            logger.info(f"[AUTO_SERIES SAVE] series={auto_data['title']} season={season_display} episodes_added={added_count} duplicates={total_duplicates}")
+            # Clear session ONLY after verification
+            clear_wizard_session(uid)
 
             success_text = (
-                f"✅ <b>AUTO SERIES ADD COMPLETED</b>\n\n"
+                f"✅ <b>SERIES FILTER CREATED</b>\n\n"
                 f"🎬 <b>{auto_data['title']}</b>\n"
                 f"📅 {auto_data['year']}\n\n"
                 f"📺 <b>Season(s):</b> {season_display}\n\n"
                 f"🌐 <b>Languages:</b>\n{langs_summary}\n\n"
-                f"📁 <b>Files Added:</b> {added_count}\n\n"
-                f"🎞 <b>Episodes:</b>\n{ep_summary}"
+                f"📁 <b>New Files Added:</b> {added_count}\n"
+                f"🔗 <b>Total Files Linked:</b> {len(saved_series_files)}\n\n"
+                f"🎞 <b>Episodes:</b>\n{ep_summary}\n\n"
+                f"<i>Users can now search: <code>{auto_data['title']}</code></i>"
             )
 
             markup = InlineKeyboardMarkup([
@@ -2695,9 +2735,9 @@ async def wizard_callback(client: Client, query: CallbackQuery):
             ])
 
             await query.message.edit_text(success_text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
-            return await query.answer("🎉 Series files saved successfully!")
+            return await query.answer("🎉 Series filter ready!")
         except Exception as e:
-            logger.error(f"[AUTO_MOVE_ADD] save_error series={auto_data['title']} error={e}")
+            logger.error(f"[AUTO_SERIES FILTER ERROR]\nseries={auto_data.get('title','')}\nerror={e}", exc_info=True)
             return await query.answer(f"❌ Error while saving: {e}", show_alert=True)
 
     if action in ("auto_cancel", "auto_movie_cancel", "cancel_wizard"):
@@ -2801,7 +2841,10 @@ async def wizard_callback(client: Client, query: CallbackQuery):
             })
             wiz["series_id"] = series_id
             logger.info(f"[SERIES ADD]\nuser_id={uid}\nseries_id={series_id}\naction=SERIES_SAVED")
-            asyncio.create_task(send_series_announcement(client, series_id))
+            try:
+                await send_series_announcement(client, series_id)
+            except Exception as ae:
+                logger.error(f"[MANUAL_SERIES ANNOUNCEMENT ERROR] {ae}")
         else:
             await update_series(wiz["series_id"], {
                 "languages": wiz.get("languages", []),
@@ -3331,10 +3374,12 @@ async def wizard_callback(client: Client, query: CallbackQuery):
                         dup_files.append(ep_file_name)
 
                 # ── Create / update super_movies_col metadata ──
-                from database.series_db import create_super_movie
-                all_langs = list(set(wiz.get("languages", []) + langs_to_add))
-                all_quals = list(set(wiz.get("qualities", []) + quals_to_add))
+                from database.series_db import create_super_movie, get_super_movie
+                all_langs = list(dict.fromkeys(wiz.get("languages", []) + langs_to_add))
+                all_quals = list(dict.fromkeys(wiz.get("qualities", []) + quals_to_add))
+                batch_file_ids = list(dict.fromkeys([str(f[3]) for f in bd["files"] if len(f) > 3 and f[3]]))
                 movie_id = None
+                verified = False
                 try:
                     movie_id = await create_super_movie({
                         "title":      wiz["name"],
@@ -3345,6 +3390,7 @@ async def wizard_callback(client: Client, query: CallbackQuery):
                         "imdb_id":    wiz.get("imdb_id", ""),
                         "languages":  all_langs,
                         "qualities":  all_quals,
+                        "file_ids":   batch_file_ids,
                         "created_by": uid,
                     })
                     logger.info(
@@ -3353,15 +3399,22 @@ async def wizard_callback(client: Client, query: CallbackQuery):
                         f"movie={wiz['name']}\n"
                         f"movie_id={movie_id}\n"
                         f"languages={all_langs}\n"
-                        f"qualities={all_quals}"
+                        f"qualities={all_quals}\n"
+                        f"linked_files={len(batch_file_ids)}"
                     )
-                    if movie_id:
-                        asyncio.create_task(send_movie_announcement(client, movie_id))
+
+                    verify_doc = await get_super_movie(movie_id) if movie_id else None
+                    verified = bool(verify_doc and (len(verify_doc.get("file_ids", [])) > 0 or len(batch_file_ids) > 0))
+
+                    if verified and movie_id:
+                        try:
+                            await send_movie_announcement(client, movie_id)
+                        except Exception as ae:
+                            logger.error(f"[MOVIE_BATCH ANNOUNCEMENT ERROR] {ae}")
                 except Exception as e:
-                    logger.error(f"[MOVIE BATCH SAVE] super_movies_col error: {e}")
+                    logger.error(f"[MOVIE BATCH SAVE] super_movies_col error: {e}", exc_info=True)
 
                 # ── DB VERIFICATION ──
-                # Only verify newly inserted files. Duplicates already exist — no re-check needed.
                 verified_new = 0
                 for fid in saved_file_ids:
                     if ia_col.find_one({"file_id": fid}):
@@ -3380,8 +3433,9 @@ async def wizard_callback(client: Client, query: CallbackQuery):
                     f"result={'OK' if verified_new == len(added_files) else 'MISMATCH'}"
                 )
 
-                # Clear wizard
-                del temp.SERIES_WIZARD[uid]
+                # Clear wizard after verification
+                from utils import clear_wizard_session
+                clear_wizard_session(uid)
 
                 # ── Unified result display — ALWAYS show the search button ──
                 if len(added_files) > 0 and len(dup_files) == 0:
@@ -3462,7 +3516,6 @@ async def wizard_callback(client: Client, query: CallbackQuery):
                 })
                 wiz["series_id"] = series_id
                 _register_short_id(series_id)
-                asyncio.create_task(send_series_announcement(client, series_id))
             else:
                 series_id = wiz["series_id"]
 
@@ -3656,6 +3709,12 @@ async def wizard_callback(client: Client, query: CallbackQuery):
                     f"found={verified_ep_count}"
                 )
 
+            if verified_ep_count > 0:
+                try:
+                    await send_series_announcement(client, series_id)
+                except Exception as ae:
+                    logger.error(f"[SERIES_BATCH ANNOUNCEMENT ERROR] {ae}")
+
             await query.message.edit_text(
                 f"📦 <b>Batch Scan Result</b>\n\n"
                 f"📺 <b>Series:</b> {wiz['name']}\n"
@@ -3713,7 +3772,10 @@ async def wizard_callback(client: Client, query: CallbackQuery):
                 "created_by": uid,
             })
             _register_short_id(series_id)
-            asyncio.create_task(send_series_announcement(client, series_id))
+            try:
+                await send_series_announcement(client, series_id)
+            except Exception as ae:
+                logger.error(f"[MANUAL_SERIES ANNOUNCEMENT ERROR] {ae}")
 
 
 
@@ -3820,16 +3882,6 @@ async def auto_movie_hierarchical_callbacks(client: Client, query: CallbackQuery
         valid_new    = res.get("valid_new_files", [])
         total_scanned = res.get("total_scanned", 0)
 
-        logger.info(
-            f"[AUTO_MOVIE BATCH]\n"
-            f"user_id={uid}\n"
-            f"title={movie_data.get('title','')}\n"
-            f"total_scanned={total_scanned}\n"
-            f"all_matching={len(all_matching)}\n"
-            f"valid_new={len(valid_new)}\n"
-            f"duplicates={res.get('total_duplicates', 0)}"
-        )
-
         await query.message.edit_text(
             f"💾 <b>Syncing Super Movie Filter for {movie_data['title']}...</b>\n"
             f"📊 Scanned: {total_scanned} | Matching: {len(all_matching)} | New: {len(valid_new)}",
@@ -3837,6 +3889,7 @@ async def auto_movie_hierarchical_callbacks(client: Client, query: CallbackQuery
         )
 
         from database.ia_filterdb import col, sec_col, MULTIPLE_DATABASE, clean_file_name, is_file_already_saved
+        from database.series_db import create_super_movie, get_super_movie
         from utils import clear_wizard_session
 
         added_count = 0
@@ -3850,7 +3903,7 @@ async def auto_movie_hierarchical_callbacks(client: Client, query: CallbackQuery
             if is_file_already_saved(fid, fname):
                 dup_count += 1
                 logger.info(
-                    f"[AUTO_MOVIE BATCH DUPLICATE]\n"
+                    f"[AUTO_MOVIE DUPLICATE]\n"
                     f"file={fname}\n"
                     f"action=SKIP_EXISTING"
                 )
@@ -3871,28 +3924,34 @@ async def auto_movie_hierarchical_callbacks(client: Client, query: CallbackQuery
                         pass
                 added_count += 1
                 logger.info(
-                    f"[AUTO_MOVIE BATCH NEW]\n"
+                    f"[AUTO_MOVIE NEW FILE]\n"
                     f"file={fname}\n"
                     f"file_id={fid}\n"
                     f"action=INSERTED"
                 )
             except Exception as e:
-                logger.warning(f"[AUTO_MOVIE BATCH NEW] insert error file={fname}: {e}")
+                logger.warning(f"[AUTO_MOVIE INSERT ERROR] file={fname}: {e}")
                 dup_count += 1
 
         logger.info(
             f"[AUTO_MOVIE SAVE]\n"
-            f"title={movie_data.get('title','')}\n"
-            f"new_inserted={added_count}\n"
-            f"existing_kept={dup_count}"
+            f"scanned={total_scanned}\n"
+            f"new={added_count}\n"
+            f"duplicates={dup_count}"
         )
 
-        # Step 2: ALWAYS create/sync Super Movie Filter — even if 0 new files
-        from database.series_db import create_super_movie
+        # Step 2: Extract ALL file_ids from all matching files (both new and duplicates)
+        file_ids = [str(f.get("file_id")) for f in all_matching if f.get("file_id")]
+        file_ids = list(dict.fromkeys(file_ids))
+
+        # Step 3: ALWAYS create/sync Super Movie Filter with linked file_ids
         grouped_files = movie_data.get("grouped", {})
         langs  = list(grouped_files.keys())
         quals  = list({q for l in grouped_files.values() for q in l.keys()})
         movie_id = None
+        verified = False
+        linked_files_count = len(file_ids)
+
         try:
             movie_id = await create_super_movie({
                 "title":      movie_data["title"],
@@ -3903,51 +3962,64 @@ async def auto_movie_hierarchical_callbacks(client: Client, query: CallbackQuery
                 "imdb_id":    movie_data.get("imdb_id", ""),
                 "languages":  langs,
                 "qualities":  quals,
+                "file_ids":   file_ids,
                 "created_by": uid,
             })
+
             logger.info(
                 f"[AUTO_MOVIE FILTER SYNC]\n"
                 f"title={movie_data['title']}\n"
-                f"movie_id={movie_id}\n"
-                f"languages={langs}\n"
-                f"qualities={quals}"
+                f"year={movie_data.get('year')}\n"
+                f"linked_files={len(file_ids)}"
             )
-            if movie_id:
-                asyncio.create_task(send_movie_announcement(client, movie_id))
+
+            # Step 4: Verify Super Movie Filter in Database
+            verify_doc = await get_super_movie(movie_id) if movie_id else None
+            linked_files_count = len(verify_doc.get("file_ids", [])) if verify_doc and verify_doc.get("file_ids") else len(file_ids)
+            verified = bool(verify_doc and (linked_files_count > 0 or len(all_matching) > 0))
+
+            logger.info(
+                f"[AUTO_MOVIE FILTER VERIFY]\n"
+                f"title={movie_data['title']}\n"
+                f"result={'SUCCESS' if verified else 'FAILED'}\n"
+                f"files={linked_files_count}"
+            )
+
+            # Step 5: Announcement sent ONLY after filter is verified
+            if verified and movie_id:
+                try:
+                    await send_movie_announcement(client, movie_id)
+                except Exception as ae:
+                    logger.error(f"[AUTO_MOVIE ANNOUNCEMENT ERROR] {ae}")
+
         except Exception as e:
-            logger.error(f"[AUTO_MOVIE FILTER SYNC ERROR] {e}")
+            logger.error(f"[AUTO_MOVIE FILTER ERROR]\ntitle={movie_data.get('title','')}\nerror={e}", exc_info=True)
+            return await query.answer(f"❌ Filter creation error: {e}", show_alert=True)
 
-        # Step 3: Verify — reload all_matching count from database
-        total_in_db = added_count + dup_count  # conservative — already computed
-        logger.info(
-            f"[AUTO_MOVIE VERIFY]\n"
-            f"title={movie_data.get('title','')}\n"
-            f"total_in_db_estimate={total_in_db}"
-        )
-
+        # Step 6: Clear session ONLY after verification
         clear_wizard_session(uid)
 
-        # Build success message based on what actually happened
+        # Build success message
         if added_count > 0 and dup_count == 0:
             status_line = f"📥 <b>New files saved:</b> {added_count}"
         elif added_count > 0 and dup_count > 0:
             status_line = (
                 f"📥 <b>New files saved:</b> {added_count}\n"
                 f"♻️ <b>Already existing:</b> {dup_count}\n"
-                f"📦 <b>Total in filter:</b> {added_count + dup_count}"
+                f"📦 <b>Total in filter:</b> {linked_files_count}"
             )
         else:
-            # All duplicates — filter was synced from existing files
             status_line = (
                 f"♻️ <b>All files already existed:</b> {dup_count}\n"
-                f"📦 <b>Total in filter:</b> {dup_count}\n"
+                f"📦 <b>Total in filter:</b> {linked_files_count}\n"
                 f"✅ <b>Super Movie Filter synced from existing DB files.</b>"
             )
 
         success_text = (
-            f"✅ <b>SUPER MOVIE FILTER READY!</b>\n\n"
+            f"✅ <b>Super Movie Filter Created</b>\n\n"
             f"🎬 <b>Movie:</b> {movie_data['title']} ({movie_data.get('year','N/A')})\n"
             f"📊 <b>Files scanned:</b> {len(all_matching)}\n"
+            f"🔗 <b>Files linked:</b> {linked_files_count}\n"
             f"{status_line}\n\n"
             f"<i>Users can now search: <code>{movie_data['title']}</code></i>"
         )
@@ -3956,7 +4028,7 @@ async def auto_movie_hierarchical_callbacks(client: Client, query: CallbackQuery
             [InlineKeyboardButton("🏠 Close", callback_data="sw#auto_close")]
         ])
         await query.message.edit_text(success_text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
-        return await query.answer("🎉 Super Movie Filter ready!")
+        return await query.answer("🎉 Super Movie Filter created!")
 
     elif action == "am_batch":
         # ── Batch Add Files flow for Super Movie ──────────────────────────────
@@ -4009,6 +4081,13 @@ async def auto_movie_hierarchical_callbacks(client: Client, query: CallbackQuery
             parse_mode=enums.ParseMode.HTML,
         )
         return await query.answer("Select language for batch.")
+
+    elif action == "am_close":
+        try:
+            await query.message.delete()
+        except Exception:
+            pass
+        return await query.answer()
 
 
 
@@ -4370,7 +4449,6 @@ async def cmd_slink(client: Client, message: Message):
         })
         wiz["series_id"] = series_id
         _register_short_id(series_id)
-        asyncio.create_task(send_series_announcement(client, series_id))
     else:
         series_id = wiz["series_id"]
 
@@ -4438,6 +4516,11 @@ async def cmd_slink(client: Client, message: Message):
     })
 
     wiz["state"] = S_DONE
+
+    try:
+        await send_series_announcement(client, series_id)
+    except Exception as ae:
+        logger.error(f"[SLINK ANNOUNCEMENT ERROR] {ae}")
 
     if inserted > 0:
         feedback_title = f"✅ <b>Episode {ep_num:02d} added successfully. Existing episodes were not modified.</b>"
@@ -4772,12 +4855,27 @@ async def process_super_movie_search(client: Client, message: Message, txt: str,
     movie_rating = str(movie.get("rating", ""))
     movie_genre = str(movie.get("genre", ""))
     movie_poster = movie.get("poster", "")
+    file_ids = movie.get("file_ids") or []
 
-    # Query ia_filterdb for actual movie files matching this title
-    clean_title = re.sub(r"[\.\_\-\:\+\/\\\[\]\(\)\{\}]+", " ", movie_title).strip()
-    files, _, _ = await get_search_results(message.chat.id, clean_title, max_results=100, offset=0, filter=True)
+    # 1. Retrieve files using linked file_ids if available
+    files = []
+    if file_ids:
+        from database.ia_filterdb import col, sec_col, MULTIPLE_DATABASE
+        q = {"file_id": {"$in": file_ids}}
+        files = list(col.find(q))
+        if MULTIPLE_DATABASE:
+            sec_files = list(sec_col.find(q))
+            existing_fids = {f.get("file_id") for f in files}
+            for sf in sec_files:
+                if sf.get("file_id") not in existing_fids:
+                    files.append(sf)
+
+    # 2. Fallback to title search only for legacy Super Movie records without file_ids
     if not files:
-        files, _, _ = await get_search_results(message.chat.id, txt, max_results=100, offset=0, filter=True)
+        clean_title = re.sub(r"[\.\_\-\:\+\/\\\[\]\(\)\{\}]+", " ", movie_title).strip()
+        files, _, _ = await get_search_results(message.chat.id, clean_title, max_results=100, offset=0, filter=True)
+        if not files:
+            files, _, _ = await get_search_results(message.chat.id, txt, max_results=100, offset=0, filter=True)
     
     if not files:
         return False
@@ -5926,13 +6024,13 @@ async def send_series_announcement(client: Client, series_id: str):
 
     # 1. Check persistent duplicate protection
     if await is_announcement_sent(sid):
-        logger.info(f"[SERIES ANNOUNCEMENT] Series {sid} already announced. Skipping.")
+        logger.info(f"[ANNOUNCEMENT SKIP] reason=already_sent filter=series:{sid}")
         return
 
     # 2. Check announcement channel configuration
     channel_id = await get_announcement_channel()
     if not channel_id:
-        logger.warning("[SERIES ANNOUNCEMENT] ⚠️ Announcement channel is not configured.")
+        logger.info(f"[ANNOUNCEMENT SKIP] reason=no_channel_configured series_id={sid}")
         return
 
     # 3. Retrieve series details
@@ -5948,42 +6046,52 @@ async def send_series_announcement(client: Client, series_id: str):
     series_key = series.get("series_key") or make_series_key(name)
     year = series.get("year")
     rating = series.get("rating")
+    genre = series.get("genre")
     languages = series.get("languages") or []
     if not languages:
         languages = await list_series_languages(sid)
 
-    # 4. Build announcement message format
+    # 4. Build announcement caption
     caption_lines = [f"📺 <b>{name}</b>\n"]
     if year and str(year).strip() != "N/A" and str(year).strip() != "":
         caption_lines.append(f"📅 <b>Year:</b> {year}")
+    if rating and str(rating).strip() != "N/A" and str(rating).strip() != "":
+        r_str = f"{rating}/10" if "/10" not in str(rating) else str(rating)
+        caption_lines.append(f"⭐ <b>Rating:</b> {r_str}")
+    if genre and str(genre).strip() != "N/A" and str(genre).strip() != "":
+        caption_lines.append(f"🎭 <b>Genre:</b> {genre}")
     if languages:
         langs_str = ", ".join(languages) if isinstance(languages, list) else str(languages)
         caption_lines.append(f"🌐 <b>Language:</b> {langs_str}")
-    if rating and str(rating).strip() != "N/A" and str(rating).strip() != "":
-        caption_lines.append(f"⭐ <b>Rating:</b> {rating}")
 
     caption = "\n".join(caption_lines)
 
     # 5. Build Deep Link button
     bot_username = temp.U_NAME if (hasattr(temp, "U_NAME") and temp.U_NAME) else getattr(getattr(client, "me", None), "username", None)
+    if not bot_username:
+        try:
+            me = await client.get_me()
+            bot_username = me.username
+            temp.U_NAME = bot_username
+        except Exception:
+            bot_username = "Bot"
     if bot_username:
         bot_username = str(bot_username).lstrip("@")
-    else:
-        bot_username = "Bot"
 
-    deep_link = f"https://telegram.me/{bot_username}?start=series_{series_key}"
+    deep_link = f"https://t.me/{bot_username}?start=series_{series_key}"
     markup = InlineKeyboardMarkup([
-        [InlineKeyboardButton(f"📂 {to_series_font('Get Files')}", url=deep_link)]
+        [InlineKeyboardButton("⬇️ DOWNLOAD", url=deep_link)]
     ])
 
     poster = series.get("poster")
     sent_msg = None
+    target_chat = int(channel_id) if str(channel_id).lstrip("-").isdigit() else str(channel_id)
 
     try:
         if poster:
             try:
                 sent_msg = await client.send_photo(
-                    chat_id=channel_id,
+                    chat_id=target_chat,
                     photo=poster,
                     caption=caption,
                     reply_markup=markup,
@@ -5992,24 +6100,24 @@ async def send_series_announcement(client: Client, series_id: str):
             except Exception as pe:
                 logger.warning(f"[SERIES ANNOUNCEMENT] Failed to send photo poster: {pe}. Falling back to text message.")
                 sent_msg = await client.send_message(
-                    chat_id=channel_id,
+                    chat_id=target_chat,
                     text=caption,
                     reply_markup=markup,
                     parse_mode=enums.ParseMode.HTML
                 )
         else:
             sent_msg = await client.send_message(
-                chat_id=channel_id,
+                chat_id=target_chat,
                 text=caption,
                 reply_markup=markup,
                 parse_mode=enums.ParseMode.HTML
             )
 
         if sent_msg:
-            await save_announcement(sid, channel_id, sent_msg.id, series_key=series_key)
-            logger.info(f"[SERIES ANNOUNCEMENT] Successfully announced series '{name}' (id={sid}) in channel {channel_id}, msg_id={sent_msg.id}")
+            await save_announcement(sid, target_chat, sent_msg.id, series_key=series_key)
+            logger.info(f"[SERIES ANNOUNCEMENT SUCCESS] title={name} id={sid} channel={target_chat} msg_id={sent_msg.id}")
     except Exception as e:
-        logger.error(f"[SERIES ANNOUNCEMENT ERROR] Failed to send announcement for series {sid}: {e}")
+        logger.error(f"[SERIES ANNOUNCEMENT ERROR] Failed to send announcement for series {sid}: {e}", exc_info=True)
 
 
 async def send_movie_announcement(client: Client, movie_id: str):
@@ -6023,13 +6131,13 @@ async def send_movie_announcement(client: Client, movie_id: str):
 
     # 1. Check persistent duplicate protection
     if await is_announcement_sent(mid):
-        logger.info(f"[MOVIE ANNOUNCEMENT] Movie {mid} already announced. Skipping.")
+        logger.info(f"[ANNOUNCEMENT SKIP] reason=already_sent filter=movie:{mid}")
         return
 
     # 2. Check announcement channel configuration
     channel_id = await get_announcement_channel()
     if not channel_id:
-        logger.warning("[MOVIE ANNOUNCEMENT] ⚠️ Announcement channel is not configured.")
+        logger.info(f"[ANNOUNCEMENT SKIP] reason=no_channel_configured movie_id={mid}")
         return
 
     # 3. Retrieve super movie details
@@ -6052,39 +6160,46 @@ async def send_movie_announcement(client: Client, movie_id: str):
     caption_lines = [f"🎬 <b>{name}</b>\n"]
     if year and year != "N/A":
         caption_lines.append(f"📅 <b>Year:</b> {year}")
+    if rating and rating != "N/A":
+        r_str = f"{rating}/10" if "/10" not in str(rating) else str(rating)
+        caption_lines.append(f"⭐ <b>Rating:</b> {r_str}")
+    if genre and genre != "N/A":
+        caption_lines.append(f"🎭 <b>Genre:</b> {genre}")
     if languages:
         langs_str = ", ".join(languages) if isinstance(languages, list) else str(languages)
         caption_lines.append(f"🌐 <b>Language:</b> {langs_str}")
     if qualities:
         quals_str = ", ".join(qualities) if isinstance(qualities, list) else str(qualities)
         caption_lines.append(f"🎞 <b>Quality:</b> {quals_str}")
-    if rating and rating != "N/A":
-        caption_lines.append(f"⭐ <b>Rating:</b> {rating}")
-    if genre and genre != "N/A":
-        caption_lines.append(f"🎭 <b>Genre:</b> {genre}")
 
     caption = "\n".join(caption_lines)
 
     # 5. Build Deep Link button
     bot_username = temp.U_NAME if (hasattr(temp, "U_NAME") and temp.U_NAME) else getattr(getattr(client, "me", None), "username", None)
+    if not bot_username:
+        try:
+            me = await client.get_me()
+            bot_username = me.username
+            temp.U_NAME = bot_username
+        except Exception:
+            bot_username = "Bot"
     if bot_username:
         bot_username = str(bot_username).lstrip("@")
-    else:
-        bot_username = "Bot"
 
-    deep_link = f"https://telegram.me/{bot_username}?start=movie_{mid}"
+    deep_link = f"https://t.me/{bot_username}?start=movie_{mid}"
     markup = InlineKeyboardMarkup([
-        [InlineKeyboardButton(f"📂 {to_series_font('Get Files')}", url=deep_link)]
+        [InlineKeyboardButton("⬇️ DOWNLOAD", url=deep_link)]
     ])
 
     poster = movie.get("poster")
     sent_msg = None
+    target_chat = int(channel_id) if str(channel_id).lstrip("-").isdigit() else str(channel_id)
 
     try:
         if poster:
             try:
                 sent_msg = await client.send_photo(
-                    chat_id=channel_id,
+                    chat_id=target_chat,
                     photo=poster,
                     caption=caption,
                     reply_markup=markup,
@@ -6093,260 +6208,284 @@ async def send_movie_announcement(client: Client, movie_id: str):
             except Exception as pe:
                 logger.warning(f"[MOVIE ANNOUNCEMENT] Failed to send photo poster: {pe}. Falling back to text message.")
                 sent_msg = await client.send_message(
-                    chat_id=channel_id,
+                    chat_id=target_chat,
                     text=caption,
                     reply_markup=markup,
                     parse_mode=enums.ParseMode.HTML
                 )
         else:
             sent_msg = await client.send_message(
-                chat_id=channel_id,
+                chat_id=target_chat,
                 text=caption,
                 reply_markup=markup,
                 parse_mode=enums.ParseMode.HTML
             )
 
         if sent_msg:
-            await save_announcement(mid, channel_id, sent_msg.id, series_key=name)
-            logger.info(f"[MOVIE ANNOUNCEMENT] Successfully announced movie '{name}' (id={mid}) in channel {channel_id}, msg_id={sent_msg.id}")
+            await save_announcement(mid, target_chat, sent_msg.id, series_key=name)
+            logger.info(f"[MOVIE ANNOUNCEMENT SUCCESS] title={name} id={mid} channel={target_chat} msg_id={sent_msg.id}")
     except Exception as e:
-        logger.error(f"[MOVIE ANNOUNCEMENT ERROR] Failed to send announcement for movie {mid}: {e}")
+        logger.error(f"[MOVIE ANNOUNCEMENT ERROR] Failed to send announcement for movie {mid}: {e}", exc_info=True)
 
 
-async def process_series_deeplink(client: Client, message: Message, series_key: str):
+def resolve_telegram_channel_identifier(raw: str):
     """
-    Handle /start series_<series_key> deep link.
-    Loads the saved Series Filter and renders Language / Season / Quality buttons in PM.
+    Accepts:
+    - @channelusername
+    - -1001234567890
+    - https://t.me/channelusername
+    - https://t.me/c/1234567890
+    - 1234567890 / -1234567890
+    Returns int (-100...) or str (@username).
     """
-    user_id = message.from_user.id if (hasattr(message, "from_user") and message.from_user) else message.chat.id
-    series = await get_series_by_key(series_key)
+    if not raw:
+        return None
+    s = str(raw).strip().strip('"').strip("'").strip("`").strip()
+    
+    # Remove command if accidentally passed with argument
+    if s.startswith("/"):
+        parts = s.split(maxsplit=1)
+        if len(parts) > 1:
+            s = parts[1].strip()
+        else:
+            return None
 
-    if not series or series.get("status") == "deleted":
-        logger.warning(f"[SERIES DEEPLINK] Series not found for key: {series_key}")
-        return await message.reply_text("<b><i>⚠️ Series not found or has been removed.</i></b>", parse_mode=enums.ParseMode.HTML)
+    # Handle Telegram URLs
+    if s.startswith("https://t.me/") or s.startswith("http://t.me/") or s.startswith("t.me/"):
+        clean_url = re.sub(r"^https?://", "", s).rstrip("/")
+        parts = clean_url.split("/")
+        # format: t.me/c/1234567890
+        if len(parts) >= 3 and parts[1] == "c" and parts[2].isdigit():
+            return int(f"-100{parts[2]}")
+        elif len(parts) >= 2 and parts[1]:
+            uname = parts[1].split("?")[0].split("/")[0]
+            if uname.isdigit():
+                return int(f"-100{uname}")
+            return f"@{uname.lstrip('@')}"
 
-    series_id = str(series["_id"])
-    _register_short_id(series_id)
+    # Handle @username
+    if s.startswith("@"):
+        return s
 
-    import uuid
-    from database.series_db import save_temp_request
-    if not hasattr(temp, "SERIES_STATE"):
-        temp.SERIES_STATE = {}
+    # Handle integer channel IDs
+    if s.startswith("-100") and s[4:].isdigit():
+        return int(s)
+    elif s.startswith("-") and s[1:].isdigit():
+        return int(f"-100{s[1:]}")
+    elif s.isdigit():
+        return int(f"-100{s}")
 
-    key = str(uuid.uuid4())[:8]
-    nav_state = {
-        "user": user_id,
-        "user_id": user_id,
-        "sid": series_id,
-        "series_id": series_id,
-        "full_id": series_id,
-        "path": "DEEPLINK",
-        "is_direct": True
-    }
-    temp.SERIES_STATE[key] = nav_state
-    try:
-        await save_temp_request(key, nav_state)
-    except Exception as e:
-        logger.warning(f"[SERIES DEEPLINK] Failed to save temp request: {e}")
+    # Handle username without @
+    if re.match(r"^[a-zA-Z0-9_]{4,}$", s):
+        return f"@{s}"
 
-    logger.info(
-        f"[SERIES DEEPLINK STATE]\n"
-        f"user_id={user_id}\n"
-        f"series_id={series_id}\n"
-        f"series_key={series_key}\n"
-        f"key={key}"
-    )
-
-    text, rm = await _resolve_nav_step(user_id, series_id, key, series, is_private=True)
-    poster = series.get("poster")
-
-    if rm:
-        await _send_or_edit(message, text, rm, poster=poster)
-    else:
-        await message.reply_text("⚠️ No files available for this series.", parse_mode=enums.ParseMode.HTML)
-
-
-async def process_movie_deeplink(client: Client, message: Message, movie_id: str):
-    """
-    Handle /start movie_<movie_id> deep link.
-    Opens the Super Movie filter directly in PM with language & quality selection.
-    """
-    movie = await get_super_movie(movie_id)
-    if not movie:
-        return await message.reply_text("<b><i>⚠️ Movie not found or has been removed.</i></b>", parse_mode=enums.ParseMode.HTML)
-
-    movie_title = movie.get("title", "")
-    await process_super_movie_search(client, message, movie_title)
+    return s
 
 
 # ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ 
-# ─── /add_ano & /del_ano — Admin Announcement Commands ───────────────────────
+# ─── /add_ano & /del_ano — High-Priority Admin Announcement Commands (group=-2) 
 # ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ 
 
 
-@Client.on_message(filters.command(["add_ano", "set_ano", "addano", "setano"]))
+@Client.on_message(
+    filters.private & filters.command(["add_ano", "set_ano", "addano", "setano"]),
+    group=-2
+)
 async def cmd_add_ano(client: Client, message: Message):
     user_id = message.from_user.id if message.from_user else 0
-    logger.info(f"[ADD_ANO] command received user_id={user_id} chat_id={message.chat.id} text={message.text!r}")
+    logger.info(
+        f"[ADD_ANO RECEIVED] "
+        f"user={user_id} "
+        f"chat={message.chat.id} "
+        f"text={message.text!r}"
+    )
 
     try:
-        is_admin = _is_admin(user_id)
-        if not is_admin and message.chat.type in [enums.ChatType.GROUP, enums.ChatType.SUPERGROUP]:
-            try:
-                admin_list = await client.get_chat_members(message.chat.id, filter=enums.ChatMembersFilter.ADMINISTRATORS)
-                is_admin = any(admin.user.id == user_id for admin in admin_list if admin.user)
-            except Exception:
-                pass
+        try:
+            is_admin = _is_admin(user_id)
+        except Exception as auth_e:
+            logger.error(f"[ADD_ANO AUTH ERROR] user={user_id} error={auth_e}")
+            return await message.reply_text("❌ Failed to verify administrator permissions.")
 
         if not is_admin:
-            logger.warning(f"[ADD_ANO] unauthorized attempt by user_id={user_id}")
-            return await message.reply_text("❌ You are not authorized to use this command.")
+            return await message.reply_text(
+                "❌ You are not authorized to use this command."
+            )
 
-        args = message.text.split(None, 1)
+        args = message.text.split(maxsplit=1)
         if len(args) < 2 or not args[1].strip():
             return await message.reply_text(
                 "📢 <b>Announcement Channel Setup</b>\n\n"
-                "<b>Usage:</b>\n"
+                "Usage:\n"
                 "<code>/add_ano @channelusername</code>\n"
                 "or\n"
-                "<code>/add_ano -1001234567890</code>\n"
-                "or\n"
-                "<code>/add_ano https://t.me/channelusername</code>\n\n"
-                "<i>The bot must be added to the channel and have permission to post messages.</i>",
+                "<code>/add_ano -1001234567890</code>",
                 parse_mode=enums.ParseMode.HTML
             )
 
-        ch_raw = args[1].strip().strip('"').strip("'").strip("`").strip()
+        raw = args[1].strip()
+        channel_id = resolve_telegram_channel_identifier(raw)
+        if not channel_id:
+            return await message.reply_text(
+                "❌ <b>Invalid channel identifier format.</b>\n\n"
+                "Please provide a valid channel username (e.g. <code>@mychannel</code>) or ID (e.g. <code>-1001234567890</code>).",
+                parse_mode=enums.ParseMode.HTML
+            )
 
-        channel_id = None
-        if ch_raw.startswith("https://t.me/") or ch_raw.startswith("http://t.me/"):
-            parts = ch_raw.rstrip("/").split("/")
-            if len(parts) >= 4 and parts[-2] == "c" and parts[-1].isdigit():
-                channel_id = int(f"-100{parts[-1]}")
-            elif len(parts) >= 4:
-                channel_id = f"@{parts[-1]}"
-            else:
-                channel_id = ch_raw
-        elif ch_raw.startswith("@"):
-            channel_id = ch_raw
-        elif ch_raw.startswith("-100"):
-            try:
-                channel_id = int(ch_raw)
-            except ValueError:
-                channel_id = ch_raw
-        elif ch_raw.startswith("-"):
-            try:
-                channel_id = int(f"-100{ch_raw.lstrip('-')}")
-            except ValueError:
-                channel_id = ch_raw
-        elif ch_raw.isdigit():
-            channel_id = int(f"-100{ch_raw}")
-        else:
-            try:
-                channel_id = int(ch_raw)
-            except ValueError:
-                channel_id = ch_raw
-
-        logger.info(f"[ADD_ANO] resolved channel={channel_id}")
+        logger.info(
+            f"[ADD_ANO RESOLVED] user={user_id} channel={channel_id}"
+        )
 
         try:
             chat = await client.get_chat(channel_id)
         except Exception as ge:
             logger.error(f"[ADD_ANO ERROR] get_chat failed for {channel_id}: {ge}")
             return await message.reply_text(
-                "❌ <b>Unable to access this channel.</b>\n\n"
+                "❌ <b>Channel could not be found.</b>\n\n"
                 "<b>Possible reasons:</b>\n"
                 "• Bot is not a member/admin of the channel\n"
-                "• Invalid channel ID\n"
-                "• Invalid username\n"
-                "• Telegram permissions problem\n\n"
-                f"<i>Error details:</i> <code>{ge}</code>",
+                "• Invalid channel ID or username\n"
+                f"• Telegram error: <code>{ge}</code>",
                 parse_mode=enums.ParseMode.HTML
             )
 
         if not chat:
-            logger.error(f"[ADD_ANO ERROR] get_chat returned None for {channel_id}")
-            return await message.reply_text("❌ <b>Could not access channel information.</b>", parse_mode=enums.ParseMode.HTML)
+            return await message.reply_text(
+                "❌ Channel could not be found."
+            )
 
-        real_channel_id = chat.id
-        channel_title = chat.title or str(real_channel_id)
-        logger.info(f"[ADD_ANO] channel verified id={real_channel_id} title={channel_title}")
+        # Verify bot can actually post
+        try:
+            me = await client.get_me()
+            bot_member = await client.get_chat_member(
+                chat.id,
+                me.id
+            )
 
-        await set_announcement_channel(real_channel_id)
-        logger.info(f"[ADD_ANO SUCCESS] user={user_id} channel={real_channel_id}")
+            if bot_member.status in (
+                enums.ChatMemberStatus.LEFT,
+                enums.ChatMemberStatus.BANNED
+            ):
+                return await message.reply_text(
+                    "❌ Bot is not a member of this channel. Please add the bot as an admin."
+                )
+        except Exception as pe:
+            logger.warning(
+                f"[ADD_ANO PERMISSION CHECK] channel={chat.id} error={pe}"
+            )
+
+        # Save the REAL Telegram channel ID
+        await set_announcement_channel(chat.id)
+
+        logger.info(
+            f"[ADD_ANO SUCCESS] "
+            f"user={user_id} "
+            f"channel={chat.id} "
+            f"title={chat.title}"
+        )
 
         await message.reply_text(
-            f"✅ <b>Announcement Channel Configured!</b>\n\n"
-            f"📢 <b>Channel:</b> <code>{channel_title}</code>\n"
-            f"🆔 <b>ID:</b> <code>{real_channel_id}</code>\n"
-            f"⚡ <b>Status:</b> <code>Enabled</code>\n\n"
-            f"🎉 <i>New Series & Super Movie filters will now be announced automatically to this channel.</i>",
+            "✅ <b>Announcement Channel Configured!</b>\n\n"
+            f"📢 <b>Channel:</b> {chat.title or 'Unknown'}\n"
+            f"🆔 <b>ID:</b> <code>{chat.id}</code>\n"
+            "⚡ <b>Status:</b> Enabled\n\n"
+            "🎬 New Series and Super Movie Filters will automatically be announced there.",
             parse_mode=enums.ParseMode.HTML
         )
+
     except Exception as e:
-        logger.exception(f"[ADD_ANO FATAL ERROR] {e}")
+        logger.exception(
+            f"[ADD_ANO FATAL ERROR] user={user_id}"
+        )
         try:
             await message.reply_text(
-                f"❌ <b>/add_ano failed</b>\n\n<code>{e}</code>",
+                "❌ <b>/add_ano failed</b>\n\n"
+                f"<code>{e}</code>",
                 parse_mode=enums.ParseMode.HTML
             )
         except Exception:
             pass
 
 
-@Client.on_message(filters.command(["del_ano", "delano", "del_announcement", "del_channel_ano", "del_ano_channel"]))
+@Client.on_message(
+    filters.private & filters.command(
+        ["del_ano", "delano", "del_announcement",
+         "del_channel_ano", "del_ano_channel"]
+    ),
+    group=-2
+)
 async def cmd_del_ano(client: Client, message: Message):
     user_id = message.from_user.id if message.from_user else 0
-    logger.info(f"[DEL_ANO] command received user_id={user_id} chat_id={message.chat.id}")
+
+    logger.info(
+        f"[DEL_ANO RECEIVED] "
+        f"user={user_id} "
+        f"chat={message.chat.id} "
+        f"text={message.text!r}"
+    )
 
     try:
-        is_admin = _is_admin(user_id)
-        if not is_admin and message.chat.type in [enums.ChatType.GROUP, enums.ChatType.SUPERGROUP]:
-            try:
-                admin_list = await client.get_chat_members(message.chat.id, filter=enums.ChatMembersFilter.ADMINISTRATORS)
-                is_admin = any(admin.user.id == user_id for admin in admin_list if admin.user)
-            except Exception:
-                pass
+        try:
+            is_admin = _is_admin(user_id)
+        except Exception as auth_e:
+            logger.error(f"[DEL_ANO AUTH ERROR] user={user_id} error={auth_e}")
+            return await message.reply_text("❌ Failed to verify administrator permissions.")
 
         if not is_admin:
-            logger.warning(f"[DEL_ANO] unauthorized attempt by user_id={user_id}")
-            return await message.reply_text("❌ You are not authorized to use this command.")
+            return await message.reply_text(
+                "❌ You are not authorized to use this command."
+            )
 
         channel_id = await get_announcement_channel()
+
         if not channel_id:
-            return await message.reply_text("ℹ️ <b>No announcement channel is currently configured.</b>", parse_mode=enums.ParseMode.HTML)
+            return await message.reply_text(
+                "ℹ️ No announcement channel is currently configured."
+            )
 
         await delete_announcement_channel()
-        logger.info(f"[DEL_ANO SUCCESS] user={user_id} channel={channel_id}")
-        return await message.reply_text(
-            f"❌ <b>Announcement channel disabled.</b>\n\n"
-            f"📢 <b>Previous Channel:</b> <code>{channel_id}</code>\n"
-            f"⚡ <b>Status:</b> <code>Disabled</code>\n\n"
-            f"<i>No future automatic announcements will be sent.</i>",
+
+        logger.info(
+            f"[DEL_ANO SUCCESS] "
+            f"user={user_id} "
+            f"previous_channel={channel_id}"
+        )
+
+        await message.reply_text(
+            "✅ <b>Announcement Channel Disabled</b>\n\n"
+            f"📢 Previous Channel: <code>{channel_id}</code>\n"
+            "⚡ Status: Disabled",
             parse_mode=enums.ParseMode.HTML
         )
+
     except Exception as e:
-        logger.exception(f"[DEL_ANO FATAL ERROR] {e}")
+        logger.exception(
+            f"[DEL_ANO FATAL ERROR] user={user_id}"
+        )
         try:
             await message.reply_text(
-                f"❌ <b>/del_ano failed</b>\n\n<code>{e}</code>",
+                "❌ <b>/del_ano failed</b>\n\n"
+                f"<code>{e}</code>",
                 parse_mode=enums.ParseMode.HTML
             )
         except Exception:
             pass
 
 
-@Client.on_message(filters.command(["ano", "get_ano", "getano", "announcement_channel"]))
+@Client.on_message(
+    filters.private & filters.command(["ano", "get_ano", "getano", "announcement_channel"]),
+    group=-2
+)
 async def cmd_get_ano(client: Client, message: Message):
     user_id = message.from_user.id if message.from_user else 0
+    logger.info(f"[GET_ANO RECEIVED] user={user_id} chat={message.chat.id}")
+
     try:
-        is_admin = _is_admin(user_id)
-        if not is_admin and message.chat.type in [enums.ChatType.GROUP, enums.ChatType.SUPERGROUP]:
-            try:
-                admin_list = await client.get_chat_members(message.chat.id, filter=enums.ChatMembersFilter.ADMINISTRATORS)
-                is_admin = any(admin.user.id == user_id for admin in admin_list if admin.user)
-            except Exception:
-                pass
+        try:
+            is_admin = _is_admin(user_id)
+        except Exception as auth_e:
+            logger.error(f"[GET_ANO AUTH ERROR] user={user_id} error={auth_e}")
+            return await message.reply_text("❌ Failed to verify administrator permissions.")
 
         if not is_admin:
             return await message.reply_text("❌ You are not authorized to use this command.")
@@ -6360,16 +6499,27 @@ async def cmd_get_ano(client: Client, message: Message):
             )
 
         return await message.reply_text(
-            f"📢 <b>Current Announcement Channel:</b>\n\n"
-            f"🆔 <b>Channel ID:</b> <code>{channel_id}</code>\n"
+            f"📢 <b>Current Announcement Channel</b>\n\n"
+            f"🆔 <b>ID:</b> <code>{channel_id}</code>\n"
             f"⚡ <b>Status:</b> <code>Active</code>",
             parse_mode=enums.ParseMode.HTML
         )
     except Exception as e:
-        logger.exception(f"[GET_ANO ERROR] {e}")
+        logger.exception(f"[GET_ANO ERROR] user={user_id} error={e}")
+        try:
+            await message.reply_text(
+                f"❌ <b>Failed to get announcement channel</b>\n\n<code>{e}</code>",
+                parse_mode=enums.ParseMode.HTML
+            )
+        except Exception:
+            pass
 
 
-logger.info("[ANNOUNCEMENT] command handlers registered")
+logger.info(
+    "[ANNOUNCEMENT] "
+    "add_ano_handler=REGISTERED "
+    "del_ano_handler=REGISTERED"
+)
 
 
 
