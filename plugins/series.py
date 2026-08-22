@@ -61,6 +61,15 @@ from database.series_db import (
     get_announcement,
     save_announcement,
     delete_announcement,
+    get_super_movie,
+    create_super_movie,
+    update_super_movie,
+    delete_super_movie,
+    search_super_movies,
+    list_all_super_movies,
+    super_movies_col,
+    sync_movie_filter_for_files,
+    sync_existing_movie_filter,
 )
 
 logger = logging.getLogger(__name__)
@@ -1307,14 +1316,19 @@ def _should_show_skip_season(wiz: dict) -> bool:
 
 def _config_menu_keyboard(series_id: str = None, from_viewseries: bool = False) -> InlineKeyboardMarkup:
     if series_id:
-        # Existing series editing mode: show both Add Episode and Add Files
+        # Existing series editing mode: show Add Episode, Add Files, Announcement, Delete
         buttons = [
             [
                 InlineKeyboardButton("➕ Add Episode", callback_data="sw#menu#add_ep"),
                 InlineKeyboardButton("📁 Add Files", callback_data="sw#menu#batch")
+            ],
+            [
+                InlineKeyboardButton("📢 Announcement", callback_data=f"edser#ano#{series_id}")
+            ],
+            [
+                InlineKeyboardButton("🗑 Delete Series", callback_data=f"sw#del_series#{series_id}")
             ]
         ]
-        buttons.append([InlineKeyboardButton("🗑 Delete Series", callback_data=f"sw#del_series#{series_id}")])
     else:
         # New series creation mode: only show Add Files
         buttons = [
@@ -1546,7 +1560,36 @@ async def cb_edser(client: Client, query: CallbackQuery):
     uid = query.from_user.id
     from utils import temp
     from database.series_db import get_series
-    
+
+    if query.data.startswith("edser#ano#"):
+        series_id = query.data.split("#")[2]
+        exact = await get_series(series_id)
+        if not exact:
+            return await query.answer("❌ Series not found.", show_alert=True)
+        channel_id = await get_announcement_channel()
+        if not channel_id:
+            return await query.message.reply_text(
+                "⚠️ <b>Announcement channel is not configured.</b>\n\n"
+                "Use:\n<code>/add_ano &lt;channel_id&gt;</code>",
+                parse_mode=enums.ParseMode.HTML
+            )
+        logger.info(f"[MANUAL ANNOUNCEMENT]\ntype=series\nfilter_id={series_id}")
+        try:
+            success = await announce_filter_created(client, filter_type="series", filter_id=str(series_id), force=True)
+            if success:
+                logger.info(f"[MANUAL ANNOUNCEMENT SUCCESS]\ntype=series\nfilter_id={series_id}\nchannel={channel_id}")
+                await query.answer("📢 Series announcement sent successfully!", show_alert=True)
+                await query.message.reply_text(
+                    "✅ <b>Series announcement sent successfully.</b>",
+                    parse_mode=enums.ParseMode.HTML
+                )
+            else:
+                await query.answer("❌ Failed to send announcement.", show_alert=True)
+        except Exception as e:
+            logger.error(f"[MANUAL ANNOUNCEMENT ERROR]\ntype=series\nfilter_id={series_id}\nerror={e}")
+            await query.answer(f"❌ Error: {e}", show_alert=True)
+        return
+
     series_id = query.data.split("#")[1]
     exact = await get_series(series_id)
     if not exact:
@@ -1705,6 +1748,30 @@ async def _is_in_wizard_session_filter(_, __, message: Message) -> bool:
 wizard_filter = filters.create(_is_in_wizard_session_filter)
 
 
+def _log_wizard_step(user_id: int, workflow: str, old_state: str, new_state: str):
+    log_str = (
+        f"[WIZARD STEP]\n"
+        f"user_id={user_id}\n"
+        f"workflow={workflow}\n"
+        f"old_state={old_state}\n"
+        f"new_state={new_state}"
+    )
+    print(log_str, flush=True)
+    logger.info(log_str)
+
+
+def _log_wizard_prompt(user_id: int, workflow: str, state: str, message_id: int):
+    log_str = (
+        f"[WIZARD PROMPT]\n"
+        f"user_id={user_id}\n"
+        f"workflow={workflow}\n"
+        f"state={state}\n"
+        f"message_id={message_id}"
+    )
+    print(log_str, flush=True)
+    logger.info(log_str)
+
+
 @Client.on_message(
     (filters.text | filters.photo) & wizard_filter,
     group=-10
@@ -1726,15 +1793,9 @@ async def wizard_text_handler(client: Client, message: Message):
         if text.lower().startswith("/cancel"):
             from utils import cancel_wizard_session
             workflow = cancel_wizard_session(uid)
+            clear_wizard_session(uid)
             logger.info(f"[WIZARD CANCEL]\nuser_id={uid}\nworkflow={workflow}")
-            if workflow == "AUTO_MOVIE":
-                return await message.reply_text("❌ <b>Auto Movie Add cancelled.</b>", parse_mode=enums.ParseMode.HTML)
-            elif workflow in ("AUTO_SERIES", "SERIES_WIZARD"):
-                return await message.reply_text("❌ <b>Auto Series Add cancelled.</b>", parse_mode=enums.ParseMode.HTML)
-            elif workflow:
-                return await message.reply_text("❌ <b>Action cancelled.</b>", parse_mode=enums.ParseMode.HTML)
-            else:
-                return await message.reply_text("No active wizard or session to cancel.")
+            return await message.reply_text("❌ <b>Action cancelled.</b>", parse_mode=enums.ParseMode.HTML)
         elif text.lower().startswith("/skip"):
             # Allow /skip to pass through to the wizard state handlers!
             pass
@@ -1758,7 +1819,15 @@ async def wizard_text_handler(client: Client, message: Message):
 
     workflow = sess.get("workflow")
     state = sess.get("state")
-    logger.info(f"[WIZARD INPUT] user={uid} workflow={workflow} state={state} text={text}")
+    log_input = (
+        f"[WIZARD INPUT]\n"
+        f"user_id={uid}\n"
+        f"workflow={workflow}\n"
+        f"state={state}\n"
+        f"text={text}"
+    )
+    print(log_input, flush=True)
+    logger.info(log_input)
 
     # ── Thumbnail Wizard Handler ─────────────────────────────────────────────
     if workflow == "THUMBNAIL" or (hasattr(temp, "SETTING_SERIES_THUMB") and temp.SETTING_SERIES_THUMB.get(uid)):
@@ -1772,7 +1841,7 @@ async def wizard_text_handler(client: Client, message: Message):
                 
             clear_wizard_session(uid)
             cmd_msg_id = thumb_state.get("command_msg_id") if isinstance(thumb_state, dict) else None
-            prompt_msg_id = thumb_state.get("prompt_msg_id") if isinstance(thumb_state, dict) else None
+            prompt_msg_id = thumb_state.get("prompt_msg_id") or thumb_state.get("prompt_message_id") if isinstance(thumb_state, dict) else None
             
             try:
                 await client.delete_messages(message.chat.id, [
@@ -1799,33 +1868,63 @@ async def wizard_text_handler(client: Client, message: Message):
     if workflow == "AUTO_SERIES":
         auto_data = sess.get("data") or temp.AUTO_SERIES.get(uid, {})
         if sess.get("state") == "WAIT_IMDB" or auto_data.get("state") == "WAIT_IMDB":
-            if not text:
-                return await message.reply_text("⚠️ Please send a valid IMDb link, ID, or Series Name.")
-
             m_imdb = re.search(r"(?:imdb\.com/title/)?(tt\d{5,12})", text, re.I)
-            imdb_id = m_imdb.group(1).lower() if m_imdb else None
+            if not m_imdb:
+                prompt_msg_id = auto_data.get("prompt_msg_id") or auto_data.get("prompt_message_id")
+                try:
+                    await message.delete()
+                except Exception:
+                    pass
+                if prompt_msg_id:
+                    try:
+                        await client.delete_messages(chat_id, prompt_msg_id)
+                    except Exception:
+                        pass
+                pmsg = await client.send_message(
+                    chat_id=chat_id,
+                    text=(
+                        "❌ <b>Invalid IMDb URL or ID.</b>\n\n"
+                        "Please send:\n\n"
+                        "<code>https://www.imdb.com/title/tt9288030/</code>\n\n"
+                        "or:\n\n"
+                        "<code>tt9288030</code>"
+                    ),
+                    reply_markup=InlineKeyboardMarkup([[
+                        InlineKeyboardButton("❌ Cancel", callback_data="sw#auto_cancel")
+                    ]]),
+                    parse_mode=enums.ParseMode.HTML
+                )
+                auto_data["prompt_msg_id"] = pmsg.id if pmsg else None
+                auto_data["prompt_message_id"] = pmsg.id if pmsg else None
+                return
 
-            prompt_msg_id = auto_data.get("prompt_msg_id") or sess.get("data", {}).get("prompt_msg_id")
+            imdb_id = m_imdb.group(1).lower()
+
+            prompt_msg_id = auto_data.get("prompt_msg_id") or auto_data.get("prompt_message_id")
             try:
                 await message.delete()
-                logger.info(f"[AUTO_SERIES] user message deleted")
-            except Exception as de:
-                logger.warning(f"[AUTO_SERIES] could not delete user message: {de}")
+            except Exception:
+                pass
 
             if prompt_msg_id:
                 try:
-                    await client.delete_messages(message.chat.id, prompt_msg_id)
+                    await client.delete_messages(chat_id, prompt_msg_id)
                 except Exception:
                     pass
 
-            loading_msg = await client.send_message(chat_id=message.chat.id, text="⏳ Fetching IMDb Series metadata, please wait...")
+            loading_msg = await client.send_message(
+                chat_id=chat_id,
+                text=(
+                    "🔎 <b>Processing IMDb Series...</b>\n\n"
+                    f"IMDb ID:\n<code>{imdb_id}</code>\n\n"
+                    "Please wait..."
+                ),
+                parse_mode=enums.ParseMode.HTML
+            )
 
             info = None
             try:
-                if imdb_id:
-                    info = await get_poster(imdb_id, id=True)
-                else:
-                    info = await get_poster(text)
+                info = await get_poster(imdb_id, id=True)
                 if info:
                     logger.info(f"[AUTO_SERIES IMDb]\nuser_id={uid}\nimdb_id={info.get('imdb_id')}\ntitle={info.get('title')}\nkind={info.get('kind')}")
                 else:
@@ -1871,10 +1970,11 @@ async def wizard_text_handler(client: Client, message: Message):
                 "total_seasons": tot_seasons,
                 "existing_series_id": str(existing["_id"]) if existing else None,
             })
-            set_wizard_session(uid, workflow="AUTO_SERIES", state="CONFIRM_IMDB", data=auto_data, chat_id=message.chat.id)
+            _log_wizard_step(uid, "AUTO_SERIES", "WAIT_IMDB", "CONFIRM_IMDB")
+            set_wizard_session(uid, workflow="AUTO_SERIES", state="CONFIRM_IMDB", data=auto_data, chat_id=chat_id)
             temp.AUTO_SERIES[uid] = auto_data
 
-            rating_str = f"\n⭐ <b>Rating:</b> {auto_data['rating']}/10" if auto_data['rating'] else ""
+            rating_str = f"\n⭐ {auto_data['rating']}/10" if auto_data['rating'] else ""
             exist_str = "\n\nℹ️ <i>Existing series found in database. New files will be attached without duplicating existing episodes.</i>" if existing else ""
 
             if tot_seasons == 1:
@@ -1891,22 +1991,24 @@ async def wizard_text_handler(client: Client, message: Message):
                 ])
 
             caption = (
-                f"🎬 <b>{auto_data['title']}</b>\n"
-                f"📅 <b>Year:</b> {auto_data['year']}\n"
-                f"🎭 <b>Genre:</b> {auto_data['genre']}"
+                "📺 <b>Series Found</b>\n\n"
+                f"<b>{auto_data['title']}</b> ({auto_data['year']})\n"
                 f"{rating_str}\n"
-                f"🆔 <b>IMDb:</b> <code>{auto_data['imdb_id']}</code>"
+                f"🎭 {auto_data['genre']}"
                 f"{exist_str}\n\n"
                 "Choose an option below to proceed:"
             )
 
             await loading_msg.delete()
-            await client.send_message(
-                chat_id=message.chat.id,
+            pmsg = await client.send_message(
+                chat_id=chat_id,
                 text=caption,
                 reply_markup=markup,
                 parse_mode=enums.ParseMode.HTML,
             )
+            auto_data["prompt_msg_id"] = pmsg.id if pmsg else None
+            auto_data["prompt_message_id"] = pmsg.id if pmsg else None
+            _log_wizard_prompt(uid, "AUTO_SERIES", "CONFIRM_IMDB", pmsg.id if pmsg else 0)
             try:
                 message.stop_propagation()
             except Exception:
@@ -1917,33 +2019,63 @@ async def wizard_text_handler(client: Client, message: Message):
     if workflow == "AUTO_MOVIE":
         movie_data = sess.get("data") or temp.AUTO_MOVIE.get(uid, {})
         if sess.get("state") == "WAIT_IMDB" or movie_data.get("state") == "WAIT_IMDB":
-            if not text:
-                return await message.reply_text("⚠️ Please send a valid IMDb link, ID, or Movie Name.")
-
             m_imdb = re.search(r"(?:imdb\.com/title/)?(tt\d{5,12})", text, re.I)
-            imdb_id = m_imdb.group(1).lower() if m_imdb else None
+            if not m_imdb:
+                prompt_msg_id = movie_data.get("prompt_msg_id") or movie_data.get("prompt_message_id")
+                try:
+                    await message.delete()
+                except Exception:
+                    pass
+                if prompt_msg_id:
+                    try:
+                        await client.delete_messages(chat_id, prompt_msg_id)
+                    except Exception:
+                        pass
+                pmsg = await client.send_message(
+                    chat_id=chat_id,
+                    text=(
+                        "❌ <b>Invalid IMDb URL or ID.</b>\n\n"
+                        "Please send:\n\n"
+                        "<code>https://www.imdb.com/title/tt35723557/</code>\n\n"
+                        "or:\n\n"
+                        "<code>tt35723557</code>"
+                    ),
+                    reply_markup=InlineKeyboardMarkup([[
+                        InlineKeyboardButton("❌ Cancel", callback_data="sw#auto_cancel")
+                    ]]),
+                    parse_mode=enums.ParseMode.HTML
+                )
+                movie_data["prompt_msg_id"] = pmsg.id if pmsg else None
+                movie_data["prompt_message_id"] = pmsg.id if pmsg else None
+                return
 
-            prompt_msg_id = movie_data.get("prompt_msg_id") or sess.get("data", {}).get("prompt_msg_id")
+            imdb_id = m_imdb.group(1).lower()
+
+            prompt_msg_id = movie_data.get("prompt_msg_id") or movie_data.get("prompt_message_id")
             try:
                 await message.delete()
-                logger.info(f"[AUTO_MOVIE] user message deleted")
-            except Exception as de:
-                logger.warning(f"[AUTO_MOVIE] could not delete user message: {de}")
+            except Exception:
+                pass
 
             if prompt_msg_id:
                 try:
-                    await client.delete_messages(message.chat.id, prompt_msg_id)
+                    await client.delete_messages(chat_id, prompt_msg_id)
                 except Exception:
                     pass
 
-            loading_msg = await client.send_message(chat_id=message.chat.id, text="⏳ Fetching IMDb Movie metadata, please wait...")
+            loading_msg = await client.send_message(
+                chat_id=chat_id,
+                text=(
+                    "🔎 <b>Processing IMDb Movie...</b>\n\n"
+                    f"IMDb ID:\n<code>{imdb_id}</code>\n\n"
+                    "Please wait..."
+                ),
+                parse_mode=enums.ParseMode.HTML
+            )
 
             info = None
             try:
-                if imdb_id:
-                    info = await get_poster(imdb_id, id=True)
-                else:
-                    info = await get_poster(text)
+                info = await get_poster(imdb_id, id=True)
                 if info:
                     logger.info(f"[AUTO_MOVIE IMDb]\nuser_id={uid}\nimdb_id={info.get('imdb_id')}\ntitle={info.get('title')}\nyear={info.get('year')}\nkind={info.get('kind')}\ntype=MOVIE")
                 else:
@@ -1983,11 +2115,17 @@ async def wizard_text_handler(client: Client, message: Message):
                 "poster": info.get("poster") or "",
                 "created_at": time.time(),
             })
-            set_wizard_session(uid, workflow="AUTO_MOVIE", state="SCANNING", data=movie_data, chat_id=message.chat.id)
+            _log_wizard_step(uid, "AUTO_MOVIE", "WAIT_IMDB", "SCANNING")
+            set_wizard_session(uid, workflow="AUTO_MOVIE", state="SCANNING", data=movie_data, chat_id=chat_id)
             logger.info("[AUTO MOVIE]\nstate=SCANNING")
 
+            rating_str = f"\n⭐ {movie_data['rating']}/10" if movie_data['rating'] else ""
             await loading_msg.edit_text(
-                f"🔍 <b>Scanning database for {movie_data['title']} ({movie_data['year']})...</b>",
+                f"🎬 <b>Movie Found</b>\n\n"
+                f"<b>{movie_data['title']}</b> ({movie_data['year']})\n"
+                f"{rating_str}\n"
+                f"🎭 {movie_data['genre']}\n\n"
+                f"🔍 <b>Scanning database for files...</b>",
                 parse_mode=enums.ParseMode.HTML
             )
 
@@ -1997,7 +2135,7 @@ async def wizard_text_handler(client: Client, message: Message):
             movie_data["state"] = "RESULT"
             temp.AUTO_MOVIE[session_id] = movie_data
             temp.AUTO_MOVIE[uid] = movie_data
-            set_wizard_session(uid, workflow="AUTO_MOVIE", state="RESULT", data=movie_data, chat_id=message.chat.id)
+            _log_wizard_step(uid, "AUTO_MOVIE", "SCANNING", "RESULT")
             logger.info("[AUTO MOVIE]\nstate=RESULT")
 
             logger.info(f"[AUTO_MOVIE SCAN]\ntitle={movie_data['title']}\nscanned={res['total_scanned']}\nmatched={res['total_matched']}\nnew={res['total_new']}\nduplicates={res['total_duplicates']}")
@@ -2015,6 +2153,7 @@ async def wizard_text_handler(client: Client, message: Message):
     if workflow != "SERIES_WIZARD" or uid not in temp.SERIES_WIZARD:
         return
 
+    import html
     wiz = temp.SERIES_WIZARD[uid]
     state = wiz.get("state")
 
@@ -2032,7 +2171,7 @@ async def wizard_text_handler(client: Client, message: Message):
                     text=f"⚠️ A series named <b>{text}</b> already exists.\n\nPlease send a different name, or /cancel to abort.",
                     parse_mode=enums.ParseMode.HTML,
                 )
-        prompt_msg_id = wiz.get("prompt_msg_id") or sess.get("data", {}).get("prompt_msg_id")
+        prompt_msg_id = wiz.get("prompt_msg_id") or wiz.get("prompt_message_id") or sess.get("data", {}).get("prompt_msg_id") or sess.get("data", {}).get("prompt_message_id")
         try:
             await message.delete()
         except Exception:
@@ -2044,48 +2183,100 @@ async def wizard_text_handler(client: Client, message: Message):
                 pass
 
         wiz["name"] = text
+        _log_wizard_step(uid, "SERIES_WIZARD", S_NAME, S_YEAR)
         wiz["state"] = S_YEAR
+        set_wizard_session(uid, workflow="SERIES_WIZARD", state=S_YEAR, data=wiz, chat_id=chat_id)
+
+        prompt_text = (
+            "📅 <b>Series Year</b>\n\n"
+            f"Series:\n<b>{html.escape(wiz['name'])}</b>\n\n"
+            "Please send the release year.\n\n"
+            "Example:\n\n"
+            "<code>2021</code>"
+        )
+        markup = InlineKeyboardMarkup([[
+            InlineKeyboardButton("❌ Cancel", callback_data="sw#auto_cancel")
+        ]])
         pmsg = await client.send_message(
             chat_id=chat_id,
-            text=f"✅ Name set to: <b>{text}</b>\n\nNow send the <b>release year</b> (e.g. <code>2023</code>) or send /skip.",
+            text=prompt_text,
+            reply_markup=markup,
             parse_mode=enums.ParseMode.HTML,
         )
         wiz["prompt_msg_id"] = pmsg.id if pmsg else None
+        wiz["prompt_message_id"] = pmsg.id if pmsg else None
+        _log_wizard_prompt(uid, "SERIES_WIZARD", S_YEAR, pmsg.id if pmsg else 0)
         return
 
     # ── Year ─────────────────────────────────────────────────────────────────
     elif state == S_YEAR:
+        prompt_msg_id = wiz.get("prompt_msg_id") or wiz.get("prompt_message_id")
         try:
             await message.delete()
         except Exception:
             pass
-        prompt_msg_id = wiz.get("prompt_msg_id")
         if prompt_msg_id:
             try:
                 await client.delete_messages(chat_id, prompt_msg_id)
             except Exception:
                 pass
 
+        if text.lower() != "/skip" and not (len(text) == 4 and text.isdigit()):
+            pmsg = await client.send_message(
+                chat_id=chat_id,
+                text=(
+                    "❌ <b>Invalid year.</b>\n\n"
+                    "Please send a valid 4-digit year.\n\n"
+                    "Example:\n\n"
+                    "<code>2021</code>"
+                ),
+                reply_markup=InlineKeyboardMarkup([[
+                    InlineKeyboardButton("❌ Cancel", callback_data="sw#auto_cancel")
+                ]]),
+                parse_mode=enums.ParseMode.HTML,
+            )
+            wiz["prompt_msg_id"] = pmsg.id if pmsg else None
+            wiz["prompt_message_id"] = pmsg.id if pmsg else None
+            return
+
         if text.lower() == "/skip":
             wiz["year"] = ""
         else:
             wiz["year"] = text
+
+        _log_wizard_step(uid, "SERIES_WIZARD", S_YEAR, S_GENRE)
         wiz["state"] = S_GENRE
+        set_wizard_session(uid, workflow="SERIES_WIZARD", state=S_GENRE, data=wiz, chat_id=chat_id)
+
+        year_str = f" ({wiz['year']})" if wiz["year"] else ""
+        prompt_text = (
+            "🎭 <b>Genre</b>\n\n"
+            f"Series:\n<b>{html.escape(wiz['name'])}{year_str}</b>\n\n"
+            "Please send the genre.\n\n"
+            "Example:\n\n"
+            "<code>Action, Adventure, Drama</code>"
+        )
+        markup = InlineKeyboardMarkup([[
+            InlineKeyboardButton("❌ Cancel", callback_data="sw#auto_cancel")
+        ]])
         pmsg = await client.send_message(
             chat_id=chat_id,
-            text=f"📅 Year saved: <b>{wiz['year'] or 'Skipped'}</b>\n\nNow send the <b>genre(s)</b> (e.g. <code>Action, Drama, Sci-Fi</code>) or send /skip.",
+            text=prompt_text,
+            reply_markup=markup,
             parse_mode=enums.ParseMode.HTML,
         )
         wiz["prompt_msg_id"] = pmsg.id if pmsg else None
+        wiz["prompt_message_id"] = pmsg.id if pmsg else None
+        _log_wizard_prompt(uid, "SERIES_WIZARD", S_GENRE, pmsg.id if pmsg else 0)
         return
 
     # ── Genre ────────────────────────────────────────────────────────────────
     elif state == S_GENRE:
+        prompt_msg_id = wiz.get("prompt_msg_id") or wiz.get("prompt_message_id")
         try:
             await message.delete()
         except Exception:
             pass
-        prompt_msg_id = wiz.get("prompt_msg_id")
         if prompt_msg_id:
             try:
                 await client.delete_messages(chat_id, prompt_msg_id)
@@ -2096,48 +2287,101 @@ async def wizard_text_handler(client: Client, message: Message):
             wiz["genre"] = ""
         else:
             wiz["genre"] = text
+
+        _log_wizard_step(uid, "SERIES_WIZARD", S_GENRE, S_RATING)
         wiz["state"] = S_RATING
+        set_wizard_session(uid, workflow="SERIES_WIZARD", state=S_RATING, data=wiz, chat_id=chat_id)
+
+        prompt_text = (
+            "⭐ <b>IMDb Rating</b>\n\n"
+            "Please send the IMDb rating.\n\n"
+            "Example:\n\n"
+            "<code>8.2</code>"
+        )
+        markup = InlineKeyboardMarkup([[
+            InlineKeyboardButton("❌ Cancel", callback_data="sw#auto_cancel")
+        ]])
         pmsg = await client.send_message(
             chat_id=chat_id,
-            text=f"🎭 Genre saved: <b>{wiz['genre'] or 'Skipped'}</b>\n\nNow send the <b>IMDb rating</b> (e.g. <code>8.5/10</code>) or send /skip.",
+            text=prompt_text,
+            reply_markup=markup,
             parse_mode=enums.ParseMode.HTML,
         )
         wiz["prompt_msg_id"] = pmsg.id if pmsg else None
+        wiz["prompt_message_id"] = pmsg.id if pmsg else None
+        _log_wizard_prompt(uid, "SERIES_WIZARD", S_RATING, pmsg.id if pmsg else 0)
         return
 
     # ── Rating ───────────────────────────────────────────────────────────────
     elif state == S_RATING:
+        prompt_msg_id = wiz.get("prompt_msg_id") or wiz.get("prompt_message_id")
         try:
             await message.delete()
         except Exception:
             pass
-        prompt_msg_id = wiz.get("prompt_msg_id")
         if prompt_msg_id:
             try:
                 await client.delete_messages(chat_id, prompt_msg_id)
             except Exception:
                 pass
 
-        if text.lower() == "/skip":
-            wiz["rating"] = ""
+        if text.lower() != "/skip":
+            clean_rating = text.lower().replace("/10", "").strip()
+            try:
+                r_val = float(clean_rating)
+                if not (0.0 <= r_val <= 10.0):
+                    raise ValueError()
+                wiz["rating"] = str(r_val)
+            except Exception:
+                pmsg = await client.send_message(
+                    chat_id=chat_id,
+                    text=(
+                        "❌ <b>Invalid IMDb rating.</b>\n\n"
+                        "Please send a number like:\n\n"
+                        "<code>8.2</code>"
+                    ),
+                    reply_markup=InlineKeyboardMarkup([[
+                        InlineKeyboardButton("❌ Cancel", callback_data="sw#auto_cancel")
+                    ]]),
+                    parse_mode=enums.ParseMode.HTML,
+                )
+                wiz["prompt_msg_id"] = pmsg.id if pmsg else None
+                wiz["prompt_message_id"] = pmsg.id if pmsg else None
+                return
         else:
-            wiz["rating"] = text
+            wiz["rating"] = ""
+
+        _log_wizard_step(uid, "SERIES_WIZARD", S_RATING, S_DESC)
         wiz["state"] = S_DESC
+        set_wizard_session(uid, workflow="SERIES_WIZARD", state=S_DESC, data=wiz, chat_id=chat_id)
+
+        prompt_text = (
+            "📝 <b>Description</b>\n\n"
+            "Please send a short description of the Series.\n\n"
+            "Example:\n\n"
+            "<code>A time-travelling story...</code>"
+        )
+        markup = InlineKeyboardMarkup([[
+            InlineKeyboardButton("❌ Cancel", callback_data="sw#auto_cancel")
+        ]])
         pmsg = await client.send_message(
             chat_id=chat_id,
-            text=f"⭐ Rating saved: <b>{wiz['rating'] or 'Skipped'}</b>\n\nNow send a <b>short description</b> or send /skip.",
+            text=prompt_text,
+            reply_markup=markup,
             parse_mode=enums.ParseMode.HTML,
         )
         wiz["prompt_msg_id"] = pmsg.id if pmsg else None
+        wiz["prompt_message_id"] = pmsg.id if pmsg else None
+        _log_wizard_prompt(uid, "SERIES_WIZARD", S_DESC, pmsg.id if pmsg else 0)
         return
 
     # ── Description ───────────────────────────────────────────────────────────
     elif state == S_DESC:
+        prompt_msg_id = wiz.get("prompt_msg_id") or wiz.get("prompt_message_id")
         try:
             await message.delete()
         except Exception:
             pass
-        prompt_msg_id = wiz.get("prompt_msg_id")
         if prompt_msg_id:
             try:
                 await client.delete_messages(chat_id, prompt_msg_id)
@@ -2148,22 +2392,37 @@ async def wizard_text_handler(client: Client, message: Message):
             wiz["description"] = ""
         else:
             wiz["description"] = text
+
+        _log_wizard_step(uid, "SERIES_WIZARD", S_DESC, S_POSTER)
         wiz["state"] = S_POSTER
+        set_wizard_session(uid, workflow="SERIES_WIZARD", state=S_POSTER, data=wiz, chat_id=chat_id)
+
+        prompt_text = (
+            "🖼 <b>Series Poster</b>\n\n"
+            "Please send the Series poster image."
+        )
+        markup = InlineKeyboardMarkup([
+            [InlineKeyboardButton("⏭️ Skip Poster", callback_data="sw#skip_poster")],
+            [InlineKeyboardButton("❌ Cancel", callback_data="sw#auto_cancel")]
+        ])
         pmsg = await client.send_message(
             chat_id=chat_id,
-            text=f"📝 Description saved.\n\nNow send a <b>poster / banner image</b> or send /skip.",
+            text=prompt_text,
+            reply_markup=markup,
             parse_mode=enums.ParseMode.HTML,
         )
         wiz["prompt_msg_id"] = pmsg.id if pmsg else None
+        wiz["prompt_message_id"] = pmsg.id if pmsg else None
+        _log_wizard_prompt(uid, "SERIES_WIZARD", S_POSTER, pmsg.id if pmsg else 0)
         return
 
     # ── Poster ────────────────────────────────────────────────────────────────
     elif state == S_POSTER:
+        prompt_msg_id = wiz.get("prompt_msg_id") or wiz.get("prompt_message_id")
         try:
             await message.delete()
         except Exception:
             pass
-        prompt_msg_id = wiz.get("prompt_msg_id")
         if prompt_msg_id:
             try:
                 await client.delete_messages(chat_id, prompt_msg_id)
@@ -2175,17 +2434,31 @@ async def wizard_text_handler(client: Client, message: Message):
         elif text.lower() == "/skip":
             wiz["poster"] = ""
         else:
-            pmsg = await client.send_message(chat_id=chat_id, text="Please send a photo or /skip.")
+            pmsg = await client.send_message(
+                chat_id=chat_id,
+                text="⚠️ Please send a photo or click Skip Poster.",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("⏭️ Skip Poster", callback_data="sw#skip_poster")],
+                    [InlineKeyboardButton("❌ Cancel", callback_data="sw#auto_cancel")]
+                ]),
+                parse_mode=enums.ParseMode.HTML,
+            )
             wiz["prompt_msg_id"] = pmsg.id if pmsg else None
+            wiz["prompt_message_id"] = pmsg.id if pmsg else None
             return
 
+        _log_wizard_step(uid, "SERIES_WIZARD", S_POSTER, S_DONE)
         wiz["state"] = S_DONE
-        await client.send_message(
+        set_wizard_session(uid, workflow="SERIES_WIZARD", state=S_DONE, data=wiz, chat_id=chat_id)
+        pmsg = await client.send_message(
             chat_id=chat_id,
             text=_series_card(wiz) + "\n\n⚙️ <b>Series Configuration</b>\nChoose an option to edit or click Save:",
             reply_markup=_config_menu_keyboard(wiz.get("series_id"), wiz.get("from_viewseries", False)),
             parse_mode=enums.ParseMode.HTML,
         )
+        wiz["prompt_msg_id"] = pmsg.id if pmsg else None
+        wiz["prompt_message_id"] = pmsg.id if pmsg else None
+        _log_wizard_prompt(uid, "SERIES_WIZARD", S_DONE, pmsg.id if pmsg else 0)
         return
 
     # ── Custom Language Input ────────────────────────────────────────────────
@@ -2322,6 +2595,8 @@ async def _handle_wizard_callback(client: Client, query: CallbackQuery):
 
     # ── Auto S Add & Menu Entry Callbacks ────────────────────────────────────
     if action == "start_manual":
+        print(f"[WIZARD BUTTON]\nuser_id={uid}\nbutton=MANUAL", flush=True)
+        logger.info(f"[WIZARD BUTTON]\nuser_id={uid}\nbutton=MANUAL")
         print(
             f"### MANUAL START REACHED user={uid}",
             flush=True
@@ -2377,8 +2652,11 @@ async def _handle_wizard_callback(client: Client, query: CallbackQuery):
 
         # STEP 3: Send the NEW wizard prompt message
         text = (
-            "🎬 <b>Create New Series</b>\n\n"
-            "Please send the <b>series name</b>."
+            "📝 <b>Manual Series Adding</b>\n\n"
+            "You selected <b>Manual Adding</b>.\n\n"
+            "Please send the <b>Series Name</b>.\n\n"
+            "Example:\n\n"
+            "<code>Loki</code>"
         )
         markup = InlineKeyboardMarkup([[
             InlineKeyboardButton("❌ Cancel", callback_data="sw#auto_cancel")
@@ -2398,14 +2676,7 @@ async def _handle_wizard_callback(client: Client, query: CallbackQuery):
             f"user={uid}",
             flush=True
         )
-        prompt_log = (
-            f"[WIZARD PROMPT CREATED]\n"
-            f"workflow=SERIES_WIZARD\n"
-            f"user_id={uid}\n"
-            f"message_id={pmsg.id}"
-        )
-        print(prompt_log, flush=True)
-        logger.info(prompt_log)
+        _log_wizard_prompt(uid, "SERIES_WIZARD", S_NAME, pmsg.id)
 
         temp.SERIES_WIZARD[uid]["prompt_message_id"] = pmsg.id
         temp.SERIES_WIZARD[uid]["prompt_msg_id"] = pmsg.id
@@ -2422,7 +2693,33 @@ async def _handle_wizard_callback(client: Client, query: CallbackQuery):
         logger.info(f"[AUTO MENU]\naction=CLICK\nbutton=MANUAL\nuser_id={uid}")
         return
 
+    if action == "skip_poster":
+        await query.answer()
+        if uid not in temp.SERIES_WIZARD:
+            return
+        wiz = temp.SERIES_WIZARD[uid]
+        wiz["poster"] = ""
+        _log_wizard_step(uid, "SERIES_WIZARD", S_POSTER, S_DONE)
+        wiz["state"] = S_DONE
+        set_wizard_session(uid, workflow="SERIES_WIZARD", state=S_DONE, data=wiz, chat_id=query.message.chat.id)
+        try:
+            await query.message.delete()
+        except Exception:
+            pass
+        pmsg = await client.send_message(
+            chat_id=query.message.chat.id,
+            text=_series_card(wiz) + "\n\n⚙️ <b>Series Configuration</b>\nChoose an option to edit or click Save:",
+            reply_markup=_config_menu_keyboard(wiz.get("series_id"), wiz.get("from_viewseries", False)),
+            parse_mode=enums.ParseMode.HTML,
+        )
+        wiz["prompt_msg_id"] = pmsg.id if pmsg else None
+        wiz["prompt_message_id"] = pmsg.id if pmsg else None
+        _log_wizard_prompt(uid, "SERIES_WIZARD", S_DONE, pmsg.id if pmsg else 0)
+        return
+
     if action == "start_auto":
+        print(f"[WIZARD BUTTON]\nuser_id={uid}\nbutton=AUTO_SERIES", flush=True)
+        logger.info(f"[WIZARD BUTTON]\nuser_id={uid}\nbutton=AUTO_SERIES")
         print(
             f"### AUTO SERIES START REACHED user={uid}",
             flush=True
@@ -2465,10 +2762,12 @@ async def _handle_wizard_callback(client: Client, query: CallbackQuery):
 
         # STEP 3: Send the NEW wizard prompt message
         text = (
-            "🤖 <b>Auto Series Add — Series Importer</b>\n\n"
-            "🎬 <b>Send IMDb Series link or ID:</b>\n\n"
+            "📺 <b>Auto Series Add</b>\n\n"
+            "You selected <b>Auto S Add</b>.\n\n"
+            "Please send the <b>IMDb Series URL or IMDb ID</b>.\n\n"
             "Examples:\n\n"
-            "<code>https://www.imdb.com/title/tt9288030/</code>\n"
+            "<code>https://www.imdb.com/title/tt9288030/</code>\n\n"
+            "or\n\n"
             "<code>tt9288030</code>"
         )
         markup = InlineKeyboardMarkup([[
@@ -2489,14 +2788,7 @@ async def _handle_wizard_callback(client: Client, query: CallbackQuery):
             f"user={uid}",
             flush=True
         )
-        prompt_log = (
-            f"[WIZARD PROMPT CREATED]\n"
-            f"workflow=AUTO_SERIES\n"
-            f"user_id={uid}\n"
-            f"message_id={pmsg.id}"
-        )
-        print(prompt_log, flush=True)
-        logger.info(prompt_log)
+        _log_wizard_prompt(uid, "AUTO_SERIES", "WAIT_IMDB", pmsg.id)
 
         temp.AUTO_SERIES[uid]["prompt_message_id"] = pmsg.id
         temp.AUTO_SERIES[uid]["prompt_msg_id"] = pmsg.id
@@ -2514,6 +2806,8 @@ async def _handle_wizard_callback(client: Client, query: CallbackQuery):
         return
 
     if action == "start_auto_movie":
+        print(f"[WIZARD BUTTON]\nuser_id={uid}\nbutton=AUTO_MOVIE", flush=True)
+        logger.info(f"[WIZARD BUTTON]\nuser_id={uid}\nbutton=AUTO_MOVIE")
         print(
             f"### AUTO MOVIE START REACHED user={uid}",
             flush=True
@@ -2558,10 +2852,12 @@ async def _handle_wizard_callback(client: Client, query: CallbackQuery):
 
         # STEP 3: Send the NEW wizard prompt message
         text = (
-            "🎬 <b>AUTO MOVIE ADD</b>\n\n"
-            "Send IMDb Movie URL or IMDb ID.\n\n"
+            "🎬 <b>Auto Movie Add</b>\n\n"
+            "You selected <b>Auto Movie Add</b>.\n\n"
+            "Please send the <b>IMDb Movie URL or IMDb ID</b>.\n\n"
             "Examples:\n\n"
-            "<code>https://www.imdb.com/title/tt35723557/</code>\n"
+            "<code>https://www.imdb.com/title/tt35723557/</code>\n\n"
+            "or\n\n"
             "<code>tt35723557</code>"
         )
         markup = InlineKeyboardMarkup([[
@@ -2582,14 +2878,7 @@ async def _handle_wizard_callback(client: Client, query: CallbackQuery):
             f"user={uid}",
             flush=True
         )
-        prompt_log = (
-            f"[WIZARD PROMPT CREATED]\n"
-            f"workflow=AUTO_MOVIE\n"
-            f"user_id={uid}\n"
-            f"message_id={pmsg.id}"
-        )
-        print(prompt_log, flush=True)
-        logger.info(prompt_log)
+        _log_wizard_prompt(uid, "AUTO_MOVIE", "WAIT_IMDB", pmsg.id)
 
         temp.AUTO_MOVIE[uid]["prompt_message_id"] = pmsg.id
         temp.AUTO_MOVIE[uid]["prompt_msg_id"] = pmsg.id
@@ -3084,11 +3373,45 @@ async def _handle_wizard_callback(client: Client, query: CallbackQuery):
             langs_summary = "\n".join(f"• {l}" for l in detected_langs) if detected_langs else "None"
 
             # Announcement sent when series filter is created/synced
-            if series_id:
+            logger.info(
+                f"[AUTO_SERIES ANNOUNCEMENT START] "
+                f"series_id={series_id} "
+                f"verified={verified}"
+            )
+
+            channel_id = await get_announcement_channel()
+
+            logger.info(
+                f"[AUTO_SERIES ANNOUNCEMENT CONFIG] "
+                f"channel_id={channel_id}"
+            )
+
+            announcement_already_sent = await is_announcement_sent(f"series:{series_id}", filter_type="series", filter_id=str(series_id))
+
+            logger.info(
+                f"[AUTO_SERIES ANNOUNCEMENT DUP CHECK] "
+                f"series_id={series_id} "
+                f"already_sent={announcement_already_sent}"
+            )
+
+            if verified and series_id:
                 try:
-                    await send_series_announcement(client, series_id, force=True)
+                    await announce_filter_created(
+                        client,
+                        filter_type="series",
+                        filter_id=str(series_id)
+                    )
+                    logger.info(
+                        f"[AUTO_SERIES ANNOUNCEMENT RETURNED] "
+                        f"series_id={series_id}"
+                    )
                 except Exception as ae:
-                    logger.error(f"[AUTO_SERIES ANNOUNCEMENT ERROR] {ae}")
+                    logger.exception(
+                        f"[AUTO_SERIES ANNOUNCEMENT FAILED] "
+                        f"series_id={series_id} "
+                        f"channel={channel_id} "
+                        f"key=series:{series_id}"
+                    )
 
             # Clear session ONLY after verification
             clear_wizard_session(uid)
@@ -3741,9 +4064,9 @@ async def _handle_wizard_callback(client: Client, query: CallbackQuery):
 
                     if verified and movie_id:
                         try:
-                            await send_movie_announcement(client, movie_id)
+                            await announce_filter_created(client, filter_type="movie", filter_id=str(movie_id))
                         except Exception as ae:
-                            logger.error(f"[MOVIE_BATCH ANNOUNCEMENT ERROR] {ae}")
+                            logger.exception(f"[MOVIE_BATCH ANNOUNCEMENT ERROR] movie_id={movie_id} error={ae}")
                 except Exception as e:
                     logger.error(f"[MOVIE BATCH SAVE] super_movies_col error: {e}", exc_info=True)
 
@@ -4042,11 +4365,11 @@ async def _handle_wizard_callback(client: Client, query: CallbackQuery):
                     f"found={verified_ep_count}"
                 )
 
-            if verified_ep_count > 0:
+            if verified_ep_count > 0 and series_id:
                 try:
-                    await send_series_announcement(client, series_id)
+                    await announce_filter_created(client, filter_type="series", filter_id=str(series_id))
                 except Exception as ae:
-                    logger.error(f"[SERIES_BATCH ANNOUNCEMENT ERROR] {ae}")
+                    logger.exception(f"[SERIES_BATCH ANNOUNCEMENT ERROR] series_id={series_id} error={ae}")
 
             await query.message.edit_text(
                 f"📦 <b>Batch Scan Result</b>\n\n"
@@ -4105,10 +4428,11 @@ async def _handle_wizard_callback(client: Client, query: CallbackQuery):
                 "created_by": uid,
             })
             _register_short_id(series_id)
-            try:
-                await send_series_announcement(client, series_id)
-            except Exception as ae:
-                logger.error(f"[MANUAL_SERIES ANNOUNCEMENT ERROR] {ae}")
+            if series_id:
+                try:
+                    await announce_filter_created(client, filter_type="series", filter_id=str(series_id))
+                except Exception as ae:
+                    logger.exception(f"[MANUAL_SERIES ANNOUNCEMENT ERROR] series_id={series_id} error={ae}")
 
 
 
@@ -4333,11 +4657,46 @@ async def _handle_auto_movie_hierarchical_callbacks(client: Client, query: Callb
             )
 
             # Step 5: Announcement sent when movie filter is created/synced
-            if movie_id:
+            logger.info(
+                f"[AUTO_MOVIE ANNOUNCEMENT START] "
+                f"movie_id={movie_id} "
+                f"verified={verified} "
+                f"linked_files={linked_files_count}"
+            )
+
+            channel_id = await get_announcement_channel()
+
+            logger.info(
+                f"[AUTO_MOVIE ANNOUNCEMENT CONFIG] "
+                f"channel_id={channel_id}"
+            )
+
+            already_sent = await is_announcement_sent(f"movie:{movie_id}", filter_type="movie", filter_id=str(movie_id))
+
+            logger.info(
+                f"[AUTO_MOVIE ANNOUNCEMENT DUP CHECK] "
+                f"movie_id={movie_id} "
+                f"already_sent={already_sent}"
+            )
+
+            if verified and movie_id:
                 try:
-                    await send_movie_announcement(client, movie_id, force=True)
+                    await announce_filter_created(
+                        client,
+                        filter_type="movie",
+                        filter_id=str(movie_id)
+                    )
+                    logger.info(
+                        f"[AUTO_MOVIE ANNOUNCEMENT RETURNED] "
+                        f"movie_id={movie_id}"
+                    )
                 except Exception as ae:
-                    logger.error(f"[AUTO_MOVIE ANNOUNCEMENT ERROR] {ae}")
+                    logger.exception(
+                        f"[AUTO_MOVIE ANNOUNCEMENT FAILED] "
+                        f"movie_id={movie_id} "
+                        f"channel={channel_id} "
+                        f"key=movie:{movie_id}"
+                    )
 
         except Exception as e:
             logger.error(f"[AUTO_MOVIE FILTER ERROR]\ntitle={movie_data.get('title','')}\nerror={e}", exc_info=True)
@@ -4864,10 +5223,11 @@ async def cmd_slink(client: Client, message: Message):
 
     wiz["state"] = S_DONE
 
-    try:
-        await send_series_announcement(client, series_id)
-    except Exception as ae:
-        logger.error(f"[SLINK ANNOUNCEMENT ERROR] {ae}")
+    if series_id:
+        try:
+            await announce_filter_created(client, filter_type="series", filter_id=str(series_id))
+        except Exception as ae:
+            logger.exception(f"[SLINK ANNOUNCEMENT ERROR] series_id={series_id} error={ae}")
 
     if inserted > 0:
         feedback_title = f"✅ <b>Episode {ep_num:02d} added successfully. Existing episodes were not modified.</b>"
@@ -6293,44 +6653,746 @@ async def cb_vser_page(client: Client, query: CallbackQuery):
     await query.answer()
 
 
+def _movie_card(movie: dict) -> str:
+    title = movie.get("title", "Unknown")
+    year = movie.get("year", "N/A")
+    rating = movie.get("rating", "")
+    genre = movie.get("genre", "N/A")
+    languages = movie.get("languages") or []
+    qualities = movie.get("qualities") or []
+    
+    r_str = f"{rating}/10" if rating and "/10" not in str(rating) and str(rating) != "N/A" else (rating or "N/A")
+    file_count = len(movie.get("file_ids") or [])
+
+    return (
+        f"🎬 <b>Movie Filter Editor</b>\n\n"
+        f"🎬 <b>{title}</b>\n"
+        f"📅 <b>Year:</b> {year}\n"
+        f"⭐ <b>Rating:</b> {r_str}\n"
+        f"🎭 <b>Genre:</b> {genre}\n"
+        f"🌐 <b>Languages:</b> {langs_str}\n"
+        f"🎞 <b>Qualities:</b> {quals_str}\n"
+        f"📦 <b>Linked Files:</b> {file_count}"
+    )
+
+
+def _movie_edit_keyboard(movie_id: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("✏️ Edit Name", callback_data=f"emovie_name#{movie_id}"),
+            InlineKeyboardButton("📅 Edit Year", callback_data=f"emovie_year#{movie_id}")
+        ],
+        [
+            InlineKeyboardButton("🎭 Edit Genre", callback_data=f"emovie_genre#{movie_id}"),
+            InlineKeyboardButton("⭐ Edit Rating", callback_data=f"emovie_rating#{movie_id}")
+        ],
+        [
+            InlineKeyboardButton("🖼 Edit Poster", callback_data=f"emovie_poster#{movie_id}"),
+            InlineKeyboardButton("🌐 Edit Languages", callback_data=f"emovie_lang#{movie_id}")
+        ],
+        [
+            InlineKeyboardButton("🎞 Edit Qualities", callback_data=f"emovie_quality#{movie_id}"),
+            InlineKeyboardButton("🔄 Sync Files", callback_data=f"emovie_sync#{movie_id}")
+        ],
+        [
+            InlineKeyboardButton("📢 Announcement", callback_data=f"emovie_announcement#{movie_id}")
+        ],
+        [
+            InlineKeyboardButton("🗑 Delete Filter", callback_data=f"emovie_delete#{movie_id}"),
+            InlineKeyboardButton("⬅️ Back", callback_data="emovie_list#0")
+        ]
+    ])
+
+
+def _movie_lang_keyboard(movie_id: str, selected_langs: list[str]) -> InlineKeyboardMarkup:
+    standard_langs = [
+        "Malayalam", "Tamil", "Hindi", "Telugu", "Kannada",
+        "English", "Bengali", "Marathi", "German", "Korean", "Japanese"
+    ]
+    all_langs = list(dict.fromkeys(standard_langs + selected_langs))
+    rows = []
+    current_row = []
+    for lang in all_langs:
+        checked = "✅ " if lang in selected_langs else ""
+        current_row.append(InlineKeyboardButton(f"{checked}{lang}", callback_data=f"emovie_lang_toggle#{movie_id}#{lang}"))
+        if len(current_row) == 2:
+            rows.append(current_row)
+            current_row = []
+    if current_row:
+        rows.append(current_row)
+    
+    rows.append([
+        InlineKeyboardButton("➕ Add Language", callback_data=f"emovie_lang_custom#{movie_id}"),
+        InlineKeyboardButton("💾 Save", callback_data=f"emovie_lang_save#{movie_id}")
+    ])
+    rows.append([InlineKeyboardButton("⬅️ Back", callback_data=f"emovie_cancel#{movie_id}")])
+    return InlineKeyboardMarkup(rows)
+
+
+def _movie_quality_keyboard(movie_id: str, selected_quals: list[str]) -> InlineKeyboardMarkup:
+    standard_quals = [
+        "1080p", "720p", "480p", "360p", "2160p/4K",
+        "WEB-DL", "BluRay", "HDRip", "DVDRip"
+    ]
+    all_quals = list(dict.fromkeys(standard_quals + selected_quals))
+    rows = []
+    current_row = []
+    for qual in all_quals:
+        checked = "✅ " if qual in selected_quals else ""
+        current_row.append(InlineKeyboardButton(f"{checked}{qual}", callback_data=f"emovie_qual_toggle#{movie_id}#{qual}"))
+        if len(current_row) == 2:
+            rows.append(current_row)
+            current_row = []
+    if current_row:
+        rows.append(current_row)
+    
+    rows.append([
+        InlineKeyboardButton("➕ Add Quality", callback_data=f"emovie_qual_custom#{movie_id}"),
+        InlineKeyboardButton("💾 Save", callback_data=f"emovie_qual_save#{movie_id}")
+    ])
+    rows.append([InlineKeyboardButton("⬅️ Back", callback_data=f"emovie_cancel#{movie_id}")])
+    return InlineKeyboardMarkup(rows)
+
+
+async def send_movie_filter_list(message_or_query, page: int = 0):
+    per_page = 10
+    cursor = super_movies_col.find({"status": {"$ne": "deleted"}}).sort("updated_at", -1)
+    movies = [m async for m in cursor]
+    
+    if not movies:
+        text = "🎬 <b>Movie Filter Management</b>\n\n<i>No Super Movie Filters found.</i>"
+        markup = InlineKeyboardMarkup([[InlineKeyboardButton("🏠 Close", callback_data="emovie_close")]])
+        if isinstance(message_or_query, Message):
+            return await message_or_query.reply_text(text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
+        else:
+            try:
+                return await message_or_query.message.edit_text(text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
+            except Exception:
+                return
+
+    total = len(movies)
+    total_pages = max(1, (total + per_page - 1) // per_page)
+    page = max(0, min(page, total_pages - 1))
+    
+    start_idx = page * per_page
+    page_items = movies[start_idx:start_idx + per_page]
+
+    text = (
+        f"🎬 <b>Movie Filter Management</b>\n\n"
+        f"Select a Movie Filter to edit:\n"
+        f"<i>Page {page + 1}/{total_pages} (Total: {total})</i>"
+    )
+
+    rows = []
+    for m in page_items:
+        mid = str(m["_id"])
+        title = m.get("title", "Movie")
+        year = m.get("year", "")
+        year_str = f" ({year})" if year and year != "N/A" else ""
+        rows.append([
+            InlineKeyboardButton(f"🎬 {title}{year_str}", callback_data=f"emovie_select#{mid}")
+        ])
+
+    nav = []
+    if page > 0:
+        nav.append(InlineKeyboardButton("⬅️ Previous", callback_data=f"emovie_list#{page - 1}"))
+    if page < total_pages - 1:
+        nav.append(InlineKeyboardButton("Next ➡️", callback_data=f"emovie_list#{page + 1}"))
+    if nav:
+        rows.append(nav)
+
+    rows.append([InlineKeyboardButton("🏠 Close", callback_data="emovie_close")])
+    markup = InlineKeyboardMarkup(rows)
+
+    if isinstance(message_or_query, Message):
+        await message_or_query.reply_text(text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
+    else:
+        try:
+            await message_or_query.message.edit_text(text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
+        except Exception:
+            pass
+
+
+@Client.on_message(filters.command(["ed_movie", "edmovie", "editmovie", "edit_movie"]), group=1)
+async def cmd_ed_movie(client: Client, message: Message):
+    if not _is_admin(message.from_user.id if message.from_user else 0):
+        return await message.reply_text("❌ You are not authorized to use this command.")
+
+    args = message.text.split(None, 1)
+    if len(args) > 1:
+        arg = args[1].strip().strip('"').strip("'")
+        exact = None
+        if re.fullmatch(r"[0-9a-fA-F]{24}", arg):
+            exact = await get_super_movie(arg)
+        else:
+            matches = await search_super_movies(arg)
+            if matches:
+                exact = matches[0]
+        if exact:
+            movie_id = str(exact["_id"])
+            uid = message.from_user.id
+            import time
+            temp.MOVIE_EDIT[uid] = {
+                "movie_id": movie_id,
+                "state": "MAIN",
+                "created_at": time.time(),
+                "title": exact.get("title", ""),
+                "year": exact.get("year", "N/A"),
+                "genre": exact.get("genre", "N/A"),
+                "rating": exact.get("rating", ""),
+                "poster": exact.get("poster", ""),
+                "languages": list(exact.get("languages") or []),
+                "qualities": list(exact.get("qualities") or [])
+            }
+            logger.info(f"[MOVIE EDIT OPEN]\nmovie_id={movie_id}")
+            logger.info(f"[MOVIE EDIT]\naction=OPEN\nmovie_id={movie_id}\nuser_id={uid}")
+            return await message.reply_text(
+                _movie_card(exact),
+                reply_markup=_movie_edit_keyboard(movie_id),
+                parse_mode=enums.ParseMode.HTML
+            )
+        else:
+            return await message.reply_text(f"❌ No Movie Filter found matching '<b>{arg}</b>'.", parse_mode=enums.ParseMode.HTML)
+
+    await send_movie_filter_list(message, page=0)
+
+
+@Client.on_callback_query(filters.regex(r"^emovie_"), group=-10)
+async def cb_emovie(client: Client, query: CallbackQuery):
+    if not _is_admin(query.from_user.id):
+        return await query.answer("❌ You are not authorized.", show_alert=True)
+    
+    uid = query.from_user.id
+    data = query.data
+    import time
+
+    if data == "emovie_close":
+        temp.MOVIE_EDIT.pop(uid, None)
+        try:
+            await query.message.delete()
+        except Exception:
+            pass
+        return await query.answer()
+
+    if data.startswith("emovie_list#"):
+        page_str = data.split("#")[1]
+        page = int(page_str) if page_str.isdigit() else 0
+        await send_movie_filter_list(query, page=page)
+        return await query.answer()
+
+    if data.startswith("emovie_select#"):
+        movie_id = data.split("#")[1]
+        movie = await get_super_movie(movie_id)
+        if not movie or movie.get("status") == "deleted":
+            return await query.answer("❌ Movie Filter not found or deleted.", show_alert=True)
+        
+        temp.MOVIE_EDIT[uid] = {
+            "movie_id": movie_id,
+            "state": "MAIN",
+            "created_at": time.time(),
+            "title": movie.get("title", ""),
+            "year": movie.get("year", "N/A"),
+            "genre": movie.get("genre", "N/A"),
+            "rating": movie.get("rating", ""),
+            "poster": movie.get("poster", ""),
+            "languages": list(movie.get("languages") or []),
+            "qualities": list(movie.get("qualities") or [])
+        }
+        logger.info(f"[MOVIE EDIT OPEN]\nmovie_id={movie_id}")
+        logger.info(f"[MOVIE EDIT]\naction=OPEN\nmovie_id={movie_id}\nuser_id={uid}")
+        
+        await query.message.edit_text(
+            _movie_card(movie),
+            reply_markup=_movie_edit_keyboard(movie_id),
+            parse_mode=enums.ParseMode.HTML
+        )
+        return await query.answer()
+
+    parts = data.split("#")
+    action_type = parts[0]
+    movie_id = parts[1] if len(parts) > 1 else ""
+
+    if not movie_id:
+        return await query.answer("⚠️ Invalid request.", show_alert=True)
+
+    movie = await get_super_movie(movie_id)
+    if not movie or movie.get("status") == "deleted":
+        return await query.answer("❌ Movie Filter not found or deleted.", show_alert=True)
+
+    if uid not in getattr(temp, "MOVIE_EDIT", {}) or temp.MOVIE_EDIT[uid].get("movie_id") != movie_id:
+        temp.MOVIE_EDIT[uid] = {
+            "movie_id": movie_id,
+            "state": "MAIN",
+            "created_at": time.time(),
+            "title": movie.get("title", ""),
+            "year": movie.get("year", "N/A"),
+            "genre": movie.get("genre", "N/A"),
+            "rating": movie.get("rating", ""),
+            "poster": movie.get("poster", ""),
+            "languages": list(movie.get("languages") or []),
+            "qualities": list(movie.get("qualities") or [])
+        }
+
+    sess = temp.MOVIE_EDIT[uid]
+
+    if action_type == "emovie_cancel":
+        sess["state"] = "MAIN"
+        await query.message.edit_text(
+            _movie_card(movie),
+            reply_markup=_movie_edit_keyboard(movie_id),
+            parse_mode=enums.ParseMode.HTML
+        )
+        return await query.answer()
+
+    if action_type == "emovie_name":
+        sess["state"] = "WAIT_NAME"
+        logger.info(f"[MOVIE EDIT]\naction=PROMPT_NAME\nmovie_id={movie_id}\nuser_id={uid}")
+        await query.message.edit_text(
+            f"✏️ <b>Edit Movie Name</b>\n\n"
+            f"Current:\n<b>{movie.get('title', 'Unknown')}</b>\n\n"
+            f"Send the new Movie Name.\n\n"
+            f"<i>Type the new name below:</i>",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data=f"emovie_cancel#{movie_id}")] ]),
+            parse_mode=enums.ParseMode.HTML
+        )
+        return await query.answer()
+
+    if action_type == "emovie_year":
+        sess["state"] = "WAIT_YEAR"
+        logger.info(f"[MOVIE EDIT]\naction=PROMPT_YEAR\nmovie_id={movie_id}\nuser_id={uid}")
+        await query.message.edit_text(
+            f"📅 <b>Edit Release Year</b>\n\n"
+            f"Current:\n<b>{movie.get('year', 'N/A')}</b>\n\n"
+            f"Send new year (e.g. <code>2026</code>).\n\n"
+            f"<i>Type the year below:</i>",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data=f"emovie_cancel#{movie_id}")] ]),
+            parse_mode=enums.ParseMode.HTML
+        )
+        return await query.answer()
+
+    if action_type == "emovie_genre":
+        sess["state"] = "WAIT_GENRE"
+        logger.info(f"[MOVIE EDIT]\naction=PROMPT_GENRE\nmovie_id={movie_id}\nuser_id={uid}")
+        await query.message.edit_text(
+            f"🎭 <b>Edit Genre</b>\n\n"
+            f"Current:\n<b>{movie.get('genre', 'N/A')}</b>\n\n"
+            f"Send new genre (e.g. <code>Action, Thriller, Drama</code>).\n\n"
+            f"<i>Type the genre below:</i>",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data=f"emovie_cancel#{movie_id}")] ]),
+            parse_mode=enums.ParseMode.HTML
+        )
+        return await query.answer()
+
+    if action_type == "emovie_rating":
+        sess["state"] = "WAIT_RATING"
+        logger.info(f"[MOVIE EDIT]\naction=PROMPT_RATING\nmovie_id={movie_id}\nuser_id={uid}")
+        await query.message.edit_text(
+            f"⭐ <b>Edit IMDb Rating</b>\n\n"
+            f"Current:\n<b>{movie.get('rating', 'N/A')}</b>\n\n"
+            f"Send rating (e.g. <code>7.8</code> or <code>8.0</code>).\n\n"
+            f"<i>Type the rating below:</i>",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data=f"emovie_cancel#{movie_id}")] ]),
+            parse_mode=enums.ParseMode.HTML
+        )
+        return await query.answer()
+
+    if action_type == "emovie_poster":
+        sess["state"] = "WAIT_POSTER"
+        logger.info(f"[MOVIE EDIT]\naction=PROMPT_POSTER\nmovie_id={movie_id}\nuser_id={uid}")
+        await query.message.edit_text(
+            f"🖼 <b>Edit Movie Poster</b>\n\n"
+            f"Send the new poster image (photo) or image URL.\n\n"
+            f"<i>Upload a photo or send URL:</i>",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data=f"emovie_cancel#{movie_id}")] ]),
+            parse_mode=enums.ParseMode.HTML
+        )
+        return await query.answer()
+
+    if action_type == "emovie_lang":
+        sess["state"] = "EDIT_LANG"
+        sess["languages"] = list(movie.get("languages") or [])
+        await query.message.edit_text(
+            f"🌐 <b>Movie Languages</b> — <b>{movie.get('title')}</b>\n\n"
+            f"Select languages to enable or disable, then click <b>Save</b>:",
+            reply_markup=_movie_lang_keyboard(movie_id, sess["languages"]),
+            parse_mode=enums.ParseMode.HTML
+        )
+        return await query.answer()
+
+    if action_type == "emovie_lang_toggle":
+        lang = parts[2] if len(parts) > 2 else ""
+        if lang:
+            if lang in sess["languages"]:
+                sess["languages"].remove(lang)
+            else:
+                sess["languages"].append(lang)
+        await query.message.edit_reply_markup(
+            reply_markup=_movie_lang_keyboard(movie_id, sess["languages"])
+        )
+        return await query.answer()
+
+    if action_type == "emovie_lang_custom":
+        sess["state"] = "WAIT_CUSTOM_LANG"
+        await query.message.edit_text(
+            f"➕ <b>Add Custom Language</b>\n\n"
+            f"Type the name of the language to add (e.g. <code>Korean</code>):",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data=f"emovie_lang#{movie_id}")] ]),
+            parse_mode=enums.ParseMode.HTML
+        )
+        return await query.answer()
+
+    if action_type == "emovie_lang_save":
+        await update_super_movie(movie_id, {"languages": sess["languages"]})
+        sess["state"] = "MAIN"
+        logger.info(f"[MOVIE EDIT]\naction=UPDATE_LANGUAGES\nmovie_id={movie_id}\nuser_id={uid}")
+        movie = await get_super_movie(movie_id)
+        await query.answer("✅ Languages updated!", show_alert=True)
+        await query.message.edit_text(
+            _movie_card(movie),
+            reply_markup=_movie_edit_keyboard(movie_id),
+            parse_mode=enums.ParseMode.HTML
+        )
+        return
+
+    if action_type == "emovie_quality":
+        sess["state"] = "EDIT_QUAL"
+        sess["qualities"] = list(movie.get("qualities") or [])
+        await query.message.edit_text(
+            f"🎞 <b>Movie Qualities</b> — <b>{movie.get('title')}</b>\n\n"
+            f"Select qualities to enable or disable, then click <b>Save</b>:",
+            reply_markup=_movie_quality_keyboard(movie_id, sess["qualities"]),
+            parse_mode=enums.ParseMode.HTML
+        )
+        return await query.answer()
+
+    if action_type == "emovie_qual_toggle":
+        qual = parts[2] if len(parts) > 2 else ""
+        if qual:
+            if qual in sess["qualities"]:
+                sess["qualities"].remove(qual)
+            else:
+                sess["qualities"].append(qual)
+        await query.message.edit_reply_markup(
+            reply_markup=_movie_quality_keyboard(movie_id, sess["qualities"])
+        )
+        return await query.answer()
+
+    if action_type == "emovie_qual_custom":
+        sess["state"] = "WAIT_CUSTOM_QUAL"
+        await query.message.edit_text(
+            f"➕ <b>Add Custom Quality</b>\n\n"
+            f"Type the name of the quality to add (e.g. <code>IMAX 4K</code>):",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data=f"emovie_quality#{movie_id}")] ]),
+            parse_mode=enums.ParseMode.HTML
+        )
+        return await query.answer()
+
+    if action_type == "emovie_qual_save":
+        await update_super_movie(movie_id, {"qualities": sess["qualities"]})
+        sess["state"] = "MAIN"
+        logger.info(f"[MOVIE EDIT]\naction=UPDATE_QUALITIES\nmovie_id={movie_id}\nuser_id={uid}")
+        movie = await get_super_movie(movie_id)
+        await query.answer("✅ Qualities updated!", show_alert=True)
+        await query.message.edit_text(
+            _movie_card(movie),
+            reply_markup=_movie_edit_keyboard(movie_id),
+            parse_mode=enums.ParseMode.HTML
+        )
+        return
+
+    if action_type == "emovie_announcement":
+        await query.answer()
+        channel_id = await get_announcement_channel()
+        if not channel_id:
+            return await query.message.reply_text(
+                "⚠️ <b>Announcement channel is not configured.</b>\n\n"
+                "Use:\n<code>/add_ano &lt;channel_id&gt;</code>",
+                parse_mode=enums.ParseMode.HTML
+            )
+        logger.info(f"[MANUAL ANNOUNCEMENT]\ntype=movie\nfilter_id={movie_id}")
+        try:
+            success = await announce_filter_created(client, filter_type="movie", filter_id=str(movie_id), force=True)
+            if success:
+                logger.info(f"[MANUAL ANNOUNCEMENT SUCCESS]\ntype=movie\nfilter_id={movie_id}\nchannel={channel_id}")
+                await query.answer("📢 Movie announcement sent successfully!", show_alert=True)
+                await query.message.reply_text(
+                    "✅ <b>Movie announcement sent successfully.</b>",
+                    parse_mode=enums.ParseMode.HTML
+                )
+            else:
+                await query.answer("❌ Failed to send announcement.", show_alert=True)
+        except Exception as e:
+            logger.error(f"[MANUAL ANNOUNCEMENT ERROR]\ntype=movie\nfilter_id={movie_id}\nerror={e}")
+            await query.answer(f"❌ Error: {e}", show_alert=True)
+        return
+
+    if action_type == "emovie_sync":
+        await query.answer("🔄 Syncing files from database...", show_alert=False)
+        res = await sync_existing_movie_filter(movie_id)
+        if res.get("success"):
+            movie = await get_super_movie(movie_id)
+            await query.answer(f"✅ Sync complete! Total linked files: {res.get('total_files')}", show_alert=True)
+            await query.message.edit_text(
+                _movie_card(movie),
+                reply_markup=_movie_edit_keyboard(movie_id),
+                parse_mode=enums.ParseMode.HTML
+            )
+        else:
+            await query.answer("❌ Sync failed.", show_alert=True)
+        return
+
+    if action_type == "emovie_delete":
+        await query.message.edit_text(
+            f"🗑 <b>Delete Movie Filter</b>\n\n"
+            f"Are you sure you want to delete <b>{movie.get('title')}</b>?\n"
+            f"<i>(Indexed files will remain in database)</i>",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("🔴 Confirm Delete", callback_data=f"emovie_del_confirm#{movie_id}")],
+                [InlineKeyboardButton("❌ Cancel", callback_data=f"emovie_cancel#{movie_id}")]
+            ]),
+            parse_mode=enums.ParseMode.HTML
+        )
+        return await query.answer()
+
+    if action_type == "emovie_del_confirm":
+        await delete_super_movie(movie_id)
+        temp.MOVIE_EDIT.pop(uid, None)
+        logger.info(f"[MOVIE EDIT]\naction=DELETE\nmovie_id={movie_id}\nuser_id={uid}")
+        await query.answer("🗑 Movie Filter Deleted!", show_alert=True)
+        await send_movie_filter_list(query, page=0)
+        return
+
+
+@Client.on_message(filters.command(["sync_movie", "sync_movies", "syncmovie"]), group=1)
+async def cmd_sync_movie(client: Client, message: Message):
+    if not _is_admin(message.from_user.id if message.from_user else 0):
+        return await message.reply_text("❌ You are not authorized to use this command.")
+
+    args = message.text.split(None, 1)
+    if len(args) < 2:
+        return await message.reply_text(
+            "ℹ️ <b>Usage:</b>\n<code>/sync_movie &lt;movie_id or movie_title&gt;</code>\n\n"
+            "Rescans the database and links all matching files to the Super Movie Filter.",
+            parse_mode=enums.ParseMode.HTML
+        )
+
+    arg = args[1].strip().strip('"').strip("'")
+    exact = None
+    if re.fullmatch(r"[0-9a-fA-F]{24}", arg):
+        exact = await get_super_movie(arg)
+    else:
+        matches = await search_super_movies(arg)
+        if matches:
+            exact = matches[0]
+
+    if not exact:
+        return await message.reply_text(f"❌ No Movie Filter found matching '<b>{arg}</b>'.", parse_mode=enums.ParseMode.HTML)
+
+    movie_id = str(exact["_id"])
+    res = await sync_existing_movie_filter(movie_id)
+    if res.get("success"):
+        updated_movie = await get_super_movie(movie_id)
+        await message.reply_text(
+            f"✅ <b>Super Movie Filter Synced Successfully!</b>\n\n"
+            f"🎬 <b>Title:</b> {updated_movie.get('title')}\n"
+            f"📦 <b>Total Linked Files:</b> {res.get('total_files')}\n"
+            f"🌐 <b>Languages:</b> {', '.join(res.get('languages', []))}\n"
+            f"🎞 <b>Qualities:</b> {', '.join(res.get('qualities', []))}",
+            parse_mode=enums.ParseMode.HTML
+        )
+    else:
+        await message.reply_text("❌ Failed to sync Movie Filter.")
+
+
+@Client.on_message((filters.text | filters.photo) & filters.private, group=-5)
+async def on_movie_edit_input(client: Client, message: Message):
+    uid = message.from_user.id if message.from_user else 0
+    if uid not in getattr(temp, "MOVIE_EDIT", {}):
+        message.continue_propagation()
+        return
+
+    sess = temp.MOVIE_EDIT[uid]
+    state = sess.get("state")
+    movie_id = sess.get("movie_id")
+
+    if not state or state == "MAIN" or not movie_id:
+        message.continue_propagation()
+        return
+
+    if message.text and message.text.startswith("/"):
+        if message.text == "/cancel":
+            sess["state"] = "MAIN"
+            movie = await get_super_movie(movie_id)
+            if movie:
+                await message.reply_text(
+                    _movie_card(movie),
+                    reply_markup=_movie_edit_keyboard(movie_id),
+                    parse_mode=enums.ParseMode.HTML
+                )
+            return
+        message.continue_propagation()
+        return
+
+    if state == "WAIT_NAME":
+        new_name = message.text.strip()
+        if not new_name:
+            return await message.reply_text("⚠️ Movie name cannot be empty.")
+        await update_super_movie(movie_id, {"title": new_name})
+        sess["title"] = new_name
+        sess["state"] = "MAIN"
+        logger.info(f"[MOVIE EDIT]\naction=UPDATE_NAME\nmovie_id={movie_id}\nuser_id={uid}")
+        movie = await get_super_movie(movie_id)
+        await message.reply_text(
+            f"✅ <b>Movie Name updated.</b>\n\n" + _movie_card(movie),
+            reply_markup=_movie_edit_keyboard(movie_id),
+            parse_mode=enums.ParseMode.HTML
+        )
+        return
+
+    if state == "WAIT_YEAR":
+        new_year = message.text.strip()
+        if not re.fullmatch(r"(19|20)\d{2}", new_year):
+            return await message.reply_text("⚠️ Please send a valid 4-digit year (e.g. <code>2026</code>).", parse_mode=enums.ParseMode.HTML)
+        await update_super_movie(movie_id, {"year": new_year})
+        sess["year"] = new_year
+        sess["state"] = "MAIN"
+        logger.info(f"[MOVIE EDIT]\naction=UPDATE_YEAR\nmovie_id={movie_id}\nuser_id={uid}")
+        movie = await get_super_movie(movie_id)
+        await message.reply_text(
+            f"✅ <b>Release Year updated.</b>\n\n" + _movie_card(movie),
+            reply_markup=_movie_edit_keyboard(movie_id),
+            parse_mode=enums.ParseMode.HTML
+        )
+        return
+
+    if state == "WAIT_GENRE":
+        new_genre = message.text.strip()
+        if not new_genre:
+            return await message.reply_text("⚠️ Genre cannot be empty.")
+        await update_super_movie(movie_id, {"genre": new_genre})
+        sess["genre"] = new_genre
+        sess["state"] = "MAIN"
+        logger.info(f"[MOVIE EDIT]\naction=UPDATE_GENRE\nmovie_id={movie_id}\nuser_id={uid}")
+        movie = await get_super_movie(movie_id)
+        await message.reply_text(
+            f"✅ <b>Genre updated.</b>\n\n" + _movie_card(movie),
+            reply_markup=_movie_edit_keyboard(movie_id),
+            parse_mode=enums.ParseMode.HTML
+        )
+        return
+
+    if state == "WAIT_RATING":
+        raw = message.text.strip().replace("/10", "").strip()
+        try:
+            r_val = float(raw)
+            if not (0.0 <= r_val <= 10.0):
+                raise ValueError()
+        except Exception:
+            return await message.reply_text("⚠️ Please send a valid numeric rating between 0 and 10 (e.g. <code>7.8</code>).", parse_mode=enums.ParseMode.HTML)
+        await update_super_movie(movie_id, {"rating": str(r_val)})
+        sess["rating"] = str(r_val)
+        sess["state"] = "MAIN"
+        logger.info(f"[MOVIE EDIT]\naction=UPDATE_RATING\nmovie_id={movie_id}\nuser_id={uid}")
+        movie = await get_super_movie(movie_id)
+        await message.reply_text(
+            f"✅ <b>Rating updated.</b>\n\n" + _movie_card(movie),
+            reply_markup=_movie_edit_keyboard(movie_id),
+            parse_mode=enums.ParseMode.HTML
+        )
+        return
+
+    if state == "WAIT_POSTER":
+        poster = ""
+        if message.photo:
+            poster = message.photo.file_id
+        elif message.text and (message.text.startswith("http://") or message.text.startswith("https://")):
+            poster = message.text.strip()
+        elif message.text:
+            poster = message.text.strip()
+        else:
+            return await message.reply_text("⚠️ Please send a valid photo image or image URL.")
+        await update_super_movie(movie_id, {"poster": poster})
+        sess["poster"] = poster
+        sess["state"] = "MAIN"
+        logger.info(f"[MOVIE EDIT]\naction=UPDATE_POSTER\nmovie_id={movie_id}\nuser_id={uid}")
+        movie = await get_super_movie(movie_id)
+        await message.reply_text(
+            f"✅ <b>Poster updated.</b>\n\n" + _movie_card(movie),
+            reply_markup=_movie_edit_keyboard(movie_id),
+            parse_mode=enums.ParseMode.HTML
+        )
+        return
+
+    if state == "WAIT_CUSTOM_LANG":
+        new_lang = message.text.strip().title()
+        if not new_lang:
+            return await message.reply_text("⚠️ Language name cannot be empty.")
+        if new_lang not in sess["languages"]:
+            sess["languages"].append(new_lang)
+        await update_super_movie(movie_id, {"languages": sess["languages"]})
+        sess["state"] = "MAIN"
+        logger.info(f"[MOVIE EDIT]\naction=ADD_CUSTOM_LANG\nmovie_id={movie_id}\nuser_id={uid}")
+        movie = await get_super_movie(movie_id)
+        await message.reply_text(
+            f"✅ <b>Language added.</b>\n\n" + _movie_card(movie),
+            reply_markup=_movie_edit_keyboard(movie_id),
+            parse_mode=enums.ParseMode.HTML
+        )
+        return
+
+    if state == "WAIT_CUSTOM_QUAL":
+        new_qual = message.text.strip()
+        if not new_qual:
+            return await message.reply_text("⚠️ Quality name cannot be empty.")
+        if new_qual not in sess["qualities"]:
+            sess["qualities"].append(new_qual)
+        await update_super_movie(movie_id, {"qualities": sess["qualities"]})
+        sess["state"] = "MAIN"
+        logger.info(f"[MOVIE EDIT]\naction=ADD_CUSTOM_QUAL\nmovie_id={movie_id}\nuser_id={uid}")
+        movie = await get_super_movie(movie_id)
+        await message.reply_text(
+            f"✅ <b>Quality added.</b>\n\n" + _movie_card(movie),
+            reply_markup=_movie_edit_keyboard(movie_id),
+            parse_mode=enums.ParseMode.HTML
+        )
+        return
+
+    message.continue_propagation()
+
+
 @Client.on_callback_query(filters.regex(r"^edmov#"))
 async def cb_edmov(client: Client, query: CallbackQuery):
     if not _is_admin(query.from_user.id):
         return await query.answer("❌ You are not authorized.", show_alert=True)
 
     movie_id = query.data.split("#")[1]
-    from database.series_db import get_super_movie
     movie = await get_super_movie(movie_id)
     if not movie or movie.get("status") == "deleted":
         return await query.answer("Movie Filter not found or deleted.", show_alert=True)
 
-    title = movie.get("title", "")
-    year = str(movie.get("year", "N/A"))
-    rating = str(movie.get("rating", "N/A"))
-    genre = str(movie.get("genre", "N/A"))
-    langs = ", ".join(movie.get("languages", [])) or "None"
-    quals = ", ".join(movie.get("qualities", [])) or "None"
-    file_count = len(movie.get("file_ids", []))
-
-    text = (
-        f"🎬 <b>{to_series_font(title)}</b>\n\n"
-        f"📅 <b>Year:</b> {year}\n"
-        f"⭐ <b>Rating:</b> {rating}\n"
-        f"🎭 <b>Genre:</b> {to_series_font(genre)}\n"
-        f"🌐 <b>Languages:</b> {to_series_font(langs)}\n"
-        f"🎞 <b>Qualities:</b> {to_series_font(quals)}\n"
-        f"📦 <b>Linked Files:</b> {file_count}\n\n"
-        f"<i>Manage this Super Movie Filter:</i>"
-    )
-
-    markup = InlineKeyboardMarkup([
-        [InlineKeyboardButton("📢 Send Announcement", callback_data=f"anomov#{movie_id}")],
-        [InlineKeyboardButton("🗑 Delete Movie Filter", callback_data=f"delmov#{movie_id}")],
-        [InlineKeyboardButton("⬅️ Back to Movies", callback_data="vser#mov#0")]
-    ])
+    uid = query.from_user.id
+    import time
+    temp.MOVIE_EDIT[uid] = {
+        "movie_id": movie_id,
+        "state": "MAIN",
+        "created_at": time.time(),
+        "title": movie.get("title", ""),
+        "year": movie.get("year", "N/A"),
+        "genre": movie.get("genre", "N/A"),
+        "rating": movie.get("rating", ""),
+        "poster": movie.get("poster", ""),
+        "languages": list(movie.get("languages") or []),
+        "qualities": list(movie.get("qualities") or [])
+    }
+    logger.info(f"[MOVIE EDIT OPEN]\nmovie_id={movie_id}")
+    logger.info(f"[MOVIE EDIT]\naction=OPEN\nmovie_id={movie_id}\nuser_id={uid}")
 
     try:
-        await query.message.edit_text(text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
+        await query.message.edit_text(
+            _movie_card(movie),
+            reply_markup=_movie_edit_keyboard(movie_id),
+            parse_mode=enums.ParseMode.HTML
+        )
     except Exception:
         pass
     await query.answer()
@@ -6342,7 +7404,6 @@ async def cb_delmov(client: Client, query: CallbackQuery):
         return await query.answer("❌ You are not authorized.", show_alert=True)
 
     movie_id = query.data.split("#")[1]
-    from database.series_db import delete_super_movie
     await delete_super_movie(movie_id)
     await query.answer("🗑 Movie Filter Deleted!", show_alert=True)
     await send_filter_manager(query, ftype="movie", page=0)
@@ -6359,7 +7420,7 @@ async def cb_anomov(client: Client, query: CallbackQuery):
         return await query.answer("❌ No announcement channel set! Use /add_ano <channel_id>", show_alert=True)
 
     try:
-        await send_movie_announcement(client, movie_id, force=True)
+        await announce_filter_created(client, filter_type="movie", filter_id=str(movie_id), force=True)
         await query.answer("📢 Announcement sent successfully to channel!", show_alert=True)
     except Exception as e:
         logger.error(f"[MANUAL MOVIE ANNOUNCEMENT ERROR] {e}")
@@ -6443,29 +7504,84 @@ async def cmd_seriesdel(client: Client, message: Message):
 # ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ 
 
 
-async def send_series_announcement(client: Client, series_id: str, force: bool = False):
+async def announce_filter_created(
+    client: Client,
+    filter_type: str,
+    filter_id: str,
+    force: bool = False
+) -> bool:
+    """
+    Centralized announcement trigger for Series & Super Movie filters.
+    Used by: Manual Series, Auto Series, Series Batch, Slink, Auto Movie, Movie Batch.
+    """
+    if not filter_id:
+        logger.warning(f"[ANNOUNCEMENT SKIP] reason=no_filter_id filter_type={filter_type}")
+        return False
+
+    fid = str(filter_id).strip()
+    ftype = str(filter_type).strip().lower()
+    announcement_key = f"{ftype}:{fid}"
+
+    # 1. Retrieve configured announcement channel
+    channel_id = await get_announcement_channel()
+    if not channel_id:
+        logger.info(f"[ANNOUNCEMENT SKIP] reason=no_channel_configured filter_type={ftype} filter_id={fid} key={announcement_key}")
+        return False
+
+    logger.info(f"[ANNOUNCEMENT CHANNEL] channel_id={channel_id} filter_type={ftype} filter_id={fid}")
+
+    # 2. Check for duplicate announcement
+    if not force:
+        already_sent = await is_announcement_sent(announcement_key, filter_type=ftype, filter_id=fid)
+        if already_sent:
+            logger.info(f"[ANNOUNCEMENT SKIP] reason=already_sent filter_type={ftype} filter_id={fid} key={announcement_key}")
+            return False
+
+    # 3. Resolve target chat and verify bot access
+    target_chat = int(channel_id) if str(channel_id).lstrip("-").isdigit() else str(channel_id)
+    try:
+        chat_obj = await client.get_chat(target_chat)
+        if chat_obj and chat_obj.id:
+            target_chat = chat_obj.id
+    except Exception as ce:
+        logger.error(f"[ANNOUNCEMENT CHANNEL ERROR] channel={target_chat} error={ce}")
+
+    logger.info(f"[ANNOUNCEMENT SEND] filter_type={ftype} filter_id={fid} key={announcement_key} channel={target_chat}")
+
+    # 4. Dispatch to specific announcement sender
+    if ftype == "series":
+        return await send_series_announcement(client, fid, force=force)
+    elif ftype == "movie":
+        return await send_movie_announcement(client, fid, force=force)
+    else:
+        logger.warning(f"[ANNOUNCEMENT SKIP] reason=unknown_filter_type type={ftype} id={fid}")
+        return False
+
+
+async def send_series_announcement(client: Client, series_id: str, force: bool = False) -> bool:
     """
     Automatically send an announcement for a newly created series to the configured channel.
     """
     if not series_id:
-        return
+        return False
     sid = str(series_id).strip()
+    announcement_key = f"series:{sid}"
 
     # 1. Retrieve series details
     series = await get_series(sid)
     if not series or series.get("status") == "deleted":
         logger.warning(f"[SERIES ANNOUNCEMENT] Series {sid} not found or deleted.")
-        return
+        return False
 
     name = series.get("name", "").strip()
     if not name:
-        return
+        return False
 
     # 2. Check announcement channel configuration
     channel_id = await get_announcement_channel()
     if not channel_id:
-        logger.warning(f"[ANNOUNCEMENT SKIP] No announcement channel configured! Set it via /add_ano <channel_id>")
-        return
+        logger.info(f"[ANNOUNCEMENT SKIP] reason=no_channel_configured series_id={sid} key={announcement_key}")
+        return False
 
     series_key = series.get("series_key") or make_series_key(name)
     year = series.get("year")
@@ -6552,37 +7668,47 @@ async def send_series_announcement(client: Client, series_id: str, force: bool =
             )
 
         if sent_msg:
-            await save_announcement(sid, target_chat, sent_msg.id, series_key=series_key)
+            await save_announcement(sid, target_chat, sent_msg.id, filter_type="series", series_key=series_key)
             print(f">>> [SERIES ANNOUNCEMENT SUCCESS] channel={target_chat} msg_id={sent_msg.id}", flush=True)
             logger.info(f"[SERIES ANNOUNCEMENT SUCCESS] title={name} id={sid} channel={target_chat} msg_id={sent_msg.id}")
+            logger.info("[ANNOUNCEMENT SUCCESS]")
+            return True
+        return False
     except Exception as e:
         print(f">>> [SERIES ANNOUNCEMENT ERROR] channel={target_chat} error={e}", flush=True)
-        logger.error(f"[SERIES ANNOUNCEMENT ERROR] Failed to send announcement for series {sid}: {e}", exc_info=True)
+        logger.exception(
+            f"[SERIES ANNOUNCEMENT FAILED] "
+            f"series_id={sid} "
+            f"channel={target_chat} "
+            f"key={announcement_key}"
+        )
+        return False
 
 
-async def send_movie_announcement(client: Client, movie_id: str, force: bool = False):
+async def send_movie_announcement(client: Client, movie_id: str, force: bool = False) -> bool:
     """
     Automatically send an announcement for a newly created Super Movie to the configured channel.
     """
     if not movie_id:
-        return
+        return False
     mid = str(movie_id).strip()
+    announcement_key = f"movie:{mid}"
 
     # 1. Retrieve super movie details
     movie = await get_super_movie(mid)
     if not movie or movie.get("status") == "deleted":
         logger.warning(f"[MOVIE ANNOUNCEMENT] Super Movie {mid} not found or deleted.")
-        return
+        return False
 
     name = movie.get("title", "").strip()
     if not name:
-        return
+        return False
 
     # 2. Check announcement channel configuration
     channel_id = await get_announcement_channel()
     if not channel_id:
-        logger.warning(f"[ANNOUNCEMENT SKIP] No announcement channel configured! Set it via /add_ano <channel_id>")
-        return
+        logger.info(f"[ANNOUNCEMENT SKIP] reason=no_channel_configured movie_id={mid} key={announcement_key}")
+        return False
 
     year = str(movie.get("year", ""))
     rating = str(movie.get("rating", ""))
@@ -6666,12 +7792,21 @@ async def send_movie_announcement(client: Client, movie_id: str, force: bool = F
             )
 
         if sent_msg:
-            await save_announcement(mid, target_chat, sent_msg.id, series_key=name)
+            await save_announcement(mid, target_chat, sent_msg.id, filter_type="movie", series_key=name)
             print(f">>> [MOVIE ANNOUNCEMENT SUCCESS] channel={target_chat} msg_id={sent_msg.id}", flush=True)
             logger.info(f"[MOVIE ANNOUNCEMENT SUCCESS] title={name} id={mid} channel={target_chat} msg_id={sent_msg.id}")
+            logger.info("[ANNOUNCEMENT SUCCESS]")
+            return True
+        return False
     except Exception as e:
         print(f">>> [MOVIE ANNOUNCEMENT ERROR] channel={target_chat} error={e}", flush=True)
-        logger.error(f"[MOVIE ANNOUNCEMENT ERROR] Failed to send announcement for movie {mid}: {e}", exc_info=True)
+        logger.exception(
+            f"[MOVIE ANNOUNCEMENT FAILED] "
+            f"movie_id={mid} "
+            f"channel={target_chat} "
+            f"key={announcement_key}"
+        )
+        return False
 
 
 def resolve_telegram_channel_identifier(raw: str):
