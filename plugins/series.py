@@ -1344,29 +1344,52 @@ def _duplicate_file_keyboard(data_key: str) -> InlineKeyboardMarkup:
 # ─── USER NAVIGATION KEYBOARD BUILDERS ───────────────────────────────────────
 # ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ 
 
-
+LANGUAGE_FLAGS = {
+    "Malayalam": "🇮🇳",
+    "Tamil": "🇮🇳",
+    "Hindi": "🇮🇳",
+    "Telugu": "🇮🇳",
+    "Kannada": "🇮🇳",
+    "Bengali": "🇮🇳",
+    "Marathi": "🇮🇳",
+    "Punjabi": "🇮🇳",
+    "Gujarati": "🇮🇳",
+    "Urdu": "🇮🇳",
+    "Odia": "🇮🇳",
+    "English": "🇬🇧",
+    "Dual Audio": "🎙",
+    "Multi Audio": "🎧",
+    "German": "🇩🇪",
+    "Korean": "🇰🇷",
+    "Japanese": "🇯🇵",
+    "Spanish": "🇪🇸",
+    "French": "🇫🇷",
+    "Arabic": "🇸🇦",
+    "Russian": "🇷🇺",
+    "Chinese": "🇨🇳",
+    "Italian": "🇮🇹",
+    "Portuguese": "🇵🇹",
+    "Turkish": "🇹🇷",
+    "Thai": "🇹🇭",
+}
 
 def _user_lang_keyboard(sid: str, langs: list[str]) -> InlineKeyboardMarkup:
     rows = []
     for i in range(0, len(langs), 2):
-        row = [
-            InlineKeyboardButton(to_series_font(l), callback_data=f"sr#{sid}#l#{l}")
-            for l in langs[i:i+2]
-        ]
+        row = []
+        for l in langs[i:i+2]:
+            row.append(InlineKeyboardButton(to_series_font(l), callback_data=f"sr#{sid}#l#{l}"))
         rows.append(row)
     return InlineKeyboardMarkup(rows)
-
-
-
 
 
 def _user_season_keyboard(sid: str, lang: str, seasons: list[int]) -> InlineKeyboardMarkup:
     rows = []
     for i in range(0, len(seasons), 3):
-        row = [
-            InlineKeyboardButton(f"{to_series_font('Season')} {s}" if s > 0 else to_series_font("Direct Episodes"), callback_data=f"sr#{sid}#l#{lang}#s#{s}")
-            for s in seasons[i:i+3]
-        ]
+        row = []
+        for s in seasons[i:i+3]:
+            label = f"{to_series_font('Season')} {s}" if s > 0 else to_series_font("Direct Episodes")
+            row.append(InlineKeyboardButton(label, callback_data=f"sr#{sid}#l#{lang}#s#{s}"))
         rows.append(row)
     rows.append([
         InlineKeyboardButton(f"⬅️  {to_series_font('Back')}", callback_data=f"sr#{sid}#home"),
@@ -1374,13 +1397,8 @@ def _user_season_keyboard(sid: str, lang: str, seasons: list[int]) -> InlineKeyb
     return InlineKeyboardMarkup(rows)
 
 
-
-
-
 async def _user_quality_keyboard(user_id: int, full_id: str, sid: str, lang: str, season: int, quals: list[str], rating: str, is_private: bool = False) -> InlineKeyboardMarkup:
     rows = []
-    import logging
-    log = logging.getLogger(__name__)
     for i in range(0, len(quals), 3):
         row = []
         for q in quals[i:i+3]:
@@ -4771,7 +4789,7 @@ def _user_suggestions_keyboard(matches: list[dict], user_id: int) -> InlineKeybo
             f"\nkey={key}"
             f"\npath=SUGGESTION"
         )
-        rows.append([InlineKeyboardButton(to_series_font(label), callback_data=f"sr#{key}")])
+        rows.append([InlineKeyboardButton(f"📺 {to_series_font(label)}", callback_data=f"sr#{key}")])
     return InlineKeyboardMarkup(rows)
 
 

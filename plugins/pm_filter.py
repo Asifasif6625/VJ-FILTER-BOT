@@ -335,6 +335,7 @@ def group_movie_files(files):
     return grouped
 
 def build_movie_language_keyboard(key, grouped_data):
+    from plugins.series import to_series_font
     buttons = []
     langs = list(grouped_data.keys())
     preferred_order = ["Malayalam", "Tamil", "Hindi", "Telugu", "Kannada", "English", "Dual Audio", "Multi Audio"]
@@ -343,14 +344,12 @@ def build_movie_language_keyboard(key, grouped_data):
     for i in range(0, len(langs), 2):
         row = []
         for l in langs[i:i+2]:
-            flag = LANGUAGE_FLAGS.get(l, "🌐")
-            count = sum(len(flist) for flist in grouped_data[l].values())
-            row.append(InlineKeyboardButton(f"{flag} {l} ({count})", callback_data=f"movie_lang#{key}#{l}"))
+            row.append(InlineKeyboardButton(to_series_font(l), callback_data=f"movie_lang#{key}#{l}"))
         buttons.append(row)
-    buttons.append([InlineKeyboardButton("🔴 Close", callback_data=f"movie_close#{key}")])
     return InlineKeyboardMarkup(buttons)
 
 def build_movie_quality_keyboard(key, lang, qualities_dict):
+    from plugins.series import to_series_font
     buttons = []
     quality_order = ["2160p", "4K", "1440p", "1080p", "720p", "480p", "360p", "HDRip", "WEB-DL", "BluRay", "DVDRip", "HEVC", "Unknown"]
     qualities_sorted = sorted(list(qualities_dict.keys()), key=lambda x: (quality_order.index(x) if x in quality_order else 99, x))
@@ -358,10 +357,9 @@ def build_movie_quality_keyboard(key, lang, qualities_dict):
     for i in range(0, len(qualities_sorted), 2):
         row = []
         for q in qualities_sorted[i:i+2]:
-            count = len(qualities_dict[q])
-            row.append(InlineKeyboardButton(f"{q} ({count})", callback_data=f"movie_quality#{key}#{lang}#{q}"))
+            row.append(InlineKeyboardButton(to_series_font(q), callback_data=f"movie_quality#{key}#{lang}#{q}"))
         buttons.append(row)
-    buttons.append([InlineKeyboardButton("⬅️ Back", callback_data=f"movie_back#{key}#langs")])
+    buttons.append([InlineKeyboardButton(f"⬅️  {to_series_font('Back')}", callback_data=f"movie_back#{key}#langs")])
     return InlineKeyboardMarkup(buttons)
 
 def build_movie_file_keyboard(key, lang, qual, files, page=0, pre="file"):
@@ -464,20 +462,69 @@ async def movie_qual_callback(client: Client, query: CallbackQuery):
     title = state.get("title", "Movie")
     logger.info(f"[MOVIE QUALITY]\ntitle={title}\nlanguage={lang}\nquality={qual}\nfiles={len(files)}")
     
-    await query.answer(f"🚀 Sending {len(files)} {lang} {qual} files to your PM...", show_alert=False)
+    import uuid, time
+    from database.series_db import save_temp_request
+    req_key = str(uuid.uuid4())[:8]
+    req_data = {
+        "request_key": req_key,
+        "user": query.from_user.id,
+        "user_id": query.from_user.id,
+        "type": "movie",
+        "request_type": "movie",
+        "source": "MOVIE_FILTER",
+        "movie_title": title,
+        "title": title,
+        "language": lang,
+        "quality": qual,
+        "files": files,
+        "delivery_status": "pending",
+        "state": "PENDING",
+        "created_at": time.time()
+    }
+    if not hasattr(temp, "MOVIE_STATE"):
+        temp.MOVIE_STATE = {}
+    temp.MOVIE_STATE[req_key] = req_data
+    if not hasattr(temp, "GETALL"):
+        temp.GETALL = {}
+    temp.GETALL[req_key] = req_data
+    try:
+        await save_temp_request(req_key, req_data)
+    except Exception:
+        pass
+        
+    bot_username = temp.U_NAME if (hasattr(temp, "U_NAME") and temp.U_NAME) else getattr(getattr(client, "me", None), "username", None)
+    if bot_username:
+        bot_username = str(bot_username).lstrip("@")
+    else:
+        bot_username = "Bot"
+
+    start_url = f"https://t.me/{bot_username}?start=all_{req_key}"
     
-    from plugins.commands import send_movie_files_to_user
-    user_id = query.from_user.id
-    sent_count = await send_movie_files_to_user(
-        client=client,
-        user_id=user_id,
-        files=files,
-        query=query,
-        movie_title=title,
-        language=lang,
-        quality=qual
-    )
-    logger.info(f"[MOVIE SEND FILES]\ntitle={title}\nlanguage={lang}\nquality={qual}\ncount={sent_count}")
+    # If in private chat, directly deliver files
+    if query.message.chat.type == enums.ChatType.PRIVATE:
+        from plugins.commands import send_movie_files_to_user
+        await query.answer("🚀 Sending files...")
+        await send_movie_files_to_user(
+            client=client,
+            user_id=query.from_user.id,
+            files=files,
+            query=query,
+            movie_title=title,
+            language=lang,
+            quality=qual
+        )
+        return
+        
+    try:
+        return await query.answer(url=start_url)
+    except Exception as e:
+        logger.warning(f"[MOVIE QUALITY ROUTING] query.answer(url=start_url) failed: {e}. Replying with fallback button.")
+        return await query.message.reply_text(
+            f"📩 Open bot to get your requested <b>{title}</b> ({qual}) files:",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("📂 Open Bot", url=start_url)]
+            ])
+        )
 
 @Client.on_callback_query(filters.regex(r"^(mvpage#|movie_files#)"))
 async def movie_page_callback(client: Client, query: CallbackQuery):
