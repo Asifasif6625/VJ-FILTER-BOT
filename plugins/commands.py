@@ -54,6 +54,52 @@ async def process_series_start(client: Client, user_id: int, req_key: str, messa
             await client.send_message(user_id, msg_text)
         return
         
+    if req.get("type") == "movie" or req.get("request_type") == "movie":
+        log.info(f"[MOVIE START TRACE] Delivering movie files for req_key={req_key}")
+        if AUTH_CHANNEL:
+            sub = await utils.is_subscribed(client, user_id)
+            if not sub:
+                log.info(f"[MOVIE START]\naction=MEMBERSHIP_CHECK\nresult=NOT_JOINED\nrequest_key={req_key}")
+                if not req.get("join_message_id"):
+                    try:
+                        invite_link = await client.create_chat_invite_link(int(AUTH_CHANNEL), creates_join_request=True)
+                        text = (
+                            "📢 **Channel Join Request**\n\n"
+                            "ഫയലുകൾ ലഭിക്കുന്നതിന് മുമ്പ് ഞങ്ങളുടെ ചാനലിലേക്ക് Join Request അയയ്ക്കുക.\n\n"
+                            "Request അയച്ച ശേഷം താഴെയുള്ള Try Again ബട്ടൺ ക്ലിക്ക് ചെയ്യുക.\n\n"
+                            "Please send a Join Request to our channel before getting the files.\n\n"
+                            "After sending the request, click Try Again below."
+                        )
+                        btn = [
+                            [InlineKeyboardButton("📢 Send Join Request", url=invite_link.invite_link)],
+                            [InlineKeyboardButton("🔄 Try Again", callback_data=f"checksub#series#{req_key}")]
+                        ]
+                        join_msg = await client.send_message(
+                            chat_id=user_id,
+                            text=text,
+                            reply_markup=InlineKeyboardMarkup(btn),
+                            parse_mode=enums.ParseMode.MARKDOWN
+                        )
+                        req["join_message_id"] = join_msg.id
+                        from database.series_db import save_temp_request
+                        await save_temp_request(req_key, req)
+                    except Exception as e:
+                        log.error(f"Failed to create join request: {e}")
+                return
+        
+        req["delivery_status"] = "sending"
+        files = req.get("files", [])
+        await send_movie_files_to_user(
+            client=client,
+            user_id=user_id,
+            files=files,
+            movie_title=req.get("movie_title", req.get("title")),
+            language=req.get("language"),
+            quality=req.get("quality")
+        )
+        req["delivery_status"] = "completed"
+        return
+
     full_id = req.get("full_id") or req.get("series_id")
     if full_id and len(str(full_id)) != 24:
         from plugins.series import _get_full_id
