@@ -17,7 +17,7 @@ import logging
 logger = logging.getLogger(__name__)
 logging.getLogger("pyrogram").setLevel(logging.WARNING)
 
-@Client.on_callback_query(filters.regex('cancel'))
+@Client.on_callback_query(filters.regex(r"^cancel$"))
 async def cancel(bot,update):
     try:
         await update.message.delete()
