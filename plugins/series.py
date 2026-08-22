@@ -2157,6 +2157,21 @@ async def _handle_wizard_callback(client: Client, query: CallbackQuery):
     if not action:
         return await query.answer()
 
+    # ── Cancel Action ────────────────────────────────────────────────────────
+    if action in ("auto_cancel", "cancel", "auto_movie_cancel"):
+        from utils import clear_wizard_session, cancel_wizard_session
+        cancel_wizard_session(uid)
+        clear_wizard_session(uid)
+        await query.answer("❌ Cancelled.")
+        try:
+            await query.message.delete()
+        except Exception:
+            try:
+                await query.message.edit_text("❌ <b>Action cancelled.</b>", parse_mode=enums.ParseMode.HTML)
+            except Exception:
+                pass
+        return
+
     # ── Auto S Add & Menu Entry Callbacks ────────────────────────────────────
     if action == "start_manual":
         await query.answer()
@@ -2171,18 +2186,27 @@ async def _handle_wizard_callback(client: Client, query: CallbackQuery):
             "batch_langs": [], "batch_seasons": [], "batch_qualities": [],
             "batch_data": None,
         }
-        set_wizard_session(uid, workflow="SERIES_WIZARD", state=S_NAME, data=temp.SERIES_WIZARD[uid], chat_id=query.message.chat.id)
+        chat_id = query.message.chat.id if query.message and query.message.chat else uid
+        set_wizard_session(uid, workflow="SERIES_WIZARD", state=S_NAME, data=temp.SERIES_WIZARD[uid], chat_id=chat_id)
         sess = get_wizard_session(uid)
         logger.info(f"[MANUAL SERIES SESSION CHECK] user={uid} session={sess}")
         logger.info(f"[AUTO MENU]\naction=CLICK\nbutton=MANUAL\nuser_id={uid}")
-        await query.message.edit_text(
+        
+        import html
+        user_first = (query.from_user.first_name if query.from_user else "") or "Admin"
+        user_first_safe = html.escape(user_first)
+        text = (
             f"🎬 <b>Create New Series</b>\n\n"
-            f"Hey {query.from_user.mention}, please send the <b>series name</b>.",
-            reply_markup=InlineKeyboardMarkup([[
-                InlineKeyboardButton("❌ Cancel", callback_data="sw#auto_cancel")
-            ]]),
-            parse_mode=enums.ParseMode.HTML,
+            f"Hey <b>{user_first_safe}</b>, please send the <b>series name</b>."
         )
+        markup = InlineKeyboardMarkup([[
+            InlineKeyboardButton("❌ Cancel", callback_data="sw#auto_cancel")
+        ]])
+        try:
+            await query.message.edit_text(text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
+        except Exception as edit_e:
+            logger.warning(f"[START_MANUAL EDIT FALLBACK] {edit_e}")
+            await client.send_message(chat_id=chat_id, text=text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
         return
 
     if action == "start_auto":
@@ -2194,22 +2218,27 @@ async def _handle_wizard_callback(client: Client, query: CallbackQuery):
             "admin_id": uid,
             "created_at": time.time(),
         }
-        set_wizard_session(uid, workflow="AUTO_SERIES", state="WAIT_IMDB", data=temp.AUTO_SERIES[uid], chat_id=query.message.chat.id)
+        chat_id = query.message.chat.id if query.message and query.message.chat else uid
+        set_wizard_session(uid, workflow="AUTO_SERIES", state="WAIT_IMDB", data=temp.AUTO_SERIES[uid], chat_id=chat_id)
         sess = get_wizard_session(uid)
         logger.info(f"[AUTO SERIES SESSION CHECK] user={uid} session={sess}")
         logger.info(f"[AUTO MENU]\naction=CLICK\nbutton=AUTO_SERIES\nuser_id={uid}")
         logger.info(f"[AUTO SERIES]\naction=START\nuser_id={uid}")
-        await query.message.edit_text(
+        text = (
             "🤖 <b>Auto Series Add — Series Importer</b>\n\n"
             "🎬 <b>Send IMDb Series link or ID:</b>\n\n"
             "<b>Examples:</b>\n"
             "<code>https://www.imdb.com/title/tt9288030/</code>\n"
-            "<code>tt9288030</code>",
-            reply_markup=InlineKeyboardMarkup([[
-                InlineKeyboardButton("❌ Cancel", callback_data="sw#auto_cancel")
-            ]]),
-            parse_mode=enums.ParseMode.HTML,
+            "<code>tt9288030</code>"
         )
+        markup = InlineKeyboardMarkup([[
+            InlineKeyboardButton("❌ Cancel", callback_data="sw#auto_cancel")
+        ]])
+        try:
+            await query.message.edit_text(text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
+        except Exception as edit_e:
+            logger.warning(f"[START_AUTO EDIT FALLBACK] {edit_e}")
+            await client.send_message(chat_id=chat_id, text=text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
         return
 
     if action == "start_auto_movie":
@@ -2223,22 +2252,27 @@ async def _handle_wizard_callback(client: Client, query: CallbackQuery):
             "files": [],
             "grouped": {},
         }
-        set_wizard_session(uid, workflow="AUTO_MOVIE", state="WAIT_IMDB", data=temp.AUTO_MOVIE[uid], chat_id=query.message.chat.id)
+        chat_id = query.message.chat.id if query.message and query.message.chat else uid
+        set_wizard_session(uid, workflow="AUTO_MOVIE", state="WAIT_IMDB", data=temp.AUTO_MOVIE[uid], chat_id=chat_id)
         sess = get_wizard_session(uid)
         logger.info(f"[AUTO MOVIE SESSION CHECK] user={uid} session={sess}")
         logger.info(f"[AUTO MENU]\naction=CLICK\nbutton=AUTO_MOVIE\nuser_id={uid}")
         logger.info(f"[AUTO MOVIE]\naction=START\nuser_id={uid}")
-        await query.message.edit_text(
+        text = (
             "🎬 <b>AUTO MOVIE ADD</b>\n\n"
             "Send IMDb Movie URL or IMDb ID.\n\n"
             "<b>Examples:</b>\n"
             "<code>https://www.imdb.com/title/tt35723557/</code>\n"
-            "<code>tt35723557</code>",
-            reply_markup=InlineKeyboardMarkup([[
-                InlineKeyboardButton("❌ Cancel", callback_data="sw#auto_cancel")
-            ]]),
-            parse_mode=enums.ParseMode.HTML,
+            "<code>tt35723557</code>"
         )
+        markup = InlineKeyboardMarkup([[
+            InlineKeyboardButton("❌ Cancel", callback_data="sw#auto_cancel")
+        ]])
+        try:
+            await query.message.edit_text(text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
+        except Exception as edit_e:
+            logger.warning(f"[START_AUTO_MOVIE EDIT FALLBACK] {edit_e}")
+            await client.send_message(chat_id=chat_id, text=text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
         return
 
     if action == "auto_season_skip":
