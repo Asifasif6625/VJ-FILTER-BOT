@@ -418,8 +418,12 @@ async def get_announcement_channel() -> int | str | None:
     doc = await settings_col.find_one({"_id": "announcement_channel"})
     cid = doc.get("channel_id") if doc else None
     if not cid:
-        from os import environ
-        cid = environ.get("ANNOUNCEMENT_CHANNEL") or environ.get("ANO_CHANNEL")
+        try:
+            from info import ANNOUNCEMENT_CHANNEL
+            cid = ANNOUNCEMENT_CHANNEL
+        except Exception:
+            from os import environ
+            cid = environ.get("ANNOUNCEMENT_CHANNEL") or environ.get("ANO_CHANNEL")
     return cid
 
 async def delete_announcement_channel():
