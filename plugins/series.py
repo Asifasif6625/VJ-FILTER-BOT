@@ -2123,6 +2123,7 @@ async def wizard_text_handler(client: Client, message: Message):
 @Client.on_callback_query(filters.regex(r"^sw#"), group=-10)
 async def wizard_callback(client: Client, query: CallbackQuery):
     uid = query.from_user.id if query.from_user else 0
+    print(f">>> [SERIES BUTTON CLICK] user={uid} data={query.data}", flush=True)
     logger.info(f"[SERIES BUTTON CLICK] user={uid} data={query.data}")
 
     try:
@@ -2167,14 +2168,17 @@ async def _handle_wizard_callback(client: Client, query: CallbackQuery):
             await query.message.delete()
         except Exception:
             try:
-                await query.message.edit_text("❌ <b>Action cancelled.</b>", parse_mode=enums.ParseMode.HTML)
+                await query.edit_message_text("❌ <b>Action cancelled.</b>", parse_mode=enums.ParseMode.HTML)
             except Exception:
                 pass
         return
 
     # ── Auto S Add & Menu Entry Callbacks ────────────────────────────────────
     if action == "start_manual":
-        await query.answer()
+        try:
+            await query.answer("Opening Manual Series Creator...")
+        except Exception:
+            pass
         from utils import set_wizard_session, get_wizard_session
         temp.SERIES_WIZARD[uid] = {
             "mode": "add",
@@ -2203,14 +2207,20 @@ async def _handle_wizard_callback(client: Client, query: CallbackQuery):
             InlineKeyboardButton("❌ Cancel", callback_data="sw#auto_cancel")
         ]])
         try:
-            await query.message.edit_text(text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
-        except Exception as edit_e:
-            logger.warning(f"[START_MANUAL EDIT FALLBACK] {edit_e}")
-            await client.send_message(chat_id=chat_id, text=text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
+            await query.edit_message_text(text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
+        except Exception:
+            try:
+                await query.message.edit_text(text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
+            except Exception as edit_e:
+                logger.warning(f"[START_MANUAL EDIT FALLBACK] {edit_e}")
+                await client.send_message(chat_id=chat_id, text=text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
         return
 
     if action == "start_auto":
-        await query.answer()
+        try:
+            await query.answer("Opening Auto Series Importer...")
+        except Exception:
+            pass
         from utils import set_wizard_session, get_wizard_session
         temp.AUTO_SERIES[uid] = {
             "state": "WAIT_IMDB",
@@ -2235,14 +2245,20 @@ async def _handle_wizard_callback(client: Client, query: CallbackQuery):
             InlineKeyboardButton("❌ Cancel", callback_data="sw#auto_cancel")
         ]])
         try:
-            await query.message.edit_text(text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
-        except Exception as edit_e:
-            logger.warning(f"[START_AUTO EDIT FALLBACK] {edit_e}")
-            await client.send_message(chat_id=chat_id, text=text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
+            await query.edit_message_text(text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
+        except Exception:
+            try:
+                await query.message.edit_text(text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
+            except Exception as edit_e:
+                logger.warning(f"[START_AUTO EDIT FALLBACK] {edit_e}")
+                await client.send_message(chat_id=chat_id, text=text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
         return
 
     if action == "start_auto_movie":
-        await query.answer()
+        try:
+            await query.answer("Opening Auto Movie Importer...")
+        except Exception:
+            pass
         from utils import set_wizard_session, get_wizard_session
         temp.AUTO_MOVIE[uid] = {
             "state": "WAIT_IMDB",
@@ -2269,10 +2285,13 @@ async def _handle_wizard_callback(client: Client, query: CallbackQuery):
             InlineKeyboardButton("❌ Cancel", callback_data="sw#auto_cancel")
         ]])
         try:
-            await query.message.edit_text(text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
-        except Exception as edit_e:
-            logger.warning(f"[START_AUTO_MOVIE EDIT FALLBACK] {edit_e}")
-            await client.send_message(chat_id=chat_id, text=text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
+            await query.edit_message_text(text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
+        except Exception:
+            try:
+                await query.message.edit_text(text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
+            except Exception as edit_e:
+                logger.warning(f"[START_AUTO_MOVIE EDIT FALLBACK] {edit_e}")
+                await client.send_message(chat_id=chat_id, text=text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
         return
 
     if action == "auto_season_skip":
