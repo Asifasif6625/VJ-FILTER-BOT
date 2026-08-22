@@ -6662,17 +6662,18 @@ def _movie_card(movie: dict) -> str:
     qualities = movie.get("qualities") or []
     
     r_str = f"{rating}/10" if rating and "/10" not in str(rating) and str(rating) != "N/A" else (rating or "N/A")
-    file_count = len(movie.get("file_ids") or [])
+    langs_str = ", ".join(languages) if isinstance(languages, list) and languages else (str(languages) if languages else "N/A")
+    quals_str = ", ".join(qualities) if isinstance(qualities, list) and qualities else (str(qualities) if qualities else "N/A")
 
     return (
         f"🎬 <b>Movie Filter Editor</b>\n\n"
-        f"🎬 <b>{title}</b>\n"
+        f"🎬 <b>Movie:</b>\n"
+        f"<b>{title}</b>\n\n"
         f"📅 <b>Year:</b> {year}\n"
         f"⭐ <b>Rating:</b> {r_str}\n"
-        f"🎭 <b>Genre:</b> {genre}\n"
-        f"🌐 <b>Languages:</b> {langs_str}\n"
-        f"🎞 <b>Qualities:</b> {quals_str}\n"
-        f"📦 <b>Linked Files:</b> {file_count}"
+        f"🎭 <b>Genre:</b> {genre}\n\n"
+        f"🌐 <b>Languages:</b>\n{langs_str}\n\n"
+        f"🎞 <b>Qualities:</b>\n{quals_str}"
     )
 
 
@@ -6688,17 +6689,16 @@ def _movie_edit_keyboard(movie_id: str) -> InlineKeyboardMarkup:
         ],
         [
             InlineKeyboardButton("🖼 Edit Poster", callback_data=f"emovie_poster#{movie_id}"),
-            InlineKeyboardButton("🌐 Edit Languages", callback_data=f"emovie_lang#{movie_id}")
+            InlineKeyboardButton("🌐 Edit Languages", callback_data=f"emovie_languages#{movie_id}")
         ],
         [
-            InlineKeyboardButton("🎞 Edit Qualities", callback_data=f"emovie_quality#{movie_id}"),
-            InlineKeyboardButton("🔄 Sync Files", callback_data=f"emovie_sync#{movie_id}")
+            InlineKeyboardButton("🎞 Edit Qualities", callback_data=f"emovie_quality#{movie_id}")
         ],
         [
-            InlineKeyboardButton("📢 Announcement", callback_data=f"emovie_announcement#{movie_id}")
+            InlineKeyboardButton("📢 Announcement", callback_data=f"emovie_announcement#{movie_id}"),
+            InlineKeyboardButton("🗑 Delete Filter", callback_data=f"emovie_delete#{movie_id}")
         ],
         [
-            InlineKeyboardButton("🗑 Delete Filter", callback_data=f"emovie_delete#{movie_id}"),
             InlineKeyboardButton("⬅️ Back", callback_data="vser#mov#0")
         ]
     ])
@@ -6844,8 +6844,8 @@ async def cmd_ed_movie(client: Client, message: Message):
                 "languages": list(exact.get("languages") or []),
                 "qualities": list(exact.get("qualities") or [])
             }
+            logger.info(f"[VIEW MOVIE EDIT]\nmovie_id={movie_id}\nuser_id={uid}")
             logger.info(f"[MOVIE EDIT OPEN]\nmovie_id={movie_id}")
-            logger.info(f"[MOVIE EDIT]\naction=OPEN\nmovie_id={movie_id}\nuser_id={uid}")
             return await message.reply_text(
                 _movie_card(exact),
                 reply_markup=_movie_edit_keyboard(movie_id),
@@ -6859,308 +6859,334 @@ async def cmd_ed_movie(client: Client, message: Message):
 
 @Client.on_callback_query(filters.regex(r"^emovie_"), group=-10)
 async def cb_emovie(client: Client, query: CallbackQuery):
-    if not _is_admin(query.from_user.id):
-        return await query.answer("❌ You are not authorized.", show_alert=True)
-    
-    uid = query.from_user.id
-    data = query.data
-    import time
-
-    if data == "emovie_close":
-        temp.MOVIE_EDIT.pop(uid, None)
-        try:
-            await query.message.delete()
-        except Exception:
-            pass
-        return await query.answer()
-
-    if data.startswith("emovie_list#"):
-        page_str = data.split("#")[1]
-        page = int(page_str) if page_str.isdigit() else 0
-        await send_movie_filter_list(query, page=page)
-        return await query.answer()
-
-    if data.startswith("emovie_select#"):
-        movie_id = data.split("#")[1]
-        movie = await get_super_movie(movie_id)
-        if not movie or movie.get("status") == "deleted":
-            return await query.answer("❌ Movie Filter not found or deleted.", show_alert=True)
-        
-        temp.MOVIE_EDIT[uid] = {
-            "movie_id": movie_id,
-            "state": "MAIN",
-            "created_at": time.time(),
-            "title": movie.get("title", ""),
-            "year": movie.get("year", "N/A"),
-            "genre": movie.get("genre", "N/A"),
-            "rating": movie.get("rating", ""),
-            "poster": movie.get("poster", ""),
-            "languages": list(movie.get("languages") or []),
-            "qualities": list(movie.get("qualities") or [])
-        }
-        logger.info(f"[MOVIE EDIT OPEN]\nmovie_id={movie_id}")
-        logger.info(f"[MOVIE EDIT]\naction=OPEN\nmovie_id={movie_id}\nuser_id={uid}")
-        
-        await query.message.edit_text(
-            _movie_card(movie),
-            reply_markup=_movie_edit_keyboard(movie_id),
-            parse_mode=enums.ParseMode.HTML
-        )
-        return await query.answer()
-
-    parts = data.split("#")
-    action_type = parts[0]
-    movie_id = parts[1] if len(parts) > 1 else ""
-
-    if not movie_id:
-        return await query.answer("⚠️ Invalid request.", show_alert=True)
-
-    movie = await get_super_movie(movie_id)
-    if not movie or movie.get("status") == "deleted":
-        return await query.answer("❌ Movie Filter not found or deleted.", show_alert=True)
-
-    if uid not in getattr(temp, "MOVIE_EDIT", {}) or temp.MOVIE_EDIT[uid].get("movie_id") != movie_id:
-        temp.MOVIE_EDIT[uid] = {
-            "movie_id": movie_id,
-            "state": "MAIN",
-            "created_at": time.time(),
-            "title": movie.get("title", ""),
-            "year": movie.get("year", "N/A"),
-            "genre": movie.get("genre", "N/A"),
-            "rating": movie.get("rating", ""),
-            "poster": movie.get("poster", ""),
-            "languages": list(movie.get("languages") or []),
-            "qualities": list(movie.get("qualities") or [])
-        }
-
-    sess = temp.MOVIE_EDIT[uid]
-
-    if action_type == "emovie_cancel":
-        sess["state"] = "MAIN"
-        await query.message.edit_text(
-            _movie_card(movie),
-            reply_markup=_movie_edit_keyboard(movie_id),
-            parse_mode=enums.ParseMode.HTML
-        )
-        return await query.answer()
-
-    if action_type == "emovie_name":
-        sess["state"] = "WAIT_NAME"
-        logger.info(f"[MOVIE EDIT]\naction=PROMPT_NAME\nmovie_id={movie_id}\nuser_id={uid}")
-        await query.message.edit_text(
-            f"✏️ <b>Edit Movie Name</b>\n\n"
-            f"Current:\n<b>{movie.get('title', 'Unknown')}</b>\n\n"
-            f"Send the new Movie Name.\n\n"
-            f"<i>Type the new name below:</i>",
-            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data=f"emovie_cancel#{movie_id}")] ]),
-            parse_mode=enums.ParseMode.HTML
-        )
-        return await query.answer()
-
-    if action_type == "emovie_year":
-        sess["state"] = "WAIT_YEAR"
-        logger.info(f"[MOVIE EDIT]\naction=PROMPT_YEAR\nmovie_id={movie_id}\nuser_id={uid}")
-        await query.message.edit_text(
-            f"📅 <b>Edit Release Year</b>\n\n"
-            f"Current:\n<b>{movie.get('year', 'N/A')}</b>\n\n"
-            f"Send new year (e.g. <code>2026</code>).\n\n"
-            f"<i>Type the year below:</i>",
-            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data=f"emovie_cancel#{movie_id}")] ]),
-            parse_mode=enums.ParseMode.HTML
-        )
-        return await query.answer()
-
-    if action_type == "emovie_genre":
-        sess["state"] = "WAIT_GENRE"
-        logger.info(f"[MOVIE EDIT]\naction=PROMPT_GENRE\nmovie_id={movie_id}\nuser_id={uid}")
-        await query.message.edit_text(
-            f"🎭 <b>Edit Genre</b>\n\n"
-            f"Current:\n<b>{movie.get('genre', 'N/A')}</b>\n\n"
-            f"Send new genre (e.g. <code>Action, Thriller, Drama</code>).\n\n"
-            f"<i>Type the genre below:</i>",
-            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data=f"emovie_cancel#{movie_id}")] ]),
-            parse_mode=enums.ParseMode.HTML
-        )
-        return await query.answer()
-
-    if action_type == "emovie_rating":
-        sess["state"] = "WAIT_RATING"
-        logger.info(f"[MOVIE EDIT]\naction=PROMPT_RATING\nmovie_id={movie_id}\nuser_id={uid}")
-        await query.message.edit_text(
-            f"⭐ <b>Edit IMDb Rating</b>\n\n"
-            f"Current:\n<b>{movie.get('rating', 'N/A')}</b>\n\n"
-            f"Send rating (e.g. <code>7.8</code> or <code>8.0</code>).\n\n"
-            f"<i>Type the rating below:</i>",
-            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data=f"emovie_cancel#{movie_id}")] ]),
-            parse_mode=enums.ParseMode.HTML
-        )
-        return await query.answer()
-
-    if action_type == "emovie_poster":
-        sess["state"] = "WAIT_POSTER"
-        logger.info(f"[MOVIE EDIT]\naction=PROMPT_POSTER\nmovie_id={movie_id}\nuser_id={uid}")
-        await query.message.edit_text(
-            f"🖼 <b>Edit Movie Poster</b>\n\n"
-            f"Send the new poster image (photo) or image URL.\n\n"
-            f"<i>Upload a photo or send URL:</i>",
-            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data=f"emovie_cancel#{movie_id}")] ]),
-            parse_mode=enums.ParseMode.HTML
-        )
-        return await query.answer()
-
-    if action_type == "emovie_lang":
-        sess["state"] = "EDIT_LANG"
-        sess["languages"] = list(movie.get("languages") or [])
-        await query.message.edit_text(
-            f"🌐 <b>Movie Languages</b> — <b>{movie.get('title')}</b>\n\n"
-            f"Select languages to enable or disable, then click <b>Save</b>:",
-            reply_markup=_movie_lang_keyboard(movie_id, sess["languages"]),
-            parse_mode=enums.ParseMode.HTML
-        )
-        return await query.answer()
-
-    if action_type == "emovie_lang_toggle":
-        lang = parts[2] if len(parts) > 2 else ""
-        if lang:
-            if lang in sess["languages"]:
-                sess["languages"].remove(lang)
-            else:
-                sess["languages"].append(lang)
-        await query.message.edit_reply_markup(
-            reply_markup=_movie_lang_keyboard(movie_id, sess["languages"])
-        )
-        return await query.answer()
-
-    if action_type == "emovie_lang_custom":
-        sess["state"] = "WAIT_CUSTOM_LANG"
-        await query.message.edit_text(
-            f"➕ <b>Add Custom Language</b>\n\n"
-            f"Type the name of the language to add (e.g. <code>Korean</code>):",
-            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data=f"emovie_lang#{movie_id}")] ]),
-            parse_mode=enums.ParseMode.HTML
-        )
-        return await query.answer()
-
-    if action_type == "emovie_lang_save":
-        await update_super_movie(movie_id, {"languages": sess["languages"]})
-        sess["state"] = "MAIN"
-        logger.info(f"[MOVIE EDIT]\naction=UPDATE_LANGUAGES\nmovie_id={movie_id}\nuser_id={uid}")
-        movie = await get_super_movie(movie_id)
-        await query.answer("✅ Languages updated!", show_alert=True)
-        await query.message.edit_text(
-            _movie_card(movie),
-            reply_markup=_movie_edit_keyboard(movie_id),
-            parse_mode=enums.ParseMode.HTML
-        )
-        return
-
-    if action_type == "emovie_quality":
-        sess["state"] = "EDIT_QUAL"
-        sess["qualities"] = list(movie.get("qualities") or [])
-        await query.message.edit_text(
-            f"🎞 <b>Movie Qualities</b> — <b>{movie.get('title')}</b>\n\n"
-            f"Select qualities to enable or disable, then click <b>Save</b>:",
-            reply_markup=_movie_quality_keyboard(movie_id, sess["qualities"]),
-            parse_mode=enums.ParseMode.HTML
-        )
-        return await query.answer()
-
-    if action_type == "emovie_qual_toggle":
-        qual = parts[2] if len(parts) > 2 else ""
-        if qual:
-            if qual in sess["qualities"]:
-                sess["qualities"].remove(qual)
-            else:
-                sess["qualities"].append(qual)
-        await query.message.edit_reply_markup(
-            reply_markup=_movie_quality_keyboard(movie_id, sess["qualities"])
-        )
-        return await query.answer()
-
-    if action_type == "emovie_qual_custom":
-        sess["state"] = "WAIT_CUSTOM_QUAL"
-        await query.message.edit_text(
-            f"➕ <b>Add Custom Quality</b>\n\n"
-            f"Type the name of the quality to add (e.g. <code>IMAX 4K</code>):",
-            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data=f"emovie_quality#{movie_id}")] ]),
-            parse_mode=enums.ParseMode.HTML
-        )
-        return await query.answer()
-
-    if action_type == "emovie_qual_save":
-        await update_super_movie(movie_id, {"qualities": sess["qualities"]})
-        sess["state"] = "MAIN"
-        logger.info(f"[MOVIE EDIT]\naction=UPDATE_QUALITIES\nmovie_id={movie_id}\nuser_id={uid}")
-        movie = await get_super_movie(movie_id)
-        await query.answer("✅ Qualities updated!", show_alert=True)
-        await query.message.edit_text(
-            _movie_card(movie),
-            reply_markup=_movie_edit_keyboard(movie_id),
-            parse_mode=enums.ParseMode.HTML
-        )
-        return
-
-    if action_type == "emovie_announcement":
+    try:
         await query.answer()
-        channel_id = await get_announcement_channel()
-        if not channel_id:
-            return await query.message.reply_text(
-                "⚠️ <b>Announcement channel is not configured.</b>\n\n"
-                "Use:\n<code>/add_ano &lt;channel_id&gt;</code>",
-                parse_mode=enums.ParseMode.HTML
-            )
-        logger.info(f"[MANUAL ANNOUNCEMENT]\ntype=movie\nfilter_id={movie_id}")
-        try:
-            success = await announce_filter_created(client, filter_type="movie", filter_id=str(movie_id), force=True)
-            if success:
-                logger.info(f"[MANUAL ANNOUNCEMENT SUCCESS]\ntype=movie\nfilter_id={movie_id}\nchannel={channel_id}")
-                await query.answer("📢 Movie announcement sent successfully!", show_alert=True)
-                await query.message.reply_text(
-                    "✅ <b>Movie announcement sent successfully.</b>",
-                    parse_mode=enums.ParseMode.HTML
-                )
-            else:
-                await query.answer("❌ Failed to send announcement.", show_alert=True)
-        except Exception as e:
-            logger.error(f"[MANUAL ANNOUNCEMENT ERROR]\ntype=movie\nfilter_id={movie_id}\nerror={e}")
-            await query.answer(f"❌ Error: {e}", show_alert=True)
-        return
+    except Exception:
+        pass
 
-    if action_type == "emovie_sync":
-        await query.answer("🔄 Syncing files from database...", show_alert=False)
-        res = await sync_existing_movie_filter(movie_id)
-        if res.get("success"):
+    try:
+        if not _is_admin(query.from_user.id):
+            return await query.answer("❌ You are not authorized.", show_alert=True)
+        
+        uid = query.from_user.id
+        data = query.data
+        import time
+
+        if data in ["emovie_close", "emovie_back"]:
+            temp.MOVIE_EDIT.pop(uid, None)
+            if data == "emovie_close":
+                try:
+                    await query.message.delete()
+                except Exception:
+                    pass
+                return
+            else:
+                return await send_filter_manager(query, ftype="movie", page=0)
+
+        if data.startswith("emovie_list#"):
+            page_str = data.split("#")[1]
+            page = int(page_str) if page_str.isdigit() else 0
+            return await send_filter_manager(query, ftype="movie", page=page)
+
+        if data.startswith("emovie_back#"):
+            temp.MOVIE_EDIT.pop(uid, None)
+            return await send_filter_manager(query, ftype="movie", page=0)
+
+        if data.startswith("emovie_select#"):
+            movie_id = data.split("#")[1]
             movie = await get_super_movie(movie_id)
-            await query.answer(f"✅ Sync complete! Total linked files: {res.get('total_files')}", show_alert=True)
+            if not movie or movie.get("status") == "deleted":
+                return await query.answer("❌ Movie Filter not found or deleted.", show_alert=True)
+            
+            temp.MOVIE_EDIT[uid] = {
+                "movie_id": movie_id,
+                "state": "MAIN",
+                "created_at": time.time(),
+                "title": movie.get("title", ""),
+                "year": movie.get("year", "N/A"),
+                "genre": movie.get("genre", "N/A"),
+                "rating": movie.get("rating", ""),
+                "poster": movie.get("poster", ""),
+                "languages": list(movie.get("languages") or []),
+                "qualities": list(movie.get("qualities") or [])
+            }
+            logger.info(f"[VIEW MOVIE EDIT]\nmovie_id={movie_id}\nuser_id={uid}")
+            logger.info(f"[MOVIE EDIT OPEN]\nmovie_id={movie_id}")
+            
             await query.message.edit_text(
                 _movie_card(movie),
                 reply_markup=_movie_edit_keyboard(movie_id),
                 parse_mode=enums.ParseMode.HTML
             )
-        else:
-            await query.answer("❌ Sync failed.", show_alert=True)
-        return
+            return
 
-    if action_type == "emovie_delete":
-        await query.message.edit_text(
-            f"🗑 <b>Delete Movie Filter</b>\n\n"
-            f"Are you sure you want to delete <b>{movie.get('title')}</b>?\n"
-            f"<i>(Indexed files will remain in database)</i>",
-            reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("🔴 Confirm Delete", callback_data=f"emovie_del_confirm#{movie_id}")],
-                [InlineKeyboardButton("❌ Cancel", callback_data=f"emovie_cancel#{movie_id}")]
-            ]),
-            parse_mode=enums.ParseMode.HTML
-        )
-        return await query.answer()
+        parts = data.split("#")
+        action_type = parts[0]
+        movie_id = parts[1] if len(parts) > 1 else ""
 
-    if action_type == "emovie_del_confirm":
-        await delete_super_movie(movie_id)
-        temp.MOVIE_EDIT.pop(uid, None)
-        logger.info(f"[MOVIE EDIT]\naction=DELETE\nmovie_id={movie_id}\nuser_id={uid}")
-        await query.answer("🗑 Movie Filter Deleted!", show_alert=True)
-        await send_movie_filter_list(query, page=0)
-        return
+        if not movie_id:
+            return await query.answer("⚠️ Invalid request.", show_alert=True)
+
+        movie = await get_super_movie(movie_id)
+        if not movie or movie.get("status") == "deleted":
+            return await query.answer("❌ Movie Filter not found or deleted.", show_alert=True)
+
+        if uid not in getattr(temp, "MOVIE_EDIT", {}) or temp.MOVIE_EDIT[uid].get("movie_id") != movie_id:
+            temp.MOVIE_EDIT[uid] = {
+                "movie_id": movie_id,
+                "state": "MAIN",
+                "created_at": time.time(),
+                "title": movie.get("title", ""),
+                "year": movie.get("year", "N/A"),
+                "genre": movie.get("genre", "N/A"),
+                "rating": movie.get("rating", ""),
+                "poster": movie.get("poster", ""),
+                "languages": list(movie.get("languages") or []),
+                "qualities": list(movie.get("qualities") or [])
+            }
+
+        sess = temp.MOVIE_EDIT[uid]
+
+        if action_type == "emovie_cancel":
+            sess["state"] = "MAIN"
+            await query.message.edit_text(
+                _movie_card(movie),
+                reply_markup=_movie_edit_keyboard(movie_id),
+                parse_mode=enums.ParseMode.HTML
+            )
+            return
+
+        if action_type == "emovie_name":
+            sess["state"] = "WAIT_NAME"
+            logger.info(f"[MOVIE EDIT]\naction=PROMPT_NAME\nmovie_id={movie_id}\nuser_id={uid}")
+            await query.message.edit_text(
+                f"✏️ <b>Edit Movie Name</b>\n\n"
+                f"Current:\n<b>{movie.get('title', 'Unknown')}</b>\n\n"
+                f"Please send the new Movie Name.\n\n"
+                f"<i>Type the new name below:</i>",
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data=f"emovie_cancel#{movie_id}")] ]),
+                parse_mode=enums.ParseMode.HTML
+            )
+            return
+
+        if action_type == "emovie_year":
+            sess["state"] = "WAIT_YEAR"
+            logger.info(f"[MOVIE EDIT]\naction=PROMPT_YEAR\nmovie_id={movie_id}\nuser_id={uid}")
+            await query.message.edit_text(
+                f"📅 <b>Edit Movie Year</b>\n\n"
+                f"Current:\n<b>{movie.get('year', 'N/A')}</b>\n\n"
+                f"Please send the new year.\n\n"
+                f"<i>Type the year below:</i>",
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data=f"emovie_cancel#{movie_id}")] ]),
+                parse_mode=enums.ParseMode.HTML
+            )
+            return
+
+        if action_type == "emovie_genre":
+            sess["state"] = "WAIT_GENRE"
+            logger.info(f"[MOVIE EDIT]\naction=PROMPT_GENRE\nmovie_id={movie_id}\nuser_id={uid}")
+            await query.message.edit_text(
+                f"🎭 <b>Edit Genre</b>\n\n"
+                f"Current:\n<b>{movie.get('genre', 'N/A')}</b>\n\n"
+                f"Please send the new genre.\n\n"
+                f"<i>Type the genre below:</i>",
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data=f"emovie_cancel#{movie_id}")] ]),
+                parse_mode=enums.ParseMode.HTML
+            )
+            return
+
+        if action_type == "emovie_rating":
+            sess["state"] = "WAIT_RATING"
+            logger.info(f"[MOVIE EDIT]\naction=PROMPT_RATING\nmovie_id={movie_id}\nuser_id={uid}")
+            await query.message.edit_text(
+                f"⭐ <b>Edit IMDb Rating</b>\n\n"
+                f"Current:\n<b>{movie.get('rating', 'N/A')}</b>\n\n"
+                f"Please send the new rating.\n\n"
+                f"Example:\n<code>8.1</code>",
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data=f"emovie_cancel#{movie_id}")] ]),
+                parse_mode=enums.ParseMode.HTML
+            )
+            return
+
+        if action_type == "emovie_poster":
+            sess["state"] = "WAIT_POSTER"
+            logger.info(f"[MOVIE EDIT]\naction=PROMPT_POSTER\nmovie_id={movie_id}\nuser_id={uid}")
+            await query.message.edit_text(
+                f"🖼 <b>Edit Movie Poster</b>\n\n"
+                f"Send the new poster image (photo) or image URL.\n\n"
+                f"<i>Upload a photo or send URL:</i>",
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data=f"emovie_cancel#{movie_id}")] ]),
+                parse_mode=enums.ParseMode.HTML
+            )
+            return
+
+        if action_type in ["emovie_languages", "emovie_lang"]:
+            sess["state"] = "EDIT_LANG"
+            sess["languages"] = list(movie.get("languages") or [])
+            await query.message.edit_text(
+                f"🌐 <b>Movie Languages</b> — <b>{movie.get('title')}</b>\n\n"
+                f"Select languages to enable or disable, then click <b>Save</b>:",
+                reply_markup=_movie_lang_keyboard(movie_id, sess["languages"]),
+                parse_mode=enums.ParseMode.HTML
+            )
+            return
+
+        if action_type == "emovie_lang_toggle":
+            lang = parts[2] if len(parts) > 2 else ""
+            if lang:
+                if lang in sess["languages"]:
+                    sess["languages"].remove(lang)
+                else:
+                    sess["languages"].append(lang)
+            await query.message.edit_reply_markup(
+                reply_markup=_movie_lang_keyboard(movie_id, sess["languages"])
+            )
+            return
+
+        if action_type == "emovie_lang_custom":
+            sess["state"] = "WAIT_CUSTOM_LANG"
+            await query.message.edit_text(
+                f"➕ <b>Add Custom Language</b>\n\n"
+                f"Type the name of the language to add (e.g. <code>Korean</code>):",
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data=f"emovie_languages#{movie_id}")] ]),
+                parse_mode=enums.ParseMode.HTML
+            )
+            return
+
+        if action_type == "emovie_lang_save":
+            await update_super_movie(movie_id, {"languages": sess["languages"]})
+            sess["state"] = "MAIN"
+            logger.info(f"[MOVIE EDIT UPDATE]\nfield=languages\nmovie_id={movie_id}")
+            movie = await get_super_movie(movie_id)
+            await query.answer("✅ Languages updated!", show_alert=True)
+            await query.message.edit_text(
+                _movie_card(movie),
+                reply_markup=_movie_edit_keyboard(movie_id),
+                parse_mode=enums.ParseMode.HTML
+            )
+            return
+
+        if action_type in ["emovie_quality", "emovie_qual"]:
+            sess["state"] = "EDIT_QUAL"
+            sess["qualities"] = list(movie.get("qualities") or [])
+            await query.message.edit_text(
+                f"🎞 <b>Movie Qualities</b> — <b>{movie.get('title')}</b>\n\n"
+                f"Select qualities to enable or disable, then click <b>Save</b>:",
+                reply_markup=_movie_quality_keyboard(movie_id, sess["qualities"]),
+                parse_mode=enums.ParseMode.HTML
+            )
+            return
+
+        if action_type == "emovie_qual_toggle":
+            qual = parts[2] if len(parts) > 2 else ""
+            if qual:
+                if qual in sess["qualities"]:
+                    sess["qualities"].remove(qual)
+                else:
+                    sess["qualities"].append(qual)
+            await query.message.edit_reply_markup(
+                reply_markup=_movie_quality_keyboard(movie_id, sess["qualities"])
+            )
+            return
+
+        if action_type == "emovie_qual_custom":
+            sess["state"] = "WAIT_CUSTOM_QUAL"
+            await query.message.edit_text(
+                f"➕ <b>Add Custom Quality</b>\n\n"
+                f"Type the name of the quality to add (e.g. <code>IMAX 4K</code>):",
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data=f"emovie_quality#{movie_id}")] ]),
+                parse_mode=enums.ParseMode.HTML
+            )
+            return
+
+        if action_type == "emovie_qual_save":
+            await update_super_movie(movie_id, {"qualities": sess["qualities"]})
+            sess["state"] = "MAIN"
+            logger.info(f"[MOVIE EDIT UPDATE]\nfield=qualities\nmovie_id={movie_id}")
+            movie = await get_super_movie(movie_id)
+            await query.answer("✅ Qualities updated!", show_alert=True)
+            await query.message.edit_text(
+                _movie_card(movie),
+                reply_markup=_movie_edit_keyboard(movie_id),
+                parse_mode=enums.ParseMode.HTML
+            )
+            return
+
+        if action_type == "emovie_announcement":
+            logger.info(f"[MOVIE EDIT ANNOUNCEMENT]\nmovie_id={movie_id}")
+            channel_id = await get_announcement_channel()
+            if not channel_id:
+                return await query.message.reply_text(
+                    "⚠️ <b>Announcement channel is not configured.</b>\n\n"
+                    "Use:\n<code>/add_ano &lt;channel_id&gt;</code>",
+                    parse_mode=enums.ParseMode.HTML
+                )
+            try:
+                success = await announce_filter_created(client, filter_type="movie", filter_id=str(movie_id), force=True)
+                if success:
+                    logger.info(f"[MANUAL ANNOUNCEMENT SUCCESS]\ntype=movie\nfilter_id={movie_id}\nchannel={channel_id}")
+                    await query.answer("📢 Movie announcement sent successfully!", show_alert=True)
+                    await query.message.reply_text(
+                        "✅ <b>Movie announcement sent successfully.</b>",
+                        parse_mode=enums.ParseMode.HTML
+                    )
+                else:
+                    await query.answer("❌ Failed to send announcement.", show_alert=True)
+            except Exception as e:
+                logger.error(f"[MANUAL ANNOUNCEMENT ERROR]\ntype=movie\nfilter_id={movie_id}\nerror={e}")
+                await query.answer(f"❌ Error: {e}", show_alert=True)
+            return
+
+        if action_type == "emovie_sync":
+            await query.answer("🔄 Syncing files from database...", show_alert=False)
+            res = await sync_existing_movie_filter(movie_id)
+            if res.get("success"):
+                movie = await get_super_movie(movie_id)
+                await query.answer(f"✅ Sync complete! Total linked files: {res.get('total_files')}", show_alert=True)
+                await query.message.edit_text(
+                    _movie_card(movie),
+                    reply_markup=_movie_edit_keyboard(movie_id),
+                    parse_mode=enums.ParseMode.HTML
+                )
+            else:
+                await query.answer("❌ Sync failed.", show_alert=True)
+            return
+
+        if action_type == "emovie_delete":
+            logger.info(f"[MOVIE EDIT DELETE]\nmovie_id={movie_id}")
+            y_str = f" ({movie.get('year')})" if movie.get("year") and movie.get("year") != "N/A" else ""
+            await query.message.edit_text(
+                f"⚠️ <b>Delete Movie Filter?</b>\n\n"
+                f"🎬 <b>{movie.get('title')}{y_str}</b>\n\n"
+                f"This removes the Super Movie Filter.\n\n"
+                f"What should happen to the underlying movie files?\n"
+                f"<i>(Indexed files will remain safely in the movie database)</i>",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("✅ Confirm Delete", callback_data=f"emovie_delete_confirm#{movie_id}")],
+                    [InlineKeyboardButton("❌ Cancel", callback_data=f"emovie_select#{movie_id}")]
+                ]),
+                parse_mode=enums.ParseMode.HTML
+            )
+            return
+
+        if action_type in ["emovie_delete_confirm", "emovie_del_confirm"]:
+            logger.info(f"[MOVIE EDIT DELETE CONFIRM]\nmovie_id={movie_id}")
+            await delete_super_movie(movie_id)
+            try:
+                await delete_announcement(f"movie:{movie_id}")
+            except Exception:
+                pass
+            temp.MOVIE_EDIT.pop(uid, None)
+            logger.info(f"[MOVIE EDIT DELETE SUCCESS]\nmovie_id={movie_id}")
+            await query.answer("✅ Movie Filter deleted.\n📁 Original movie files were kept in the movie database.", show_alert=True)
+            return await send_filter_manager(query, ftype="movie", page=0)
+
+    except Exception as e:
+        logger.exception(f"[MOVIE EDIT ERROR] callback={query.data} error={e}")
+        try:
+            await query.answer(f"❌ Error: {str(e)[:150]}", show_alert=True)
+        except Exception:
+            pass
 
 
 @Client.on_message(filters.command(["sync_movie", "sync_movies", "syncmovie"]), group=1)
@@ -7240,7 +7266,7 @@ async def on_movie_edit_input(client: Client, message: Message):
         await update_super_movie(movie_id, {"title": new_name})
         sess["title"] = new_name
         sess["state"] = "MAIN"
-        logger.info(f"[MOVIE EDIT]\naction=UPDATE_NAME\nmovie_id={movie_id}\nuser_id={uid}")
+        logger.info(f"[MOVIE EDIT UPDATE]\nfield=name\nmovie_id={movie_id}")
         movie = await get_super_movie(movie_id)
         await message.reply_text(
             f"✅ <b>Movie Name updated.</b>\n\n" + _movie_card(movie),
@@ -7256,7 +7282,7 @@ async def on_movie_edit_input(client: Client, message: Message):
         await update_super_movie(movie_id, {"year": new_year})
         sess["year"] = new_year
         sess["state"] = "MAIN"
-        logger.info(f"[MOVIE EDIT]\naction=UPDATE_YEAR\nmovie_id={movie_id}\nuser_id={uid}")
+        logger.info(f"[MOVIE EDIT UPDATE]\nfield=year\nmovie_id={movie_id}")
         movie = await get_super_movie(movie_id)
         await message.reply_text(
             f"✅ <b>Release Year updated.</b>\n\n" + _movie_card(movie),
@@ -7272,7 +7298,7 @@ async def on_movie_edit_input(client: Client, message: Message):
         await update_super_movie(movie_id, {"genre": new_genre})
         sess["genre"] = new_genre
         sess["state"] = "MAIN"
-        logger.info(f"[MOVIE EDIT]\naction=UPDATE_GENRE\nmovie_id={movie_id}\nuser_id={uid}")
+        logger.info(f"[MOVIE EDIT UPDATE]\nfield=genre\nmovie_id={movie_id}")
         movie = await get_super_movie(movie_id)
         await message.reply_text(
             f"✅ <b>Genre updated.</b>\n\n" + _movie_card(movie),
@@ -7292,7 +7318,7 @@ async def on_movie_edit_input(client: Client, message: Message):
         await update_super_movie(movie_id, {"rating": str(r_val)})
         sess["rating"] = str(r_val)
         sess["state"] = "MAIN"
-        logger.info(f"[MOVIE EDIT]\naction=UPDATE_RATING\nmovie_id={movie_id}\nuser_id={uid}")
+        logger.info(f"[MOVIE EDIT UPDATE]\nfield=rating\nmovie_id={movie_id}")
         movie = await get_super_movie(movie_id)
         await message.reply_text(
             f"✅ <b>Rating updated.</b>\n\n" + _movie_card(movie),
@@ -7314,7 +7340,7 @@ async def on_movie_edit_input(client: Client, message: Message):
         await update_super_movie(movie_id, {"poster": poster})
         sess["poster"] = poster
         sess["state"] = "MAIN"
-        logger.info(f"[MOVIE EDIT]\naction=UPDATE_POSTER\nmovie_id={movie_id}\nuser_id={uid}")
+        logger.info(f"[MOVIE EDIT UPDATE]\nfield=poster\nmovie_id={movie_id}")
         movie = await get_super_movie(movie_id)
         await message.reply_text(
             f"✅ <b>Poster updated.</b>\n\n" + _movie_card(movie),
@@ -7331,7 +7357,7 @@ async def on_movie_edit_input(client: Client, message: Message):
             sess["languages"].append(new_lang)
         await update_super_movie(movie_id, {"languages": sess["languages"]})
         sess["state"] = "MAIN"
-        logger.info(f"[MOVIE EDIT]\naction=ADD_CUSTOM_LANG\nmovie_id={movie_id}\nuser_id={uid}")
+        logger.info(f"[MOVIE EDIT UPDATE]\nfield=languages\nmovie_id={movie_id}")
         movie = await get_super_movie(movie_id)
         await message.reply_text(
             f"✅ <b>Language added.</b>\n\n" + _movie_card(movie),
@@ -7348,7 +7374,7 @@ async def on_movie_edit_input(client: Client, message: Message):
             sess["qualities"].append(new_qual)
         await update_super_movie(movie_id, {"qualities": sess["qualities"]})
         sess["state"] = "MAIN"
-        logger.info(f"[MOVIE EDIT]\naction=ADD_CUSTOM_QUAL\nmovie_id={movie_id}\nuser_id={uid}")
+        logger.info(f"[MOVIE EDIT UPDATE]\nfield=qualities\nmovie_id={movie_id}")
         movie = await get_super_movie(movie_id)
         await message.reply_text(
             f"✅ <b>Quality added.</b>\n\n" + _movie_card(movie),
@@ -7358,73 +7384,6 @@ async def on_movie_edit_input(client: Client, message: Message):
         return
 
     message.continue_propagation()
-
-
-@Client.on_callback_query(filters.regex(r"^edmov#"))
-async def cb_edmov(client: Client, query: CallbackQuery):
-    if not _is_admin(query.from_user.id):
-        return await query.answer("❌ You are not authorized.", show_alert=True)
-
-    movie_id = query.data.split("#")[1]
-    movie = await get_super_movie(movie_id)
-    if not movie or movie.get("status") == "deleted":
-        return await query.answer("Movie Filter not found or deleted.", show_alert=True)
-
-    uid = query.from_user.id
-    import time
-    temp.MOVIE_EDIT[uid] = {
-        "movie_id": movie_id,
-        "state": "MAIN",
-        "created_at": time.time(),
-        "title": movie.get("title", ""),
-        "year": movie.get("year", "N/A"),
-        "genre": movie.get("genre", "N/A"),
-        "rating": movie.get("rating", ""),
-        "poster": movie.get("poster", ""),
-        "languages": list(movie.get("languages") or []),
-        "qualities": list(movie.get("qualities") or [])
-    }
-    logger.info(f"[MOVIE EDIT OPEN]\nmovie_id={movie_id}")
-    logger.info(f"[MOVIE EDIT]\naction=OPEN\nmovie_id={movie_id}\nuser_id={uid}")
-
-    try:
-        await query.message.edit_text(
-            _movie_card(movie),
-            reply_markup=_movie_edit_keyboard(movie_id),
-            parse_mode=enums.ParseMode.HTML
-        )
-    except Exception:
-        pass
-    await query.answer()
-
-
-@Client.on_callback_query(filters.regex(r"^delmov#"))
-async def cb_delmov(client: Client, query: CallbackQuery):
-    if not _is_admin(query.from_user.id):
-        return await query.answer("❌ You are not authorized.", show_alert=True)
-
-    movie_id = query.data.split("#")[1]
-    await delete_super_movie(movie_id)
-    await query.answer("🗑 Movie Filter Deleted!", show_alert=True)
-    await send_filter_manager(query, ftype="movie", page=0)
-
-
-@Client.on_callback_query(filters.regex(r"^anomov#"))
-async def cb_anomov(client: Client, query: CallbackQuery):
-    if not _is_admin(query.from_user.id):
-        return await query.answer("❌ You are not authorized.", show_alert=True)
-
-    movie_id = query.data.split("#")[1]
-    channel_id = await get_announcement_channel()
-    if not channel_id:
-        return await query.answer("❌ No announcement channel set! Use /add_ano <channel_id>", show_alert=True)
-
-    try:
-        await announce_filter_created(client, filter_type="movie", filter_id=str(movie_id), force=True)
-        await query.answer("📢 Announcement sent successfully to channel!", show_alert=True)
-    except Exception as e:
-        logger.error(f"[MANUAL MOVIE ANNOUNCEMENT ERROR] {e}")
-        await query.answer(f"❌ Error sending announcement: {e}", show_alert=True)
 
 
 @Client.on_message(filters.command(["serieslist", "viewseries", "seriesview", "viewmovies", "movielist", "filters"]), group=1)
