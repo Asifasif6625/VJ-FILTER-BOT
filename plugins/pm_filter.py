@@ -136,10 +136,22 @@ def is_english_only(text: str) -> bool:
 
 @Client.on_message(filters.group & filters.text & filters.incoming)
 async def give_filter(client, message):
+    user_id = message.from_user.id if message.from_user else (message.sender_chat.id if message.sender_chat else 0)
+    
+    # ── Check active wizard session ──
+    from utils import get_wizard_session, temp
+    if get_wizard_session(user_id) is not None:
+        return
+    if (user_id in getattr(temp, "AUTO_SERIES", {}) or 
+        user_id in getattr(temp, "AUTO_MOVIE", {}) or 
+        user_id in getattr(temp, "SERIES_WIZARD", {}) or 
+        user_id in getattr(temp, "AUTO_MOVIE_BATCH", {}) or 
+        getattr(temp, "SETTING_SERIES_THUMB", {}).get(user_id)):
+        return
+
     if message.chat.id != SUPPORT_CHAT_ID:
         settings = await get_settings(message.chat.id)
         chatid = message.chat.id 
-        user_id = message.from_user.id if message.from_user else (message.sender_chat.id if message.sender_chat else 0)
         from info import ADMINS
         if settings.get('fsub') is not None and user_id not in ADMINS:
             try:

@@ -1706,12 +1706,18 @@ wizard_filter = filters.create(_is_in_wizard_session_filter)
 
 
 @Client.on_message(
-    filters.private & (filters.text | filters.photo) & wizard_filter,
+    (filters.text | filters.photo) & wizard_filter,
     group=-10
 )
 async def wizard_text_handler(client: Client, message: Message):
+    try:
+        message.stop_propagation()
+    except Exception:
+        pass
+
     uid = message.from_user.id if message.from_user else 0
     text = message.text.strip() if message.text else ""
+    chat_id = message.chat.id if message.chat else uid
 
     from utils import get_wizard_session, clear_wizard_session, set_wizard_session, temp
 
@@ -2312,12 +2318,12 @@ async def _handle_wizard_callback(client: Client, query: CallbackQuery):
     # ── Auto S Add & Menu Entry Callbacks ────────────────────────────────────
     if action == "start_manual":
         await query.answer()
+        chat_id = (query.message.chat.id if query.message and query.message.chat else None) or (query.from_user.id if query.from_user else uid)
         try:
             await query.message.delete()
         except Exception:
             pass
 
-        chat_id = query.message.chat.id if query.message and query.message.chat else uid
         import html
         user_first = (query.from_user.first_name if query.from_user else "") or "Admin"
         user_first_safe = html.escape(user_first)
@@ -2348,12 +2354,12 @@ async def _handle_wizard_callback(client: Client, query: CallbackQuery):
 
     if action == "start_auto":
         await query.answer()
+        chat_id = (query.message.chat.id if query.message and query.message.chat else None) or (query.from_user.id if query.from_user else uid)
         try:
             await query.message.delete()
         except Exception:
             pass
 
-        chat_id = query.message.chat.id if query.message and query.message.chat else uid
         text = (
             "🤖 <b>Auto Series Add — Series Importer</b>\n\n"
             "🎬 <b>Send IMDb Series link or ID:</b>\n\n"
@@ -2380,12 +2386,12 @@ async def _handle_wizard_callback(client: Client, query: CallbackQuery):
 
     if action == "start_auto_movie":
         await query.answer()
+        chat_id = (query.message.chat.id if query.message and query.message.chat else None) or (query.from_user.id if query.from_user else uid)
         try:
             await query.message.delete()
         except Exception:
             pass
 
-        chat_id = query.message.chat.id if query.message and query.message.chat else uid
         text = (
             "🎬 <b>AUTO MOVIE ADD — Movie Importer</b>\n\n"
             "Send IMDb Movie URL or IMDb ID:\n\n"
