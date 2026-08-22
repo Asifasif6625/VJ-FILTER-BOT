@@ -768,6 +768,10 @@ async def get_batches(series_id: str, language: str, season: int, quality: str) 
 # ─── Super Movie CRUD ────────────────────────────────────────────────────────
 async def create_super_movie(data: dict) -> str:
     clean_name = clean_series_title(data.get("title", ""))
+    file_ids = [str(fid) for fid in data.get("file_ids", []) if fid]
+    # Deduplicate file_ids preserving order
+    unique_file_ids = list(dict.fromkeys(file_ids))
+    
     doc = {
         "title": clean_name,
         "normalized_name": _normalize(clean_name),
@@ -778,14 +782,33 @@ async def create_super_movie(data: dict) -> str:
         "imdb_id": data.get("imdb_id", ""),
         "languages": data.get("languages", []),
         "qualities": data.get("qualities", []),
+        "file_ids": unique_file_ids,
         "created_by": data.get("created_by"),
         "created_at": datetime.utcnow(),
         "updated_at": datetime.utcnow(),
         "status": "active",
     }
-    existing = await super_movies_col.find_one({"normalized_name": doc["normalized_name"], "year": doc["year"]})
+    existing = await super_movies_col.find_one({"normalized_name": doc["normalized_name"], "year": doc["year"], "status": {"$ne": "deleted"}})
+    if not existing and doc["year"] == "N/A":
+        existing = await super_movies_col.find_one({"normalized_name": doc["normalized_name"], "status": {"$ne": "deleted"}})
     if existing:
-        await super_movies_col.update_one({"_id": existing["_id"]}, {"$set": doc})
+        merged_file_ids = list(dict.fromkeys((existing.get("file_ids") or []) + unique_file_ids))
+        merged_langs = list(dict.fromkeys((existing.get("languages") or []) + (doc.get("languages") or [])))
+        merged_quals = list(dict.fromkeys((existing.get("qualities") or []) + (doc.get("qualities") or [])))
+        update_fields = {
+            "title": doc["title"] or existing.get("title"),
+            "year": doc["year"] if doc["year"] != "N/A" else existing.get("year", "N/A"),
+            "genre": doc["genre"] if doc["genre"] != "N/A" else existing.get("genre", "N/A"),
+            "rating": doc["rating"] or existing.get("rating", ""),
+            "poster": doc["poster"] or existing.get("poster", ""),
+            "imdb_id": doc["imdb_id"] or existing.get("imdb_id", ""),
+            "languages": merged_langs,
+            "qualities": merged_quals,
+            "file_ids": merged_file_ids,
+            "updated_at": datetime.utcnow(),
+            "status": "active",
+        }
+        await super_movies_col.update_one({"_id": existing["_id"]}, {"$set": update_fields})
         return str(existing["_id"])
     result = await super_movies_col.insert_one(doc)
     return str(result.inserted_id)
