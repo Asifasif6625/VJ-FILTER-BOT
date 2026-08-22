@@ -53,6 +53,7 @@ class temp(object):
     SERIES_STATE = {}
     AUTO_SERIES = {}
     AUTO_MOVIE = {}
+    AUTO_MOVIE_BATCH = {}
     MOVIE_STATE = {}
     WIZARD_SESSIONS = {}
     U_NAME = None
@@ -95,6 +96,9 @@ def get_wizard_session(user_id: int, max_age_seconds: int = 900) -> dict | None:
         if getattr(temp, "AUTO_MOVIE", {}).get(user_id):
             mdata = temp.AUTO_MOVIE[user_id]
             return {"user_id": user_id, "workflow": "AUTO_MOVIE", "state": mdata.get("state", "UNKNOWN"), "data": mdata}
+        if getattr(temp, "AUTO_MOVIE_BATCH", {}).get(user_id):
+            bdata = temp.AUTO_MOVIE_BATCH[user_id]
+            return {"user_id": user_id, "workflow": "SUPER_MOVIE_BATCH", "state": bdata.get("state", "UNKNOWN"), "data": bdata}
         if getattr(temp, "AUTO_SERIES", {}).get(user_id):
             sdata = temp.AUTO_SERIES[user_id]
             return {"user_id": user_id, "workflow": "AUTO_SERIES", "state": sdata.get("state", "UNKNOWN"), "data": sdata}
