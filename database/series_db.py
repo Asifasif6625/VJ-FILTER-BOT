@@ -613,6 +613,15 @@ async def delete_series(series_id: str):
     )
 
 
+async def delete_series_filter(series_id: str):
+    """
+    Canonical helper: Soft-delete/disable ONLY the series filter metadata/index.
+    Preserves series_files (sfiles_col) intact.
+    """
+    return await delete_series(series_id)
+
+
+
 async def list_all_series() -> list[dict]:
     """Return all active series (for admin listing)."""
     cursor = series_col.find({"status": "active"}).sort("name", 1)

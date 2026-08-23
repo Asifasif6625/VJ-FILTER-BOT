@@ -164,6 +164,27 @@ async def get_bad_files(query, file_type=None, use_filter=False):
 async def get_file_details(query):
     return col.find_one({'file_id': query}) or sec_col.find_one({'file_id': query})
 
+async def get_bulk_file_details(file_ids: list[str]) -> dict[str, dict]:
+    """
+    Bulk preloads file details for a list of file IDs in a single query.
+    Returns a dict mapping file_id -> file document.
+    """
+    if not file_ids:
+        return {}
+    file_map = {}
+    q = {"file_id": {"$in": file_ids}}
+    for doc in col.find(q):
+        fid = doc.get("file_id")
+        if fid:
+            file_map[fid] = doc
+    if MULTIPLE_DATABASE:
+        for doc in sec_col.find(q):
+            fid = doc.get("file_id")
+            if fid and fid not in file_map:
+                file_map[fid] = doc
+    return file_map
+
+
 def encode_file_id(s: bytes) -> str:
     r = b""
     n = 0
