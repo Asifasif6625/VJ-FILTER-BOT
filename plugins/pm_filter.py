@@ -2093,7 +2093,7 @@ async def cb_handler(client: Client, query: CallbackQuery):
                 # Check channel membership first
                 if AUTH_CHANNEL and not await is_subscribed(client, query):
                     log.info(f"[SERIES TRY AGAIN]\nkey={req_key}\nuser_id={query.from_user.id}\nmembership=NOT_JOINED")
-                    return await query.answer("⚠️ Please join the channel first.", show_alert=True)
+                    return await query.answer("⚠️ Please send a Join Request first.", show_alert=True)
                 
                 # Immediately delete Join Request message upon confirmed membership
                 try:
@@ -2103,9 +2103,60 @@ async def cb_handler(client: Client, query: CallbackQuery):
                 except Exception as e:
                     log.warning(f"[SERIES TRY AGAIN] Failed to delete Join Request message: {e}")
 
-                from plugins.series import deliver_series_request
-                await deliver_series_request(client, req_key, query.from_user.id, query=query)
-                return
+                from database.series_db import get_temp_request
+                req = temp.SERIES_STATE.get(req_key) or temp.GETALL.get(req_key) or await get_temp_request(req_key)
+                if req and (req.get("type") == "movie" or req.get("request_type") == "movie"):
+                    from plugins.commands import send_movie_files_to_user
+                    req["delivery_status"] = "sending"
+                    await send_movie_files_to_user(
+                        client=client,
+                        user_id=query.from_user.id,
+                        files=req.get("files", []),
+                        movie_title=req.get("movie_title", req.get("title")),
+                        language=req.get("language"),
+                        quality=req.get("quality")
+                    )
+                    req["delivery_status"] = "completed"
+                    return
+                else:
+                    from plugins.series import deliver_series_request
+                    await deliver_series_request(client, req_key, query.from_user.id, query=query)
+                    return
+
+            elif kk == "main":
+                if AUTH_CHANNEL and not await is_subscribed(client, query):
+                    return await query.answer("⚠️ Please send a Join Request first.", show_alert=True)
+                await query.answer("✅ Verification successful!", show_alert=True)
+                try:
+                    if query.message:
+                        await query.message.delete()
+                except Exception:
+                    pass
+                from plugins.commands import start
+                class MockMsg3:
+                    def __init__(self, q):
+                        self.message = q.message
+                        self.chat = q.message.chat
+                        self.from_user = q.from_user
+                        self.text = "/start"
+                        self.command = ["start"]
+                        self.id = q.message.id
+                        self.date = q.message.date
+                    def __getattr__(self, name):
+                        return getattr(self.message, name)
+                    async def reply(self, text, *args, **kwargs):
+                        kwargs.pop("reply_to_message_id", None)
+                        return await self.message._client.send_message(self.chat.id, text, *args, **kwargs)
+                    async def reply_text(self, text, *args, **kwargs):
+                        kwargs.pop("reply_to_message_id", None)
+                        return await self.message._client.send_message(self.chat.id, text, *args, **kwargs)
+                    async def reply_photo(self, photo, *args, **kwargs):
+                        kwargs.pop("reply_to_message_id", None)
+                        return await self.message._client.send_photo(self.chat.id, photo, *args, **kwargs)
+                    async def reply_sticker(self, sticker, *args, **kwargs):
+                        kwargs.pop("reply_to_message_id", None)
+                        return await self.message._client.send_sticker(self.chat.id, sticker, *args, **kwargs)
+                return await start(client, MockMsg3(query))
         except Exception as e:
             import logging
             logging.getLogger(__name__).exception("[FORCE SUB] ERROR: %s", e)

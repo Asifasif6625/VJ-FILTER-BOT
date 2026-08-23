@@ -16,38 +16,39 @@ logger = logging.getLogger(__name__)
 BATCH_FILES = {}
 join_db = JoinReqs
 
-@Client.on_chat_join_request((filters.group | filters.channel))
+@Client.on_chat_join_request()
 async def auto_approve(client, message: ChatJoinRequest):
     auth_ch = int(AUTH_CHANNEL) if AUTH_CHANNEL else None
     msg_chat_id = int(message.chat.id) if message.chat else None
+    ap_user_id = message.from_user.id
+    first_name = getattr(message.from_user, "first_name", "") or ""
+    username = getattr(message.from_user, "username", "") or ""
+    date = getattr(message, "date", datetime.datetime.now())
+
+    if auth_ch and msg_chat_id == auth_ch:
+        await join_db().add_user(user_id=ap_user_id, first_name=first_name, username=username, date=date)
+        logger.info(f"[JOIN REQUEST] Tracked join request for user_id={ap_user_id} in auth_channel={auth_ch}")
 
     if AUTO_APPROVE_MODE == True:
-        if not await db.is_user_exist(message.from_user.id):
-            await db.add_user(message.from_user.id, message.from_user.first_name)
+        if not await db.is_user_exist(ap_user_id):
+            await db.add_user(ap_user_id, first_name)
         if auth_ch and msg_chat_id == auth_ch:
             pass
         else:
             chat = message.chat 
             user = message.from_user  
-            await client.approve_chat_join_request(chat_id=chat.id, user_id=user.id)
-            text = f"<b>ʜᴇʟʟᴏ {message.from_user.mention} 👋,\n\nʏᴏᴜʀ ʀᴇǫᴜᴇsᴛ ᴛᴏ ᴊᴏɪɴ {message.chat.title} ɪs ᴀᴘᴘʀᴏᴠᴇᴅ.\n\nᴘᴏᴡᴇʀᴇᴅ ʙʏ - {CHNL_LNK}</b>"
-            await client.send_message(chat_id=user.id, text=text)
+            try:
+                await client.approve_chat_join_request(chat_id=chat.id, user_id=user.id)
+                text = f"<b>ʜᴇʟʟᴏ {message.from_user.mention} 👋,\n\nʏᴏᴜʀ ʀᴇǫᴜᴇsᴛ ᴛᴏ ᴊᴏɪɴ {message.chat.title} ɪs ᴀᴘᴘʀᴏᴠᴇᴅ.\n\nᴘᴏᴡᴇʀᴇᴅ ʙʏ - {CHNL_LNK}</b>"
+                await client.send_message(chat_id=user.id, text=text)
+            except Exception as ae:
+                logger.warning(f"[AUTO APPROVE ERROR] {ae}")
          
-    if REQUEST_TO_JOIN_MODE == False:
-        return 
-    if not auth_ch or msg_chat_id != auth_ch:
-        return 
-    if not join_db().isActive():
-        return
-    ap_user_id = message.from_user.id
-    first_name = message.from_user.first_name
-    username = message.from_user.username
-    date = message.date
-    await join_db().add_user(user_id=ap_user_id, first_name=first_name, username=username, date=date)
-    logger.info(f"[JOIN REQUEST] Tracked join request for user_id={ap_user_id} in auth_channel={auth_ch}")
     if TRY_AGAIN_BTN == True:
         return 
     data = await db.get_msg_command(ap_user_id)
+    if not data:
+        return
         
     if data.split("-", 1)[0] == "VJ":
         user_id = int(data.split("-", 1)[1])

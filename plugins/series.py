@@ -1928,12 +1928,14 @@ async def wizard_text_handler(client: Client, message: Message):
         else:
             return await message.reply_text("⚠️ Please send a PHOTO to set as thumbnail, or /cancel to abort.")
 
-    # ── Auto Series Add IMDb Input Handler ───────────────────────────────────
+    # ── Auto Series Add IMDb/TMDB Input Handler ───────────────────────────────
     if workflow == "AUTO_SERIES":
         auto_data = sess.get("data") or temp.AUTO_SERIES.get(uid, {})
         if sess.get("state") == "WAIT_IMDB" or auto_data.get("state") == "WAIT_IMDB":
             m_imdb = re.search(r"(?:imdb\.com/title/)?(tt\d{5,12})", text, re.I)
-            if not m_imdb:
+            m_tmdb = re.search(r'(?:https?://)?(?:www\.)?themoviedb\.org/(movie|tv)/(\d+)', text, re.I)
+
+            if not m_imdb and not m_tmdb:
                 prompt_msg_id = auto_data.get("prompt_msg_id") or auto_data.get("prompt_message_id")
                 try:
                     await message.delete()
@@ -1947,11 +1949,12 @@ async def wizard_text_handler(client: Client, message: Message):
                 pmsg = await client.send_message(
                     chat_id=chat_id,
                     text=(
-                        "❌ <b>Invalid IMDb URL or ID.</b>\n\n"
+                        "❌ <b>Invalid IMDb or TMDB URL.</b>\n\n"
                         "Please send:\n\n"
-                        "<code>https://www.imdb.com/title/tt9288030/</code>\n\n"
-                        "or:\n\n"
-                        "<code>tt9288030</code>"
+                        "<b>IMDb Series:</b>\n"
+                        "<code>https://www.imdb.com/title/tt9288030/</code> or <code>tt9288030</code>\n\n"
+                        "<b>TMDB Series:</b>\n"
+                        "<code>https://www.themoviedb.org/tv/1396</code>"
                     ),
                     reply_markup=InlineKeyboardMarkup([[
                         InlineKeyboardButton("❌ Cancel", callback_data="sw#auto_cancel")
@@ -1961,8 +1964,6 @@ async def wizard_text_handler(client: Client, message: Message):
                 auto_data["prompt_msg_id"] = pmsg.id if pmsg else None
                 auto_data["prompt_message_id"] = pmsg.id if pmsg else None
                 return
-
-            imdb_id = m_imdb.group(1).lower()
 
             prompt_msg_id = auto_data.get("prompt_msg_id") or auto_data.get("prompt_message_id")
             try:
@@ -1979,28 +1980,38 @@ async def wizard_text_handler(client: Client, message: Message):
             loading_msg = await client.send_message(
                 chat_id=chat_id,
                 text=(
-                    "🔎 <b>Processing IMDb Series...</b>\n\n"
-                    f"IMDb ID:\n<code>{imdb_id}</code>\n\n"
+                    "🔎 <b>Processing Series Data...</b>\n\n"
+                    f"Query:\n<code>{text}</code>\n\n"
                     "Please wait..."
                 ),
                 parse_mode=enums.ParseMode.HTML
             )
 
             info = None
-            try:
-                info = await get_poster(imdb_id, id=True)
+            imdb_id = None
+            if m_tmdb:
+                from utils import get_tmdb_by_url
+                info = await get_tmdb_by_url(text)
                 if info:
-                    logger.info(f"[AUTO_SERIES IMDb]\nuser_id={uid}\nimdb_id={info.get('imdb_id')}\ntitle={info.get('title')}\nkind={info.get('kind')}")
+                    logger.info(f"[AUTO_SERIES TMDB]\nuser_id={uid}\ntmdb_id={info.get('tmdb_id')}\ntitle={info.get('title')}\nkind={info.get('kind')}")
                 else:
-                    logger.warning(f"[AUTO_SERIES IMDb] query={text} status=failed")
-            except Exception as e:
-                logger.error(f"[AUTO_SERIES IMDb] query={text} error={e}")
-                info = None
+                    logger.warning(f"[AUTO_SERIES TMDB] query={text} status=failed")
+            elif m_imdb:
+                imdb_id = m_imdb.group(1).lower()
+                try:
+                    info = await get_poster(imdb_id, id=True)
+                    if info:
+                        logger.info(f"[AUTO_SERIES IMDb]\nuser_id={uid}\nimdb_id={info.get('imdb_id')}\ntitle={info.get('title')}\nkind={info.get('kind')}")
+                    else:
+                        logger.warning(f"[AUTO_SERIES IMDb] query={text} status=failed")
+                except Exception as e:
+                    logger.error(f"[AUTO_SERIES IMDb] query={text} error={e}")
+                    info = None
 
             if not info or not info.get("title"):
                 return await loading_msg.edit_text(
-                    f"❌ <b>Could not retrieve IMDb data for <code>{text}</code>.</b>\n\n"
-                    "Please provide a valid IMDb URL (e.g. <code>https://www.imdb.com/title/tt9288030/</code>) or ID (<code>tt9288030</code>), or send /cancel to abort.",
+                    f"❌ <b>Could not retrieve data for <code>{text}</code>.</b>\n\n"
+                    "Please provide a valid IMDb URL (e.g. <code>https://www.imdb.com/title/tt9288030/</code>) or TMDB URL (e.g. <code>https://www.themoviedb.org/tv/1396</code>), or send /cancel to abort.",
                     parse_mode=enums.ParseMode.HTML,
                 )
 
@@ -2008,7 +2019,7 @@ async def wizard_text_handler(client: Client, message: Message):
             kind = str(info.get("kind", "")).lower()
             if kind in ["movie", "feature"]:
                 return await loading_msg.edit_text(
-                    "⚠️ <b>This IMDb title is a Movie.</b>\n\nPlease use Auto Movie Add instead.",
+                    "⚠️ <b>This title is a Movie.</b>\n\nPlease use Auto Movie Add instead.",
                     parse_mode=enums.ParseMode.HTML,
                 )
 
@@ -2024,7 +2035,7 @@ async def wizard_text_handler(client: Client, message: Message):
 
             auto_data.update({
                 "state": "CONFIRM_IMDB",
-                "imdb_id": info.get("imdb_id", imdb_id),
+                "imdb_id": info.get("imdb_id") or info.get("tmdb_id") or imdb_id or "tmdb",
                 "title": info["title"],
                 "year": str(info.get("year") or "N/A"),
                 "genre": info.get("genres", "N/A"),
@@ -2054,37 +2065,28 @@ async def wizard_text_handler(client: Client, message: Message):
                     [InlineKeyboardButton("❌ Cancel", callback_data="sw#auto_cancel")]
                 ])
 
-            caption = (
-                "📺 <b>Series Found</b>\n\n"
+            logger.info(f"[AUTO SERIES]\naction=CONFIRM_IMDB\ntitle={auto_data['title']}\nseasons={tot_seasons}\nuser_id={uid}")
+            await loading_msg.edit_text(
+                f"📺 <b>Series Found</b>\n\n"
                 f"<b>{auto_data['title']}</b> ({auto_data['year']})\n"
                 f"{rating_str}\n"
-                f"🎭 {auto_data['genre']}"
+                f"🎭 {auto_data['genre']}\n"
+                f"📦 Total Seasons: <b>{tot_seasons}</b>"
                 f"{exist_str}\n\n"
-                "Choose an option below to proceed:"
-            )
-
-            await loading_msg.delete()
-            pmsg = await client.send_message(
-                chat_id=chat_id,
-                text=caption,
+                "Please select an option below:",
                 reply_markup=markup,
-                parse_mode=enums.ParseMode.HTML,
+                parse_mode=enums.ParseMode.HTML
             )
-            auto_data["prompt_msg_id"] = pmsg.id if pmsg else None
-            auto_data["prompt_message_id"] = pmsg.id if pmsg else None
-            _log_wizard_prompt(uid, "AUTO_SERIES", "CONFIRM_IMDB", pmsg.id if pmsg else 0)
-            try:
-                message.stop_propagation()
-            except Exception:
-                pass
             return
 
-    # ── Auto Movie Add IMDb Input Handler ──────────────────────────────────────
+    # ── Auto Movie Add IMDb/TMDB Input Handler ─────────────────────────────────
     if workflow == "AUTO_MOVIE":
         movie_data = sess.get("data") or temp.AUTO_MOVIE.get(uid, {})
         if sess.get("state") == "WAIT_IMDB" or movie_data.get("state") == "WAIT_IMDB":
             m_imdb = re.search(r"(?:imdb\.com/title/)?(tt\d{5,12})", text, re.I)
-            if not m_imdb:
+            m_tmdb = re.search(r'(?:https?://)?(?:www\.)?themoviedb\.org/(movie|tv)/(\d+)', text, re.I)
+
+            if not m_imdb and not m_tmdb:
                 prompt_msg_id = movie_data.get("prompt_msg_id") or movie_data.get("prompt_message_id")
                 try:
                     await message.delete()
@@ -2098,11 +2100,12 @@ async def wizard_text_handler(client: Client, message: Message):
                 pmsg = await client.send_message(
                     chat_id=chat_id,
                     text=(
-                        "❌ <b>Invalid IMDb URL or ID.</b>\n\n"
+                        "❌ <b>Invalid IMDb or TMDB URL.</b>\n\n"
                         "Please send:\n\n"
-                        "<code>https://www.imdb.com/title/tt35723557/</code>\n\n"
-                        "or:\n\n"
-                        "<code>tt35723557</code>"
+                        "<b>IMDb Movie:</b>\n"
+                        "<code>https://www.imdb.com/title/tt35723557/</code> or <code>tt35723557</code>\n\n"
+                        "<b>TMDB Movie:</b>\n"
+                        "<code>https://www.themoviedb.org/movie/863530</code>"
                     ),
                     reply_markup=InlineKeyboardMarkup([[
                         InlineKeyboardButton("❌ Cancel", callback_data="sw#auto_cancel")
@@ -2112,8 +2115,6 @@ async def wizard_text_handler(client: Client, message: Message):
                 movie_data["prompt_msg_id"] = pmsg.id if pmsg else None
                 movie_data["prompt_message_id"] = pmsg.id if pmsg else None
                 return
-
-            imdb_id = m_imdb.group(1).lower()
 
             prompt_msg_id = movie_data.get("prompt_msg_id") or movie_data.get("prompt_message_id")
             try:
@@ -2130,28 +2131,38 @@ async def wizard_text_handler(client: Client, message: Message):
             loading_msg = await client.send_message(
                 chat_id=chat_id,
                 text=(
-                    "🔎 <b>Processing IMDb Movie...</b>\n\n"
-                    f"IMDb ID:\n<code>{imdb_id}</code>\n\n"
+                    "🔎 <b>Processing Movie Data...</b>\n\n"
+                    f"Query:\n<code>{text}</code>\n\n"
                     "Please wait..."
                 ),
                 parse_mode=enums.ParseMode.HTML
             )
 
             info = None
-            try:
-                info = await get_poster(imdb_id, id=True)
+            imdb_id = None
+            if m_tmdb:
+                from utils import get_tmdb_by_url
+                info = await get_tmdb_by_url(text)
                 if info:
-                    logger.info(f"[AUTO_MOVIE IMDb]\nuser_id={uid}\nimdb_id={info.get('imdb_id')}\ntitle={info.get('title')}\nyear={info.get('year')}\nkind={info.get('kind')}\ntype=MOVIE")
+                    logger.info(f"[AUTO_MOVIE TMDB]\nuser_id={uid}\ntmdb_id={info.get('tmdb_id')}\ntitle={info.get('title')}\nyear={info.get('year')}\nkind={info.get('kind')}\ntype=MOVIE")
                 else:
-                    logger.warning(f"[AUTO_MOVIE IMDb] query={text} status=failed")
-            except Exception as e:
-                logger.error(f"[AUTO_MOVIE IMDb] query={text} error={e}")
-                info = None
+                    logger.warning(f"[AUTO_MOVIE TMDB] query={text} status=failed")
+            elif m_imdb:
+                imdb_id = m_imdb.group(1).lower()
+                try:
+                    info = await get_poster(imdb_id, id=True)
+                    if info:
+                        logger.info(f"[AUTO_MOVIE IMDb]\nuser_id={uid}\nimdb_id={info.get('imdb_id')}\ntitle={info.get('title')}\nyear={info.get('year')}\nkind={info.get('kind')}\ntype=MOVIE")
+                    else:
+                        logger.warning(f"[AUTO_MOVIE IMDb] query={text} status=failed")
+                except Exception as e:
+                    logger.error(f"[AUTO_MOVIE IMDb] query={text} error={e}")
+                    info = None
 
             if not info or not info.get("title"):
                 return await loading_msg.edit_text(
-                    f"❌ <b>Could not retrieve IMDb data for <code>{text}</code>.</b>\n\n"
-                    "Please provide a valid IMDb URL (e.g. <code>https://www.imdb.com/title/tt0111161/</code>) or ID (<code>tt0111161</code>), or send /cancel to abort.",
+                    f"❌ <b>Could not retrieve data for <code>{text}</code>.</b>\n\n"
+                    "Please provide a valid IMDb URL (e.g. <code>https://www.imdb.com/title/tt0111161/</code>) or TMDB URL (e.g. <code>https://www.themoviedb.org/movie/863530</code>), or send /cancel to abort.",
                     parse_mode=enums.ParseMode.HTML,
                 )
 
@@ -2160,7 +2171,7 @@ async def wizard_text_handler(client: Client, message: Message):
             is_series = kind in ["tv series", "tv mini series", "series", "tvseries", "tv mini-series"] or (info.get("seasons") and str(info["seasons"]).isdigit() and int(info["seasons"]) > 0)
             if is_series:
                 return await loading_msg.edit_text(
-                    "⚠️ <b>This IMDb title is a TV Series.</b>\n\nPlease use Auto Series Add instead.",
+                    "⚠️ <b>This title is a TV Series.</b>\n\nPlease use Auto Series Add instead.",
                     parse_mode=enums.ParseMode.HTML,
                 )
 
@@ -2170,7 +2181,7 @@ async def wizard_text_handler(client: Client, message: Message):
                 "session_id": session_id,
                 "user_id": uid,
                 "state": "SCANNING",
-                "imdb_id": info.get("imdb_id", imdb_id),
+                "imdb_id": info.get("imdb_id") or info.get("tmdb_id") or imdb_id or "tmdb",
                 "title": info["title"],
                 "year": str(info.get("year") or "N/A"),
                 "genre": info.get("genres", "N/A"),
@@ -2657,7 +2668,7 @@ async def _handle_wizard_callback(client: Client, query: CallbackQuery):
                 pass
         return
 
-    # ── Auto S Add & Menu Entry Callbacks ────────────────────────────────────
+    # ── Manual Series Wizard Handler ──────────────────────────────────────────
     if action == "start_manual":
         print(f"[WIZARD BUTTON]\nuser_id={uid}\nbutton=MANUAL", flush=True)
         logger.info(f"[WIZARD BUTTON]\nuser_id={uid}\nbutton=MANUAL")
@@ -2828,11 +2839,11 @@ async def _handle_wizard_callback(client: Client, query: CallbackQuery):
         text = (
             "📺 <b>Auto Series Add</b>\n\n"
             "You selected <b>Auto S Add</b>.\n\n"
-            "Please send the <b>IMDb Series URL or IMDb ID</b>.\n\n"
-            "Examples:\n\n"
-            "<code>https://www.imdb.com/title/tt9288030/</code>\n\n"
-            "or\n\n"
-            "<code>tt9288030</code>"
+            "Please send the <b>IMDb or TMDB Series URL</b>.\n\n"
+            "<b>IMDb Examples:</b>\n"
+            "<code>https://www.imdb.com/title/tt9288030/</code> or <code>tt9288030</code>\n\n"
+            "<b>TMDB Examples:</b>\n"
+            "<code>https://www.themoviedb.org/tv/1396</code>"
         )
         markup = InlineKeyboardMarkup([[
             InlineKeyboardButton("❌ Cancel", callback_data="sw#auto_cancel")
@@ -2918,11 +2929,11 @@ async def _handle_wizard_callback(client: Client, query: CallbackQuery):
         text = (
             "🎬 <b>Auto Movie Add</b>\n\n"
             "You selected <b>Auto Movie Add</b>.\n\n"
-            "Please send the <b>IMDb Movie URL or IMDb ID</b>.\n\n"
-            "Examples:\n\n"
-            "<code>https://www.imdb.com/title/tt35723557/</code>\n\n"
-            "or\n\n"
-            "<code>tt35723557</code>"
+            "Please send the <b>IMDb or TMDB Movie URL</b>.\n\n"
+            "<b>IMDb Examples:</b>\n"
+            "<code>https://www.imdb.com/title/tt35723557/</code> or <code>tt35723557</code>\n\n"
+            "<b>TMDB Examples:</b>\n"
+            "<code>https://www.themoviedb.org/movie/863530</code>"
         )
         markup = InlineKeyboardMarkup([[
             InlineKeyboardButton("❌ Cancel", callback_data="sw#auto_cancel")
@@ -6144,6 +6155,28 @@ async def deliver_series_request(client: Client, req_key: str, user_id: int, que
         if query:
             await query.answer("⏳ Files are already being sent.", show_alert=True)
         return False
+
+    if req.get("type") == "movie" or req.get("request_type") == "movie":
+        req["delivery_status"] = "sending"
+        req["state"] = "SENDING"
+        if query and query.message:
+            try:
+                await query.message.delete()
+            except Exception:
+                pass
+        from plugins.commands import send_movie_files_to_user
+        files = req.get("files", [])
+        await send_movie_files_to_user(
+            client=client,
+            user_id=user_id,
+            files=files,
+            movie_title=req.get("movie_title", req.get("title")),
+            language=req.get("language"),
+            quality=req.get("quality")
+        )
+        req["delivery_status"] = "completed"
+        req["state"] = "COMPLETED"
+        return True
 
     req["delivery_status"] = "sending"
     req["state"] = "SENDING"
