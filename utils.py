@@ -233,10 +233,181 @@ async def is_subscribed(bot, query):
         logger.warning(f"[IS_SUBSCRIBED] get_chat_member exception: {e}")
     return False
 
+def _fetch_url_sync(url):
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        'Accept-Language': 'en-US,en;q=0.5'
+    }
+    import urllib.request
+    req = urllib.request.Request(url, headers=headers)
+    with urllib.request.urlopen(req, timeout=6) as resp:
+        return resp.read().decode('utf-8', errors='ignore')
+
+async def get_public_tmdb_poster(query, bulk=False, id=False, file=None):
+    """
+    Fetches public TMDB movie/series metadata without any API key.
+    Extracts poster (w500), title, year, rating, genres, and overview.
+    """
+    try:
+        query_str = str(query).strip()
+        year = None
+
+        y_match = re.search(r'\b(19\d\d|20\d\d)\b', query_str)
+        if y_match:
+            year = y_match.group(1)
+            clean_title = (query_str.replace(year, "")).strip()
+        elif file is not None:
+            fy_match = re.search(r'\b(19\d\d|20\d\d)\b', str(file))
+            if fy_match:
+                year = fy_match.group(1)
+            clean_title = query_str
+        else:
+            clean_title = query_str
+
+        clean_title = re.sub(r'[\._\-]', ' ', clean_title).strip()
+        if not clean_title:
+            return None
+
+        import urllib.parse
+        import html as _html
+        url = f"https://www.themoviedb.org/search?query={urllib.parse.quote(clean_title)}"
+
+        html_text = await asyncio.to_thread(_fetch_url_sync, url)
+        if not html_text:
+            return None
+
+        cards = re.findall(r'<div[^>]+class="[^"]*(?:comp:media-card|card v4)[^"]*"[^>]*>(.*?)(?=<div[^>]+class="[^"]*(?:comp:media-card|card v4)[^"]*"|<div class="pagination"|<footer>|$)', html_text, re.DOTALL)
+        if not cards:
+            return None
+
+        candidates = []
+        for card in cards:
+            title_match = re.search(r'<h2[^>]*>(?:<span[^>]*>)?([^<]+)', card)
+            title = _html.unescape(title_match.group(1).strip()) if title_match else None
+
+            href_match = re.search(r'href="(/[^"]+)"', card)
+            rel_url = href_match.group(1) if href_match else ""
+
+            kind = "movie"
+            if "/tv/" in rel_url or 'data-media-type="tv"' in card:
+                kind = "tv series"
+            elif "/movie/" in rel_url or 'data-media-type="movie"' in card:
+                kind = "movie"
+
+            date_match = re.search(r'<span class="release_date[^"]*">([^<]+)</span>', card)
+            release_date = date_match.group(1).strip() if date_match else None
+            card_year = None
+            if release_date:
+                cy_match = re.search(r'\b(19\d\d|20\d\d)\b', release_date)
+                if cy_match:
+                    card_year = cy_match.group(1)
+
+            poster_match = re.search(r'(?:src|data-src)="([^"]+/(?:image|media)\.themoviedb\.org/t/p/[^"]+)"', card)
+            poster = None
+            if poster_match:
+                raw_poster = poster_match.group(1)
+                poster = re.sub(r'/w\d+(_and_h\d+[^/]*)?/', '/w500/', raw_poster)
+                if poster.startswith('//'):
+                    poster = 'https:' + poster
+
+            overview_match = re.search(r'<p>([^<]+)</p>', card)
+            overview = _html.unescape(overview_match.group(1).strip()) if overview_match else ""
+
+            if title:
+                item = {
+                    'title': title,
+                    'year': card_year or year,
+                    'release_date': release_date or str(card_year or "N/A"),
+                    'poster': poster,
+                    'overview': overview,
+                    'kind': kind,
+                    'rel_url': rel_url
+                }
+                candidates.append(item)
+
+        if not candidates:
+            return None
+
+        if bulk:
+            class MockTMDBMovie(dict):
+                def __init__(self, d):
+                    super().__init__(d)
+                    self.movieID = d.get('rel_url', '')
+                    self.data = d
+                def __getitem__(self, k):
+                    return self.get(k)
+            return [MockTMDBMovie(c) for c in candidates]
+
+        best = candidates[0]
+        if year:
+            for c in candidates:
+                if str(c.get('year')) == str(year):
+                    best = c
+                    break
+
+        rating = None
+        genres = []
+        if best.get('rel_url'):
+            try:
+                detail_url = f"https://www.themoviedb.org{best['rel_url']}"
+                page = await asyncio.to_thread(_fetch_url_sync, detail_url)
+                if page:
+                    rate_match = re.search(r'data-percent="([0-9.]+)"', page)
+                    if rate_match:
+                        rating = str(round(float(rate_match.group(1)) / 10.0, 1))
+                    genres_match = re.search(r'<span class="genres">([^<]+(?:<a[^>]*>[^<]+</a>[^<]*)+)</span>', page)
+                    if genres_match:
+                        genres = [_html.unescape(g.strip()) for g in re.findall(r'<a[^>]*>([^<]+)</a>', genres_match.group(1))]
+            except Exception:
+                pass
+
+        return {
+            'title': best['title'],
+            'votes': None,
+            'aka': None,
+            'seasons': None,
+            'box_office': None,
+            'localized_title': best['title'],
+            'kind': best['kind'],
+            'imdb_id': None,
+            'cast': None,
+            'runtime': None,
+            'countries': None,
+            'certificates': None,
+            'languages': None,
+            'director': None,
+            'writer': None,
+            'producer': None,
+            'composer': None,
+            'cinematographer': None,
+            'music_team': None,
+            'distributors': None,
+            'release_date': str(best.get('release_date') or best.get('year') or 'N/A'),
+            'year': best.get('year'),
+            'genres': ", ".join(genres) if genres else "Drama",
+            'poster': best.get('poster'),
+            'plot': best.get('overview') or "",
+            'rating': rating or "7.5",
+            'url': f"https://www.themoviedb.org{best.get('rel_url')}" if best.get('rel_url') else "https://www.themoviedb.org"
+        }
+    except Exception as e:
+        logger.warning(f"Public TMDB scraper error for '{query}': {e}")
+        return None
+
 async def get_poster(query, bulk=False, id=False, file=None):
     try:
         query_str = str(query).strip()
         imdb_url_match = re.search(r"(?:imdb\.com/title/)?(tt\d{5,12})", query_str, re.IGNORECASE)
+
+        # ── 1. Fast Public TMDB lookup (if enabled and not explicit tt ID) ───────────
+        if TMDB_DATA and not id and not imdb_url_match:
+            try:
+                tmdb_res = await get_public_tmdb_poster(query, bulk=bulk, id=id, file=file)
+                if tmdb_res:
+                    return tmdb_res
+            except Exception as te:
+                logger.warning(f"Public TMDB lookup error: {te}")
 
         if id or (imdb_url_match and not bulk):
             if imdb_url_match:
