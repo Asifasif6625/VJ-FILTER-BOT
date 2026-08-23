@@ -169,6 +169,9 @@ YEARS = ["1900", "1991", "1992", "1993", "1994", "1995", "1996", "1997", "1998",
                            # Ask Doubt on telegram @KingVJ01
 
 
+# Batch file delivery concurrency (parallel sends)
+BATCH_SEND_CONCURRENCY = int(environ.get('BATCH_SEND_CONCURRENCY', '8'))
+
 # Online Stream and Download
 STREAM_MODE = bool(environ.get('STREAM_MODE', True)) # Set True or False
 

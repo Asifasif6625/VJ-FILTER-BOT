@@ -198,38 +198,40 @@ async def pub_is_subscribed(bot, query, channel):
     return btn
 
 async def is_subscribed(bot, query):
+    if not AUTH_CHANNEL:
+        return True
     user_id = query if isinstance(query, int) else getattr(getattr(query, "from_user", None), "id", getattr(query, "id", None))
     if not user_id:
         return False
+
+    auth_ch = int(AUTH_CHANNEL)
     if REQUEST_TO_JOIN_MODE == True and join_db().isActive():
         try:
             user = await join_db().get_user(user_id)
-            if user and user["user_id"] == user_id:
+            if user and int(user.get("user_id", 0)) == int(user_id):
                 return True
-            else:
-                try:
-                    user_data = await bot.get_chat_member(AUTH_CHANNEL, user_id)
-                except UserNotParticipant:
-                    pass
-                except Exception as e:
-                    logger.exception(e)
-                else:
-                    if user_data.status != enums.ChatMemberStatus.BANNED:
-                        return True
         except Exception as e:
-            logger.exception(e)
-            return False
-    else:
-        try:
-            user = await bot.get_chat_member(AUTH_CHANNEL, user_id)
-        except UserNotParticipant:
-            pass
-        except Exception as e:
-            logger.exception(e)
-        else:
-            if user.status != enums.ChatMemberStatus.BANNED:
+            logger.warning(f"[IS_SUBSCRIBED] join_db lookup error: {e}")
+
+    try:
+        user_data = await bot.get_chat_member(auth_ch, user_id)
+        if user_data:
+            st = user_data.status
+            if st in [enums.ChatMemberStatus.MEMBER, enums.ChatMemberStatus.ADMINISTRATOR, enums.ChatMemberStatus.OWNER, enums.ChatMemberStatus.RESTRICTED]:
+                if REQUEST_TO_JOIN_MODE == True and join_db().isActive():
+                    try:
+                        u_obj = getattr(user_data, "user", None)
+                        fn = getattr(u_obj, "first_name", "") if u_obj else ""
+                        un = getattr(u_obj, "username", "") if u_obj else ""
+                        await join_db().add_user(user_id=user_id, first_name=fn, username=un, date=datetime.datetime.now())
+                    except Exception:
+                        pass
                 return True
-        return False
+    except UserNotParticipant:
+        pass
+    except Exception as e:
+        logger.warning(f"[IS_SUBSCRIBED] get_chat_member exception: {e}")
+    return False
 
 async def get_poster(query, bulk=False, id=False, file=None):
     try:
@@ -980,3 +982,41 @@ async def get_seconds(time_string):
         return value * 86400 * 365
     else:
         return 0
+
+
+# ─── 10-Minute Centralized Auto Delete Helper ─────────────────────────────────
+_FILTER_DELETE_TASKS = {}
+
+async def delete_message_after(client, chat_id: int, message_id: int, delay: int = 600):
+    try:
+        await asyncio.sleep(delay)
+        await client.delete_messages(chat_id, message_id)
+        logger.info(f"[AUTO DELETE EXECUTED]\nchat_id={chat_id}\nmessage_id={message_id}")
+    except asyncio.CancelledError:
+        pass
+    except Exception as e:
+        logger.debug(f"[AUTO DELETE] chat={chat_id} message={message_id} error={e}")
+    finally:
+        _FILTER_DELETE_TASKS.pop((int(chat_id), int(message_id)), None)
+
+def schedule_filter_message_delete(client, chat_id: int, message_id: int, delay: int = 600):
+    """
+    Schedules auto-deletion of a temporary bot filter/result message after `delay` seconds (default 600s = 10 mins).
+    If the message is refreshed/edited, cancels any pending task and resets the TTL.
+    """
+    if not client or not chat_id or not message_id:
+        return None
+
+    key = (int(chat_id), int(message_id))
+    old_task = _FILTER_DELETE_TASKS.get(key)
+    if old_task and not old_task.done():
+        try:
+            old_task.cancel()
+        except Exception:
+            pass
+
+    logger.info(f"[AUTO DELETE SCHEDULED]\nchat_id={chat_id}\nmessage_id={message_id}\ndelay={delay}")
+    task = asyncio.create_task(delete_message_after(client, chat_id, message_id, delay))
+    _FILTER_DELETE_TASKS[key] = task
+    return task
+
