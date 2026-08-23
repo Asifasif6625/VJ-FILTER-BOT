@@ -64,6 +64,11 @@ async def start():
     temp.ME = me.id
     temp.U_NAME = me.username
     temp.B_NAME = me.first_name
+    try:
+        from plugins.series import start_cleanup_schedulers
+        start_cleanup_schedulers(TechVJBot)
+    except Exception as e:
+        logging.warning(f"Failed to start cleanup schedulers: {e}")
     logging.info(script.LOGO)
     tz = pytz.timezone('Asia/Kolkata')
     today = date.today()
