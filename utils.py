@@ -200,32 +200,44 @@ async def pub_is_subscribed(bot, query, channel):
 async def is_subscribed(bot, query):
     if not AUTH_CHANNEL:
         return True
-    user_id = query if isinstance(query, int) else getattr(getattr(query, "from_user", None), "id", getattr(query, "id", None))
+
+    if isinstance(query, int):
+        user_id = query
+    elif isinstance(query, str) and query.lstrip("-").isdigit():
+        user_id = int(query)
+    elif hasattr(query, "from_user") and query.from_user:
+        user_id = query.from_user.id
+    elif hasattr(query, "chat") and query.chat:
+        user_id = query.chat.id
+    else:
+        user_id = getattr(query, "id", None)
+
     if not user_id:
         return False
 
+    if user_id in ADMINS:
+        return True
+
     auth_ch = int(AUTH_CHANNEL)
-    if REQUEST_TO_JOIN_MODE == True and join_db().isActive():
-        try:
-            user = await join_db().get_user(user_id)
-            if user and int(user.get("user_id", 0)) == int(user_id):
-                return True
-        except Exception as e:
-            logger.warning(f"[IS_SUBSCRIBED] join_db lookup error: {e}")
+    try:
+        user = await join_db().get_user(user_id)
+        if user and int(user.get("user_id", 0)) == int(user_id):
+            return True
+    except Exception as e:
+        logger.warning(f"[IS_SUBSCRIBED] join_db lookup error: {e}")
 
     try:
         user_data = await bot.get_chat_member(auth_ch, user_id)
         if user_data:
             st = user_data.status
             if st in [enums.ChatMemberStatus.MEMBER, enums.ChatMemberStatus.ADMINISTRATOR, enums.ChatMemberStatus.OWNER, enums.ChatMemberStatus.RESTRICTED]:
-                if REQUEST_TO_JOIN_MODE == True and join_db().isActive():
-                    try:
-                        u_obj = getattr(user_data, "user", None)
-                        fn = getattr(u_obj, "first_name", "") if u_obj else ""
-                        un = getattr(u_obj, "username", "") if u_obj else ""
-                        await join_db().add_user(user_id=user_id, first_name=fn, username=un, date=datetime.datetime.now())
-                    except Exception:
-                        pass
+                try:
+                    u_obj = getattr(user_data, "user", None)
+                    fn = getattr(u_obj, "first_name", "") if u_obj else ""
+                    un = getattr(u_obj, "username", "") if u_obj else ""
+                    await join_db().add_user(user_id=user_id, first_name=fn, username=un, date=datetime.now())
+                except Exception:
+                    pass
                 return True
     except UserNotParticipant:
         pass
@@ -395,9 +407,122 @@ async def get_public_tmdb_poster(query, bulk=False, id=False, file=None):
         logger.warning(f"Public TMDB scraper error for '{query}': {e}")
         return None
 
+async def get_tmdb_by_url(url_or_path):
+    """
+    Directly resolves a TMDB URL (e.g. https://www.themoviedb.org/movie/863530 or https://www.themoviedb.org/tv/1396)
+    without any API key and returns structured movie/series metadata.
+    """
+    import html as _html
+    try:
+        m = re.search(r'(?:themoviedb\.org)?/(movie|tv)/(\d+)', str(url_or_path), re.I)
+        if not m:
+            return None
+        media_type = m.group(1).lower()  # 'movie' or 'tv'
+        tmdb_id = m.group(2)
+        
+        clean_url = f"https://www.themoviedb.org/{media_type}/{tmdb_id}"
+        page = await asyncio.to_thread(_fetch_url_sync, clean_url)
+        if not page:
+            return None
+
+        # Title
+        title_match = re.search(r'<h2[^>]*>\s*(?:<a[^>]*>)?([^<]+)', page) or re.search(r'<meta property="og:title" content="([^"]+)"', page)
+        title = _html.unescape(title_match.group(1).strip()) if title_match else None
+        if title:
+            title = re.sub(r'\s*\(\d{4}\)\s*$', '', title).strip()
+
+        # Year
+        year = None
+        date_match = re.search(r'<span class="tag release_date">\s*\(([0-9]{4})\)\s*</span>', page) or re.search(r'<span class="release_date[^"]*">([^<]+)</span>', page)
+        if date_match:
+            rel_text = date_match.group(1).strip()
+            y_m = re.search(r'\b(19\d\d|20\d\d)\b', rel_text)
+            if y_m:
+                year = y_m.group(1)
+
+        # Rating
+        rating = None
+        rate_match = re.search(r'data-percent="([0-9.]+)"', page)
+        if rate_match:
+            try:
+                rating = str(round(float(rate_match.group(1)) / 10.0, 1))
+            except:
+                pass
+
+        # Genres
+        genres_match = re.search(r'<span class="genres">([^<]+(?:<a[^>]*>[^<]+</a>[^<]*)+)</span>', page)
+        genres = []
+        if genres_match:
+            genres = [_html.unescape(g.strip()) for g in re.findall(r'<a[^>]*>([^<]+)</a>', genres_match.group(1))]
+
+        # Seasons for TV Series
+        seasons = None
+        if media_type == "tv":
+            season_match = re.search(r'(\d+)\s+Season', page, re.I)
+            if season_match:
+                seasons = int(season_match.group(1))
+            else:
+                seasons = 1
+
+        # Poster
+        poster_match = re.search(r'<meta property="og:image" content="([^"]+)"', page) or re.search(r'class="poster[^"]*"[^>]+(?:src|data-src)="([^"]+)"', page)
+        poster = None
+        if poster_match:
+            raw_poster = poster_match.group(1)
+            poster = re.sub(r'/w\d+(_and_h\d+[^/]*)?/', '/w500/', raw_poster)
+            if poster.startswith('//'):
+                poster = 'https:' + poster
+
+        # Overview
+        overview_match = re.search(r'<div class="overview"[^>]*>\s*<p>([^<]+)</p>', page) or re.search(r'<meta property="og:description" content="([^"]+)"', page)
+        overview = _html.unescape(overview_match.group(1).strip()) if overview_match else ""
+
+        kind = "tv series" if media_type == "tv" else "movie"
+
+        return {
+            'title': title,
+            'votes': None,
+            'aka': None,
+            'seasons': seasons,
+            'box_office': None,
+            'localized_title': title,
+            'kind': kind,
+            'imdb_id': None,
+            'tmdb_id': tmdb_id,
+            'cast': None,
+            'runtime': None,
+            'countries': None,
+            'certificates': None,
+            'languages': None,
+            'director': None,
+            'writer': None,
+            'producer': None,
+            'composer': None,
+            'cinematographer': None,
+            'music_team': None,
+            'distributors': None,
+            'release_date': str(year or "N/A"),
+            'year': year,
+            'genres': ", ".join(genres) if genres else "Drama",
+            'poster': poster,
+            'plot': overview,
+            'rating': rating or "7.5",
+            'url': clean_url
+        }
+    except Exception as e:
+        logger.warning(f"Error fetching TMDB URL '{url_or_path}': {e}")
+        return None
+
 async def get_poster(query, bulk=False, id=False, file=None):
     try:
         query_str = str(query).strip()
+
+        # ── 0. Direct TMDB URL Resolution ──────────────────────────────────────────
+        if "themoviedb.org" in query_str:
+            tmdb_direct = await get_tmdb_by_url(query_str)
+            if tmdb_direct:
+                return tmdb_direct
+
         imdb_url_match = re.search(r"(?:imdb\.com/title/)?(tt\d{5,12})", query_str, re.IGNORECASE)
 
         # ── 1. Fast Public TMDB lookup (if enabled and not explicit tt ID) ───────────
