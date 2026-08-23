@@ -25,7 +25,6 @@ join_db = JoinReqs
 async def process_series_start(client: Client, user_id: int, req_key: str, message: Message = None):
     import utils
     from utils import temp
-    from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
     import info
     import logging
     log = logging.getLogger(__name__)
@@ -192,11 +191,13 @@ async def process_series_start(client: Client, user_id: int, req_key: str, messa
 
 
 
-@Client.on_message(filters.command("start") & filters.incoming)
+@Client.on_message(filters.command("start") & filters.incoming, group=-10)
 async def start(client, message):
     import logging
     log = logging.getLogger(__name__)
     
+    payload = message.command[1] if len(message.command) > 1 else ""
+    log.info(f"[START HANDLER]\npayload={payload}")
     log.info(f"[DEBUG START] Raw text: {message.text}")
     
     try:
@@ -300,7 +301,34 @@ async def start(client, message):
         return
     # --- END SERIES & MOVIE DEEP LINK PM FLOW ---
     
-    # Global Force Subscribe intercepted bypassed as requested
+    # Global Force Subscribe Check
+    if AUTH_CHANNEL and (message.from_user.id not in ADMINS):
+        if not await is_subscribed(client, message.from_user.id):
+            try:
+                invite_link = await client.create_chat_invite_link(int(AUTH_CHANNEL), creates_join_request=True)
+            except Exception as e:
+                log.error(f"Failed to create invite link for AUTH_CHANNEL: {e}")
+                invite_link = None
+
+            if invite_link:
+                req_cmd = data if len(message.command) > 1 else ""
+                text = (
+                    "📢 **Channel Join Request**\n\n"
+                    "ഫയൽ ലഭിക്കുന്നതിന് മുമ്പ് ഞങ്ങളുടെ ചാനലിലേക്ക് Join Request അയയ്ക്കുക.\n\n"
+                    "Request അയച്ച ശേഷം താഴെയുള്ള Try Again ബട്ടൺ ക്ലിക്ക് ചെയ്യുക.\n\n"
+                    "Please send a Join Request to our channel before getting the files.\n\n"
+                    "After sending the request, click Try Again below."
+                )
+                btn = [
+                    [InlineKeyboardButton("📢 Send Join Request", url=invite_link.invite_link)],
+                    [InlineKeyboardButton("🔄 Try Again", callback_data=f"checksub#all#{req_cmd}" if req_cmd else f"checksub#main#0")]
+                ]
+                return await client.send_message(
+                    chat_id=message.from_user.id,
+                    text=text,
+                    reply_markup=InlineKeyboardMarkup(btn),
+                    parse_mode=enums.ParseMode.MARKDOWN
+                )
     
     if data.split("-", 1)[0] == "VJ":
         user_id = int(data.split("-", 1)[1])
@@ -380,64 +408,44 @@ async def start(client, message):
                 return await client.send_message(LOG_CHANNEL, f"UNABLE TO OPEN FILE.\n{e}")
             BATCH_FILES[identifier] = msgs
 
-        filesarr = []
-        for msg in msgs:
-            title = msg.get("title")
-            size=get_size(int(msg.get("size", 0)))
-            f_caption=msg.get("caption", "")
+        def batch_files_caption_builder(msg_doc, idx, total_count):
+            title = msg_doc.get("title")
+            size = get_size(int(msg_doc.get("size", 0)))
+            f_caption = msg_doc.get("caption", "")
             if BATCH_FILE_CAPTION:
                 try:
-                    f_caption=BATCH_FILE_CAPTION.format(file_name= '' if title is None else title, file_size='' if size is None else size, file_caption='' if f_caption is None else f_caption)
-                except:
-                    f_caption=f_caption
-            if f_caption is None:
-                f_caption = f"{title}"
-            try:
-                if STREAM_MODE == True:
-                    log_msg = await client.send_cached_media(chat_id=LOG_CHANNEL, file_id=msg.get("file_id"))
-                    fileName = {quote_plus(get_name(log_msg))}
-                    stream = f"{URL}watch/{str(log_msg.id)}/{quote_plus(get_name(log_msg))}?hash={get_hash(log_msg)}"
-                    download = f"{URL}{str(log_msg.id)}/{quote_plus(get_name(log_msg))}?hash={get_hash(log_msg)}"
+                    f_caption = BATCH_FILE_CAPTION.format(file_name='' if title is None else title, file_size='' if size is None else size, file_caption='' if f_caption is None else f_caption)
+                except Exception:
+                    pass
+            if not f_caption:
+                f_caption = f"{title}" if title else ""
+            return f_caption
 
-                if STREAM_MODE == True:
-                    button = [[
-                        InlineKeyboardButton("• ᴅᴏᴡɴʟᴏᴀᴅ •", url=download),
-                        InlineKeyboardButton('• ᴡᴀᴛᴄʜ •', url=stream)
-                    ],[
-                        InlineKeyboardButton("• ᴡᴀᴛᴄʜ ɪɴ ᴡᴇʙ ᴀᴘᴘ •", web_app=WebAppInfo(url=stream))
-                    ]]
-                    reply_markup = InlineKeyboardMarkup(button)
-                else:
-                    reply_markup = None
-                    
-                msg = await client.send_cached_media(
+        try:
+            await sts.delete()
+        except Exception:
+            pass
+
+        sent_messages = await send_batch_files(
+            client=client,
+            chat_id=message.from_user.id,
+            files=msgs,
+            user_id=message.from_user.id,
+            custom_caption_builder=batch_files_caption_builder
+        )
+
+        if sent_messages:
+            try:
+                k = await client.send_message(
                     chat_id=message.from_user.id,
-                    file_id=msg.get("file_id"),
-                    caption="",
-                    protect_content=msg.get('protect', False),
-                    reply_markup=reply_markup
+                    text="<blockquote><b><u>❗️❗️❗️IMPORTANT❗️️❗️❗️</u></b>\n\nᴛʜɪs ᴍᴇssᴀɢᴇ ᴡɪʟʟ ʙᴇ ᴅᴇʟᴇᴛᴇᴅ ɪɴ <b><u>10 mins</u> 🫥 <i></b>(ᴅᴜᴇ ᴛᴏ ᴄᴏᴘʏʀɪɢʜᴛ ɪssᴜᴇs)</i>.\n\n<b><i>ᴘʟᴇᴀsᴇ ғᴏʀᴡᴀʀᴅ ᴛʜɪs ᴍᴇssᴀɢᴇ ᴛᴏ ʏᴏᴜʀ sᴀᴠᴇᴅ ᴍᴇssᴀɢᴇs ᴏʀ ᴀɴʏ ᴘʀɪᴠᴀᴛᴇ ᴄʜᴀᴛ.</i></b></blockquote>",
+                    parse_mode=enums.ParseMode.HTML
                 )
-                filesarr.append(msg)
-                
-            except FloodWait as e:
-                await asyncio.sleep(e.value)
-                msg = await client.send_cached_media(
-                    chat_id=message.from_user.id,
-                    file_id=msg.get("file_id"),
-                    caption="",
-                    protect_content=msg.get('protect', False),
-                    reply_markup=InlineKeyboardMarkup(button)
-                )
-                filesarr.append(msg)
-            except:
-                continue
-            await asyncio.sleep(1) 
-        await sts.delete()
-        k = await client.send_message(chat_id = message.from_user.id, text=f"<blockquote><b><u>❗️❗️❗️IMPORTANT❗️️❗️❗️</u></b>\n\nᴛʜɪs ᴍᴇssᴀɢᴇ ᴡɪʟʟ ʙᴇ ᴅᴇʟᴇᴛᴇᴅ ɪɴ <b><u>10 mins</u> 🫥 <i></b>(ᴅᴜᴇ ᴛᴏ ᴄᴏᴘʏʀɪɢʜᴛ ɪssᴜᴇs)</i>.\n\n<b><i>ᴘʟᴇᴀsᴇ ғᴏʀᴡᴀʀᴅ ᴛʜɪs ᴍᴇssᴀɢᴇ ᴛᴏ ʏᴏᴜʀ sᴀᴠᴇᴅ ᴍᴇssᴀɢᴇs ᴏʀ ᴀɴʏ ᴘʀɪᴠᴀᴛᴇ ᴄʜᴀᴛ.</i></b></blockquote>")
-        await asyncio.sleep(600)
-        for x in filesarr:
-            await x.delete()
-        await k.edit_text("<blockquote>Copyright Protection Notify</blockquote>\n\n <b>Your Requst Movie Files Automaticaly Deleted.\n\nനിങൾ റിക്വസ്റ്റ് ചെയ്ത മൂവി ഫയൽ ഓട്ടോമാറ്റിക്കലി ഡിലീറ്റ് ആയിട്ടുണ്ട്.</b>")  
+                from utils import schedule_filter_message_delete
+                if k:
+                    schedule_filter_message_delete(client, k.chat.id, k.id, 600)
+            except Exception:
+                pass
         return
     
     elif data.split("-", 1)[0] == "DSTORE":
@@ -567,98 +575,82 @@ async def start(client, message):
         log = logging.getLogger(__name__)
         # Check temp.GETALL first
         files = temp.GETALL.get(file_id)
-        
+
         if not files:
             log.warning(f"[ALLFILES START] GETALL NOT FOUND file_id={file_id}")
             return
-            
-        filesarr = []
-        
-        # ORIGINAL NON-SERIES LOGIC
-        for idx, file in enumerate(files, start=1):
-                file_id_str = file["file_id"]
-                protect_content = True if (hasattr(message, "command") and len(message.command) > 1 and message.command[1].startswith("allfilesp")) else False
-                
-                files1 = await get_file_details(file_id_str)
-                if not files1: continue
-                title = files1["file_name"]
-                size=get_size(files1["file_size"])
-                f_caption=files1.get("caption", "")
-            
-                if CUSTOM_FILE_CAPTION:
-                    try:
-                        f_caption=CUSTOM_FILE_CAPTION.format(file_name= '' if title is None else title, file_size='' if size is None else size, file_caption='' if f_caption is None else f_caption)
-                    except:
-                        f_caption=f_caption
-                if f_caption is None:
-                    f_caption = f"{' '.join(filter(lambda x: not x.startswith('[') and not x.startswith('@'), files1['file_name'].split()))}"
-                if not await db.has_premium_access(message.from_user.id):
-                    if not await check_verification(client, message.from_user.id) and VERIFY == True:
-                        btn = [[
-                            InlineKeyboardButton("ᴠᴇʀɪғʏ", url=await get_token(client, message.from_user.id, f"https://telegram.me/{temp.U_NAME}?start="))
-                        ],[
-                            InlineKeyboardButton("ʜᴏᴡ ᴛᴏ ᴠᴇʀɪғʏ", url=VERIFY_TUTORIAL)
-                        ]]
-                        text = "<b>ʜᴇʏ {} 👋,\n\nʏᴏᴜ ᴀʀᴇ ɴᴏᴛ ᴠᴇʀɪғɪᴇᴅ ᴛᴏᴅᴀʏ, ᴘʟᴇᴀꜱᴇ ᴄʟɪᴄᴋ ᴏɴ ᴠᴇʀɪғʏ & ɢᴇᴛ ᴜɴʟɪᴍɪᴛᴇᴅ ᴀᴄᴄᴇꜱꜱ ғᴏʀ ᴛᴏᴅᴀʏ</b>"
-                        if PREMIUM_AND_REFERAL_MODE == True:
-                            text += "<b>ɪғ ʏᴏᴜ ᴡᴀɴᴛ ᴅɪʀᴇᴄᴛ ғɪʟᴇꜱ ᴡɪᴛʜᴏᴜᴛ ᴀɴʏ ᴠᴇʀɪꜰɪᴄᴀᴛɪᴏɴꜱ ᴛʜᴇɴ ʙᴜʏ ʙᴏᴛ ꜱᴜʙꜱᴄʀɪᴘᴛɪᴏɴ ☺️\n\n💶 ꜱᴇɴᴅ /plan ᴛᴏ ʙᴜʏ ꜱᴜʙꜱᴄʀɪᴘᴛɪᴏɴ</b>"
-                        await message.reply_text(
-                            text=text.format(message.from_user.mention),
-                            protect_content=True,
-                            reply_markup=InlineKeyboardMarkup(btn)
-                        )
-                        return
-                        
-                        
-                if STREAM_MODE == True:
-                    button = [[InlineKeyboardButton('sᴛʀᴇᴀᴍ ᴀɴᴅ ᴅᴏᴡɴʟᴏᴀᴅ', callback_data=f'generate_stream_link:{file_id_str}')]]
-                    reply_markup = InlineKeyboardMarkup(button)
-                else:
-                    reply_markup = None
-                    
+
+        # Verification check ONCE before batch sending
+        if not await db.has_premium_access(message.from_user.id):
+            if not await check_verification(client, message.from_user.id) and VERIFY == True:
+                btn = [[
+                    InlineKeyboardButton("ᴠᴇʀɪғʏ", url=await get_token(client, message.from_user.id, f"https://telegram.me/{temp.U_NAME}?start="))
+                ],[
+                    InlineKeyboardButton("ʜᴏᴡ ᴛᴏ ᴠᴇʀɪғʏ", url=VERIFY_TUTORIAL)
+                ]]
+                text = "<b>ʜᴇʏ {} 👋,\n\nʏᴏᴜ ᴀʀᴇ ɴᴏᴛ ᴠᴇʀɪғɪᴇᴅ ᴛᴏᴅᴀʏ, ᴘʟᴇᴀꜱᴇ ᴄʟɪᴄᴋ ᴏɴ ᴠᴇʀɪғʏ & ɢᴇᴛ ᴜɴʟɪᴍɪᴛᴇᴅ ᴀᴄᴄᴇꜱꜱ ғᴏʀ ᴛᴏᴅᴀʏ</b>"
+                if PREMIUM_AND_REFERAL_MODE == True:
+                    text += "<b>ɪғ ʏᴏᴜ ᴡᴀɴᴛ ᴅɪʀᴇᴄᴛ ғɪʟᴇꜱ ᴡɪᴛʜᴏᴜᴛ ᴀɴʏ ᴠᴇʀɪꜰɪᴄᴀᴛɪᴏɴꜱ ᴛʜᴇɴ ʙᴜʏ ʙᴏᴛ ꜱᴜʙꜱᴄʀɪᴘᴛɪᴏɴ ☺️\n\n💶 ꜱᴇɴᴅ /plan ᴛᴏ ʙᴜʏ ꜱᴜʙꜱᴄʀɪᴘᴛɪᴏɴ</b>"
+                return await message.reply_text(
+                    text=text.format(message.from_user.mention),
+                    protect_content=True,
+                    reply_markup=InlineKeyboardMarkup(btn)
+                )
+
+        protect_content = True if (hasattr(message, "command") and len(message.command) > 1 and message.command[1].startswith("allfilesp")) else False
+
+        # Bulk preload file details in ONE query
+        file_ids_list = [f["file_id"] for f in files if isinstance(f, dict) and "file_id" in f]
+        from database.ia_filterdb import get_bulk_file_details
+        bulk_map = await get_bulk_file_details(file_ids_list)
+
+        def allfiles_caption_builder(f_doc, idx, total_count):
+            title = f_doc.get("file_name")
+            raw_sz = f_doc.get("file_size", 0)
+            size = get_size(raw_sz) if raw_sz else "Unknown Size"
+            f_caption = f_doc.get("caption", "")
+            if CUSTOM_FILE_CAPTION:
                 try:
-                    log.info(f"[NORMAL FILE] Sending\nuser_id={message.from_user.id}\nfile_id={file_id_str}")
-                    log.info(f"[TRY AGAIN SEND] file_id={file_id_str} source=normal_file")
-                    msg = await client.send_cached_media(
-                        chat_id=message.from_user.id,
-                        file_id=file_id_str,
-                        caption=f_caption,
-                        protect_content=protect_content,
-                        reply_markup=reply_markup
-                    )
-                    log.info("[NORMAL FILE] SENT SUCCESSFULLY")
-                    filesarr.append(msg)
-                except FloodWait as e:
-                    await asyncio.sleep(e.value + 1)
-                    try:
-                        msg = await client.send_cached_media(
-                            chat_id=message.from_user.id,
-                            file_id=file_id_str,
-                            caption=f_caption,
-                            protect_content=protect_content,
-                            reply_markup=reply_markup
-                        )
-                        log.info("[NORMAL FILE] SENT SUCCESSFULLY")
-                        filesarr.append(msg)
-                    except Exception as e:
-                        log.error(f"[NORMAL FILE] SEND ERROR\nuser_id={message.from_user.id}\nfile_id={file_id_str}\nerror={e}")
-                except Exception as e:
-                    log.error(f"[NORMAL FILE] SEND ERROR\nuser_id={message.from_user.id}\nfile_id={file_id_str}\nerror={e}")
-        k = await client.send_message(chat_id = message.from_user.id, text=f"<blockquote><b><u>❗️❗️❗️IMPORTANT❗️️❗️❗️</u></b>\n\nᴛʜɪs ᴍᴇssᴀɢᴇ ᴡɪʟʟ ʙᴇ ᴅᴇʟᴇᴛᴇᴅ ɪɴ <b><u>10 mins</u> 🫥 <i></b>(ᴅᴜᴇ ᴛᴏ ᴄᴏᴘʏʀɪɢʜᴛ ɪssᴜᴇs)</i>.\n\n<b><i>ᴘʟᴇᴀsᴇ ғᴏʀᴡᴀʀᴅ ᴛʜɪs ᴍᴇssᴀɢᴇ ᴛᴏ ʏᴏᴜʀ sᴀᴠᴇᴅ ᴍᴇssᴀɢᴇs ᴏʀ ᴀɴʏ ᴘʀɪᴠᴀᴛᴇ ᴄʜᴀᴛ.</i></b></blockquote>")
-        
-        async def delete_files_later():
-            await asyncio.sleep(600)
-            for x in filesarr:
-                try:
-                    await x.delete()
+                    f_caption = CUSTOM_FILE_CAPTION.format(file_name='' if title is None else title, file_size='' if size is None else size, file_caption='' if f_caption is None else f_caption)
                 except Exception:
                     pass
+            if not f_caption:
+                fname_str = f_doc.get('file_name', '')
+                f_caption = f"{' '.join(filter(lambda x: not x.startswith('[') and not x.startswith('@'), fname_str.split()))}"
+            return f_caption
+
+        merged_files = []
+        for f in files:
+            fid = f.get("file_id") if isinstance(f, dict) else f
+            if fid:
+                f_doc = bulk_map.get(fid, {})
+                merged = {**f_doc, **(f if isinstance(f, dict) else {"file_id": fid})}
+                if STREAM_MODE:
+                    button = [[InlineKeyboardButton('sᴛʀᴇᴀᴍ ᴀɴᴅ ᴅᴏᴡɴʟᴏᴀᴅ', callback_data=f'generate_stream_link:{fid}')]]
+                    merged["reply_markup"] = InlineKeyboardMarkup(button)
+                merged_files.append(merged)
+
+        sent_messages = await send_batch_files(
+            client=client,
+            chat_id=message.from_user.id,
+            files=merged_files,
+            user_id=message.from_user.id,
+            protect_content=protect_content,
+            custom_caption_builder=allfiles_caption_builder
+        )
+
+        if sent_messages:
             try:
-                await k.edit_text("<b>✅ ʏᴏᴜʀ ᴍᴇssᴀɢᴇ ɪs sᴜᴄᴄᴇssғᴜʟʟʏ ᴅᴇʟᴇᴛᴇᴅ</b>")
+                k = await client.send_message(
+                    chat_id=message.from_user.id,
+                    text="<blockquote><b><u>❗️❗️❗️IMPORTANT❗️️❗️❗️</u></b>\n\nᴛʜɪs ᴍᴇssᴀɢᴇ ᴡɪʟʟ ʙᴇ ᴅᴇʟᴇᴛᴇᴅ ɪɴ <b><u>10 mins</u> 🫥 <i></b>(ᴅᴜᴇ ᴛᴏ ᴄᴏᴘʏʀɪɢʜᴛ ɪssᴜᴇs)</i>.\n\n<b><i>ᴘʟᴇᴀsᴇ ғᴏʀᴡᴀʀᴅ ᴛʜɪs ᴍᴇssᴀɢᴇ ᴛᴏ ʏᴏᴜʀ sᴀᴠᴇᴅ ᴍᴇssᴀɢᴇs ᴏʀ ᴀɴʏ ᴘʀɪᴠᴀᴛᴇ ᴄʜᴀᴛ.</i></b></blockquote>",
+                    parse_mode=enums.ParseMode.HTML
+                )
+                from utils import schedule_filter_message_delete
+                if k:
+                    schedule_filter_message_delete(client, k.chat.id, k.id, 600)
             except Exception:
                 pass
-                
-        asyncio.create_task(delete_files_later())
         return    
         
     elif data.startswith("files"):
@@ -1585,15 +1577,17 @@ async def check_plans_cmd(client, message):
         await asyncio.sleep(2)
         await m.delete()
 
-@Client.on_message(filters.command("totalrequests") & filters.private & filters.user(ADMINS))
+@Client.on_message(filters.command(["totalrequests", "totalrequest", "total_requests"]) & filters.user(ADMINS))
 async def total_requests(client, message):
     if join_db().isActive():
         total = await join_db().get_all_users_count()
         await message.reply_text(
-            text=f"Total Requests: {total}",
+            text=f"📊 **Total Join Requests in Database:** `{total}`",
             parse_mode=enums.ParseMode.MARKDOWN,
             disable_web_page_preview=True
         )
+    else:
+        await message.reply_text("⚠️ Join requests database is not active.")
 
 async def execute_purge_requests(client=None) -> tuple[int, int]:
     """
@@ -1604,6 +1598,7 @@ async def execute_purge_requests(client=None) -> tuple[int, int]:
     import logging
     import asyncio
     from pyrogram.errors import FloodWait
+    from utils import temp
     log = logging.getLogger(__name__)
     log.info("[REQUEST PURGE] START")
     log.info(f"[REQUEST PURGE] CHANNEL = {AUTH_CHANNEL}")
@@ -1615,30 +1610,31 @@ async def execute_purge_requests(client=None) -> tuple[int, int]:
         users = await join_db().get_all_users()
         await join_db().delete_all_users()
 
+    bot_client = client or getattr(temp, "BOT", None)
     declined_count = 0
-    if AUTH_CHANNEL and users and client:
+    if AUTH_CHANNEL and users and bot_client:
         for u in users:
             uid = u.get("user_id")
             if not uid:
                 continue
             try:
-                await client.decline_chat_join_request(int(AUTH_CHANNEL), int(uid))
+                await bot_client.decline_chat_join_request(int(AUTH_CHANNEL), int(uid))
                 declined_count += 1
             except FloodWait as f:
                 await asyncio.sleep(f.value)
                 try:
-                    await client.decline_chat_join_request(int(AUTH_CHANNEL), int(uid))
+                    await bot_client.decline_chat_join_request(int(AUTH_CHANNEL), int(uid))
                     declined_count += 1
                 except Exception:
                     pass
             except Exception:
                 pass
 
-    log.info(f"[REQUEST PURGE]\nAutomatic 24-hour purge completed: db_purged={db_count}, channel_declined={declined_count}")
+    log.info(f"[REQUEST PURGE]\nPurge completed: db_purged={db_count}, channel_declined={declined_count}")
     return db_count, declined_count
 
 
-@Client.on_message(filters.command("purgerequests") & filters.private & filters.user(ADMINS))
+@Client.on_message(filters.command(["purgerequests", "purgerrequests", "purgerequest", "purge_requests", "purge_request"]) & filters.user(ADMINS))
 async def purge_requests(client, message):
     msg = await message.reply_text("Processing /purgerequests...", parse_mode=enums.ParseMode.MARKDOWN)
 
@@ -1654,46 +1650,193 @@ async def purge_requests(client, message):
 
     await msg.edit(text, parse_mode=enums.ParseMode.MARKDOWN)
 
+# ─── BATCH CONCURRENCY CONFIGURATION ──────────────────────────────────────────
+BATCH_SEND_CONCURRENCY = int(os.getenv("BATCH_SEND_CONCURRENCY", "8"))
+
+
+# ─── PARALLEL BATCH FILE DELIVERY ENGINE ─────────────────────────────────────
+async def send_batch_files(
+    client,
+    chat_id,
+    files,
+    user_id=None,
+    protect_content=False,
+    reply_markup=None,
+    custom_caption_builder=None
+):
+    """
+    High-speed parallel batch file delivery engine with controlled concurrency,
+    file order preservation, automatic retries, and 10-minute auto-deletion.
+    """
+    import asyncio
+    import time
+    import logging
+    from utils import schedule_filter_message_delete, get_size, temp
+    from pyrogram.errors import FloodWait
+
+    log = logging.getLogger(__name__)
+    target_id = user_id or chat_id
+    if not files:
+        return []
+
+    start_time = time.monotonic()
+    total_files = len(files)
+
+    log.info(
+        f"[BATCH SEND START]\n"
+        f"chat_id={target_id}\n"
+        f"files={total_files}\n"
+        f"concurrency={BATCH_SEND_CONCURRENCY}"
+    )
+
+    # 1. Preload database records if files is a list of file IDs or partial records needing lookup
+    missing_lookup_ids = []
+    for f in files:
+        if isinstance(f, str):
+            missing_lookup_ids.append(f)
+        elif isinstance(f, dict) and (not f.get("file_name") or not f.get("file_size")):
+            fid = f.get("file_id")
+            if fid:
+                missing_lookup_ids.append(fid)
+
+    preloaded_map = {}
+    if missing_lookup_ids:
+        try:
+            from database.ia_filterdb import get_bulk_file_details
+            preloaded_map = await get_bulk_file_details(missing_lookup_ids)
+        except Exception as e:
+            log.warning(f"[BATCH SEND] Bulk preload fallback: {e}")
+
+    # 2. Pre-build metadata and captions for all files
+    prepared_items = []
+    bot_uname = temp.U_NAME if hasattr(temp, "U_NAME") and temp.U_NAME else "BotUsername"
+
+    for idx, f in enumerate(files, 1):
+        if isinstance(f, str):
+            fid = f
+            file_doc = preloaded_map.get(f, {"file_id": f})
+        elif isinstance(f, dict):
+            fid = f.get("file_id")
+            if fid and fid in preloaded_map:
+                file_doc = {**preloaded_map[fid], **f}
+            else:
+                file_doc = f
+        else:
+            fid = getattr(f, "file_id", None)
+            file_doc = getattr(f, "__dict__", {})
+
+        if not fid:
+            continue
+
+        if custom_caption_builder:
+            cap = custom_caption_builder(file_doc, idx, total_files)
+        else:
+            fname = file_doc.get("file_name", "File")
+            raw_size = file_doc.get("file_size", 0)
+            fsize = get_size(raw_size) if raw_size else "Unknown Size"
+            lang = file_doc.get("language", "Unknown")
+            cap = (
+                f"⦿ <i>File name:</i> <code>{fname}</code>\n"
+                f"⦿ <i>Size:</i> {fsize}\n"
+                f"⦿ <i>Language:</i> {lang}\n"
+                f"⦿ <i>File:</i> {idx} / {total_files}\n\n"
+                f"@{bot_uname}"
+            )
+
+        prepared_items.append({
+            "index": idx,
+            "file_id": str(fid),
+            "caption": cap,
+            "protect": file_doc.get("protect", protect_content),
+            "reply_markup": file_doc.get("reply_markup", reply_markup)
+        })
+
+    if not prepared_items:
+        return []
+
+    # 3. Controlled concurrency execution
+    sent_results = [None] * len(prepared_items)
+    semaphore = asyncio.Semaphore(BATCH_SEND_CONCURRENCY)
+
+    async def _send_item(idx_pos, item):
+        fid = item["file_id"]
+        cap = item["caption"]
+        prot = item["protect"]
+        rm = item["reply_markup"]
+
+        log.info(
+            f"[BATCH SEND]\n"
+            f"index={item['index']}\n"
+            f"total={total_files}\n"
+            f"file_id={fid}"
+        )
+
+        for attempt in range(3):
+            try:
+                async with semaphore:
+                    msg = await client.send_cached_media(
+                        chat_id=target_id,
+                        file_id=fid,
+                        caption=cap,
+                        protect_content=prot,
+                        reply_markup=rm
+                    )
+                if msg:
+                    schedule_filter_message_delete(client, msg.chat.id, msg.id, 600)
+                    sent_results[idx_pos] = msg
+                    return msg
+            except FloodWait as fw:
+                log.warning(f"[BATCH SEND] FloodWait {fw.value}s on file_id={fid}")
+                await asyncio.sleep(fw.value + 1)
+            except Exception as ex:
+                if attempt < 2:
+                    await asyncio.sleep(2 ** attempt)
+                else:
+                    log.error(
+                        f"[BATCH SEND FAILED]\n"
+                        f"file_id={fid}\n"
+                        f"error={ex}"
+                    )
+                    return None
+        return None
+
+    if len(prepared_items) == 1:
+        await _send_item(0, prepared_items[0])
+    else:
+        tasks = [_send_item(i, item) for i, item in enumerate(prepared_items)]
+        await asyncio.gather(*tasks, return_exceptions=True)
+
+    sent_messages = [m for m in sent_results if m is not None]
+    failed_count = total_files - len(sent_messages)
+    duration = time.monotonic() - start_time
+
+    log.info(
+        f"[BATCH SEND SUCCESS]\n"
+        f"sent={len(sent_messages)}\n"
+        f"failed={failed_count}\n"
+        f"duration={duration:.3f}s"
+    )
+    log.info(
+        f"[BATCH SEND COMPLETE]\n"
+        f"total={total_files}\n"
+        f"sent={len(sent_messages)}\n"
+        f"failed={failed_count}\n"
+        f"duration={duration:.3f}s"
+    )
+
+    return sent_messages
+
+
 # ─── SERIES FILE DELIVERY HANDLER (WITH METADATA) ───────────────────────────
 async def send_series_files_to_user(client, user_id, files, query=None):
-    from utils import get_size
-    from pyrogram.errors import FloodWait
+    from utils import get_size, schedule_filter_message_delete, temp
     import logging
     import asyncio
     import html
-    import re
-    
+
     log = logging.getLogger(__name__)
     if not files:
-        return
-        
-    async def delayed_delete(m, delay):
-        await asyncio.sleep(delay)
-        try:
-            await m.delete()
-        except Exception:
-            pass
-
-    async def _send_single_file(file_id_str, f_caption):
-        log.info(f"[FILE SEND] request_id={file_id_str}")
-        log.info(f"[FILE SEND] file_id={file_id_str}")
-        while True:
-            try:
-                msg = await client.send_cached_media(
-                    chat_id=user_id,
-                    file_id=file_id_str,
-                    caption=f_caption,
-                    protect_content=False,
-                )
-                log.info(f"[FILE SEND] SUCCESS request_id={file_id_str}")
-                asyncio.create_task(delayed_delete(msg, 240))
-                return msg
-            except FloodWait as e:
-                log.warning(f"[FILE SEND] FloodWait for {e.value}s on {file_id_str}")
-                await asyncio.sleep(e.value + 1)
-            except Exception as e:
-                log.error(f"[FILE SEND] ERROR: {e}")
-                return None
+        return []
 
     def _get_episode_num(f):
         ep = f.get("episode")
@@ -1723,7 +1866,7 @@ async def send_series_files_to_user(client, user_id, files, query=None):
 
     # 1. Sort files numerically by episode number
     sorted_files = sorted(files, key=_get_episode_num)
-    
+
     # 2. Deduplicate exact duplicate records (same file_id)
     seen_ids = set()
     ordered_files = []
@@ -1734,13 +1877,13 @@ async def send_series_files_to_user(client, user_id, files, query=None):
                 continue
             seen_ids.add(fid)
         ordered_files.append(f)
-        
+
     sorted_order = [_get_episode_num(f) for f in ordered_files]
 
     # 3. Extract common Series metadata context
     first_file = ordered_files[0] if ordered_files else {}
     is_series = any(f.get("is_series") for f in ordered_files)
-    
+
     series_id = first_file.get("series_id", "")
     season = first_file.get("season", 0)
     language = first_file.get("language", "")
@@ -1753,53 +1896,44 @@ async def send_series_files_to_user(client, user_id, files, query=None):
             series_tag = f"#Series {s_num:02d}" if s_num > 0 else "#Series 01"
         else:
             series_tag = f"#{season}"
-            
+
         lang_clean = str(language).strip().replace(" ", "_")
         lang_tag = f"#{lang_clean}" if not lang_clean.startswith("#") else lang_clean
-        
+
         qual_clean = str(quality).strip().replace(" ", "_")
         qual_tag = f"#{qual_clean}" if not qual_clean.startswith("#") else qual_clean
-        
+
         metadata_text = f"{series_tag}\n{lang_tag}\n{qual_tag}"
-        
+
         log.info(f"[SERIES DELIVERY]\nrequest_id={first_file.get('file_id', '')}\nseries_id={series_id}\nseason={season}\nlanguage={language}\nquality={quality}\ntotal_files={len(ordered_files)}")
         log.info(f"[SERIES DELIVERY]\naction=EPISODES_SORTED\norder={sorted_order}")
         log.info(f"[SERIES DELIVERY]\naction=METADATA_SENT\nmetadata={metadata_text.replace(chr(10), ' ')}")
-        
+
         try:
             meta_msg = await client.send_message(
                 chat_id=user_id,
                 text=metadata_text,
                 protect_content=False,
             )
-            asyncio.create_task(delayed_delete(meta_msg, 240))
+            if meta_msg:
+                schedule_filter_message_delete(client, meta_msg.chat.id, meta_msg.id, 600)
         except Exception as ex:
             log.warning(f"Failed to send metadata message: {ex}")
 
-    # 5. Sequentially send files in exact sorted order
-    total_eps = len(ordered_files)
-    sent_messages = []
-    
-    for idx, file in enumerate(ordered_files, start=1):
-        file_id_str = file.get("file_id")
-        if not file_id_str:
-            continue
-            
-        fname = file.get("file_name", "Unknown File")
+    # 5. Caption builder
+    bot_uname = temp.U_NAME if hasattr(temp, "U_NAME") and temp.U_NAME else "BotUsername"
+    def series_caption_builder(file_doc, idx, total_eps):
+        fname = file_doc.get("file_name", "Unknown File")
         if len(fname) > 900:
             fname = fname[:900] + "..."
         file_name = html.escape(fname)
-        
-        raw_size = file.get("file_size", 0)
+
+        raw_size = file_doc.get("file_size", 0)
         file_size = get_size(raw_size) if raw_size else "Unknown Size"
-        
-        bot_uname = temp.U_NAME if hasattr(temp, "U_NAME") and temp.U_NAME else "BotUsername"
-        lang_str = file.get("language", "Unknown")
-        rating = file.get("series_rating", "")
-        ep_num = _get_episode_num(file)
-        if ep_num == 99999:
-            ep_num = idx
-            
+
+        lang_str = file_doc.get("language", "Unknown")
+        rating = file_doc.get("series_rating", "")
+
         f_caption = (
             f"⦿ <i>File name:</i> <code>{file_name}</code>\n"
             f"⦿ <i>Size:</i> {file_size}\n"
@@ -1807,72 +1941,54 @@ async def send_series_files_to_user(client, user_id, files, query=None):
         )
         if rating and str(rating).lower() not in ["skip", "n/a", ""]:
             f_caption += f"⦿ <i>Rating:</i> ⭐ {rating}\n"
-            
+
         f_caption += (
             f"⦿ <i>File:</i> {idx} / {total_eps}\n\n"
             f"@{bot_uname}"
         )
-        
-        msg = await _send_single_file(file_id_str, f_caption)
-        if msg:
-            sent_messages.append(msg)
-            log.info(f"[SERIES DELIVERY]\naction=FILE_SENT\nepisode={ep_num}")
-            await asyncio.sleep(0.3)
+        return f_caption
+
+    # 6. Deliver files concurrently with preserved order
+    sent_messages = await send_batch_files(
+        client=client,
+        chat_id=user_id,
+        files=ordered_files,
+        user_id=user_id,
+        custom_caption_builder=series_caption_builder
+    )
 
     log.info(f"[SERIES DELIVERY]\naction=COMPLETED\ntotal_files={len(sent_messages)}")
 
-    # 6. Send final delete notification
+    # 7. Send final delete notification
     if sent_messages:
-        k = await client.send_message(
-            chat_id=user_id,
-            text=(
-                "<blockquote><b><u>❗️❗️❗️IMPORTANT❗️️❗️❗️</u></b>\n\n"
-                "ᴛʜɪs ᴍᴇssᴀɢᴇ ᴡɪʟʟ ʙᴇ ᴅᴇʟᴇᴛᴇᴅ ɪɴ <b><u>4 mins</u> 🫥 <i></b>"
-                "(ᴅᴜᴇ ᴛᴏ ᴄᴏᴘʏʀɪɢʜᴛ ɪssᴜᴇs)</i>.\n\n"
-                "<b><i>ᴘʟᴇᴀsᴇ ғᴏʀᴡᴀʀᴅ ᴛʜᴇsᴇ ғɪʟᴇs ᴛᴏ sᴏᴍᴇᴡʜᴇʀᴇ ᴇʟsᴇ ᴀɴᴅ sᴛᴀʀᴛ ᴅᴏᴡɴʟᴏᴀᴅɪɴɢ ᴛʜᴇʀᴇ</b></i></blockquote>"
-            ),
-            parse_mode=enums.ParseMode.HTML
-        )
-        asyncio.create_task(delayed_delete(k, 240))
+        try:
+            k = await client.send_message(
+                chat_id=user_id,
+                text=(
+                    "<blockquote><b><u>❗️❗️❗️IMPORTANT❗️️❗️❗️</u></b>\n\n"
+                    "ᴛʜɪs ᴍᴇssᴀɢᴇ ᴡɪʟʟ ʙᴇ ᴅᴇʟᴇᴛᴇᴅ ɪɴ <b><u>10 mins</u> 🫥 <i></b>"
+                    "(ᴅᴜᴇ ᴛᴏ ᴄᴏᴘʏʀɪɢʜᴛ ɪssᴜᴇs)</i>.\n\n"
+                    "<b><i>ᴘʟᴇᴀsᴇ ғᴏʀᴡᴀʀᴅ ᴛʜᴇsᴇ ғɪʟᴇs ᴛᴏ sᴏᴍᴇᴡʜᴇʀᴇ ᴇʟsᴇ ᴀɴᴅ sᴛᴀʀᴛ ᴅᴏᴡɴʟᴏᴀᴅɪɴɢ ᴛʜᴇʀᴇ</b></i></blockquote>"
+                ),
+                parse_mode=enums.ParseMode.HTML
+            )
+            if k:
+                schedule_filter_message_delete(client, k.chat.id, k.id, 600)
+        except Exception:
+            pass
+
+    return sent_messages
 
 
 # ─── MOVIE FILE DELIVERY HANDLER (DIRECT PM DELIVERY) ────────────────────────
 async def send_movie_files_to_user(client, user_id, files, query=None, movie_title=None, language=None, quality=None):
-    from utils import get_size, temp
-    from pyrogram.errors import FloodWait
+    from utils import get_size, temp, schedule_filter_message_delete
     import logging
     import asyncio
-    
+
     log = logging.getLogger(__name__)
     if not files:
         return 0
-        
-    async def delayed_delete(m, delay):
-        await asyncio.sleep(delay)
-        try:
-            await m.delete()
-        except Exception:
-            pass
-
-    async def _send_single_file(file_id_str, f_caption):
-        log.info(f"[MOVIE FILE SEND] file_id={file_id_str}")
-        while True:
-            try:
-                msg = await client.send_cached_media(
-                    chat_id=user_id,
-                    file_id=file_id_str,
-                    caption=f_caption,
-                    protect_content=False,
-                )
-                log.info(f"[MOVIE FILE SEND] SUCCESS file_id={file_id_str}")
-                asyncio.create_task(delayed_delete(msg, 240))
-                return msg
-            except FloodWait as e:
-                log.warning(f"[MOVIE FILE SEND] FloodWait for {e.value}s on {file_id_str}")
-                await asyncio.sleep(e.value + 1)
-            except Exception as e:
-                log.error(f"[MOVIE FILE SEND] ERROR: {e}")
-                return None
 
     # 1. Deduplicate files (same file_id)
     seen_ids = set()
@@ -1901,23 +2017,19 @@ async def send_movie_files_to_user(client, user_id, files, query=None, movie_tit
                 parse_mode=enums.ParseMode.HTML,
                 protect_content=False,
             )
-            asyncio.create_task(delayed_delete(meta_msg, 240))
+            if meta_msg:
+                schedule_filter_message_delete(client, meta_msg.chat.id, meta_msg.id, 600)
         except Exception as ex:
             log.warning(f"Failed to send movie metadata message: {ex}")
 
-    # 3. Sequentially send each file
-    total_files = len(ordered_files)
-    sent_messages = []
+    # 3. Caption builder
     bot_uname = temp.U_NAME if hasattr(temp, "U_NAME") and temp.U_NAME else "BotUsername"
-    for idx, file in enumerate(ordered_files, 1):
-        file_id_str = file.get("file_id")
-        if not file_id_str:
-            continue
-        file_name = file.get("file_name", "Movie File")
-        raw_size = file.get("file_size", 0)
+    def movie_caption_builder(file_doc, idx, total_files):
+        file_name = file_doc.get("file_name", "Movie File")
+        raw_size = file_doc.get("file_size", 0)
         file_size = get_size(raw_size) if raw_size else "Unknown Size"
-        lang_str = language or file.get("language", "Unknown")
-        
+        lang_str = language or file_doc.get("language", "Unknown")
+
         f_caption = (
             f"⦿ <i>File name:</i> <code>{file_name}</code>\n"
             f"⦿ <i>Size:</i> {file_size}\n"
@@ -1925,27 +2037,35 @@ async def send_movie_files_to_user(client, user_id, files, query=None, movie_tit
             f"⦿ <i>File:</i> {idx} / {total_files}\n\n"
             f"@{bot_uname}"
         )
-        
-        msg = await _send_single_file(file_id_str, f_caption)
-        if msg:
-            sent_messages.append(msg)
-            await asyncio.sleep(0.3)
+        return f_caption
 
-    # 4. Send final delete notification
+    # 4. Deliver files concurrently with preserved order
+    sent_messages = await send_batch_files(
+        client=client,
+        chat_id=user_id,
+        files=ordered_files,
+        user_id=user_id,
+        custom_caption_builder=movie_caption_builder
+    )
+
+    # 5. Send final delete notification
     if sent_messages:
         try:
             k = await client.send_message(
                 chat_id=user_id,
                 text=(
                     "<blockquote><b><u>❗️❗️❗️IMPORTANT❗️️❗️❗️</u></b>\n\n"
-                    "ᴛʜɪs ᴍᴇssᴀɢᴇ ᴡɪʟʟ ʙᴇ ᴅᴇʟᴇᴛᴇᴅ ɪɴ <b><u>4 mins</u> 🫥 <i></b>"
+                    "ᴛʜɪs ᴍᴇssᴀɢᴇ ᴡɪʟʟ ʙᴇ ᴅᴇʟᴇᴛᴇᴅ ɪɴ <b><u>10 mins</u> 🫥 <i></b>"
                     "(ᴅᴜᴇ ᴛᴏ ᴄᴏᴘʏʀɪɢʜᴛ ɪssᴜᴇs)</i>.\n\n"
                     "<b><i>ᴘʟᴇᴀsᴇ ғᴏʀᴡᴀʀᴅ ᴛʜᴇsᴇ ғɪʟᴇs ᴛᴏ sᴏᴍᴇᴡʜᴇʀᴇ ᴇʟsᴇ ᴀɴᴅ sᴛᴀʀᴛ ᴅᴏᴡɴʟᴏᴀᴅɪɴɢ ᴛʜᴇʀᴇ</b></i></blockquote>"
                 ),
                 parse_mode=enums.ParseMode.HTML
             )
-            asyncio.create_task(delayed_delete(k, 240))
+            if k:
+                schedule_filter_message_delete(client, k.chat.id, k.id, 600)
         except Exception:
             pass
 
     return len(sent_messages)
+
+
