@@ -18,20 +18,24 @@ join_db = JoinReqs
 
 @Client.on_chat_join_request((filters.group | filters.channel))
 async def auto_approve(client, message: ChatJoinRequest):
+    auth_ch = int(AUTH_CHANNEL) if AUTH_CHANNEL else None
+    msg_chat_id = int(message.chat.id) if message.chat else None
+
     if AUTO_APPROVE_MODE == True:
         if not await db.is_user_exist(message.from_user.id):
             await db.add_user(message.from_user.id, message.from_user.first_name)
-        if message.chat.id == AUTH_CHANNEL:
-            return 
-        chat = message.chat 
-        user = message.from_user  
-        await client.approve_chat_join_request(chat_id=chat.id, user_id=user.id)
-        text = f"<b>ʜᴇʟʟᴏ {message.from_user.mention} 👋,\n\nʏᴏᴜʀ ʀᴇǫᴜᴇsᴛ ᴛᴏ ᴊᴏɪɴ {message.chat.title} ɪs ᴀᴘᴘʀᴏᴠᴇᴅ.\n\nᴘᴏᴡᴇʀᴇᴅ ʙʏ - {CHNL_LNK}</b>"
-        await client.send_message(chat_id=user.id, text=text)
+        if auth_ch and msg_chat_id == auth_ch:
+            pass
+        else:
+            chat = message.chat 
+            user = message.from_user  
+            await client.approve_chat_join_request(chat_id=chat.id, user_id=user.id)
+            text = f"<b>ʜᴇʟʟᴏ {message.from_user.mention} 👋,\n\nʏᴏᴜʀ ʀᴇǫᴜᴇsᴛ ᴛᴏ ᴊᴏɪɴ {message.chat.title} ɪs ᴀᴘᴘʀᴏᴠᴇᴅ.\n\nᴘᴏᴡᴇʀᴇᴅ ʙʏ - {CHNL_LNK}</b>"
+            await client.send_message(chat_id=user.id, text=text)
          
     if REQUEST_TO_JOIN_MODE == False:
         return 
-    if message.chat.id != AUTH_CHANNEL:
+    if not auth_ch or msg_chat_id != auth_ch:
         return 
     if not join_db().isActive():
         return
@@ -40,6 +44,7 @@ async def auto_approve(client, message: ChatJoinRequest):
     username = message.from_user.username
     date = message.date
     await join_db().add_user(user_id=ap_user_id, first_name=first_name, username=username, date=date)
+    logger.info(f"[JOIN REQUEST] Tracked join request for user_id={ap_user_id} in auth_channel={auth_ch}")
     if TRY_AGAIN_BTN == True:
         return 
     data = await db.get_msg_command(ap_user_id)

@@ -191,12 +191,14 @@ async def give_filter(client, message):
         else:
             return await message.reply_text(f"<b>Hᴇʏ {message.from_user.mention}, {str(total_results)} ʀᴇsᴜʟᴛs ᴀʀᴇ ғᴏᴜɴᴅ ɪɴ ᴍʏ ᴅᴀᴛᴀʙᴀsᴇ ғᴏʀ ʏᴏᴜʀ ᴏ̨ᴜᴇʀʏ {search}. \n\nTʜɪs ɪs ᴀ sᴜᴘᴘᴏʀᴛ ɢʀᴏᴜᴘ sᴏ ᴛʜᴀᴛ ʏᴏᴜ ᴄᴀɴ'ᴛ ɢᴇᴛ ғɪʟᴇs ғʀᴏᴍ ʜᴇʀᴇ...\n\nJᴏɪɴ ᴀɴᴅ Sᴇᴀʀᴄʜ Hᴇʀᴇ - {GRP_LNK}</b>")
 
-@Client.on_message(filters.private & filters.text & filters.incoming)
+@Client.on_message(filters.private & filters.text & filters.incoming, group=2)
 async def pm_text(bot, message):
     content = message.text
     user = message.from_user.first_name if message.from_user else "User"
     user_id = message.from_user.id if message.from_user else 0
-    if not content or content.startswith("/") or content.startswith("#"): return  # ignore commands and hashtags
+    if not content or content.startswith("/") or content.startswith("#"):
+        logger.info(f"[PM SEARCH SKIP]\nreason=start_command\ntext={content}")
+        return  # ignore commands and hashtags
     
     # ── Check active wizard session ──
     from utils import get_wizard_session, temp
@@ -454,6 +456,8 @@ async def movie_lang_callback(client: Client, query: CallbackQuery):
             await query.message.edit_text(text=cap, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
     except MessageNotModified:
         pass
+    from utils import schedule_filter_message_delete
+    schedule_filter_message_delete(client, query.message.chat.id, query.message.id, 600)
     await query.answer()
 
 @Client.on_callback_query(filters.regex(r"^(mvqual#|movie_quality#)"))
@@ -476,6 +480,13 @@ async def movie_qual_callback(client: Client, query: CallbackQuery):
         
     title = state.get("title", "Movie")
     logger.info(f"[MOVIE QUALITY]\ntitle={title}\nlanguage={lang}\nquality={qual}\nfiles={len(files)}")
+    logger.info(
+        f"[QUALITY DELIVERY]\n"
+        f"filter_type=movie\n"
+        f"language={lang}\n"
+        f"quality={qual}\n"
+        f"files={len(files)}"
+    )
     
     import uuid, time
     from database.series_db import save_temp_request
@@ -534,12 +545,16 @@ async def movie_qual_callback(client: Client, query: CallbackQuery):
         return await query.answer(url=start_url)
     except Exception as e:
         logger.warning(f"[MOVIE QUALITY ROUTING] query.answer(url=start_url) failed: {e}. Replying with fallback button.")
-        return await query.message.reply_text(
+        fb_msg = await query.message.reply_text(
             f"📩 Open bot to get your requested <b>{title}</b> ({qual}) files:",
             reply_markup=InlineKeyboardMarkup([
                 [InlineKeyboardButton("📂 Open Bot", url=start_url)]
             ])
         )
+        from utils import schedule_filter_message_delete
+        if fb_msg:
+            schedule_filter_message_delete(client, fb_msg.chat.id, fb_msg.id, 600)
+        return
 
 @Client.on_callback_query(filters.regex(r"^(mvpage#|movie_files#)"))
 async def movie_page_callback(client: Client, query: CallbackQuery):
@@ -567,6 +582,8 @@ async def movie_page_callback(client: Client, query: CallbackQuery):
         await query.message.edit_reply_markup(reply_markup=markup)
     except MessageNotModified:
         pass
+    from utils import schedule_filter_message_delete
+    schedule_filter_message_delete(client, query.message.chat.id, query.message.id, 600)
     await query.answer()
 
 @Client.on_callback_query(filters.regex(r"^(mvback#|movie_back#)"))
@@ -622,6 +639,8 @@ async def movie_back_callback(client: Client, query: CallbackQuery):
             await query.message.edit_text(text=cap, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
     except MessageNotModified:
         pass
+    from utils import schedule_filter_message_delete
+    schedule_filter_message_delete(client, query.message.chat.id, query.message.id, 600)
     await query.answer()
 
 @Client.on_callback_query(filters.regex(r"^(mvclose#|movie_close#)"))

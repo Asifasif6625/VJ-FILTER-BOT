@@ -1326,7 +1326,7 @@ def _config_menu_keyboard(series_id: str = None, from_viewseries: bool = False) 
                 InlineKeyboardButton("📢 Announcement", callback_data=f"edser#ano#{series_id}")
             ],
             [
-                InlineKeyboardButton("🗑 Delete Series", callback_data=f"sw#del_series#{series_id}")
+                InlineKeyboardButton("🗑 Delete Series", callback_data=f"edser#delete#{series_id}")
             ]
         ]
     else:
@@ -1559,7 +1559,7 @@ async def cb_edser(client: Client, query: CallbackQuery):
     
     uid = query.from_user.id
     from utils import temp
-    from database.series_db import get_series
+    from database.series_db import get_series, delete_series, delete_series_filter, delete_announcement
 
     if query.data.startswith("edser#ano#"):
         series_id = query.data.split("#")[2]
@@ -1589,6 +1589,70 @@ async def cb_edser(client: Client, query: CallbackQuery):
             logger.error(f"[MANUAL ANNOUNCEMENT ERROR]\ntype=series\nfilter_id={series_id}\nerror={e}")
             await query.answer(f"❌ Error: {e}", show_alert=True)
         return
+
+    if query.data.startswith("edser#delete#"):
+        series_id = query.data.split("#")[2]
+        exact = await get_series(series_id)
+        if not exact:
+            return await query.answer("❌ Series not found.", show_alert=True)
+        series_name = exact.get("name", "Unknown Series")
+        confirm_markup = InlineKeyboardMarkup([
+            [InlineKeyboardButton("✅ Confirm Delete", callback_data=f"edser#delete_confirm#{series_id}")],
+            [InlineKeyboardButton("❌ Cancel", callback_data=f"edser#delete_cancel#{series_id}")]
+        ])
+        return await query.message.edit_text(
+            f"⚠️ <b>Delete Series Filter?</b>\n\n"
+            f"🎬 <b>{series_name}</b>\n\n"
+            f"This will remove the Series Filter.",
+            reply_markup=confirm_markup,
+            parse_mode=enums.ParseMode.HTML
+        )
+
+    if query.data.startswith("edser#delete_cancel#"):
+        series_id = query.data.split("#")[2]
+        exact = await get_series(series_id)
+        if not exact:
+            return await query.answer("❌ Series not found.", show_alert=True)
+        temp.SERIES_WIZARD[uid] = {
+            "mode": "edit",
+            "state": S_DONE,
+            "name": exact["name"],
+            "year": exact.get("year", ""),
+            "genre": exact.get("genre", ""),
+            "description": exact.get("description", ""),
+            "poster": exact.get("poster", ""),
+            "languages": exact.get("languages", []),
+            "seasons": exact.get("seasons", []),
+            "qualities": exact.get("qualities", []),
+            "series_id": str(exact["_id"]),
+            "season_modes": exact.get("season_modes", {}),
+            "batch_langs": [], "batch_seasons": [], "batch_qualities": [],
+            "batch_data": None,
+            "from_viewseries": True
+        }
+        wiz = temp.SERIES_WIZARD[uid]
+        await query.message.edit_text(
+            _series_card(wiz) + "\n\n⚙️ <b>Edit Series Configuration</b>\nChoose an option to edit:",
+            reply_markup=_config_menu_keyboard(series_id, True),
+            parse_mode=enums.ParseMode.HTML,
+        )
+        return await query.answer("Deletion cancelled.")
+
+    if query.data.startswith("edser#delete_confirm#"):
+        series_id = query.data.split("#")[2]
+        logger.info(f"[DELETE SERIES]\nseries_id={series_id}\nuser_id={uid}")
+        exact = await get_series(series_id)
+        series_name = exact.get("name", "Unknown Series") if exact else "Series"
+        await delete_series_filter(series_id)
+        try:
+            await delete_announcement(f"series:{series_id}")
+            await delete_announcement(str(series_id))
+        except Exception:
+            pass
+        temp.SERIES_WIZARD.pop(uid, None)
+        logger.info(f"[DELETE SERIES SUCCESS]\nseries_id={series_id}")
+        await query.answer("✅ Series Filter Deleted\n📁 Original files were preserved.", show_alert=True)
+        return await send_filter_manager(query, ftype="series", page=0)
 
     series_id = query.data.split("#")[1]
     exact = await get_series(series_id)
@@ -3962,7 +4026,6 @@ async def _handle_wizard_callback(client: Client, query: CallbackQuery):
             # ══════════════════════════════════════════════════════════════════
             if is_super_movie_batch:
                 from database.ia_filterdb import col as ia_col, sec_col, MULTIPLE_DATABASE, clean_file_name, is_file_already_saved
-                from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
                 langs_to_add = wiz.get("batch_langs") or wiz.get("languages") or ["Unknown"]
                 quals_to_add = wiz.get("batch_qualities") or wiz.get("qualities") or ["Default"]
@@ -5252,45 +5315,28 @@ async def cmd_slink(client: Client, message: Message):
 
 
 
-def schedule_series_auto_delete(message, delay: int = 300):
-    from info import AUTO_DELETE
-    if not AUTO_DELETE or not message:
+def schedule_series_auto_delete(message, delay: int = 600, client: Client = None):
+    from utils import schedule_filter_message_delete
+    if not message:
         return
-    from utils import temp
-    if not hasattr(temp, "SERIES_SCHEDULED_DELETES"):
-        temp.SERIES_SCHEDULED_DELETES = set()
-
     chat_id = getattr(getattr(message, "chat", None), "id", None)
     msg_id = getattr(message, "id", None)
     if not chat_id or not msg_id:
         return
-    msg_key = (chat_id, msg_id)
-    if msg_key in temp.SERIES_SCHEDULED_DELETES:
-        return
-    temp.SERIES_SCHEDULED_DELETES.add(msg_key)
-
-    async def _auto_delete():
-        try:
-            import asyncio
-            await asyncio.sleep(delay)
-            await message.delete()
-        except Exception:
-            pass
-        finally:
-            temp.SERIES_SCHEDULED_DELETES.discard(msg_key)
-
-    import asyncio
-    asyncio.create_task(_auto_delete())
+    c = client or getattr(message, "_client", None)
+    if c:
+        schedule_filter_message_delete(c, chat_id, msg_id, delay)
 
 
 async def _send_or_edit(message_or_query, text, reply_markup, poster=None):
+    from utils import schedule_filter_message_delete
     if isinstance(message_or_query, Message):
         if poster:
             m = await message_or_query.reply_photo(photo=poster, caption=text, reply_markup=reply_markup, parse_mode=enums.ParseMode.HTML)
         else:
             m = await message_or_query.reply_text(text, reply_markup=reply_markup, parse_mode=enums.ParseMode.HTML)
         if m:
-            schedule_series_auto_delete(m, delay=300)
+            schedule_filter_message_delete(m._client, m.chat.id, m.id, delay=600)
         return m
     else:
         try:
@@ -5306,7 +5352,8 @@ async def _send_or_edit(message_or_query, text, reply_markup, poster=None):
             else:
                 m = await message_or_query.message.edit_text(text, reply_markup=reply_markup, parse_mode=enums.ParseMode.HTML)
             if m:
-                schedule_series_auto_delete(m, delay=300)
+                c = getattr(message_or_query, "_client", None) or getattr(m, "_client", None)
+                schedule_filter_message_delete(c, m.chat.id, m.id, delay=600)
             return m
         except MessageNotModified:
             return message_or_query.message
@@ -5648,31 +5695,28 @@ async def process_super_movie_search(client: Client, message: Message, txt: str,
         f"🌐 <b>Select Language:</b>"
     )
     reply_markup = build_movie_language_keyboard(key, grouped)
-
+    from utils import schedule_filter_message_delete
     if movie_poster:
         try:
             if reply_msg:
                 await reply_msg.delete()
             hehe = await message.reply_photo(photo=movie_poster, caption=cap, reply_markup=reply_markup)
-            if settings.get('auto_delete'):
-                async def _del():
-                    await asyncio.sleep(300)
-                    try:
-                        await hehe.delete()
-                        await message.delete()
-                    except Exception:
-                        pass
-                asyncio.create_task(_del())
+            if hehe:
+                schedule_filter_message_delete(client, hehe.chat.id, hehe.id, 600)
         except Exception:
             if reply_msg:
-                await reply_msg.edit_text(text=cap, reply_markup=reply_markup)
+                m = await reply_msg.edit_text(text=cap, reply_markup=reply_markup)
             else:
-                await message.reply_text(text=cap, reply_markup=reply_markup)
+                m = await message.reply_text(text=cap, reply_markup=reply_markup)
+            if m:
+                schedule_filter_message_delete(client, m.chat.id, m.id, 600)
     else:
         if reply_msg:
-            await reply_msg.edit_text(text=cap, reply_markup=reply_markup, disable_web_page_preview=True)
+            m = await reply_msg.edit_text(text=cap, reply_markup=reply_markup, disable_web_page_preview=True)
         else:
-            await message.reply_text(text=cap, reply_markup=reply_markup, disable_web_page_preview=True)
+            m = await message.reply_text(text=cap, reply_markup=reply_markup, disable_web_page_preview=True)
+        if m:
+            schedule_filter_message_delete(client, m.chat.id, m.id, 600)
 
     return True
 
@@ -6485,6 +6529,20 @@ async def series_user_nav(client: Client, query: CallbackQuery):
                 f"request_key={req_key}"
             )
 
+            log.info(
+                f"[QUALITY DELIVERY]\n"
+                f"filter_type=series\n"
+                f"language={lang}\n"
+                f"quality={qual}\n"
+                f"files=pending"
+            )
+
+            # If in private chat, directly deliver files
+            if query.message.chat.type == enums.ChatType.PRIVATE:
+                await query.answer("🚀 Sending files...")
+                await deliver_series_request(client, req_key, query.from_user.id, query=query)
+                return
+
             bot_username = temp.U_NAME if (hasattr(temp, "U_NAME") and temp.U_NAME) else getattr(getattr(client, "me", None), "username", None)
             if bot_username:
                 bot_username = str(bot_username).lstrip("@")
@@ -6501,12 +6559,16 @@ async def series_user_nav(client: Client, query: CallbackQuery):
                 return await query.answer(url=start_url)
             except Exception as e:
                 log.warning(f"[SERIES QUALITY ROUTING] query.answer(url=start_url) failed: {e}. Replying with fallback button.")
-                return await query.message.reply_text(
+                fb_msg = await query.message.reply_text(
                     "📩 Open bot to get your requested Series files:",
                     reply_markup=InlineKeyboardMarkup([
                         [InlineKeyboardButton("📂 Open Bot", url=start_url)]
                     ])
                 )
+                from utils import schedule_filter_message_delete
+                if fb_msg:
+                    schedule_filter_message_delete(client, fb_msg.chat.id, fb_msg.id, 600)
+                return
         except Exception as e:
             log.exception(f"[SERIES QUALITY ERROR] {e}")
             return await query.answer("⚠️ Unable to process this Series request.", show_alert=True)
@@ -7153,7 +7215,7 @@ async def cb_emovie(client: Client, query: CallbackQuery):
             return
 
         if action_type == "emovie_delete":
-            logger.info(f"[MOVIE EDIT DELETE]\nmovie_id={movie_id}")
+            logger.info(f"[DELETE MOVIE FILTER]\nmovie_id={movie_id}\nuser_id={uid}")
             y_str = f" ({movie.get('year')})" if movie.get("year") and movie.get("year") != "N/A" else ""
             await query.message.edit_text(
                 f"⚠️ <b>Delete Movie Filter?</b>\n\n"
@@ -7170,14 +7232,14 @@ async def cb_emovie(client: Client, query: CallbackQuery):
             return
 
         if action_type in ["emovie_delete_confirm", "emovie_del_confirm"]:
-            logger.info(f"[MOVIE EDIT DELETE CONFIRM]\nmovie_id={movie_id}")
+            logger.info(f"[DELETE MOVIE FILTER]\nmovie_id={movie_id}\nuser_id={uid}")
             await delete_super_movie(movie_id)
             try:
                 await delete_announcement(f"movie:{movie_id}")
             except Exception:
                 pass
             temp.MOVIE_EDIT.pop(uid, None)
-            logger.info(f"[MOVIE EDIT DELETE SUCCESS]\nmovie_id={movie_id}")
+            logger.info(f"[DELETE MOVIE FILTER SUCCESS]\nmovie_id={movie_id}")
             await query.answer("✅ Movie Filter deleted.\n📁 Original movie files were kept in the movie database.", show_alert=True)
             return await send_filter_manager(query, ftype="movie", page=0)
 
