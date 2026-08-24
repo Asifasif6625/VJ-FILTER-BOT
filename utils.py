@@ -227,22 +227,31 @@ def extract_release_year(filename: str, caption: str = None) -> str | None:
 def normalize_title_for_matching(text: str) -> str:
     """
     Normalizes a movie or series title or filename for strict identity matching.
-    Strips technical tokens, resolutions, codecs, sources, extensions, and years,
+    Strips technical tokens, resolutions, codecs, sources, extensions, bracket tags, and years,
     while PRESERVING meaningful sequel/chapter/part/season numbers (e.g. '2', '3', 'ii', 'iii', 'chapter 2', 'part 2').
     """
     if not text:
         return ""
     
     t = str(text).strip()
+    # 1. Remove file extensions
     t = _RE_EXT.sub("", t)
+    # 2. Remove URLs, handles, invites
     t = _RE_URL.sub(" ", t)
-    t = re.sub(r"\[.*?\]|\(.*?\)", lambda m: "" if any(k in m.group(0).lower() for k in ["t.me", "@", "join", "channel", "link", "credit", "team"]) else m.group(0), t)
+    # 3. Remove bracketed noise like [430.34 MB], [mwkOTT], [TG], [VJ], @name
+    t = re.sub(r"\[[^\]]*\]", " ", t)
+    t = re.sub(r"\{[^\}]*\}", " ", t)
+    t = re.sub(r"@\w+", " ", t)
+    t = re.sub(r"(?i)\b\d+(?:\.\d+)?\s*(?:gb|mb|kb)\b", " ", t)
 
+    # 4. Replace delimiters with spaces
     t = _RE_DELIMS.sub(" ", t)
 
+    # 5. Remove technical patterns (resolutions, codecs, sources, audios, languages)
     for pat in _RE_TECH_PATTERNS:
         t = pat.sub(" ", t)
 
+    # 6. Remove 4-digit years
     t = _RE_YEAR.sub(" ", t)
 
     words = t.lower().split()
@@ -288,22 +297,56 @@ def match_movie_identity(file_doc: dict, requested_title: str, requested_year: s
 
     # 3. Extract Titles and Years
     file_year = extract_release_year(file_name, caption)
-    norm_file_title = normalize_title_for_matching(file_name)
-    norm_req_title = normalize_title_for_matching(requested_title)
-
     req_year_str = str(requested_year).strip() if (requested_year and str(requested_year).strip() not in ["N/A", "None", "0", ""]) else None
 
-    # Title Comparison
-    if not norm_file_title or not norm_req_title:
+    # Strict Year validation check
+    if req_year_str and file_year:
+        if file_year != req_year_str:
+            return False, "YEAR_MISMATCH"
+
+    norm_req_title = normalize_title_for_matching(requested_title)
+    r_tokens = norm_req_title.split()
+    if not r_tokens:
         return False, "EMPTY_TITLE"
 
-    f_tokens = norm_file_title.split()
-    r_tokens = norm_req_title.split()
+    # Strategy A: Check title extracted before release year in filename
+    # E.g. for "I.Nobody.2026.1080p.mkv", before "2026" is "I.Nobody"
+    title_match = False
+    if file_year and file_year in file_name:
+        idx = file_name.find(file_year)
+        before_year = file_name[:idx]
+        norm_before_year = normalize_title_for_matching(before_year)
+        if norm_before_year.split() == r_tokens:
+            title_match = True
 
-    if f_tokens != r_tokens:
+    # Strategy B: Full normalized filename comparison
+    if not title_match:
+        norm_file_title = normalize_title_for_matching(file_name)
+        f_tokens = norm_file_title.split()
+        if f_tokens == r_tokens:
+            title_match = True
+        elif len(f_tokens) >= len(r_tokens) and f_tokens[:len(r_tokens)] == r_tokens:
+            trailing = f_tokens[len(r_tokens):]
+            sequel_indicators = {"2", "3", "4", "5", "6", "7", "8", "9", "ii", "iii", "iv", "v", "vi", "part", "chapter", "reloaded", "returns"}
+            if not any(t in sequel_indicators for t in trailing):
+                title_match = True
+
+    # Strategy C: Check caption if filename alone was ambiguous/incomplete
+    if not title_match and caption:
+        norm_cap = normalize_title_for_matching(caption)
+        cap_tokens = norm_cap.split()
+        if cap_tokens == r_tokens:
+            title_match = True
+        elif len(cap_tokens) >= len(r_tokens) and cap_tokens[:len(r_tokens)] == r_tokens:
+            trailing = cap_tokens[len(r_tokens):]
+            sequel_indicators = {"2", "3", "4", "5", "6", "7", "8", "9", "ii", "iii", "iv", "v", "vi", "part", "chapter"}
+            if not any(t in sequel_indicators for t in trailing):
+                title_match = True
+
+    if not title_match:
         return False, "TITLE_MISMATCH"
 
-    # Year Comparison
+    # Year Comparison completion
     if req_year_str and file_year:
         if file_year == req_year_str:
             return True, "TITLE_AND_YEAR_MATCH"
