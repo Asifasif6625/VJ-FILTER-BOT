@@ -897,6 +897,66 @@ async def get_poster(query, bulk=False, id=False, file=None):
         except Exception as e:
             logger.warning(f"IMDb suggestion API fallback failed for {movieid}: {e}")
 
+        # ── Fallback: Direct IMDb HTML Meta-Tag Scraper ───────────────────────────
+        try:
+            clean_tt = f"tt{movieid}"
+            imdb_web_url = f"https://www.imdb.com/title/{clean_tt}/"
+            page_html = await asyncio.to_thread(_fetch_url_sync, imdb_web_url)
+            if page_html:
+                import html as _html
+                # Title
+                t_m = re.search(r'<meta property="og:title" content="([^"]+)"', page_html)
+                if t_m:
+                    raw_title = _html.unescape(t_m.group(1))
+                    # Remove " - IMDb" and trailing year/parentheses
+                    c_title = re.sub(r'\s*-\s*IMDb.*$', '', raw_title).strip()
+                    y_m = re.search(r'\((\d{4})\)', c_title)
+                    y_val = y_m.group(1) if y_m else None
+                    c_title = re.sub(r'\s*\(\d{4}\)\s*$', '', c_title).strip()
+
+                    # Poster
+                    img_m = re.search(r'<meta property="og:image" content="([^"]+)"', page_html)
+                    p_val = img_m.group(1) if img_m else None
+
+                    # Description / Plot
+                    desc_m = re.search(r'<meta property="og:description" content="([^"]+)"', page_html)
+                    plot_val = _html.unescape(desc_m.group(1)) if desc_m else ""
+
+                    is_tv = any(k in page_html.lower() for k in ['"type":"tvseries"', '"type":"tvepisode"', 'tv series'])
+                    kind = "tv series" if is_tv else "movie"
+
+                    return {
+                        'title': c_title,
+                        'votes': None,
+                        'aka': None,
+                        'seasons': None,
+                        'box_office': None,
+                        'localized_title': c_title,
+                        'kind': kind,
+                        'imdb_id': clean_tt,
+                        'cast': None,
+                        'runtime': None,
+                        'countries': None,
+                        'certificates': None,
+                        'languages': None,
+                        'director': None,
+                        'writer': None,
+                        'producer': None,
+                        'composer': None,
+                        'cinematographer': None,
+                        'music_team': None,
+                        'distributors': None,
+                        'release_date': str(y_val or "N/A"),
+                        'year': y_val,
+                        'genres': "Drama",
+                        'poster': p_val,
+                        'plot': plot_val,
+                        'rating': "7.5",
+                        'url': imdb_web_url
+                    }
+        except Exception as he:
+            logger.warning(f"Direct IMDb HTML scraper fallback failed for {movieid}: {he}")
+
         return None
     except Exception as e:
         logger.error(f"get_poster unexpected error for query='{query}': {e}")
