@@ -1460,10 +1460,9 @@ async def scan_movie_files_by_identity(
     Searches candidates broadly (up to 500), enforces strict Title + Release Year / IMDb ID
     validation on every candidate, and returns a structured scan report.
     """
-    from database.ia_filterdb import get_search_results
     from utils import match_movie_identity, normalize_title_for_matching, extract_release_year
     from plugins.pm_filter import detect_file_languages
-    from plugins.series import extract_quality_from_filename
+    from plugins.series import extract_quality_from_filename, get_movie_candidates
 
     clean_t = clean_series_title(title)
     req_year_str = str(year).strip() if (year and str(year).strip() not in ["N/A", "None", "0", ""]) else None
@@ -1477,36 +1476,8 @@ async def scan_movie_files_by_identity(
     )
     logger.info("[AUTO MOVIE FILE SCAN START]")
 
-    # 1. Retrieve candidates broadly from database
-    candidate_docs = []
-    seen_fids = set()
-
-    # Search with title
-    files, _, _ = await get_search_results(0, clean_t, max_results=500, offset=0, filter=True)
-    for f in (files or []):
-        fid = f.get("file_id")
-        if fid and fid not in seen_fids:
-            seen_fids.add(fid)
-            candidate_docs.append(f)
-
-    # Search with title + year if available
-    if req_year_str:
-        y_files, _, _ = await get_search_results(0, f"{clean_t} {req_year_str}", max_results=500, offset=0, filter=True)
-        for f in (y_files or []):
-            fid = f.get("file_id")
-            if fid and fid not in seen_fids:
-                seen_fids.add(fid)
-                candidate_docs.append(f)
-
-    # Search with IMDb ID if available
-    if imdb_id and str(imdb_id).startswith("tt"):
-        id_files, _, _ = await get_search_results(0, str(imdb_id), max_results=100, offset=0, filter=True)
-        for f in (id_files or []):
-            fid = f.get("file_id")
-            if fid and fid not in seen_fids:
-                seen_fids.add(fid)
-                candidate_docs.append(f)
-
+    # 1. Retrieve candidates broadly from database using fast non-blocking background query
+    candidate_docs = await get_movie_candidates(0, title=title, year=year, limit=500)
     logger.info(f"[AUTO MOVIE CANDIDATES] count={len(candidate_docs)}")
 
     matching_files = []
