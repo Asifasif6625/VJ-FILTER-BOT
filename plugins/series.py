@@ -540,12 +540,11 @@ async def scan_sdatabase_for_movie(title: str, year: str = None, client: Client 
     start_query = time.monotonic()
     logger.info("[AUTO MOVIE SCAN QUERY START]\ncandidate_limit=500")
 
-    clean_title = clean_series_title(title)
-    q_tokens = [w for w in _normalize(clean_title).split() if len(w) > 1]
+    clean_title = re.sub(r"[\._\-\+\[\]\(\)\{\}:;!?,/\\~|#*\"\'`]", " ", clean_series_title(title))
+    q_tokens = [w for w in clean_title.lower().split() if len(w) > 1]
     if not q_tokens:
-        q_tokens = [_normalize(clean_title)]
+        q_tokens = [clean_title.lower().strip()] if clean_title.strip() else ["a"]
 
-    # Use first few meaningful tokens to query candidates
     tok_pattern = ".*".join(re.escape(t) for t in q_tokens[:3])
     try:
         query_regex = re.compile(tok_pattern, re.IGNORECASE)
@@ -563,6 +562,18 @@ async def scan_sdatabase_for_movie(title: str, year: str = None, client: Client 
                 cur2 = sec_col.find({"file_name": query_regex}).limit(500 - len(results))
                 for d in cur2:
                     results.append(d)
+            # Fallback to longest token if initial ordered regex returned 0
+            if not results and len(q_tokens) >= 2:
+                longest_tok = max(q_tokens, key=len)
+                if len(longest_tok) >= 4:
+                    fallback_regex = re.compile(re.escape(longest_tok), re.IGNORECASE)
+                    cur_fb = col.find({"file_name": fallback_regex}).limit(500)
+                    for d in cur_fb:
+                        results.append(d)
+                    if MULTIPLE_DATABASE and len(results) < 500:
+                        cur_fb2 = sec_col.find({"file_name": fallback_regex}).limit(500 - len(results))
+                        for d in cur_fb2:
+                            results.append(d)
         except Exception as qe:
             logger.error(f"[AUTO MOVIE QUERY ERROR] {qe}")
         return results
@@ -2325,19 +2336,30 @@ async def wizard_text_handler(client: Client, message: Message):
                 )
                 return
 
-            movie_data["scan"] = res
-            movie_data["grouped"] = _group_auto_movie_files(res)
-            movie_data["state"] = "RESULT"
-            temp.AUTO_MOVIE[session_id] = movie_data
-            temp.AUTO_MOVIE[uid] = movie_data
-            _log_wizard_step(uid, "AUTO_MOVIE", "SCANNING", "RESULT")
-            logger.info("[AUTO MOVIE]\nstate=RESULT")
+            try:
+                movie_data["scan"] = res
+                movie_data["grouped"] = _group_auto_movie_files(res)
+                movie_data["state"] = "RESULT"
+                temp.AUTO_MOVIE[session_id] = movie_data
+                temp.AUTO_MOVIE[uid] = movie_data
+                _log_wizard_step(uid, "AUTO_MOVIE", "SCANNING", "RESULT")
+                logger.info("[AUTO MOVIE]\nstate=RESULT")
 
-            logger.info(f"[AUTO_MOVIE SCAN]\ntitle={movie_data['title']}\nscanned={res['total_scanned']}\nmatched={res['total_matched']}\nnew={res['total_new']}\nduplicates={res['total_duplicates']}")
+                logger.info(f"[AUTO_MOVIE SCAN]\ntitle={movie_data['title']}\nscanned={res['total_scanned']}\nmatched={res['total_matched']}\nnew={res['total_new']}\nduplicates={res['total_duplicates']}")
 
-            text_res = _build_auto_movie_lang_text(movie_data)
-            markup = _build_auto_movie_lang_keyboard(session_id, movie_data)
-            await loading_msg.edit_text(text_res, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
+                text_res = _build_auto_movie_lang_text(movie_data)
+                markup = _build_auto_movie_lang_keyboard(session_id, movie_data)
+                await loading_msg.edit_text(text_res, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
+            except Exception as ue:
+                logger.exception(f"[AUTO MOVIE UI RENDER ERROR] {ue}")
+                await loading_msg.edit_text(
+                    f"🎬 <b>Auto Movie Add</b>\n\n"
+                    f"<b>{movie_data['title']} ({movie_data['year']})</b>\n\n"
+                    f"📊 <b>Scanned:</b> {res.get('total_scanned', 0)} | <b>Matched:</b> {res.get('total_matched', 0)}\n\n"
+                    f"<i>Click below to proceed.</i>",
+                    reply_markup=_build_auto_movie_lang_keyboard(session_id, movie_data),
+                    parse_mode=enums.ParseMode.HTML
+                )
             try:
                 message.stop_propagation()
             except Exception:
