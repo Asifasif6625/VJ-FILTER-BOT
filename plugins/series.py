@@ -126,7 +126,17 @@ S_BATCH_WAIT       = "WAITING_BATCH"
 S_BATCH_CONF       = "CONFIRMING_BATCH"
 S_DONE             = "SAVED"
 
-
+def to_series_font(text: str) -> str:
+    """Converts regular text to small-caps series styling font."""
+    table = {
+        'a': 'ᴀ', 'b': 'ʙ', 'c': 'ᴄ', 'd': 'ᴅ', 'e': 'ᴇ', 'f': 'ғ', 'g': 'ɢ', 'h': 'ʜ', 'i': 'ɪ',
+        'j': 'ᴊ', 'k': 'ᴋ', 'l': 'ʟ', 'm': 'ᴍ', 'n': 'ɴ', 'o': 'ᴏ', 'p': 'ᴘ', 'q': 'ǫ', 'r': 'ʀ',
+        's': 's', 't': 'ᴛ', 'u': 'ᴜ', 'v': 'ᴠ', 'w': 'ᴡ', 'x': 'x', 'y': 'ʏ', 'z': 'ᴢ',
+        'A': 'ᴀ', 'B': 'ʙ', 'C': 'ᴄ', 'D': 'ᴅ', 'E': 'ᴇ', 'F': 'ғ', 'G': 'ɢ', 'H': 'ʜ', 'I': 'ɪ',
+        'J': 'ᴊ', 'K': 'ᴋ', 'L': 'ʟ', 'M': 'ᴍ', 'N': 'ɴ', 'O': 'ᴏ', 'P': 'ᴘ', 'Q': 'ǫ', 'R': 'ʀ',
+        'S': 's', 'T': 'ᴛ', 'U': 'ᴜ', 'V': 'ᴠ', 'W': 'ᴡ', 'X': 'x', 'Y': 'ʏ', 'Z': 'ᴢ',
+    }
+    return "".join(table.get(c, c) for c in str(text))
 
 # ─── Language / Season / Quality choices ─────────────────────────────────────
 LANG_OPTIONS = [
@@ -1822,8 +1832,11 @@ async def cmd_series_menu(client: Client, message: Message):
             parse_mode=enums.ParseMode.HTML
         )
 
-    from utils import clear_wizard_session
+    from utils import clear_wizard_session, temp
     clear_wizard_session(uid)
+    temp.AUTO_MOVIE.pop(uid, None)
+    temp.AUTO_SERIES.pop(uid, None)
+    temp.SERIES_WIZARD.pop(uid, None)
 
     markup = InlineKeyboardMarkup([
         [
@@ -2162,9 +2175,10 @@ def _log_wizard_prompt(user_id: int, workflow: str, state: str, message_id: int)
 async def wizard_text_handler(client: Client, message: Message):
     text = message.text.strip() if message.text else ""
 
-    # Check for cancel command first WITHOUT stopping propagation so /cancel handler runs cleanly
-    if text and text.lower().startswith("/cancel"):
-        return
+    # If it is any slash command (except /skip for wizards), allow normal command handlers to process it!
+    if text and text.startswith("/"):
+        if not text.lower().startswith("/skip"):
+            return
 
     try:
         message.stop_propagation()
@@ -2175,14 +2189,6 @@ async def wizard_text_handler(client: Client, message: Message):
     chat_id = message.chat.id if message.chat else uid
 
     from utils import get_wizard_session, clear_wizard_session, set_wizard_session, temp
-
-    # Check for commands in wizard
-    if text.startswith("/"):
-        if text.lower().startswith("/skip"):
-            # Allow /skip to pass through to the wizard state handlers!
-            pass
-        else:
-            return
 
     sess = get_wizard_session(uid)
     # Fallback session support
@@ -2458,15 +2464,15 @@ async def wizard_text_handler(client: Client, message: Message):
             )
 
             # Update UI to Movie Found before starting database scan
-            rating_str = f"\n? {movie_data['rating']}/10" if movie_data.get('rating') else ""
-            genre_str = f"\n?? {movie_data['genre']}" if movie_data.get('genre') and movie_data['genre'] != "N/A" else ""
+            rating_str = f"\n⭐ {movie_data['rating']}/10" if movie_data.get('rating') else ""
+            genre_str = f"\n🎭 {movie_data['genre']}" if movie_data.get('genre') and movie_data['genre'] != "N/A" else ""
 
             movie_found_text = (
-                f"?? <b>Movie Found</b>\n\n"
-                f"<b>{movie_data['title']}</b> ({movie_data['year']})"
+                f"🎬 <b>Movie Found</b>\n\n"
+                f"<b>{html.escape(str(movie_data['title']))}</b> ({movie_data['year']})"
                 f"{rating_str}"
                 f"{genre_str}\n\n"
-                f"?? <b>Scanning database for files...</b>"
+                f"🔍 <b>Scanning database for files...</b>"
             )
             target_msg = loading_msg
             try:
@@ -2485,4 +2491,701 @@ async def wizard_text_handler(client: Client, message: Message):
             except Exception:
                 pass
             return
+
+    # ── Auto Series Add Handler ──────────────────────────────────────────────
+    elif workflow == "AUTO_SERIES":
+        s_data = sess.get("data") or temp.AUTO_SERIES.get(uid, {})
+        m_imdb = re.search(r"(?:imdb\.com/title/)?(tt\d{5,12})", text, re.I)
+        m_tmdb = re.search(r'(?:https?://)?(?:www\.)?themoviedb\.org/(movie|tv)/(\d+)', text, re.I)
+
+        if not m_imdb and not m_tmdb:
+            return await message.reply_text(
+                "❌ <b>Invalid IMDb or TMDB URL.</b>\n\n"
+                "Please send a valid Series URL or ID.\n\n"
+                "Example:\n<code>https://www.imdb.com/title/tt9288030/</code> or <code>tt9288030</code>",
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="sw#auto_cancel")]]),
+                parse_mode=enums.ParseMode.HTML
+            )
+
+        logger.info(f"[AUTO SERIES] METADATA START query={text}")
+        loading_msg = await message.reply_text(
+            "🔎 <b>Processing Series Data...</b>\n\nPlease wait...",
+            parse_mode=enums.ParseMode.HTML
+        )
+
+        info = None
+        if m_tmdb:
+            from utils import get_tmdb_by_url
+            try:
+                info = await asyncio.wait_for(get_tmdb_by_url(text), timeout=20)
+            except Exception as e:
+                logger.warning(f"[AUTO SERIES] TMDB error: {e}")
+                info = None
+        elif m_imdb:
+            imdb_id = m_imdb.group(1).lower()
+            try:
+                info = await asyncio.wait_for(get_poster(imdb_id, id=True), timeout=20)
+            except Exception as e:
+                logger.warning(f"[AUTO SERIES] IMDb error: {e}")
+                info = None
+
+        if not info or not info.get("title"):
+            clear_wizard_session(uid)
+            temp.AUTO_SERIES.pop(uid, None)
+            return await loading_msg.edit_text(
+                "❌ <b>Failed to fetch series data.</b>\n\nPlease try again.",
+                reply_markup=InlineKeyboardMarkup([[
+                    InlineKeyboardButton("🔄 Retry", callback_data="sw#start_auto"),
+                    InlineKeyboardButton("❌ Cancel", callback_data="sw#auto_cancel")
+                ]]),
+                parse_mode=enums.ParseMode.HTML
+            )
+
+        kind = str(info.get("kind", "")).lower()
+        if kind == "movie" and not info.get("seasons"):
+            clear_wizard_session(uid)
+            temp.AUTO_SERIES.pop(uid, None)
+            return await loading_msg.edit_text(
+                "⚠️ <b>This title is a Movie.</b>\n\nPlease use Auto Movie Add instead.",
+                reply_markup=InlineKeyboardMarkup([[
+                    InlineKeyboardButton("🎬 Auto Movie Add", callback_data="sw#start_auto_movie"),
+                    InlineKeyboardButton("❌ Cancel", callback_data="sw#auto_cancel")
+                ]]),
+                parse_mode=enums.ParseMode.HTML
+            )
+
+        s_title = info["title"]
+        s_year = str(info.get("year") or "")
+        s_genre = info.get("genres") or "Drama"
+        s_rating = str(info.get("rating") or "")
+        s_poster = info.get("poster") or ""
+        s_plot = info.get("plot") or ""
+
+        from database.series_db import get_series_by_name, create_series
+        existing = await get_series_by_name(_normalize(s_title))
+        if existing:
+            series_id = str(existing["_id"])
+        else:
+            series_id = await create_series({
+                "name": s_title,
+                "year": s_year,
+                "genre": s_genre,
+                "rating": s_rating,
+                "poster": s_poster,
+                "description": s_plot,
+                "languages": ["Malayalam", "Tamil", "Hindi", "English"],
+                "seasons": [1, 2, 3] if not info.get("seasons") else list(range(1, int(info["seasons"]) + 1)),
+                "qualities": ["480p", "720p", "1080p"],
+                "created_by": uid
+            })
+
+        logger.info(f"[AUTO SERIES COMPLETE] title={s_title} series_id={series_id}")
+        clear_wizard_session(uid)
+        temp.AUTO_SERIES.pop(uid, None)
+
+        card_text = (
+            f"📺 <b>Auto Series Configured</b>\n\n"
+            f"<b>{html.escape(s_title)}</b> ({s_year})\n"
+            f"⭐ Rating: {s_rating}/10\n"
+            f"🎭 Genre: {html.escape(s_genre)}\n\n"
+            f"<i>Series Filter ID: <code>{series_id}</code></i>"
+        )
+        markup = InlineKeyboardMarkup([
+            [InlineKeyboardButton("📁 Add Files / Batch", callback_data=f"sw#menu#batch#{series_id}")],
+            [InlineKeyboardButton("⚙️ Edit Configuration", callback_data=f"edser#edit#{series_id}")],
+            [InlineKeyboardButton("✅ Done", callback_data="sw#auto_cancel")]
+        ])
+        return await loading_msg.edit_text(card_text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
+
+    # ── Manual Series Wizard Handler ─────────────────────────────────────────
+    elif workflow == "SERIES_WIZARD":
+        wiz = temp.SERIES_WIZARD.get(uid) or sess.get("data", {})
+        cur_state = wiz.get("state", S_NAME)
+
+        if cur_state == S_NAME:
+            wiz["name"] = text
+            wiz["state"] = S_YEAR
+            set_wizard_session(uid, workflow="SERIES_WIZARD", state=S_YEAR, data=wiz, chat_id=chat_id)
+            _log_wizard_step(uid, "SERIES_WIZARD", S_NAME, S_YEAR)
+            return await message.reply_text(
+                f"Series Name: <b>{html.escape(text)}</b>\n\nPlease send the <b>Release Year</b> (e.g. <code>2021</code>) or /skip:",
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="sw#cancel")]]),
+                parse_mode=enums.ParseMode.HTML
+            )
+        elif cur_state == S_YEAR:
+            wiz["year"] = "" if text.lower() == "/skip" else text
+            wiz["state"] = S_GENRE
+            set_wizard_session(uid, workflow="SERIES_WIZARD", state=S_GENRE, data=wiz, chat_id=chat_id)
+            _log_wizard_step(uid, "SERIES_WIZARD", S_YEAR, S_GENRE)
+            return await message.reply_text(
+                f"Release Year: <b>{html.escape(wiz['year'] or 'N/A')}</b>\n\nPlease send the <b>Genre</b> (e.g. <code>Action, Drama</code>) or /skip:",
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="sw#cancel")]]),
+                parse_mode=enums.ParseMode.HTML
+            )
+        elif cur_state == S_GENRE:
+            wiz["genre"] = "" if text.lower() == "/skip" else text
+            wiz["state"] = S_POSTER
+            set_wizard_session(uid, workflow="SERIES_WIZARD", state=S_POSTER, data=wiz, chat_id=chat_id)
+            _log_wizard_step(uid, "SERIES_WIZARD", S_GENRE, S_POSTER)
+            return await message.reply_text(
+                f"Genre: <b>{html.escape(wiz['genre'] or 'N/A')}</b>\n\nPlease send a <b>Poster URL / Photo</b> or /skip:",
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="sw#cancel")]]),
+                parse_mode=enums.ParseMode.HTML
+            )
+        elif cur_state == S_POSTER:
+            poster_url = ""
+            if message.photo:
+                poster_url = message.photo.file_id
+            elif text and text.lower() != "/skip":
+                poster_url = text
+            wiz["poster"] = poster_url
+            wiz["state"] = S_LANGS
+            set_wizard_session(uid, workflow="SERIES_WIZARD", state=S_LANGS, data=wiz, chat_id=chat_id)
+            _log_wizard_step(uid, "SERIES_WIZARD", S_POSTER, S_LANGS)
+            return await message.reply_text(
+                _series_card(wiz) + "\n\n🌐 <b>Select Available Languages:</b>",
+                reply_markup=_lang_keyboard(wiz.get("languages", []), show_custom=True),
+                parse_mode=enums.ParseMode.HTML
+            )
+
+    # ── Super Movie Batch Handler ────────────────────────────────────────────
+    elif workflow == "SUPER_MOVIE_BATCH":
+        batch_data = temp.AUTO_MOVIE_BATCH.get(uid, {})
+        movie_id = batch_data.get("movie_id")
+        session_id = batch_data.get("session_id")
+        # Support batch links or message forwarded
+        from database.series_db import sync_existing_movie_filter, get_super_movie
+        if movie_id:
+            res = await sync_existing_movie_filter(movie_id)
+            clear_wizard_session(uid)
+            temp.AUTO_MOVIE_BATCH.pop(uid, None)
+            return await message.reply_text(
+                f"✅ <b>Files batch synced to Super Movie!</b>\n\nTotal Files: <b>{res.get('total_files', 0)}</b>",
+                parse_mode=enums.ParseMode.HTML
+            )
+
+
+# ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ 
+# ─── CANONICAL SERIES WIZARD CALLBACK HANDLER (sw#) ───────────────────────────
+# ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ 
+
+@Client.on_callback_query(filters.regex(r"^sw#"), group=-20)
+async def series_wizard_callback(client: Client, query: CallbackQuery):
+    print(f"### SW BUTTON RECEIVED data={query.data} user={query.from_user.id}", flush=True)
+    try:
+        await query.answer()
+    except Exception:
+        pass
+
+    uid = query.from_user.id
+    if not _is_admin(uid):
+        return await query.answer("❌ Not authorized", show_alert=True)
+
+    data = query.data
+    chat_id = query.message.chat.id if query.message and query.message.chat else uid
+
+    if data == "sw#start_manual":
+        print("### MANUAL ADD BUTTON REACHED", flush=True)
+        clear_wizard_session(uid)
+        temp.AUTO_MOVIE.pop(uid, None)
+        temp.AUTO_SERIES.pop(uid, None)
+        temp.SERIES_WIZARD[uid] = {
+            "mode": "create",
+            "state": S_NAME,
+            "name": "",
+            "year": "",
+            "genre": "",
+            "description": "",
+            "poster": "",
+            "languages": [],
+            "seasons": [],
+            "qualities": [],
+            "season_modes": {},
+            "batch_langs": [], "batch_seasons": [], "batch_qualities": [],
+            "batch_data": None,
+            "from_viewseries": False
+        }
+        set_wizard_session(uid, workflow="SERIES_WIZARD", state=S_NAME, data=temp.SERIES_WIZARD[uid], chat_id=chat_id)
+        _log_wizard_step(uid, "SERIES_WIZARD", "IDLE", S_NAME)
+
+        prompt_text = (
+            "📝 <b>Manual Series Adding</b>\n\n"
+            "You selected <b>Manual Adding</b>.\n\n"
+            "Please send the <b>Series Name</b>.\n\n"
+            "Example:\n<code>Loki</code>"
+        )
+        return await query.message.edit_text(
+            prompt_text,
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="sw#cancel")]]),
+            parse_mode=enums.ParseMode.HTML
+        )
+
+    elif data == "sw#start_auto":
+        print("### AUTO SERIES BUTTON REACHED", flush=True)
+        clear_wizard_session(uid)
+        temp.AUTO_MOVIE.pop(uid, None)
+        temp.SERIES_WIZARD.pop(uid, None)
+        auto_data = {
+            "state": "WAIT_IMDB",
+            "user_id": uid,
+            "chat_id": chat_id,
+            "created_at": time.time(),
+            "prompt_msg_id": query.message.id
+        }
+        temp.AUTO_SERIES[uid] = auto_data
+        set_wizard_session(uid, workflow="AUTO_SERIES", state="WAIT_IMDB", data=auto_data, chat_id=chat_id)
+        _log_wizard_step(uid, "AUTO_SERIES", "IDLE", "WAIT_IMDB")
+
+        prompt_text = (
+            "📺 <b>Auto Series Add</b>\n\n"
+            "You selected <b>Auto S Add</b>.\n\n"
+            "Please send the <b>IMDb Series URL or ID</b>.\n\n"
+            "Example:\n<code>https://www.imdb.com/title/tt9288030/</code>\n\nor:\n<code>tt9288030</code>"
+        )
+        return await query.message.edit_text(
+            prompt_text,
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="sw#auto_cancel")]]),
+            parse_mode=enums.ParseMode.HTML
+        )
+
+    elif data in ("sw#start_auto_movie", "sw#auto_movie"):
+        print("### AUTO MOVIE BUTTON REACHED", flush=True)
+        clear_wizard_session(uid)
+        temp.AUTO_SERIES.pop(uid, None)
+        temp.SERIES_WIZARD.pop(uid, None)
+        import uuid
+        session_id = str(uuid.uuid4())[:8]
+        movie_data = {
+            "session_id": session_id,
+            "state": "WAIT_IMDB",
+            "user_id": uid,
+            "chat_id": chat_id,
+            "created_at": time.time(),
+            "prompt_msg_id": query.message.id
+        }
+        temp.AUTO_MOVIE[session_id] = movie_data
+        temp.AUTO_MOVIE[uid] = movie_data
+        set_wizard_session(uid, workflow="AUTO_MOVIE", state="WAIT_IMDB", data=movie_data, chat_id=chat_id)
+        _log_wizard_step(uid, "AUTO_MOVIE", "IDLE", "WAIT_IMDB")
+
+        prompt_text = (
+            "🎬 <b>Auto Movie Add</b>\n\n"
+            "You selected <b>Auto Movie Add</b>.\n\n"
+            "Please send the <b>IMDb Movie URL or ID</b>.\n\n"
+            "Example:\n<code>https://www.imdb.com/title/tt11948256/</code>\n\nor:\n<code>tt11948256</code>"
+        )
+        return await query.message.edit_text(
+            prompt_text,
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="sw#auto_cancel")]]),
+            parse_mode=enums.ParseMode.HTML
+        )
+
+    elif data in ("sw#cancel", "sw#auto_cancel", "sw#auto_movie_cancel"):
+        cancel_wizard_session(uid)
+        clear_wizard_session(uid)
+        temp.AUTO_MOVIE.pop(uid, None)
+        temp.AUTO_SERIES.pop(uid, None)
+        temp.SERIES_WIZARD.pop(uid, None)
+        return await query.message.edit_text(
+            "❌ <b>Action cancelled.</b>",
+            parse_mode=enums.ParseMode.HTML
+        )
+
+    # ── Wizard Selection Steps ───────────────────────────────────────────────
+    wiz = temp.SERIES_WIZARD.get(uid)
+    if not wiz:
+        return await query.answer("Session expired. Please start over.", show_alert=True)
+
+    if data.startswith("sw#lang#"):
+        val = data.split("#")[2]
+        if val == "submit":
+            if not wiz.get("languages"):
+                return await query.answer("Please select at least one language.", show_alert=True)
+            wiz["state"] = S_SEASONS
+            set_wizard_session(uid, workflow="SERIES_WIZARD", state=S_SEASONS, data=wiz, chat_id=chat_id)
+            return await query.message.edit_text(
+                _series_card(wiz) + "\n\n📅 <b>Select Available Seasons:</b>",
+                reply_markup=_season_keyboard(MAX_SEASONS, wiz.get("seasons", []), show_skip=True),
+                parse_mode=enums.ParseMode.HTML
+            )
+        elif val == "back":
+            wiz["state"] = S_POSTER
+            set_wizard_session(uid, workflow="SERIES_WIZARD", state=S_POSTER, data=wiz, chat_id=chat_id)
+            return await query.message.edit_text(
+                "Please send a <b>Poster URL / Photo</b> or /skip:",
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="sw#cancel")]]),
+                parse_mode=enums.ParseMode.HTML
+            )
+        else:
+            langs = wiz.setdefault("languages", [])
+            if val in langs:
+                langs.remove(val)
+            else:
+                langs.append(val)
+            return await query.message.edit_reply_markup(reply_markup=_lang_keyboard(langs, show_custom=True))
+
+    elif data.startswith("sw#season#"):
+        val = data.split("#")[2]
+        if val in ("submit", "skip"):
+            wiz["state"] = S_QUALITY
+            set_wizard_session(uid, workflow="SERIES_WIZARD", state=S_QUALITY, data=wiz, chat_id=chat_id)
+            return await query.message.edit_text(
+                _series_card(wiz) + "\n\n🎞 <b>Select Available Qualities:</b>",
+                reply_markup=_quality_keyboard(wiz.get("qualities", []), show_custom=True),
+                parse_mode=enums.ParseMode.HTML
+            )
+        elif val == "back":
+            wiz["state"] = S_LANGS
+            set_wizard_session(uid, workflow="SERIES_WIZARD", state=S_LANGS, data=wiz, chat_id=chat_id)
+            return await query.message.edit_text(
+                _series_card(wiz) + "\n\n🌐 <b>Select Available Languages:</b>",
+                reply_markup=_lang_keyboard(wiz.get("languages", []), show_custom=True),
+                parse_mode=enums.ParseMode.HTML
+            )
+        else:
+            try:
+                s_int = int(val)
+                seasons = wiz.setdefault("seasons", [])
+                if s_int in seasons:
+                    seasons.remove(s_int)
+                else:
+                    seasons.append(s_int)
+                return await query.message.edit_reply_markup(reply_markup=_season_keyboard(MAX_SEASONS, seasons, show_skip=True))
+            except Exception:
+                pass
+
+    elif data.startswith("sw#quality#"):
+        val = data.split("#")[2]
+        if val == "submit":
+            if not wiz.get("qualities"):
+                return await query.answer("Please select at least one quality.", show_alert=True)
+            # Commit to database!
+            from database.series_db import create_series, search_series
+            series_id = await create_series({
+                "name": wiz["name"],
+                "year": wiz.get("year", ""),
+                "genre": wiz.get("genre", ""),
+                "rating": wiz.get("rating", ""),
+                "poster": wiz.get("poster", ""),
+                "description": wiz.get("description", ""),
+                "languages": wiz.get("languages", []),
+                "seasons": wiz.get("seasons", []),
+                "qualities": wiz.get("qualities", []),
+                "created_by": uid
+            })
+            logger.info(f"[SERIES SEARCH VERIFY] name={wiz['name']} series_id={series_id}")
+            clear_wizard_session(uid)
+            temp.SERIES_WIZARD.pop(uid, None)
+            return await query.message.edit_text(
+                f"✅ <b>Series Filter Created Successfully!</b>\n\n📺 <b>{html.escape(wiz['name'])}</b>\n\n<i>ID: <code>{series_id}</code></i>",
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("📁 Add Files / Batch", callback_data=f"sw#menu#batch#{series_id}")]]),
+                parse_mode=enums.ParseMode.HTML
+            )
+        elif val == "back":
+            wiz["state"] = S_SEASONS
+            set_wizard_session(uid, workflow="SERIES_WIZARD", state=S_SEASONS, data=wiz, chat_id=chat_id)
+            return await query.message.edit_text(
+                _series_card(wiz) + "\n\n📅 <b>Select Available Seasons:</b>",
+                reply_markup=_season_keyboard(MAX_SEASONS, wiz.get("seasons", []), show_skip=True),
+                parse_mode=enums.ParseMode.HTML
+            )
+        else:
+            quals = wiz.setdefault("qualities", [])
+            if val in quals:
+                quals.remove(val)
+            else:
+                quals.append(val)
+            return await query.message.edit_reply_markup(reply_markup=_quality_keyboard(quals, show_custom=True))
+
+
+# ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ 
+# ─── AUTO MOVIE CALLBACK HANDLER (am_) ───────────────────────────────────────
+# ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ 
+
+@Client.on_callback_query(filters.regex(r"^am_"), group=-15)
+async def auto_movie_callbacks(client: Client, query: CallbackQuery):
+    try:
+        await query.answer()
+    except Exception:
+        pass
+
+    uid = query.from_user.id
+    if not _is_admin(uid):
+        return await query.answer("❌ Not authorized", show_alert=True)
+
+    data = query.data
+
+    if data.startswith("am_save:"):
+        session_id = data.split(":")[1]
+        movie_data = temp.AUTO_MOVIE.get(session_id) or temp.AUTO_MOVIE.get(uid)
+        if not movie_data:
+            return await query.answer("⚠️ Session expired. Please scan again.", show_alert=True)
+
+        res = movie_data.get("scan", {})
+        all_files = res.get("all_matching_files") or res.get("valid_files") or []
+        file_ids = [f["file_id"] for f in all_files if f.get("file_id")]
+
+        from database.series_db import create_super_movie, search_super_movies, get_super_movie
+        movie_id = await create_super_movie({
+            "title": movie_data["title"],
+            "year": movie_data.get("year", "N/A"),
+            "genre": movie_data.get("genre", "N/A"),
+            "rating": movie_data.get("rating", ""),
+            "poster": movie_data.get("poster", ""),
+            "description": movie_data.get("description", ""),
+            "languages": list(movie_data.get("grouped", {}).keys()),
+            "qualities": list({q for l in movie_data.get("grouped", {}).values() for q in l.keys()}),
+            "file_ids": file_ids,
+            "imdb_id": movie_data.get("imdb_id"),
+            "tmdb_id": movie_data.get("tmdb_id"),
+            "created_by": uid,
+            "status": "active"
+        })
+
+        logger.info(
+            f"[SUPER MOVIE SEARCH VERIFY] "
+            f"title={movie_data['title']} "
+            f"year={movie_data.get('year')} "
+            f"movie_id={movie_id}"
+        )
+        verify_check = await search_super_movies(movie_data["title"])
+        if not verify_check:
+            logger.error("[SUPER MOVIE SEARCH VERIFY FAILED]")
+
+        clear_wizard_session(uid)
+        temp.AUTO_MOVIE.pop(uid, None)
+        temp.AUTO_MOVIE.pop(session_id, None)
+
+        title_esc = html.escape(str(movie_data.get('title', '')))
+        year_esc = html.escape(str(movie_data.get('year', '')))
+        tot_files = len(file_ids)
+
+        return await query.message.edit_text(
+            f"✅ <b>Super Movie Filter Saved Successfully!</b>\n\n"
+            f"🎬 <b>{title_esc} ({year_esc})</b>\n\n"
+            f"📁 <b>Linked Files:</b> {tot_files}\n"
+            f"<i>Super Movie Filter ID: <code>{movie_id}</code></i>",
+            parse_mode=enums.ParseMode.HTML
+        )
+
+    elif data.startswith("am_scan:"):
+        session_id = data.split(":")[1]
+        movie_data = temp.AUTO_MOVIE.get(session_id) or temp.AUTO_MOVIE.get(uid)
+        if not movie_data:
+            return await query.answer("⚠️ Session expired.", show_alert=True)
+        return await run_auto_movie_scan(client, query.message.chat.id, query.message, session_id, movie_data)
+
+    elif data.startswith("am_cancel:"):
+        session_id = data.split(":")[1]
+        clear_wizard_session(uid)
+        temp.AUTO_MOVIE.pop(uid, None)
+        temp.AUTO_MOVIE.pop(session_id, None)
+        return await query.message.edit_text("❌ <b>Auto Movie Add cancelled.</b>", parse_mode=enums.ParseMode.HTML)
+
+    elif data.startswith("am_qual:"):
+        parts = data.split(":")
+        session_id = parts[1]
+        lang = parts[2]
+        qual = parts[3]
+        movie_data = temp.AUTO_MOVIE.get(session_id) or temp.AUTO_MOVIE.get(uid)
+        if not movie_data:
+            return await query.answer("⚠️ Session expired.", show_alert=True)
+        files = movie_data.get("grouped", {}).get(lang, {}).get(qual, [])
+        return await query.message.edit_text(
+            _build_auto_movie_file_text(movie_data, lang, qual),
+            reply_markup=_build_auto_movie_file_keyboard(session_id, lang, qual, files, page=0),
+            parse_mode=enums.ParseMode.HTML
+        )
+
+    elif data.startswith("am_back:"):
+        session_id = data.split(":")[1]
+        movie_data = temp.AUTO_MOVIE.get(session_id) or temp.AUTO_MOVIE.get(uid)
+        if not movie_data:
+            return await query.answer("⚠️ Session expired.", show_alert=True)
+        return await query.message.edit_text(
+            _build_auto_movie_lang_text(movie_data),
+            reply_markup=_build_auto_movie_lang_keyboard(session_id, movie_data),
+            parse_mode=enums.ParseMode.HTML
+        )
+
+
+# ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ 
+# ─── USER SEARCH ROUTERS (Super Movie & Series Search) ───────────────────────
+# ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ 
+
+async def process_super_movie_search(client: Client, message: Message, query_text: str, reply_msg: Message = None) -> bool:
+    """
+    Checks if a query matches an existing Super Movie Filter.
+    If matched, renders the Super Movie Filter UI and returns True.
+    """
+    from database.series_db import search_super_movies, get_super_movie
+    from database.ia_filterdb import get_file_details
+    from plugins.pm_filter import group_movie_files, build_movie_language_keyboard, BUTTON_OWNERS
+
+    q = clean_series_title(query_text) if query_text else ""
+    if not q:
+        return False
+
+    matches = await search_super_movies(q)
+    logger.info(f"[SUPER MOVIE SEARCH] query={query_text!r} matches={len(matches) if matches else 0}")
+    if not matches:
+        return False
+
+    logger.info("[SEARCH ROUTE] type=movie_filter")
+    movie = matches[0]
+    movie_id = str(movie["_id"])
+    file_ids = movie.get("file_ids", [])
+    if not file_ids:
+        return False
+
+    # Fetch file documents
+    file_docs = []
+    for fid in file_ids:
+        fdoc = await get_file_details(fid)
+        if fdoc:
+            file_docs.append(fdoc)
+
+    if not file_docs:
+        return False
+
+    grouped = group_movie_files(file_docs)
+    if not grouped:
+        return False
+
+    key = f"{message.chat.id}-{message.id}"
+    temp.MOVIE_STATE[key] = {
+        "movie_id": movie_id,
+        "title": movie.get("title", ""),
+        "year": str(movie.get("year", "")),
+        "rating": str(movie.get("rating", "")),
+        "genre": movie.get("genre", ""),
+        "poster": movie.get("poster", ""),
+        "description": movie.get("description", ""),
+        "grouped": grouped,
+        "chat_id": message.chat.id,
+        "user_id": message.from_user.id if message.from_user else message.chat.id
+    }
+    BUTTON_OWNERS[key] = message.from_user.id if message.from_user else message.chat.id
+
+    title = movie.get("title", "")
+    year = str(movie.get("year", ""))
+    year_str = f" ({year})" if year and year != "N/A" else ""
+    rating = str(movie.get("rating", ""))
+    rating_str = f"\n⭐ <b>Rating:</b> {rating}/10" if rating else ""
+    genre = movie.get("genre", "")
+    genre_str = f"\n🎭 <b>Genre:</b> {genre}" if genre and genre != "N/A" else ""
+    poster = movie.get("poster", "")
+
+    caption_text = (
+        f"🎬 <b>{title}{year_str}</b>"
+        f"{rating_str}"
+        f"{genre_str}\n\n"
+        f"🌐 <b>Select Language:</b>"
+    )
+    markup = build_movie_language_keyboard(key, grouped)
+
+    if reply_msg:
+        try:
+            await reply_msg.delete()
+        except Exception:
+            pass
+
+    if poster:
+        try:
+            await message.reply_photo(
+                photo=poster,
+                caption=caption_text,
+                reply_markup=markup,
+                parse_mode=enums.ParseMode.HTML
+            )
+            return True
+        except Exception as pe:
+            logger.warning(f"[SUPER MOVIE PHOTO ERROR] {pe}")
+
+    await message.reply_text(
+        text=caption_text,
+        reply_markup=markup,
+        parse_mode=enums.ParseMode.HTML
+    )
+    return True
+
+
+async def process_series_search(client: Client, message: Message, query_text: str, reply_msg: Message = None) -> bool:
+    """
+    Checks if a query matches an existing Series Filter.
+    If matched, renders the Series Filter UI and returns True.
+    """
+    from database.series_db import search_series, list_series_languages
+    from plugins.pm_filter import BUTTON_OWNERS
+
+    q = clean_series_title(query_text) if query_text else ""
+    if not q:
+        return False
+
+    matches = await search_series(q)
+    logger.info(f"[SERIES SEARCH] query={query_text!r} matches={len(matches) if matches else 0}")
+    if not matches:
+        return False
+
+    logger.info("[SEARCH ROUTE] type=series_filter")
+    series_doc = matches[0]
+    series_id = str(series_doc["_id"])
+    name = series_doc.get("name", "")
+    year = str(series_doc.get("year", ""))
+    year_str = f" ({year})" if year and year != "N/A" else ""
+    rating = str(series_doc.get("rating", ""))
+    rating_str = f"\n⭐ <b>Rating:</b> {rating}/10" if rating else ""
+    genre = series_doc.get("genre", "")
+    genre_str = f"\n🎭 <b>Genre:</b> {genre}" if genre and genre != "N/A" else ""
+    poster = series_doc.get("poster", "")
+
+    langs = await list_series_languages(series_id)
+    if not langs:
+        langs = series_doc.get("languages", [])
+
+    key = f"{message.chat.id}-{message.id}"
+    BUTTON_OWNERS[key] = message.from_user.id if message.from_user else message.chat.id
+
+    buttons = []
+    preferred_order = ["Malayalam", "Tamil", "Hindi", "Telugu", "Kannada", "English", "Dual Audio", "Multi Audio"]
+    langs_sorted = sorted(langs, key=lambda x: (preferred_order.index(x) if x in preferred_order else 99, x))
+    for i in range(0, len(langs_sorted), 2):
+        row = []
+        for l in langs_sorted[i:i+2]:
+            row.append(InlineKeyboardButton(to_series_font(l), callback_data=f"languages#{series_id}#{l}#{key}"))
+        buttons.append(row)
+
+    caption_text = (
+        f"📺 <b>{name}{year_str}</b>"
+        f"{rating_str}"
+        f"{genre_str}\n\n"
+        f"🌐 <b>Select Language:</b>"
+    )
+    markup = InlineKeyboardMarkup(buttons)
+
+    if reply_msg:
+        try:
+            await reply_msg.delete()
+        except Exception:
+            pass
+
+    if poster:
+        try:
+            await message.reply_photo(
+                photo=poster,
+                caption=caption_text,
+                reply_markup=markup,
+                parse_mode=enums.ParseMode.HTML
+            )
+            return True
+        except Exception as pe:
+            logger.warning(f"[SERIES PHOTO ERROR] {pe}")
+
+    await message.reply_text(
+        text=caption_text,
+        reply_markup=markup,
+        parse_mode=enums.ParseMode.HTML
+    )
+    return True
+
 
