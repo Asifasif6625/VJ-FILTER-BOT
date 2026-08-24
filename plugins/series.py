@@ -761,14 +761,35 @@ async def scan_sdatabase_for_movie(
     }
 
 
-# ─── Auto Movie Add Hierarchical UI Helpers ───────────────────────────────�    "French": "🇫🇷",
-    "Arabic": "🇸🇦",
-    "Russian": "🇷🇺",
-    "Chinese": "🇨🇳",
-    "Italian": "🇮🇹",
-    "Portuguese": "🇵🇹",
-    "Turkish": "🇹🇷",
-    "Thai": "🇹🇭",
+# ??? Auto Movie Add Hierarchical UI Helpers ?????????????????????????????????
+
+LANGUAGE_FLAGS = {
+    "Malayalam": "????",
+    "Tamil": "????",
+    "Hindi": "????",
+    "Telugu": "????",
+    "Kannada": "????",
+    "Bengali": "????",
+    "Marathi": "????",
+    "Punjabi": "????",
+    "Gujarati": "????",
+    "Urdu": "????",
+    "Odia": "????",
+    "English": "????",
+    "Dual Audio": "??",
+    "Multi Audio": "??",
+    "German": "????",
+    "Korean": "????",
+    "Japanese": "????",
+    "Spanish": "????",
+    "French": "????",
+    "Arabic": "????",
+    "Russian": "????",
+    "Chinese": "????",
+    "Italian": "????",
+    "Portuguese": "????",
+    "Turkish": "????",
+    "Thai": "????",
 }
 
 def _group_auto_movie_files(res):
@@ -936,27 +957,13 @@ def _build_auto_movie_file_text(movie_data, lang, qual):
     title_esc = html.escape(str(movie_data.get('title', '')))
     year_esc = html.escape(str(movie_data.get('year', '')))
     rating_esc = html.escape(str(movie_data.get('rating', '')))
-    rating_str = f"\n⭐ <b>Rating:</b> {rating_esc}/10" if rating_esc else ""
+    rating_str = f"\n? <b>Rating:</b> {rating_esc}/10" if rating_esc else ""
     return (
-        f"🎬 <b>{title_esc} ({year_esc})</b>"
+        f"?? <b>{title_esc} ({year_esc})</b>"
         f"{rating_str}\n\n"
-        f"🌐 <b>Language:</b> {html.escape(str(lang))}\n\n"
-        f"🎞 <b>Quality:</b> {html.escape(str(qual))}\n\n"
-        f"📁 <b>Select File to Download / Test:</b>"
-    )ttons.append([
-        InlineKeyboardButton("⬅️ Language", callback_data=f"am_back:{session_id}:lang"),
-        InlineKeyboardButton("❌ Cancel", callback_data=f"am_cancel:{session_id}")
-    ])
-    return InlineKeyboardMarkup(buttons)
-
-def _build_auto_movie_file_text(movie_data, lang, qual):
-    rating_str = f"\n⭐ <b>Rating:</b> {movie_data['rating']}/10" if movie_data.get("rating") else ""
-    return (
-        f"🎬 <b>{movie_data['title']} ({movie_data['year']})</b>"
-        f"{rating_str}\n\n"
-        f"🌐 <b>Language:</b> {lang}\n"
-        f"🎞 <b>Quality:</b> {qual}\n\n"
-        f"📁 <b>Select File to Download / Test:</b>"
+        f"?? <b>Language:</b> {html.escape(str(lang))}\n\n"
+        f"?? <b>Quality:</b> {html.escape(str(qual))}\n\n"
+        f"?? <b>Select File to Download / Test:</b>"
     )
 
 def _build_auto_movie_file_keyboard(session_id, lang, qual, files, page=0, pre="file"):
@@ -2330,26 +2337,28 @@ async def wizard_text_handler(client: Client, message: Message):
                 temp.AUTO_SERIES.pop(uid, None)
 
                 series_err_markup = InlineKeyboardMarkup([
-                    [InlineKeyboardButton("❌ Retry", callback_data="sw#auto_series")],
-                    [InlineKeyboardButton("❌ Cancel", callback_data="sw#auto_cancel")]
+                    [
+                        InlineKeyboardButton("?? Retry", callback_data="sw#auto_series"),
+                        InlineKeyboardButton("? Cancel", callback_data="sw#auto_cancel")
+                    ]
                 ])
 
                 if is_series_meta_timeout:
                     return await loading_msg.edit_text(
-                        "❌ <b>Series metadata request timed out.</b>\n\n"
+                        "? <b>Series metadata request timed out.</b>\n\n"
                         "Could not fetch IMDb/TMDB details in time. Please check your connection and try again.",
                         reply_markup=series_err_markup,
                         parse_mode=enums.ParseMode.HTML
                     )
                 else:
                     return await loading_msg.edit_text(
-                        f"❌ <b>Could not retrieve series data for <code>{text}</code>.</b>\n\n"
+                        f"? <b>Could not retrieve series data for <code>{text}</code>.</b>\n\n"
                         "Please provide a valid IMDb URL (e.g. <code>https://www.imdb.com/title/tt9288030/</code>) or TMDB URL (e.g. <code>https://www.themoviedb.org/tv/1396</code>), or send /cancel to abort.",
                         reply_markup=series_err_markup,
                         parse_mode=enums.ParseMode.HTML,
                     )
 
-            # ── Series vs Movie Validation ──
+            # ?? Series vs Movie Validation ??
             kind = str(info.get("kind", "")).lower()
             if kind in ["movie", "feature"]:
                 return await loading_msg.edit_text(
@@ -2473,9 +2482,13 @@ async def wizard_text_handler(client: Client, message: Message):
                 parse_mode=enums.ParseMode.HTML
             )
 
+            import uuid
+            session_id = str(uuid.uuid4())[:8]
+
             info = None
             imdb_id = None
             is_meta_timeout = False
+            is_meta_error = False
             if m_tmdb:
                 from utils import get_tmdb_by_url
                 try:
@@ -2504,6 +2517,7 @@ async def wizard_text_handler(client: Client, message: Message):
                     raise
                 except Exception as e:
                     logger.exception(f"[AUTO MOVIE] TMDB metadata ERROR url={text}: {e}")
+                    is_meta_error = True
                     info = None
             elif m_imdb:
                 imdb_id = m_imdb.group(1).lower()
@@ -2533,12 +2547,15 @@ async def wizard_text_handler(client: Client, message: Message):
                     raise
                 except Exception as e:
                     logger.exception(f"[AUTO MOVIE] IMDb metadata ERROR id={imdb_id}: {e}")
+                    is_meta_error = True
                     info = None
 
             if info and info.get("title"):
                 logger.info(f"[AUTO MOVIE] METADATA COMPLETE title={info.get('title')}")
             elif is_meta_timeout:
                 logger.error(f"[AUTO MOVIE] METADATA TIMEOUT query={text}")
+            elif is_meta_error:
+                logger.error(f"[AUTO MOVIE] METADATA FAILED query={text}")
             else:
                 logger.warning(f"[AUTO MOVIE] METADATA FAILED query={text} info={bool(info)}")
 
@@ -2546,27 +2563,42 @@ async def wizard_text_handler(client: Client, message: Message):
                 clear_wizard_session(uid)
                 temp.AUTO_MOVIE.pop(uid, None)
 
-                err_markup = InlineKeyboardMarkup([
-                    [InlineKeyboardButton("🔄 Retry", callback_data="sw#auto_movie")],
-                    [InlineKeyboardButton("❌ Cancel", callback_data="sw#auto_cancel")]
+                retry_markup = InlineKeyboardMarkup([
+                    [
+                        InlineKeyboardButton("?? Retry", callback_data="sw#auto_movie"),
+                        InlineKeyboardButton("? Cancel", callback_data="sw#auto_cancel")
+                    ]
                 ])
 
                 if is_meta_timeout:
+                    if m_tmdb:
+                        _tmsg = "? <b>TMDB metadata request timed out.</b>\n\nPlease try again."
+                    else:
+                        _tmsg = "? <b>IMDb metadata request timed out.</b>\n\nPlease try again."
                     return await loading_msg.edit_text(
-                        "⚠️ <b>Movie metadata request timed out.</b>\n\n"
-                        "Could not fetch IMDb/TMDB details in time. Please check your connection and try again.",
-                        reply_markup=err_markup,
+                        _tmsg,
+                        reply_markup=retry_markup,
+                        parse_mode=enums.ParseMode.HTML
+                    )
+                elif is_meta_error:
+                    if m_tmdb:
+                        _emsg = "? <b>Failed to fetch TMDB movie data.</b>\n\nPlease try again."
+                    else:
+                        _emsg = "? <b>Failed to fetch IMDb movie data.</b>\n\nPlease try again."
+                    return await loading_msg.edit_text(
+                        _emsg,
+                        reply_markup=retry_markup,
                         parse_mode=enums.ParseMode.HTML
                     )
                 else:
                     return await loading_msg.edit_text(
-                        f"❌ <b>Could not retrieve movie data for <code>{text}</code>.</b>\n\n"
+                        f"? <b>Could not retrieve movie data for <code>{text}</code>.</b>\n\n"
                         "Please provide a valid IMDb URL (e.g. <code>https://www.imdb.com/title/tt0111161/</code>) or TMDB URL (e.g. <code>https://www.themoviedb.org/movie/863530</code>).",
-                        reply_markup=err_markup,
+                        reply_markup=retry_markup,
                         parse_mode=enums.ParseMode.HTML,
                     )
 
-            # ── Movie vs Series Validation ──
+            # ?? Movie vs Series Validation ??
             kind = str(info.get("kind", "")).lower()
             is_series = kind in ["tv series", "tv mini series", "series", "tvseries", "tv mini-series"] or (info.get("seasons") and str(info["seasons"]).isdigit() and int(info["seasons"]) > 0)
             if is_series:
@@ -2581,8 +2613,6 @@ async def wizard_text_handler(client: Client, message: Message):
                     parse_mode=enums.ParseMode.HTML,
                 )
 
-            import uuid
-            session_id = str(uuid.uuid4())[:8]
             movie_data.update({
                 "session_id": session_id,
                 "user_id": uid,
