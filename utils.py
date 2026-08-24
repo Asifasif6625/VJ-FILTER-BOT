@@ -250,6 +250,18 @@ def normalize_title_for_matching(text: str) -> str:
     return " ".join(norm_words).strip()
 
 
+def extract_quality_from_filename(filename: str) -> str:
+    """Extract resolution / quality tag from media filename."""
+    if not filename:
+        return "Unknown"
+    from plugins.series import extract_quality_from_filename as _eq
+    try:
+        return _eq(filename)
+    except Exception:
+        m = re.search(r"(?i)\b(2160p|4k|1440p|2k|1080p|720p|480p|360p|240p|hdrip|bluray|web-dl|webdl|webrip|dvdrip|hevc)\b", filename)
+        return m.group(1).upper() if m else "Unknown"
+
+
 def match_movie_identity(file_doc: dict, requested_title: str, requested_year: str | int = None, imdb_id: str = None, tmdb_id: str = None, known_conflicts: set = None) -> tuple[bool, str]:
     """
     Strict identity matcher for Auto Movie Add / Super Movie Filter synchronization.
