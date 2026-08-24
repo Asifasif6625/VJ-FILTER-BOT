@@ -761,27 +761,7 @@ async def scan_sdatabase_for_movie(
     }
 
 
-# ─── Auto Movie Add Hierarchical UI Helpers ─────────────────────────────────
-LANGUAGE_FLAGS = {
-    "Malayalam": "🇮🇳",
-    "Tamil": "🇮🇳",
-    "Hindi": "🇮🇳",
-    "Telugu": "🇮🇳",
-    "Kannada": "🇮🇳",
-    "Bengali": "🇮🇳",
-    "Marathi": "🇮🇳",
-    "Punjabi": "🇮🇳",
-    "Gujarati": "🇮🇳",
-    "Urdu": "🇮🇳",
-    "Odia": "🇮🇳",
-    "English": "🇬🇧",
-    "Dual Audio": "🎙",
-    "Multi Audio": "🎧",
-    "German": "🇩🇪",
-    "Korean": "🇰🇷",
-    "Japanese": "🇯🇵",
-    "Spanish": "🇪🇸",
-    "French": "🇫🇷",
+# ─── Auto Movie Add Hierarchical UI Helpers ───────────────────────────────�    "French": "🇫🇷",
     "Arabic": "🇸🇦",
     "Russian": "🇷🇺",
     "Chinese": "🇨🇳",
@@ -805,14 +785,22 @@ def _group_auto_movie_files(res):
     return grouped
 
 def _build_auto_movie_lang_text(movie_data):
+    import html
     res = movie_data.get("scan", {})
     grouped = movie_data.get("grouped", {})
     if not grouped:
         grouped = _group_auto_movie_files(res)
         movie_data["grouped"] = grouped
 
-    rating_str = f"\n⭐ <b>{movie_data['rating']}/10</b>" if movie_data.get("rating") else ""
-    genre_str = f"\n🎭 <b>{movie_data['genre']}</b>" if movie_data.get("genre") and movie_data['genre'] != "N/A" else ""
+    title_esc = html.escape(str(movie_data.get('title', '')))
+    year_esc = html.escape(str(movie_data.get('year', '')))
+    genre_esc = html.escape(str(movie_data.get('genre', '')))
+    rating_esc = html.escape(str(movie_data.get('rating', '')))
+    runtime_esc = html.escape(str(movie_data.get('runtime', '')))
+
+    rating_str = f"\n⭐ <b>{rating_esc}/10</b>" if rating_esc else ""
+    genre_str = f"\n🎭 <b>{genre_esc}</b>" if genre_esc and genre_esc != "N/A" else ""
+    runtime_str = f"\n⏱ {runtime_esc}" if runtime_esc else ""
 
     tot_scanned = res.get('total_scanned', 0)
     tot_matched = res.get('total_matched', 0)
@@ -820,7 +808,6 @@ def _build_auto_movie_lang_text(movie_data):
     tot_dup = res.get('total_duplicates', 0)
     tot_rej_year = res.get('total_rejected_year', 0)
     tot_rej_title = res.get('total_rejected_title', 0)
-    runtime_str = f"\n⏱ {movie_data['runtime']}" if movie_data.get("runtime") else ""
 
     # Build stats block
     stats_lines = [
@@ -842,7 +829,7 @@ def _build_auto_movie_lang_text(movie_data):
     if tot_matched == 0:
         return (
             f"🎬 <b>AUTO MOVIE ADD</b>\n\n"
-            f"🎬 <b>{movie_data['title']} ({movie_data['year']})</b>"
+            f"🎬 <b>{title_esc} ({year_esc})</b>"
             f"{rating_str}"
             f"{genre_str}"
             f"{runtime_str}\n\n"
@@ -857,13 +844,13 @@ def _build_auto_movie_lang_text(movie_data):
     langs = sorted(list(grouped.keys()), key=lambda x: (preferred_order.index(x) if x in preferred_order else 99, x))
     for l in langs:
         flag = LANGUAGE_FLAGS.get(l, "🌐")
-        lang_qual_lines.append(f"{flag} <b>{l}</b>")
+        lang_qual_lines.append(f"{flag} <b>{html.escape(str(l))}</b>")
         quals_dict = grouped[l]
         quality_order = ["2160p", "4K", "1440p", "1080p", "720p", "480p", "360p", "HDRip", "WEB-DL", "BluRay", "DVDRip", "HEVC", "Unknown"]
         sorted_quals = sorted(list(quals_dict.keys()), key=lambda x: (quality_order.index(x) if x in quality_order else 99, x))
         for q in sorted_quals:
             count = len(quals_dict[q])
-            lang_qual_lines.append(f"• {q} — {count}")
+            lang_qual_lines.append(f"• {html.escape(str(q))} — {count}")
             logger.info(f"[AUTO_MOVIE GROUP]\nlanguage={l}\nquality={q}\nfiles={count}")
         lang_qual_lines.append("")
 
@@ -873,7 +860,7 @@ def _build_auto_movie_lang_text(movie_data):
     if tot_matched > 0 and tot_new == 0 and tot_dup > 0:
         return (
             f"🎬 <b>AUTO MOVIE ADD</b>\n\n"
-            f"🎬 <b>{movie_data['title']} ({movie_data['year']})</b>"
+            f"🎬 <b>{title_esc} ({year_esc})</b>"
             f"{rating_str}"
             f"{genre_str}"
             f"{runtime_str}\n\n"
@@ -887,7 +874,7 @@ def _build_auto_movie_lang_text(movie_data):
     # 4. New files found (Scan Result)
     return (
         f"🎬 <b>AUTO MOVIE ADD</b>\n\n"
-        f"🎬 <b>{movie_data['title']} ({movie_data['year']})</b>"
+        f"🎬 <b>{title_esc} ({year_esc})</b>"
         f"{rating_str}"
         f"{genre_str}"
         f"{runtime_str}\n\n"
@@ -915,11 +902,15 @@ def _build_auto_movie_lang_keyboard(session_id, movie_data):
     return InlineKeyboardMarkup(buttons)
 
 def _build_auto_movie_qual_text(movie_data, lang):
-    rating_str = f"\n⭐ <b>Rating:</b> {movie_data['rating']}/10" if movie_data.get("rating") else ""
+    import html
+    title_esc = html.escape(str(movie_data.get('title', '')))
+    year_esc = html.escape(str(movie_data.get('year', '')))
+    rating_esc = html.escape(str(movie_data.get('rating', '')))
+    rating_str = f"\n⭐ <b>Rating:</b> {rating_esc}/10" if rating_esc else ""
     return (
-        f"🎬 <b>{movie_data['title']} ({movie_data['year']})</b>"
+        f"🎬 <b>{title_esc} ({year_esc})</b>"
         f"{rating_str}\n\n"
-        f"🌐 <b>Language:</b> {lang}\n\n"
+        f"🌐 <b>Language:</b> {html.escape(str(lang))}\n\n"
         f"🎞 <b>Select Quality:</b>"
     )
 
@@ -935,6 +926,24 @@ def _build_auto_movie_qual_keyboard(session_id, lang, qualities):
         buttons.append(row)
 
     buttons.append([
+        InlineKeyboardButton("⬅️ Language", callback_data=f"am_back:{session_id}:lang"),
+        InlineKeyboardButton("❌ Cancel", callback_data=f"am_cancel:{session_id}")
+    ])
+    return InlineKeyboardMarkup(buttons)
+
+def _build_auto_movie_file_text(movie_data, lang, qual):
+    import html
+    title_esc = html.escape(str(movie_data.get('title', '')))
+    year_esc = html.escape(str(movie_data.get('year', '')))
+    rating_esc = html.escape(str(movie_data.get('rating', '')))
+    rating_str = f"\n⭐ <b>Rating:</b> {rating_esc}/10" if rating_esc else ""
+    return (
+        f"🎬 <b>{title_esc} ({year_esc})</b>"
+        f"{rating_str}\n\n"
+        f"🌐 <b>Language:</b> {html.escape(str(lang))}\n\n"
+        f"🎞 <b>Quality:</b> {html.escape(str(qual))}\n\n"
+        f"📁 <b>Select File to Download / Test:</b>"
+    )ttons.append([
         InlineKeyboardButton("⬅️ Language", callback_data=f"am_back:{session_id}:lang"),
         InlineKeyboardButton("❌ Cancel", callback_data=f"am_cancel:{session_id}")
     ])
@@ -2253,31 +2262,92 @@ async def wizard_text_handler(client: Client, message: Message):
 
             info = None
             imdb_id = None
+            is_series_meta_timeout = False
             if m_tmdb:
                 from utils import get_tmdb_by_url
-                info = await get_tmdb_by_url(text)
-                if info:
-                    logger.info(f"[AUTO_SERIES TMDB]\nuser_id={uid}\ntmdb_id={info.get('tmdb_id')}\ntitle={info.get('title')}\nkind={info.get('kind')}")
-                else:
-                    logger.warning(f"[AUTO_SERIES TMDB] query={text} status=failed")
+                try:
+                    logger.info(f"[AUTO SERIES] TMDB metadata START url={text}")
+                    info = await asyncio.wait_for(
+                        get_tmdb_by_url(text),
+                        timeout=20
+                    )
+                    if info:
+                        logger.info(
+                            f"[AUTO SERIES] TMDB metadata DONE "
+                            f"title={info.get('title')} year={info.get('year')}"
+                        )
+                        logger.info(f"[AUTO_SERIES TMDB]\nuser_id={uid}\ntmdb_id={info.get('tmdb_id')}\ntitle={info.get('title')}\nkind={info.get('kind')}")
+                    else:
+                        logger.warning(f"[AUTO SERIES] TMDB metadata FAILED url={text}")
+                        logger.warning(f"[AUTO_SERIES TMDB] query={text} status=failed")
+                except asyncio.TimeoutError:
+                    logger.error(f"[AUTO SERIES] TMDB metadata TIMEOUT url={text}")
+                    is_series_meta_timeout = True
+                    info = None
+                except asyncio.CancelledError:
+                    logger.info(f"[AUTO SERIES] TMDB metadata CANCELLED url={text}")
+                    raise
+                except Exception as e:
+                    logger.exception(f"[AUTO SERIES] TMDB metadata ERROR url={text}: {e}")
+                    info = None
             elif m_imdb:
                 imdb_id = m_imdb.group(1).lower()
                 try:
-                    info = await get_poster(imdb_id, id=True)
+                    logger.info(f"[AUTO SERIES] IMDb metadata START id={imdb_id}")
+                    info = await asyncio.wait_for(
+                        get_poster(imdb_id, id=True),
+                        timeout=20
+                    )
                     if info:
+                        logger.info(
+                            f"[AUTO SERIES] IMDb metadata DONE "
+                            f"title={info.get('title')} year={info.get('year')}"
+                        )
                         logger.info(f"[AUTO_SERIES IMDb]\nuser_id={uid}\nimdb_id={info.get('imdb_id')}\ntitle={info.get('title')}\nkind={info.get('kind')}")
                     else:
+                        logger.warning(f"[AUTO SERIES] IMDb metadata FAILED id={imdb_id}")
                         logger.warning(f"[AUTO_SERIES IMDb] query={text} status=failed")
+                except asyncio.TimeoutError:
+                    logger.error(f"[AUTO SERIES] IMDb metadata TIMEOUT id={imdb_id}")
+                    is_series_meta_timeout = True
+                    info = None
+                except asyncio.CancelledError:
+                    logger.info(f"[AUTO SERIES] IMDb metadata CANCELLED id={imdb_id}")
+                    raise
                 except Exception as e:
-                    logger.error(f"[AUTO_SERIES IMDb] query={text} error={e}")
+                    logger.exception(f"[AUTO SERIES] IMDb metadata ERROR id={imdb_id}: {e}")
                     info = None
 
+            if info and info.get("title"):
+                logger.info(f"[AUTO SERIES] METADATA COMPLETE title={info.get('title')}")
+            elif is_series_meta_timeout:
+                logger.error(f"[AUTO SERIES] METADATA TIMEOUT query={text}")
+            else:
+                logger.warning(f"[AUTO SERIES] METADATA FAILED query={text} info={bool(info)}")
+
             if not info or not info.get("title"):
-                return await loading_msg.edit_text(
-                    f"❌ <b>Could not retrieve data for <code>{text}</code>.</b>\n\n"
-                    "Please provide a valid IMDb URL (e.g. <code>https://www.imdb.com/title/tt9288030/</code>) or TMDB URL (e.g. <code>https://www.themoviedb.org/tv/1396</code>), or send /cancel to abort.",
-                    parse_mode=enums.ParseMode.HTML,
-                )
+                clear_wizard_session(uid)
+                temp.AUTO_SERIES.pop(uid, None)
+
+                series_err_markup = InlineKeyboardMarkup([
+                    [InlineKeyboardButton("❌ Retry", callback_data="sw#auto_series")],
+                    [InlineKeyboardButton("❌ Cancel", callback_data="sw#auto_cancel")]
+                ])
+
+                if is_series_meta_timeout:
+                    return await loading_msg.edit_text(
+                        "❌ <b>Series metadata request timed out.</b>\n\n"
+                        "Could not fetch IMDb/TMDB details in time. Please check your connection and try again.",
+                        reply_markup=series_err_markup,
+                        parse_mode=enums.ParseMode.HTML
+                    )
+                else:
+                    return await loading_msg.edit_text(
+                        f"❌ <b>Could not retrieve series data for <code>{text}</code>.</b>\n\n"
+                        "Please provide a valid IMDb URL (e.g. <code>https://www.imdb.com/title/tt9288030/</code>) or TMDB URL (e.g. <code>https://www.themoviedb.org/tv/1396</code>), or send /cancel to abort.",
+                        reply_markup=series_err_markup,
+                        parse_mode=enums.ParseMode.HTML,
+                    )
 
             # ── Series vs Movie Validation ──
             kind = str(info.get("kind", "")).lower()
@@ -2409,44 +2479,68 @@ async def wizard_text_handler(client: Client, message: Message):
             if m_tmdb:
                 from utils import get_tmdb_by_url
                 try:
+                    logger.info(f"[AUTO MOVIE] TMDB metadata START url={text}")
                     info = await asyncio.wait_for(
                         get_tmdb_by_url(text),
-                        timeout=12
+                        timeout=20
                     )
                     if info:
+                        logger.info(
+                            f"[AUTO MOVIE] TMDB metadata DONE "
+                            f"title={info.get('title')} year={info.get('year')}"
+                        )
                         logger.info(f"[AUTO_MOVIE TMDB]\nuser_id={uid}\ntmdb_id={info.get('tmdb_id')}\ntitle={info.get('title')}\nyear={info.get('year')}\nkind={info.get('kind')}\ntype=MOVIE")
                     else:
+                        logger.warning(f"[AUTO MOVIE] TMDB metadata FAILED url={text}")
                         logger.warning(f"[AUTO_MOVIE TMDB] query={text} status=failed")
                 except asyncio.TimeoutError:
+                    logger.error(f"[AUTO MOVIE] TMDB metadata TIMEOUT url={text}")
                     logger.error(f"[AUTO MOVIE] METADATA TIMEOUT query={text}")
                     is_meta_timeout = True
                     info = None
+                except asyncio.CancelledError:
+                    logger.info(f"[AUTO MOVIE] TMDB metadata CANCELLED url={text}")
+                    logger.info(f"[AUTO MOVIE] METADATA CANCELLED")
+                    raise
                 except Exception as e:
-                    logger.exception(f"[AUTO MOVIE] METADATA ERROR query={text}: {e}")
+                    logger.exception(f"[AUTO MOVIE] TMDB metadata ERROR url={text}: {e}")
                     info = None
             elif m_imdb:
                 imdb_id = m_imdb.group(1).lower()
                 try:
+                    logger.info(f"[AUTO MOVIE] IMDb metadata START id={imdb_id}")
                     info = await asyncio.wait_for(
                         get_poster(imdb_id, id=True),
-                        timeout=12
+                        timeout=20
                     )
                     if info:
+                        logger.info(
+                            f"[AUTO MOVIE] IMDb metadata DONE "
+                            f"title={info.get('title')} year={info.get('year')}"
+                        )
                         logger.info(f"[AUTO_MOVIE IMDb]\nuser_id={uid}\nimdb_id={info.get('imdb_id')}\ntitle={info.get('title')}\nyear={info.get('year')}\nkind={info.get('kind')}\ntype=MOVIE")
                     else:
+                        logger.warning(f"[AUTO MOVIE] IMDb metadata FAILED id={imdb_id}")
                         logger.warning(f"[AUTO_MOVIE IMDb] query={text} status=failed")
                 except asyncio.TimeoutError:
+                    logger.error(f"[AUTO MOVIE] IMDb metadata TIMEOUT id={imdb_id}")
                     logger.error(f"[AUTO MOVIE] METADATA TIMEOUT imdb_id={imdb_id}")
                     is_meta_timeout = True
                     info = None
+                except asyncio.CancelledError:
+                    logger.info(f"[AUTO MOVIE] IMDb metadata CANCELLED id={imdb_id}")
+                    logger.info(f"[AUTO MOVIE] METADATA CANCELLED")
+                    raise
                 except Exception as e:
-                    logger.exception(f"[AUTO MOVIE] METADATA ERROR imdb_id={imdb_id}: {e}")
+                    logger.exception(f"[AUTO MOVIE] IMDb metadata ERROR id={imdb_id}: {e}")
                     info = None
 
             if info and info.get("title"):
-                logger.info(f"[AUTO MOVIE] METADATA DONE title={info.get('title')}")
-            elif not is_meta_timeout:
-                logger.warning(f"[AUTO MOVIE] METADATA ERROR query={text} info={bool(info)}")
+                logger.info(f"[AUTO MOVIE] METADATA COMPLETE title={info.get('title')}")
+            elif is_meta_timeout:
+                logger.error(f"[AUTO MOVIE] METADATA TIMEOUT query={text}")
+            else:
+                logger.warning(f"[AUTO MOVIE] METADATA FAILED query={text} info={bool(info)}")
 
             if not info or not info.get("title"):
                 clear_wizard_session(uid)
