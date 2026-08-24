@@ -242,8 +242,14 @@ async def english_only_reason_alert(bot, query):
 @Client.on_callback_query(filters.regex(r"^not_in_db_reason$"))
 async def not_in_db_reason_alert(bot, query):
     """Show a popup alert when user clicks the Reason button for movie not in db."""
+    alert_text = (
+        "➸ നിങ്ങൾ സെർച്ച് ചെയ്ത മൂവി Database ൽ കാണില്ല.\n\n"
+        "➸ സ്പെല്ലിംഗ് ഒന്നും കൂടെ ഗൂഗിളിൽ ചെക്ക് ചെയ്ത് അയക്കുക.\n\n"
+        "➸ മൂവിൻ്റെ കൂടെ റിലീസ് year കൂടെ ചേർത്ത് അയക്കുക. (Lift 2021)\n\n"
+        "➸ Theatre print കിട്ടില്ല. 🙂 200/- അകത്ത് അല്ലേ ഉള്ളൂ പോയി കാണുക."
+    )
     await query.answer(
-        "this movie not available in database",
+        alert_text,
         show_alert=True
     )
 
