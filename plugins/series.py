@@ -524,53 +524,68 @@ def parse_movie_filename(filename: str, movie_title: str, movie_year: str = None
     }
 
 
-async def scan_sdatabase_for_movie(title: str, year: str = None, client: Client = None, imdb_id: str = None, tmdb_id: str = None) -> dict:
+async def scan_sdatabase_for_movie(title: str, year: str = None, client: Client = None, imdb_id: str = None, tmdb_id: str = None, movie_id: str = None) -> dict:
     """
-    Scan file collections and SDatabase for files belonging strictly to the specified movie (Title + Release Year).
+    Scan database for files belonging strictly to the specified movie (Title + Release Year).
+    Uses fast two-stage candidate retrieval and strict in-memory matching with zero per-file network calls.
     """
-    from database.ia_filterdb import col, sec_col, MULTIPLE_DATABASE, is_file_already_saved, clean_file_name
+    import time
+    start_total = time.monotonic()
+    logger.info(f"[AUTO MOVIE SCAN START]\ntitle={title}\nyear={year}")
+
+    from database.ia_filterdb import col, sec_col, MULTIPLE_DATABASE
     from utils import extract_release_year, normalize_title_for_matching
+
+    # Stage 1: Fast Bounded Database Candidate Query
+    start_query = time.monotonic()
+    logger.info("[AUTO MOVIE SCAN QUERY START]\ncandidate_limit=500")
 
     clean_title = clean_series_title(title)
     q_tokens = [w for w in _normalize(clean_title).split() if len(w) > 1]
     if not q_tokens:
         q_tokens = [_normalize(clean_title)]
 
-    tok_pattern = ".*".join(re.escape(t) for t in q_tokens)
-    query_regex = re.compile(tok_pattern, re.IGNORECASE)
+    # Use first few meaningful tokens to query candidates
+    tok_pattern = ".*".join(re.escape(t) for t in q_tokens[:3])
+    try:
+        query_regex = re.compile(tok_pattern, re.IGNORECASE)
+    except Exception:
+        query_regex = re.compile(re.escape(clean_title), re.IGNORECASE)
 
-    cursor1 = col.find({"file_name": query_regex}).limit(1000)
-    docs = [d async for d in cursor1]
-    if MULTIPLE_DATABASE:
-        cursor2 = sec_col.find({"file_name": query_regex}).limit(1000)
-        docs.extend([d async for d in cursor2])
-
-    if client and SDATABASE_CHANNEL:
+    docs = []
+    def _fetch_candidates():
+        results = []
         try:
-            search_query = " ".join(q_tokens[:3])
-            async for msg in client.search_messages(chat_id=SDATABASE_CHANNEL, query=search_query, limit=500):
-                media = getattr(msg, msg.media.value, None) if msg.media else None
-                if not media:
-                    continue
-                file_name = getattr(media, "file_name", None) or getattr(msg, "caption", "") or ""
-                docs.append({
-                    "file_name": file_name,
-                    "file_id": getattr(media, "file_id", ""),
-                    "file_size": getattr(media, "file_size", 0),
-                    "caption": msg.caption.html if msg.caption else None,
-                    "message_id": msg.id,
-                    "chat_id": msg.chat.id,
-                })
-        except Exception as e:
-            logger.warning(f"Telegram channel search in SDATABASE_CHANNEL ({SDATABASE_CHANNEL}): {e}")
+            cur1 = col.find({"file_name": query_regex}).limit(500)
+            for d in cur1:
+                results.append(d)
+            if MULTIPLE_DATABASE and len(results) < 500:
+                cur2 = sec_col.find({"file_name": query_regex}).limit(500 - len(results))
+                for d in cur2:
+                    results.append(d)
+        except Exception as qe:
+            logger.error(f"[AUTO MOVIE QUERY ERROR] {qe}")
+        return results
 
-    logger.info(
-        f"[AUTO MOVIE IDENTITY]\n"
-        f"requested_title={title}\n"
-        f"requested_year={year}\n"
-        f"imdb_id={imdb_id}\n"
-        f"tmdb_id={tmdb_id}"
-    )
+    loop = asyncio.get_running_loop()
+    docs = await loop.run_in_executor(None, _fetch_candidates)
+    query_dur = time.monotonic() - start_query
+    logger.info(f"[AUTO MOVIE SCAN QUERY DONE]\ncandidate_count={len(docs)}\nduration={query_dur:.2f}s")
+
+    # Stage 2: Fast In-Memory Strict Title + Year Matching
+    start_match = time.monotonic()
+    logger.info("[AUTO MOVIE SCAN MATCH START]")
+
+    # Check already linked file IDs if movie_id is provided
+    existing_fids = set()
+    if movie_id:
+        try:
+            from database.series_db import get_super_movie
+            sm = await get_super_movie(movie_id)
+            if sm:
+                existing_fids = set(sm.get("file_ids", []))
+        except Exception:
+            pass
 
     # Detect known conflicting years for this normalized title across candidates
     known_conflicts = set()
@@ -592,6 +607,7 @@ async def scan_sdatabase_for_movie(title: str, year: str = None, client: Client 
     total_unknown_quality = 0
     total_rejected_year = 0
     total_rejected_title = 0
+    total_unknown_year = 0
     total_invalid = 0
     seen_file_keys = set()
 
@@ -622,6 +638,8 @@ async def scan_sdatabase_for_movie(title: str, year: str = None, client: Client 
                     f"reason=TITLE_MISMATCH\n"
                     f"file_name={fname}"
                 )
+            elif reason == "YEAR_NOT_FOUND_IN_FILENAME":
+                total_unknown_year += 1
             continue
 
         total_matched += 1
@@ -656,15 +674,13 @@ async def scan_sdatabase_for_movie(title: str, year: str = None, client: Client 
             continue
         seen_file_keys.add(key)
 
-        cleaned_fn = clean_file_name(fname)
-        is_dup = is_file_already_saved(fid, cleaned_fn)
+        is_dup = (fid in existing_fids) if existing_fids else False
         if is_dup:
             total_duplicates += 1
             duplicate_files.append(file_entry)
-            continue
-
-        total_new += 1
-        valid_new_files.append(file_entry)
+        else:
+            total_new += 1
+            valid_new_files.append(file_entry)
 
     valid_new_files.sort(key=lambda x: (x["language"], x["quality"]))
     all_matching_files.sort(key=lambda x: (x["language"], x["quality"]))
@@ -679,20 +695,25 @@ async def scan_sdatabase_for_movie(title: str, year: str = None, client: Client 
         if q not in organized[l]:
             organized[l].append(q)
 
-    logger.info(
-        f"[AUTO MOVIE FILTER SYNC]\n"
-        f"matched_files={total_matched}\n"
-        f"rejected_files={total_invalid}\n"
-        f"rejected_year_files={total_rejected_year}\n"
-        f"rejected_title_files={total_rejected_title}\n"
-        f"year={year}"
-    )
+    match_dur = time.monotonic() - start_match
+    total_dur = time.monotonic() - start_total
+
+    logger.info(f"[AUTO MOVIE SCAN MATCH DONE]\nmatched={total_matched}\nrejected_year={total_rejected_year}\nrejected_title={total_rejected_title}\nduration={match_dur:.2f}s")
+    logger.info(f"[AUTO MOVIE SCAN COMPLETE]\ntotal_scanned={total_scanned}\ntotal_matched={total_matched}\nduration={total_dur:.2f}s")
+
+    if total_dur > 5.0:
+        logger.warning(f"[AUTO MOVIE SCAN SLOW]\ntitle={title}\nyear={year}\nduration={total_dur:.2f}s")
 
     return {
         "valid_files": valid_new_files,
         "valid_new_files": valid_new_files,
         "all_matching_files": all_matching_files,
         "duplicate_files": duplicate_files,
+        "matching_files": all_matching_files,
+        "rejected_files": [],
+        "rejected_year_mismatch": total_rejected_year,
+        "rejected_title_mismatch": total_rejected_title,
+        "unknown_year": total_unknown_year,
         "organized": organized,
         "total_scanned": total_scanned,
         "total_matched": total_matched,
@@ -2251,7 +2272,59 @@ async def wizard_text_handler(client: Client, message: Message):
                 parse_mode=enums.ParseMode.HTML
             )
 
-            res = await scan_sdatabase_for_movie(movie_data["title"], movie_data["year"], client=client, imdb_id=movie_data.get("imdb_id"), tmdb_id=movie_data.get("tmdb_id"))
+            try:
+                res = await asyncio.wait_for(
+                    scan_sdatabase_for_movie(
+                        movie_data["title"],
+                        movie_data["year"],
+                        client=client,
+                        imdb_id=movie_data.get("imdb_id"),
+                        tmdb_id=movie_data.get("tmdb_id")
+                    ),
+                    timeout=30
+                )
+            except asyncio.TimeoutError:
+                logger.error(
+                    f"[AUTO MOVIE SCAN TIMEOUT] "
+                    f"title={movie_data.get('title')} "
+                    f"year={movie_data.get('year')}"
+                )
+                movie_data["state"] = "ERROR"
+                temp.AUTO_MOVIE[session_id] = movie_data
+                temp.AUTO_MOVIE[uid] = movie_data
+                await loading_msg.edit_text(
+                    "⚠️ <b>Movie file scan timed out.</b>\n\n"
+                    f"🎬 <b>{movie_data['title']} ({movie_data['year']})</b>\n\n"
+                    "The database scan took too long. Please try Rescan.",
+                    reply_markup=InlineKeyboardMarkup([
+                        [InlineKeyboardButton("🔄 Rescan", callback_data=f"am_rescan:{session_id}")],
+                        [InlineKeyboardButton("❌ Cancel", callback_data=f"am_cancel:{session_id}")]
+                    ]),
+                    parse_mode=enums.ParseMode.HTML
+                )
+                return
+            except Exception as e:
+                logger.exception(
+                    f"[AUTO MOVIE SCAN DATABASE ERROR] "
+                    f"title={movie_data.get('title')} "
+                    f"year={movie_data.get('year')} "
+                    f"error={e}"
+                )
+                movie_data["state"] = "ERROR"
+                temp.AUTO_MOVIE[session_id] = movie_data
+                temp.AUTO_MOVIE[uid] = movie_data
+                await loading_msg.edit_text(
+                    "❌ <b>Database scan failed.</b>\n\n"
+                    f"🎬 <b>{movie_data['title']} ({movie_data['year']})</b>\n\n"
+                    f"<i>Error: {str(e)[:100]}</i>",
+                    reply_markup=InlineKeyboardMarkup([
+                        [InlineKeyboardButton("🔄 Rescan", callback_data=f"am_rescan:{session_id}")],
+                        [InlineKeyboardButton("❌ Cancel", callback_data=f"am_cancel:{session_id}")]
+                    ]),
+                    parse_mode=enums.ParseMode.HTML
+                )
+                return
+
             movie_data["scan"] = res
             movie_data["grouped"] = _group_auto_movie_files(res)
             movie_data["state"] = "RESULT"
@@ -4657,9 +4730,60 @@ async def _handle_auto_movie_hierarchical_callbacks(client: Client, query: Callb
             f"🔄 <b>Rescanning database for {movie_data['title']} ({movie_data['year']})...</b>",
             parse_mode=enums.ParseMode.HTML
         )
-        res = await scan_sdatabase_for_movie(movie_data["title"], movie_data["year"], client=client, imdb_id=movie_data.get("imdb_id"), tmdb_id=movie_data.get("tmdb_id"))
+        try:
+            res = await asyncio.wait_for(
+                scan_sdatabase_for_movie(
+                    movie_data["title"],
+                    movie_data["year"],
+                    client=client,
+                    imdb_id=movie_data.get("imdb_id"),
+                    tmdb_id=movie_data.get("tmdb_id")
+                ),
+                timeout=30
+            )
+        except asyncio.TimeoutError:
+            logger.error(
+                f"[AUTO MOVIE SCAN TIMEOUT] "
+                f"title={movie_data.get('title')} "
+                f"year={movie_data.get('year')}"
+            )
+            movie_data["state"] = "ERROR"
+            await query.message.edit_text(
+                "⚠️ <b>Movie file scan timed out.</b>\n\n"
+                f"🎬 <b>{movie_data['title']} ({movie_data['year']})</b>\n\n"
+                "The database scan took too long. Please try Rescan.",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🔄 Rescan", callback_data=f"am_rescan:{session_id}")],
+                    [InlineKeyboardButton("❌ Cancel", callback_data=f"am_cancel:{session_id}")]
+                ]),
+                parse_mode=enums.ParseMode.HTML
+            )
+            return await query.answer("Scan timed out.", show_alert=True)
+        except Exception as e:
+            logger.exception(
+                f"[AUTO MOVIE SCAN DATABASE ERROR] "
+                f"title={movie_data.get('title')} "
+                f"year={movie_data.get('year')} "
+                f"error={e}"
+            )
+            movie_data["state"] = "ERROR"
+            await query.message.edit_text(
+                "❌ <b>Database scan failed.</b>\n\n"
+                f"🎬 <b>{movie_data['title']} ({movie_data['year']})</b>\n\n"
+                f"<i>Error: {str(e)[:100]}</i>",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🔄 Rescan", callback_data=f"am_rescan:{session_id}")],
+                    [InlineKeyboardButton("❌ Cancel", callback_data=f"am_cancel:{session_id}")]
+                ]),
+                parse_mode=enums.ParseMode.HTML
+            )
+            return await query.answer("Database scan error.", show_alert=True)
+
         movie_data["scan"] = res
         movie_data["grouped"] = _group_auto_movie_files(res)
+        movie_data["state"] = "RESULT"
+        temp.AUTO_MOVIE[session_id] = movie_data
+        temp.AUTO_MOVIE[uid] = movie_data
         text_res = _build_auto_movie_lang_text(movie_data)
         markup = _build_auto_movie_lang_keyboard(session_id, movie_data)
         await query.message.edit_text(text_res, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
