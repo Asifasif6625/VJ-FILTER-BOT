@@ -28,7 +28,7 @@ BUTTONS1 = {}
 BUTTONS2 = {}
 SPELL_CHECK = {}
 
-@Client.on_callback_query(filters.regex(r"^not_in_db_reason$"))
+@Client.on_callback_query(filters.regex(r"^not_in_db_reason$"), group=-100)
 async def not_in_db_reason_alert(bot, query):
     """Show a popup alert when user clicks the Reason button for movie not in db."""
     alert_text = (
@@ -709,6 +709,14 @@ async def filter_qualities_cb_handler(client: Client, query: CallbackQuery):
                 
 @Client.on_callback_query()
 async def cb_handler(client: Client, query: CallbackQuery):
+    if query.data == "not_in_db_reason":
+        alert_text = (
+            "➸ നിങ്ങൾ സെർച്ച് ചെയ്ത മൂവി Database ൽ കാണില്ല.\n\n"
+            "➸ സ്പെല്ലിംഗ് ഒന്നും കൂടെ ഗൂഗിളിൽ ചെക്ക് ചെയ്ത് അയക്കുക.\n\n"
+            "➸ മൂവിൻ്റെ കൂടെ റിലീസ് year കൂടെ ചേർത്ത് അയക്കുക. (Lift 2021)\n\n"
+            "➸ Theatre print കിട്ടില്ല. 🙂 200/- അകത്ത് അല്ലേ ഉള്ളൂ പോയി കാണുക."
+        )
+        return await query.answer(alert_text, show_alert=True)
     me = await client.get_me()
     settings = await db.get_bot(me.id)
     if query.data == "close_data":
