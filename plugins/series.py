@@ -71,6 +71,18 @@ from database.series_db import (
     sync_movie_filter_for_files,
     sync_existing_movie_filter,
 )
+from utils import (
+    temp,
+    get_poster,
+    set_wizard_session,
+    get_wizard_session,
+    clear_wizard_session,
+    cancel_wizard_session,
+    get_size,
+    match_movie_identity,
+    extract_release_year,
+    normalize_title_for_matching,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -987,29 +999,39 @@ def _is_admin(user_id: int | str) -> bool:
 
 
 AUTO_MOVIE_SCAN_LOCKS = {}
+AUTO_MOVIE_SCAN_TASKS = {}
+AUTO_MOVIE_CANCEL_EVENTS = {}
 
 async def run_auto_movie_scan(client, chat_id, target_msg, session_id, movie_data, is_callback=False, callback_query=None):
     """
     Unified execution helper for Auto Movie scan:
     - Session scan locking to prevent duplicate concurrent scans
-    - Guaranteed UI state transitions (SCANNING -> RESULT or ERROR)
-    - Safe execution with 20s timeout and independent error handling
+    - Cancellation support via asyncio.Task and asyncio.Event
+    - Guaranteed UI state transitions (WAIT_IMDB -> SCANNING -> RESULT or ERROR or CANCELLED)
     - Always releases lock in finally block
     """
     uid = movie_data.get("user_id")
 
-    # 1. Lock check
-    if session_id in AUTO_MOVIE_SCAN_LOCKS or movie_data.get("state") == "SCANNING":
+    # 1. Lock check - use ONLY lock dictionary
+    if session_id in AUTO_MOVIE_SCAN_LOCKS:
         logger.info(f"[AUTO MOVIE SCAN] Lock busy / already running for session={session_id}")
         if callback_query:
             return await callback_query.answer("Scan is already in progress...", show_alert=True)
         return
 
     AUTO_MOVIE_SCAN_LOCKS[session_id] = time.time()
+    logger.info(f"[AUTO MOVIE SCAN] LOCK ACQUIRED session={session_id}")
+
+    cancel_event = asyncio.Event()
+    AUTO_MOVIE_CANCEL_EVENTS[session_id] = cancel_event
+    curr_task = asyncio.current_task()
+    AUTO_MOVIE_SCAN_TASKS[session_id] = curr_task
+
     movie_data["state"] = "SCANNING"
     temp.AUTO_MOVIE[session_id] = movie_data
     if uid:
         temp.AUTO_MOVIE[uid] = movie_data
+        _log_wizard_step(uid, "AUTO_MOVIE", "WAIT_IMDB", "SCANNING")
         set_wizard_session(uid, workflow="AUTO_MOVIE", state="SCANNING", data=movie_data, chat_id=chat_id)
 
     rating_str = f"\n⭐ {movie_data['rating']}/10" if movie_data.get('rating') else ""
@@ -1029,6 +1051,9 @@ async def run_auto_movie_scan(client, chat_id, target_msg, session_id, movie_dat
         except Exception:
             pass
 
+        if cancel_event.is_set():
+            raise asyncio.CancelledError()
+
         try:
             res = await asyncio.wait_for(
                 scan_sdatabase_for_movie(
@@ -1041,6 +1066,17 @@ async def run_auto_movie_scan(client, chat_id, target_msg, session_id, movie_dat
                 ),
                 timeout=20
             )
+        except asyncio.CancelledError:
+            logger.info(f"[AUTO MOVIE SCAN] CANCELLED session={session_id}")
+            movie_data["state"] = "CANCELLED"
+            temp.AUTO_MOVIE[session_id] = movie_data
+            if uid:
+                temp.AUTO_MOVIE[uid] = movie_data
+            try:
+                await target_msg.edit_text("❌ <b>Auto Movie Add cancelled.</b>", parse_mode=enums.ParseMode.HTML)
+            except Exception:
+                pass
+            return
         except asyncio.TimeoutError:
             logger.error(f"[AUTO MOVIE SCAN] TIMEOUT title={movie_data.get('title')} year={movie_data.get('year')}")
             movie_data["state"] = "ERROR"
@@ -1089,6 +1125,18 @@ async def run_auto_movie_scan(client, chat_id, target_msg, session_id, movie_dat
                 return await callback_query.answer("Database scan error.", show_alert=True)
             return
 
+        if cancel_event.is_set():
+            logger.info(f"[AUTO MOVIE SCAN] CANCELLED session={session_id}")
+            movie_data["state"] = "CANCELLED"
+            temp.AUTO_MOVIE[session_id] = movie_data
+            if uid:
+                temp.AUTO_MOVIE[uid] = movie_data
+            try:
+                await target_msg.edit_text("❌ <b>Auto Movie Add cancelled.</b>", parse_mode=enums.ParseMode.HTML)
+            except Exception:
+                pass
+            return
+
         # Scan success
         movie_data["scan"] = res
         movie_data["grouped"] = _group_auto_movie_files(res)
@@ -1110,6 +1158,8 @@ async def run_auto_movie_scan(client, chat_id, target_msg, session_id, movie_dat
 
     finally:
         AUTO_MOVIE_SCAN_LOCKS.pop(session_id, None)
+        AUTO_MOVIE_SCAN_TASKS.pop(session_id, None)
+        AUTO_MOVIE_CANCEL_EVENTS.pop(session_id, None)
         logger.info(f"[AUTO MOVIE SCAN] LOCK RELEASED session={session_id}")
 
 
@@ -1942,21 +1992,30 @@ async def cmd_ed_series(client: Client, message: Message):
 # ─── /cancel — ABORT WIZARD ──────────────────────────────────────────────────
 # ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ 
 
-
-
-# ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ 
-# ─── /cancel — ABORT WIZARD ──────────────────────────────────────────────────
-# ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ 
-
 @Client.on_message(filters.command("cancel"), group=-1)
 async def cmd_cancel(client: Client, message: Message):
     uid = message.from_user.id if message.from_user else 0
-    from utils import cancel_wizard_session
+
+    # 1. Cancel any active running Auto Movie scans for this user
+    for sess_id, t in list(AUTO_MOVIE_SCAN_TASKS.items()):
+        m_data = getattr(temp, "AUTO_MOVIE", {}).get(sess_id, {})
+        if m_data.get("user_id") == uid:
+            ev = AUTO_MOVIE_CANCEL_EVENTS.get(sess_id)
+            if ev:
+                ev.set()
+            if t and not t.done():
+                t.cancel()
+
     workflow = cancel_wizard_session(uid)
+    clear_wizard_session(uid)
     logger.info(f"[WIZARD CANCEL] user_id={uid} workflow={workflow}")
-    if workflow == "AUTO_MOVIE":
+
+    if workflow == "AUTO_MOVIE" or uid in getattr(temp, "AUTO_MOVIE", {}):
+        temp.AUTO_MOVIE.pop(uid, None)
         return await message.reply_text("❌ <b>Auto Movie Add cancelled.</b>", parse_mode=enums.ParseMode.HTML)
-    elif workflow in ("AUTO_SERIES", "SERIES_WIZARD"):
+    elif workflow in ("AUTO_SERIES", "SERIES_WIZARD") or uid in getattr(temp, "AUTO_SERIES", {}):
+        temp.AUTO_SERIES.pop(uid, None)
+        temp.SERIES_WIZARD.pop(uid, None)
         return await message.reply_text("❌ <b>Auto Series Add cancelled.</b>", parse_mode=enums.ParseMode.HTML)
     elif workflow == "THUMBNAIL":
         return await message.reply_text("❌ <b>Series thumbnail update cancelled.</b>", parse_mode=enums.ParseMode.HTML)
@@ -2017,26 +2076,25 @@ def _log_wizard_prompt(user_id: int, workflow: str, state: str, message_id: int)
     group=-10
 )
 async def wizard_text_handler(client: Client, message: Message):
+    text = message.text.strip() if message.text else ""
+
+    # Check for cancel command first WITHOUT stopping propagation so /cancel handler runs cleanly
+    if text and text.lower().startswith("/cancel"):
+        return
+
     try:
         message.stop_propagation()
     except Exception:
         pass
 
     uid = message.from_user.id if message.from_user else 0
-    text = message.text.strip() if message.text else ""
     chat_id = message.chat.id if message.chat else uid
 
     from utils import get_wizard_session, clear_wizard_session, set_wizard_session, temp
 
     # Check for commands in wizard
     if text.startswith("/"):
-        if text.lower().startswith("/cancel"):
-            from utils import cancel_wizard_session
-            workflow = cancel_wizard_session(uid)
-            clear_wizard_session(uid)
-            logger.info(f"[WIZARD CANCEL]\nuser_id={uid}\nworkflow={workflow}")
-            return await message.reply_text("❌ <b>Action cancelled.</b>", parse_mode=enums.ParseMode.HTML)
-        elif text.lower().startswith("/skip"):
+        if text.lower().startswith("/skip"):
             # Allow /skip to pass through to the wizard state handlers!
             pass
         else:
@@ -2304,6 +2362,7 @@ async def wizard_text_handler(client: Client, message: Message):
                 except Exception:
                     pass
 
+            logger.info(f"[AUTO MOVIE] METADATA START query={text}")
             loading_msg = await client.send_message(
                 chat_id=chat_id,
                 text=(
@@ -2335,6 +2394,8 @@ async def wizard_text_handler(client: Client, message: Message):
                     logger.error(f"[AUTO_MOVIE IMDb] query={text} error={e}")
                     info = None
 
+            logger.info(f"[AUTO MOVIE] METADATA DONE title={info.get('title') if info else None}")
+
             if not info or not info.get("title"):
                 return await loading_msg.edit_text(
                     f"❌ <b>Could not retrieve data for <code>{text}</code>.</b>\n\n"
@@ -2356,7 +2417,7 @@ async def wizard_text_handler(client: Client, message: Message):
             movie_data.update({
                 "session_id": session_id,
                 "user_id": uid,
-                "state": "SCANNING",
+                "state": "WAIT_IMDB",
                 "imdb_id": info.get("imdb_id") or info.get("tmdb_id") or imdb_id or "tmdb",
                 "title": info["title"],
                 "year": str(info.get("year") or "N/A"),
@@ -2368,8 +2429,6 @@ async def wizard_text_handler(client: Client, message: Message):
             })
             temp.AUTO_MOVIE[session_id] = movie_data
             temp.AUTO_MOVIE[uid] = movie_data
-            _log_wizard_step(uid, "AUTO_MOVIE", "WAIT_IMDB", "SCANNING")
-            set_wizard_session(uid, workflow="AUTO_MOVIE", state="SCANNING", data=movie_data, chat_id=chat_id)
 
             await run_auto_movie_scan(client, chat_id, loading_msg, session_id, movie_data)
             try:
@@ -4753,8 +4812,17 @@ async def _handle_auto_movie_hierarchical_callbacks(client: Client, query: Callb
             return await query.answer()
 
     elif action == "am_cancel":
-        from utils import cancel_wizard_session
+        from utils import cancel_wizard_session, clear_wizard_session
+        ev = AUTO_MOVIE_CANCEL_EVENTS.get(session_id)
+        if ev:
+            ev.set()
+        t = AUTO_MOVIE_SCAN_TASKS.get(session_id)
+        if t and not t.done():
+            t.cancel()
         workflow = cancel_wizard_session(uid)
+        clear_wizard_session(uid)
+        temp.AUTO_MOVIE.pop(session_id, None)
+        temp.AUTO_MOVIE.pop(uid, None)
         logger.info(f"[WIZARD CANCEL]\nuser_id={uid}\nworkflow={workflow}")
         await query.message.edit_text("❌ <b>Auto Movie Add cancelled.</b>", parse_mode=enums.ParseMode.HTML)
         return await query.answer("Cancelled.")
