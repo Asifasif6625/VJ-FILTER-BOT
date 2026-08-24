@@ -542,6 +542,12 @@ async def scan_sdatabase_for_movie(title: str, year: str = None, client: Client 
     from database.ia_filterdb import col, sec_col, MULTIPLE_DATABASE
     from utils import extract_release_year, normalize_title_for_matching
 
+    logger.info(
+        f"[AUTO MOVIE DB DRIVER] "
+        f"col_type={type(col).__name__} "
+        f"sec_col_type={type(sec_col).__name__}"
+    )
+
     # Stage 1: Fast Bounded Database Candidate Query
     start_query = time.monotonic()
     logger.info("[AUTO MOVIE SCAN QUERY START]\ncandidate_limit=500")
@@ -560,26 +566,31 @@ async def scan_sdatabase_for_movie(title: str, year: str = None, client: Client 
     docs = []
     def _fetch_candidates():
         results = []
+        logger.info("[AUTO MOVIE DB QUERY START]")
         try:
-            cur1 = col.find({"file_name": query_regex}).sort('$natural', -1).limit(500).max_time_ms(6000)
+            cur1 = col.find({"file_name": query_regex}).limit(500)
             for d in cur1:
                 results.append(d)
+            logger.info(f"[AUTO MOVIE DB QUERY COL DONE] count={len(results)}")
             if MULTIPLE_DATABASE and len(results) < 500:
-                cur2 = sec_col.find({"file_name": query_regex}).sort('$natural', -1).limit(500 - len(results)).max_time_ms(6000)
+                cur2 = sec_col.find({"file_name": query_regex}).limit(500 - len(results))
                 for d in cur2:
                     results.append(d)
+            logger.info(f"[AUTO MOVIE DB QUERY SEC DONE] count={len(results)}")
             # Fallback to longest token if initial ordered regex returned 0
             if not results and len(q_tokens) >= 2:
                 longest_tok = max(q_tokens, key=len)
                 if len(longest_tok) >= 4:
+                    logger.info("[AUTO MOVIE DB FALLBACK START]")
                     fallback_regex = re.compile(re.escape(longest_tok), re.IGNORECASE)
-                    cur_fb = col.find({"file_name": fallback_regex}).sort('$natural', -1).limit(500).max_time_ms(6000)
+                    cur_fb = col.find({"file_name": fallback_regex}).limit(500)
                     for d in cur_fb:
                         results.append(d)
                     if MULTIPLE_DATABASE and len(results) < 500:
-                        cur_fb2 = sec_col.find({"file_name": fallback_regex}).sort('$natural', -1).limit(500 - len(results)).max_time_ms(6000)
+                        cur_fb2 = sec_col.find({"file_name": fallback_regex}).limit(500 - len(results))
                         for d in cur_fb2:
                             results.append(d)
+                    logger.info(f"[AUTO MOVIE DB FALLBACK DONE] count={len(results)}")
         except Exception as qe:
             logger.error(f"[AUTO MOVIE QUERY ERROR] {qe}")
         return results
@@ -641,34 +652,13 @@ async def scan_sdatabase_for_movie(title: str, year: str = None, client: Client 
             total_invalid += 1
             if reason == "YEAR_MISMATCH":
                 total_rejected_year += 1
-                logger.info(
-                    f"[AUTO MOVIE FILE REJECT]\n"
-                    f"reason=YEAR_MISMATCH\n"
-                    f"file_name={fname}\n"
-                    f"file_year={file_yr}\n"
-                    f"requested_year={year}"
-                )
             elif reason == "TITLE_MISMATCH":
                 total_rejected_title += 1
-                logger.info(
-                    f"[AUTO MOVIE FILE REJECT]\n"
-                    f"reason=TITLE_MISMATCH\n"
-                    f"file_name={fname}"
-                )
             elif reason == "YEAR_NOT_FOUND_IN_FILENAME":
                 total_unknown_year += 1
             continue
 
         total_matched += 1
-        logger.info(
-            f"[AUTO MOVIE FILE MATCH]\n"
-            f"file_name={fname}\n"
-            f"file_year={file_yr}\n"
-            f"requested_year={year}\n"
-            f"title_match=True\n"
-            f"year_match=True\n"
-            f"identity_match=True"
-        )
         lang = parsed["language"]
         qual = parsed["quality"]
         if qual == "Unknown":
@@ -717,6 +707,7 @@ async def scan_sdatabase_for_movie(title: str, year: str = None, client: Client 
 
     logger.info(f"[AUTO MOVIE SCAN MATCH DONE]\nmatched={total_matched}\nrejected_year={total_rejected_year}\nrejected_title={total_rejected_title}\nduration={match_dur:.2f}s")
     logger.info(f"[AUTO MOVIE SCAN COMPLETE]\ntotal_scanned={total_scanned}\ntotal_matched={total_matched}\nduration={total_dur:.2f}s")
+    logger.info(f"[AUTO MOVIE SCAN TIMING]\nquery={query_dur:.2f}s\nmatching={match_dur:.2f}s\ntotal={total_dur:.2f}s")
 
     if total_dur > 5.0:
         logger.warning(f"[AUTO MOVIE SCAN SLOW]\ntitle={title}\nyear={year}\nduration={total_dur:.2f}s")
