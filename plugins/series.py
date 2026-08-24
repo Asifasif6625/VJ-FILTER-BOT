@@ -561,11 +561,11 @@ async def scan_sdatabase_for_movie(title: str, year: str = None, client: Client 
     def _fetch_candidates():
         results = []
         try:
-            cur1 = col.find({"file_name": query_regex}).limit(500)
+            cur1 = col.find({"file_name": query_regex}).sort('$natural', -1).limit(500).max_time_ms(6000)
             for d in cur1:
                 results.append(d)
             if MULTIPLE_DATABASE and len(results) < 500:
-                cur2 = sec_col.find({"file_name": query_regex}).limit(500 - len(results))
+                cur2 = sec_col.find({"file_name": query_regex}).sort('$natural', -1).limit(500 - len(results)).max_time_ms(6000)
                 for d in cur2:
                     results.append(d)
             # Fallback to longest token if initial ordered regex returned 0
@@ -573,11 +573,11 @@ async def scan_sdatabase_for_movie(title: str, year: str = None, client: Client 
                 longest_tok = max(q_tokens, key=len)
                 if len(longest_tok) >= 4:
                     fallback_regex = re.compile(re.escape(longest_tok), re.IGNORECASE)
-                    cur_fb = col.find({"file_name": fallback_regex}).limit(500)
+                    cur_fb = col.find({"file_name": fallback_regex}).sort('$natural', -1).limit(500).max_time_ms(6000)
                     for d in cur_fb:
                         results.append(d)
                     if MULTIPLE_DATABASE and len(results) < 500:
-                        cur_fb2 = sec_col.find({"file_name": fallback_regex}).limit(500 - len(results))
+                        cur_fb2 = sec_col.find({"file_name": fallback_regex}).sort('$natural', -1).limit(500 - len(results)).max_time_ms(6000)
                         for d in cur_fb2:
                             results.append(d)
         except Exception as qe:
@@ -2309,16 +2309,19 @@ async def wizard_text_handler(client: Client, message: Message):
                 movie_data["state"] = "ERROR"
                 temp.AUTO_MOVIE[session_id] = movie_data
                 temp.AUTO_MOVIE[uid] = movie_data
-                await loading_msg.edit_text(
+                timeout_txt = (
                     "⚠️ <b>Movie file scan timed out.</b>\n\n"
                     f"🎬 <b>{movie_data['title']} ({movie_data['year']})</b>\n\n"
-                    "The database scan took too long. Please try Rescan.",
-                    reply_markup=InlineKeyboardMarkup([
-                        [InlineKeyboardButton("🔄 Rescan", callback_data=f"am_rescan:{session_id}")],
-                        [InlineKeyboardButton("❌ Cancel", callback_data=f"am_cancel:{session_id}")]
-                    ]),
-                    parse_mode=enums.ParseMode.HTML
+                    "The database scan took too long. Please try Rescan."
                 )
+                timeout_markup = InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🔄 Rescan", callback_data=f"am_rescan:{session_id}")],
+                    [InlineKeyboardButton("❌ Cancel", callback_data=f"am_cancel:{session_id}")]
+                ])
+                try:
+                    await loading_msg.edit_text(timeout_txt, reply_markup=timeout_markup, parse_mode=enums.ParseMode.HTML)
+                except Exception:
+                    await client.send_message(chat_id=chat_id, text=timeout_txt, reply_markup=timeout_markup, parse_mode=enums.ParseMode.HTML)
                 return
             except Exception as e:
                 logger.exception(
@@ -2330,16 +2333,19 @@ async def wizard_text_handler(client: Client, message: Message):
                 movie_data["state"] = "ERROR"
                 temp.AUTO_MOVIE[session_id] = movie_data
                 temp.AUTO_MOVIE[uid] = movie_data
-                await loading_msg.edit_text(
+                err_txt = (
                     "❌ <b>Database scan failed.</b>\n\n"
                     f"🎬 <b>{movie_data['title']} ({movie_data['year']})</b>\n\n"
-                    f"<i>Error: {str(e)[:100]}</i>",
-                    reply_markup=InlineKeyboardMarkup([
-                        [InlineKeyboardButton("🔄 Rescan", callback_data=f"am_rescan:{session_id}")],
-                        [InlineKeyboardButton("❌ Cancel", callback_data=f"am_cancel:{session_id}")]
-                    ]),
-                    parse_mode=enums.ParseMode.HTML
+                    f"<i>Error: {str(e)[:100]}</i>"
                 )
+                err_markup = InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🔄 Rescan", callback_data=f"am_rescan:{session_id}")],
+                    [InlineKeyboardButton("❌ Cancel", callback_data=f"am_cancel:{session_id}")]
+                ])
+                try:
+                    await loading_msg.edit_text(err_txt, reply_markup=err_markup, parse_mode=enums.ParseMode.HTML)
+                except Exception:
+                    await client.send_message(chat_id=chat_id, text=err_txt, reply_markup=err_markup, parse_mode=enums.ParseMode.HTML)
                 return
 
             try:
@@ -2355,17 +2361,23 @@ async def wizard_text_handler(client: Client, message: Message):
 
                 text_res = _build_auto_movie_lang_text(movie_data)
                 markup = _build_auto_movie_lang_keyboard(session_id, movie_data)
-                await loading_msg.edit_text(text_res, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
+                try:
+                    await loading_msg.edit_text(text_res, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
+                except Exception:
+                    await client.send_message(chat_id=chat_id, text=text_res, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
             except Exception as ue:
                 logger.exception(f"[AUTO MOVIE UI RENDER ERROR] {ue}")
-                await loading_msg.edit_text(
+                fallback_txt = (
                     f"🎬 <b>Auto Movie Add</b>\n\n"
                     f"<b>{movie_data['title']} ({movie_data['year']})</b>\n\n"
                     f"📊 <b>Scanned:</b> {res.get('total_scanned', 0)} | <b>Matched:</b> {res.get('total_matched', 0)}\n\n"
-                    f"<i>Click below to proceed.</i>",
-                    reply_markup=_build_auto_movie_lang_keyboard(session_id, movie_data),
-                    parse_mode=enums.ParseMode.HTML
+                    f"<i>Click below to proceed.</i>"
                 )
+                fallback_kb = _build_auto_movie_lang_keyboard(session_id, movie_data)
+                try:
+                    await loading_msg.edit_text(fallback_txt, reply_markup=fallback_kb, parse_mode=enums.ParseMode.HTML)
+                except Exception:
+                    await client.send_message(chat_id=chat_id, text=fallback_txt, reply_markup=fallback_kb, parse_mode=enums.ParseMode.HTML)
             try:
                 message.stop_propagation()
             except Exception:
