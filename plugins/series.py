@@ -70,6 +70,7 @@ from database.series_db import (
     super_movies_col,
     sync_movie_filter_for_files,
     sync_existing_movie_filter,
+    scan_movie_files_by_identity,
 )
 from utils import (
     temp,
@@ -627,110 +628,64 @@ async def scan_sdatabase_for_movie(
 ) -> dict:
     """
     Scan database for files belonging strictly to the specified movie (Title + Release Year).
-    Uses get_movie_candidates() with max_time_ms, followed by strict in-memory Title + Release Year identity verification.
+    Calls dedicated scan_movie_files_by_identity for canonical scanning and matching.
     """
     import time
     start_total = time.monotonic()
-    logger.info(f"[AUTO MOVIE SCAN START]\ntitle={title}\nyear={year}\nchat_id={chat_id}")
-
-    from utils import extract_release_year, normalize_title_for_matching
-
-    docs = await get_movie_candidates(chat_id, title, year=year, limit=500)
-
-    # Stage 2: Fast In-Memory Strict Title + Year Matching
-    start_match = time.monotonic()
-    logger.info(f"[AUTO MOVIE] MATCH START total_candidates={len(docs)}")
+    from database.series_db import scan_movie_files_by_identity, get_super_movie
 
     existing_fids = set()
     if movie_id:
         try:
-            from database.series_db import get_super_movie
             sm = await get_super_movie(movie_id)
             if sm:
                 existing_fids = set(sm.get("file_ids", []))
         except Exception:
             pass
 
-    # Detect known conflicting years for this normalized title across candidates
-    known_conflicts = set()
-    norm_req = normalize_title_for_matching(title)
-    for d in docs:
-        fn = d.get("file_name", "")
-        if normalize_title_for_matching(fn) == norm_req:
-            fy = extract_release_year(fn, d.get("caption", ""))
-            if fy:
-                known_conflicts.add(fy)
+    scan_res = await scan_movie_files_by_identity(
+        title=title,
+        year=year,
+        imdb_id=imdb_id,
+        tmdb_id=tmdb_id
+    )
 
+    all_matching_files = scan_res.get("matching_files", [])
     valid_new_files = []
     duplicate_files = []
-    all_matching_files = []
-    total_scanned = len(docs)
-    total_matched = 0
-    total_new = 0
-    total_duplicates = 0
-    total_unknown_quality = 0
-    total_rejected_year = 0
-    total_rejected_title = 0
-    total_unknown_year = 0
-    total_invalid = 0
-    seen_file_keys = set()
+    seen_keys = set()
 
-    for doc in docs:
-        fname = doc.get("file_name", "")
-        caption = doc.get("caption", "") or ""
-        parsed = parse_movie_filename(fname, title, year, imdb_id=imdb_id, tmdb_id=tmdb_id, known_conflicts=known_conflicts, caption=caption)
-
-        status = parsed.get("status")
-        reason = parsed.get("reason")
-        file_yr = extract_release_year(fname, caption)
-
-        if status != "matched":
-            total_invalid += 1
-            if reason == "YEAR_MISMATCH":
-                total_rejected_year += 1
-            elif reason == "TITLE_MISMATCH":
-                total_rejected_title += 1
-            elif reason == "YEAR_NOT_FOUND_IN_FILENAME":
-                total_unknown_year += 1
-            continue
-
-        total_matched += 1
-        lang = parsed["language"]
-        qual = parsed["quality"]
-        if qual == "Unknown":
-            total_unknown_quality += 1
-
+    for doc in all_matching_files:
         fid = doc.get("file_id")
+        lang = doc.get("language", "English")
+        qual = doc.get("quality", "Unknown")
+
         file_entry = {
             "title": title,
             "language": lang,
             "quality": qual,
             "file_id": fid,
-            "file_name": fname,
+            "file_name": doc.get("file_name", ""),
             "file_size": doc.get("file_size", 0),
             "caption": doc.get("caption"),
         }
-        all_matching_files.append(file_entry)
 
         key = (lang, qual, fid)
-        if key in seen_file_keys:
+        if key in seen_keys:
             continue
-        seen_file_keys.add(key)
+        seen_keys.add(key)
 
         is_dup = (fid in existing_fids) if existing_fids else False
         if is_dup:
-            total_duplicates += 1
             duplicate_files.append(file_entry)
         else:
-            total_new += 1
             valid_new_files.append(file_entry)
 
     valid_new_files.sort(key=lambda x: (x["language"], x["quality"]))
     all_matching_files.sort(key=lambda x: (x["language"], x["quality"]))
 
     organized = {}
-    display_source = all_matching_files if all_matching_files else valid_new_files
-    for f in display_source:
+    for f in (all_matching_files or valid_new_files):
         l = f["language"]
         q = f["quality"]
         if l not in organized:
@@ -738,18 +693,18 @@ async def scan_sdatabase_for_movie(
         if q not in organized[l]:
             organized[l].append(q)
 
-    match_dur = time.monotonic() - start_match
+    total_matched = len(all_matching_files)
+    total_new = len(valid_new_files)
+    total_duplicates = len(duplicate_files)
+    total_scanned = scan_res.get("files_scanned", 0)
+    total_rej_year = scan_res.get("year_mismatch_count", 0)
+    total_rej_title = scan_res.get("title_mismatch_count", 0)
+    total_unknown_year = scan_res.get("unknown_year_count", 0)
+
     total_dur = time.monotonic() - start_total
-
     logger.info(
-        f"[AUTO MOVIE] MATCH DONE matched={total_matched} rejected_year={total_rejected_year} rejected_title={total_rejected_title}"
+        f"[AUTO MOVIE] MATCH DONE matched={total_matched} rejected_year={total_rej_year} rejected_title={total_rej_title} duration={total_dur:.2f}s"
     )
-    logger.info(
-        f"[AUTO MOVIE] RESULT matched={total_matched} new={total_new} duplicates={total_duplicates}"
-    )
-
-    if total_dur > 5.0:
-        logger.warning(f"[AUTO MOVIE SCAN SLOW]\ntitle={title}\nyear={year}\nduration={total_dur:.2f}s")
 
     return {
         "valid_files": valid_new_files,
@@ -758,18 +713,18 @@ async def scan_sdatabase_for_movie(
         "duplicate_files": duplicate_files,
         "matching_files": all_matching_files,
         "rejected_files": [],
-        "rejected_year_mismatch": total_rejected_year,
-        "rejected_title_mismatch": total_rejected_title,
+        "rejected_year_mismatch": total_rej_year,
+        "rejected_title_mismatch": total_rej_title,
         "unknown_year": total_unknown_year,
         "organized": organized,
         "total_scanned": total_scanned,
         "total_matched": total_matched,
         "total_new": total_new,
         "total_duplicates": total_duplicates,
-        "total_rejected_year": total_rejected_year,
-        "total_rejected_title": total_rejected_title,
-        "total_unknown_quality": total_unknown_quality,
-        "total_invalid": total_invalid,
+        "total_rejected_year": total_rej_year,
+        "total_rejected_title": total_rej_title,
+        "total_unknown_quality": 0,
+        "total_invalid": total_scanned - total_matched,
     }
 
 
@@ -2921,11 +2876,23 @@ async def auto_movie_callbacks(client: Client, query: CallbackQuery):
         if not movie_data:
             return await query.answer("⚠️ Session expired. Please scan again.", show_alert=True)
 
-        res = movie_data.get("scan", {})
-        all_files = res.get("all_matching_files") or res.get("valid_files") or []
-        file_ids = [f["file_id"] for f in all_files if f.get("file_id")]
+        from database.series_db import scan_movie_files_by_identity, create_super_movie, search_super_movies, get_super_movie
 
-        from database.series_db import create_super_movie, search_super_movies, get_super_movie
+        # Strict gate: Re-verify that actual matching files exist in DB
+        scan_check = await scan_movie_files_by_identity(
+            title=movie_data["title"],
+            year=movie_data.get("year"),
+            imdb_id=movie_data.get("imdb_id"),
+            tmdb_id=movie_data.get("tmdb_id")
+        )
+        matching_files = scan_check.get("matching_files", [])
+        if not matching_files:
+            return await query.answer("❌ No matching movie files available in database to create this filter.", show_alert=True)
+
+        file_ids = [f["file_id"] for f in matching_files if f.get("file_id")]
+        if not file_ids:
+            return await query.answer("❌ No matching movie files available in database to create this filter.", show_alert=True)
+
         movie_id = await create_super_movie({
             "title": movie_data["title"],
             "year": movie_data.get("year", "N/A"),
@@ -2943,14 +2910,15 @@ async def auto_movie_callbacks(client: Client, query: CallbackQuery):
         })
 
         logger.info(
-            f"[SUPER MOVIE SEARCH VERIFY] "
-            f"title={movie_data['title']} "
-            f"year={movie_data.get('year')} "
-            f"movie_id={movie_id}"
+            f"[AUTO MOVIE FILTER CREATE]\n"
+            f"movie_id={movie_id}\n"
+            f"files={len(file_ids)}"
         )
         verify_check = await search_super_movies(movie_data["title"])
-        if not verify_check:
-            logger.error("[SUPER MOVIE SEARCH VERIFY FAILED]")
+        if verify_check:
+            logger.info(f"[AUTO MOVIE FILTER VERIFY] result=SUCCESS movie_id={movie_id}")
+        else:
+            logger.error(f"[AUTO MOVIE FILTER VERIFY] result=FAILED movie_id={movie_id}")
 
         clear_wizard_session(uid)
         temp.AUTO_MOVIE.pop(uid, None)
