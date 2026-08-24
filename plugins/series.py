@@ -350,10 +350,10 @@ async def get_movie_candidates(chat_id: int | str, title: str, year: str | int =
             tok_pat_year = ".*".join(re.escape(t) for t in q_tokens[:3]) + f".*{re.escape(year_str)}"
             try:
                 reg_year = re.compile(tok_pat_year, re.IGNORECASE)
-                for d in col.find({"file_name": reg_year}).limit(limit):
+                for d in col.find({"file_name": reg_year}).sort('$natural', -1).limit(limit):
                     results.append(d)
                 if MULTIPLE_DATABASE and len(results) < limit:
-                    for d in sec_col.find({"file_name": reg_year}).limit(limit - len(results)):
+                    for d in sec_col.find({"file_name": reg_year}).sort('$natural', -1).limit(limit - len(results)):
                         results.append(d)
                 if results:
                     logger.info(f"[AUTO MOVIE DB QUERY WITH YEAR DONE] year={year_str} count={len(results)}")
@@ -365,10 +365,10 @@ async def get_movie_candidates(chat_id: int | str, title: str, year: str | int =
         tok_pat = ".*".join(re.escape(t) for t in q_tokens[:3])
         try:
             reg_title = re.compile(tok_pat, re.IGNORECASE)
-            for d in col.find({"file_name": reg_title}).limit(limit):
+            for d in col.find({"file_name": reg_title}).sort('$natural', -1).limit(limit):
                 results.append(d)
             if MULTIPLE_DATABASE and len(results) < limit:
-                for d in sec_col.find({"file_name": reg_title}).limit(limit - len(results)):
+                for d in sec_col.find({"file_name": reg_title}).sort('$natural', -1).limit(limit - len(results)):
                     results.append(d)
             logger.info(f"[AUTO MOVIE DB QUERY TITLE DONE] count={len(results)}")
         except Exception as e:
@@ -858,22 +858,13 @@ def _build_auto_movie_lang_keyboard(session_id, movie_data):
     tot_dup = res.get("total_duplicates", 0)
 
     buttons = []
-    if tot_matched == 0:
-        buttons.append([
-            InlineKeyboardButton("📦 Batch Add Files", callback_data=f"am_batch:{session_id}"),
-        ])
-        buttons.append([
-            InlineKeyboardButton("🔄 Rescan", callback_data=f"am_rescan:{session_id}"),
-            InlineKeyboardButton("❌ Cancel", callback_data=f"am_cancel:{session_id}")
-        ])
-    else:
+    if tot_matched > 0:
         save_label = f"💾 Save Super Movie ({tot_new} New)" if tot_new > 0 else "💾 Save Super Movie Filter"
         buttons.append([InlineKeyboardButton(save_label, callback_data=f"am_save:{session_id}")])
-        buttons.append([InlineKeyboardButton("📦 Batch Add Files", callback_data=f"am_batch:{session_id}")])
-        buttons.append([
-            InlineKeyboardButton("🔄 Rescan", callback_data=f"am_rescan:{session_id}"),
-            InlineKeyboardButton("❌ Cancel", callback_data=f"am_cancel:{session_id}")
-        ])
+
+    buttons.append([InlineKeyboardButton("🔍 Scan Database for Files", callback_data=f"am_scan:{session_id}")])
+    buttons.append([InlineKeyboardButton("📦 Batch Add Files", callback_data=f"am_batch:{session_id}")])
+    buttons.append([InlineKeyboardButton("❌ Cancel", callback_data=f"am_cancel:{session_id}")])
 
     return InlineKeyboardMarkup(buttons)
 
