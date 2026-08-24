@@ -2237,7 +2237,7 @@ async def wizard_text_handler(client: Client, message: Message):
             movie_data.update({
                 "session_id": session_id,
                 "user_id": uid,
-                "state": "SCANNING",
+                "state": "CONFIRM_IMDB",
                 "imdb_id": info.get("imdb_id") or info.get("tmdb_id") or imdb_id or "tmdb",
                 "title": info["title"],
                 "year": str(info.get("year") or "N/A"),
@@ -2247,110 +2247,31 @@ async def wizard_text_handler(client: Client, message: Message):
                 "poster": info.get("poster") or "",
                 "created_at": time.time(),
             })
-            _log_wizard_step(uid, "AUTO_MOVIE", "WAIT_IMDB", "SCANNING")
-            set_wizard_session(uid, workflow="AUTO_MOVIE", state="SCANNING", data=movie_data, chat_id=chat_id)
-            logger.info("[AUTO MOVIE]\nstate=SCANNING")
+            temp.AUTO_MOVIE[session_id] = movie_data
+            temp.AUTO_MOVIE[uid] = movie_data
+            _log_wizard_step(uid, "AUTO_MOVIE", "WAIT_IMDB", "CONFIRM_IMDB")
+            set_wizard_session(uid, workflow="AUTO_MOVIE", state="CONFIRM_IMDB", data=movie_data, chat_id=chat_id)
+            logger.info("[AUTO MOVIE]\nstate=CONFIRM_IMDB")
 
             rating_str = f"\n⭐ {movie_data['rating']}/10" if movie_data['rating'] else ""
+            genre_str = f"\n🎭 {movie_data['genre']}" if movie_data.get('genre') and movie_data['genre'] != "N/A" else ""
+
+            markup = InlineKeyboardMarkup([
+                [InlineKeyboardButton("🔍 Scan Database for Files", callback_data=f"am_scan:{session_id}")],
+                [InlineKeyboardButton("📦 Batch Add Files", callback_data=f"am_batch:{session_id}")],
+                [InlineKeyboardButton("❌ Cancel", callback_data=f"am_cancel:{session_id}")]
+            ])
+
+            logger.info(f"[AUTO MOVIE]\naction=CONFIRM_IMDB\ntitle={movie_data['title']}\nyear={movie_data['year']}\nuser_id={uid}")
             await loading_msg.edit_text(
                 f"🎬 <b>Movie Found</b>\n\n"
-                f"<b>{movie_data['title']}</b> ({movie_data['year']})\n"
-                f"{rating_str}\n"
-                f"🎭 {movie_data['genre']}\n\n"
-                f"🔍 <b>Scanning database for files...</b>",
+                f"<b>{movie_data['title']}</b> ({movie_data['year']})"
+                f"{rating_str}"
+                f"{genre_str}\n\n"
+                "Please select an option below:",
+                reply_markup=markup,
                 parse_mode=enums.ParseMode.HTML
             )
-
-            try:
-                res = await asyncio.wait_for(
-                    scan_sdatabase_for_movie(
-                        message.chat.id,
-                        movie_data["title"],
-                        movie_data["year"],
-                        client=client,
-                        imdb_id=movie_data.get("imdb_id"),
-                        tmdb_id=movie_data.get("tmdb_id")
-                    ),
-                    timeout=30
-                )
-            except asyncio.TimeoutError:
-                logger.error(
-                    f"[AUTO MOVIE SCAN TIMEOUT] "
-                    f"title={movie_data.get('title')} "
-                    f"year={movie_data.get('year')}"
-                )
-                movie_data["state"] = "ERROR"
-                temp.AUTO_MOVIE[session_id] = movie_data
-                temp.AUTO_MOVIE[uid] = movie_data
-                timeout_txt = (
-                    "⚠️ <b>Movie file scan timed out.</b>\n\n"
-                    f"🎬 <b>{movie_data['title']} ({movie_data['year']})</b>\n\n"
-                    "The database scan took too long. Please try Rescan."
-                )
-                timeout_markup = InlineKeyboardMarkup([
-                    [InlineKeyboardButton("🔄 Rescan", callback_data=f"am_rescan:{session_id}")],
-                    [InlineKeyboardButton("❌ Cancel", callback_data=f"am_cancel:{session_id}")]
-                ])
-                try:
-                    await loading_msg.edit_text(timeout_txt, reply_markup=timeout_markup, parse_mode=enums.ParseMode.HTML)
-                except Exception:
-                    await client.send_message(chat_id=chat_id, text=timeout_txt, reply_markup=timeout_markup, parse_mode=enums.ParseMode.HTML)
-                return
-            except Exception as e:
-                logger.exception(
-                    f"[AUTO MOVIE SCAN DATABASE ERROR] "
-                    f"title={movie_data.get('title')} "
-                    f"year={movie_data.get('year')} "
-                    f"error={e}"
-                )
-                movie_data["state"] = "ERROR"
-                temp.AUTO_MOVIE[session_id] = movie_data
-                temp.AUTO_MOVIE[uid] = movie_data
-                err_txt = (
-                    "❌ <b>Database scan failed.</b>\n\n"
-                    f"🎬 <b>{movie_data['title']} ({movie_data['year']})</b>\n\n"
-                    f"<i>Error: {str(e)[:100]}</i>"
-                )
-                err_markup = InlineKeyboardMarkup([
-                    [InlineKeyboardButton("🔄 Rescan", callback_data=f"am_rescan:{session_id}")],
-                    [InlineKeyboardButton("❌ Cancel", callback_data=f"am_cancel:{session_id}")]
-                ])
-                try:
-                    await loading_msg.edit_text(err_txt, reply_markup=err_markup, parse_mode=enums.ParseMode.HTML)
-                except Exception:
-                    await client.send_message(chat_id=chat_id, text=err_txt, reply_markup=err_markup, parse_mode=enums.ParseMode.HTML)
-                return
-
-            try:
-                movie_data["scan"] = res
-                movie_data["grouped"] = _group_auto_movie_files(res)
-                movie_data["state"] = "RESULT"
-                temp.AUTO_MOVIE[session_id] = movie_data
-                temp.AUTO_MOVIE[uid] = movie_data
-                _log_wizard_step(uid, "AUTO_MOVIE", "SCANNING", "RESULT")
-                logger.info("[AUTO MOVIE]\nstate=RESULT")
-
-                logger.info(f"[AUTO_MOVIE SCAN]\ntitle={movie_data['title']}\nscanned={res['total_scanned']}\nmatched={res['total_matched']}\nnew={res['total_new']}\nduplicates={res['total_duplicates']}")
-
-                text_res = _build_auto_movie_lang_text(movie_data)
-                markup = _build_auto_movie_lang_keyboard(session_id, movie_data)
-                try:
-                    await loading_msg.edit_text(text_res, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
-                except Exception:
-                    await client.send_message(chat_id=chat_id, text=text_res, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
-            except Exception as ue:
-                logger.exception(f"[AUTO MOVIE UI RENDER ERROR] {ue}")
-                fallback_txt = (
-                    f"🎬 <b>Auto Movie Add</b>\n\n"
-                    f"<b>{movie_data['title']} ({movie_data['year']})</b>\n\n"
-                    f"📊 <b>Scanned:</b> {res.get('total_scanned', 0)} | <b>Matched:</b> {res.get('total_matched', 0)}\n\n"
-                    f"<i>Click below to proceed.</i>"
-                )
-                fallback_kb = _build_auto_movie_lang_keyboard(session_id, movie_data)
-                try:
-                    await loading_msg.edit_text(fallback_txt, reply_markup=fallback_kb, parse_mode=enums.ParseMode.HTML)
-                except Exception:
-                    await client.send_message(chat_id=chat_id, text=fallback_txt, reply_markup=fallback_kb, parse_mode=enums.ParseMode.HTML)
             try:
                 message.stop_propagation()
             except Exception:
@@ -4738,17 +4659,21 @@ async def _handle_auto_movie_hierarchical_callbacks(client: Client, query: Callb
         await query.message.edit_text("❌ <b>Auto Movie Add cancelled.</b>", parse_mode=enums.ParseMode.HTML)
         return await query.answer("Cancelled.")
 
-    elif action == "am_rescan":
+    elif action in ("am_scan", "am_rescan"):
+        scan_title = movie_data.get("title", "")
+        scan_year = movie_data.get("year", "")
+        label = "Rescanning" if action == "am_rescan" else "Scanning"
         await query.message.edit_text(
-            f"🔄 <b>Rescanning database for {movie_data['title']} ({movie_data['year']})...</b>",
+            f"🔍 <b>{label} database for {scan_title} ({scan_year})...</b>\n\n"
+            "<i>Searching database with Title + Release Year...</i>",
             parse_mode=enums.ParseMode.HTML
         )
         try:
             res = await asyncio.wait_for(
                 scan_sdatabase_for_movie(
                     query.message.chat.id,
-                    movie_data["title"],
-                    movie_data["year"],
+                    scan_title,
+                    scan_year,
                     client=client,
                     imdb_id=movie_data.get("imdb_id"),
                     tmdb_id=movie_data.get("tmdb_id")
@@ -4758,13 +4683,13 @@ async def _handle_auto_movie_hierarchical_callbacks(client: Client, query: Callb
         except asyncio.TimeoutError:
             logger.error(
                 f"[AUTO MOVIE SCAN TIMEOUT] "
-                f"title={movie_data.get('title')} "
-                f"year={movie_data.get('year')}"
+                f"title={scan_title} "
+                f"year={scan_year}"
             )
             movie_data["state"] = "ERROR"
             await query.message.edit_text(
                 "⚠️ <b>Movie file scan timed out.</b>\n\n"
-                f"🎬 <b>{movie_data['title']} ({movie_data['year']})</b>\n\n"
+                f"🎬 <b>{scan_title} ({scan_year})</b>\n\n"
                 "The database scan took too long. Please try Rescan.",
                 reply_markup=InlineKeyboardMarkup([
                     [InlineKeyboardButton("🔄 Rescan", callback_data=f"am_rescan:{session_id}")],
@@ -4776,14 +4701,14 @@ async def _handle_auto_movie_hierarchical_callbacks(client: Client, query: Callb
         except Exception as e:
             logger.exception(
                 f"[AUTO MOVIE SCAN DATABASE ERROR] "
-                f"title={movie_data.get('title')} "
-                f"year={movie_data.get('year')} "
+                f"title={scan_title} "
+                f"year={scan_year} "
                 f"error={e}"
             )
             movie_data["state"] = "ERROR"
             await query.message.edit_text(
                 "❌ <b>Database scan failed.</b>\n\n"
-                f"🎬 <b>{movie_data['title']} ({movie_data['year']})</b>\n\n"
+                f"🎬 <b>{scan_title} ({scan_year})</b>\n\n"
                 f"<i>Error: {str(e)[:100]}</i>",
                 reply_markup=InlineKeyboardMarkup([
                     [InlineKeyboardButton("🔄 Rescan", callback_data=f"am_rescan:{session_id}")],
@@ -4801,7 +4726,7 @@ async def _handle_auto_movie_hierarchical_callbacks(client: Client, query: Callb
         text_res = _build_auto_movie_lang_text(movie_data)
         markup = _build_auto_movie_lang_keyboard(session_id, movie_data)
         await query.message.edit_text(text_res, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
-        return await query.answer(f"Rescan complete: {res['total_new']} new files.")
+        return await query.answer(f"Scan complete: {res['total_matched']} files matched.")
 
     elif action == "am_save":
         # ── Fix: NEVER return early because of duplicates.
