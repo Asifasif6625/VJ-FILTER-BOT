@@ -328,52 +328,56 @@ def parse_series_filename(filename: str, series_title: str, target_season: int =
     }
 
 
-async def get_movie_candidates(chat_id: int | str, title: str, limit: int = 500) -> list:
+async def get_movie_candidates(chat_id: int | str, title: str, year: str | int = None, limit: int = 500) -> list:
     """
-    Reuse existing get_search_results() async search engine.
-    Fetch all pages asynchronously until:
-    - no more results
-    - or limit (500) candidates collected
+    Directly query database for candidate files using Title (+ Release Year if provided).
+    Executes in a non-blocking background thread without expensive full-collection counts.
     """
-    from database.ia_filterdb import get_search_results
+    from database.ia_filterdb import col, sec_col, MULTIPLE_DATABASE
+    import asyncio
 
-    clean_title = clean_series_title(title)
-    all_files = []
-    offset = 0
-    page = 1
-    page_size = 50
+    clean_title = re.sub(r"[\._\-\+\[\]\(\)\{\}:;!?,/\\~|#*\"\'`]", " ", clean_series_title(title))
+    q_tokens = [w for w in clean_title.lower().split() if len(w) > 1]
+    if not q_tokens:
+        q_tokens = [clean_title.lower().strip()] if clean_title.strip() else ["a"]
 
-    while len(all_files) < limit:
-        fetch_count = min(page_size, limit - len(all_files))
+    year_str = str(year).strip() if (year and str(year).strip() not in ["N/A", "None", "0", ""]) else None
+
+    def _fetch():
+        results = []
+        # 1. Primary query: Title + Release Year in database query
+        if year_str:
+            tok_pat_year = ".*".join(re.escape(t) for t in q_tokens[:3]) + f".*{re.escape(year_str)}"
+            try:
+                reg_year = re.compile(tok_pat_year, re.IGNORECASE)
+                for d in col.find({"file_name": reg_year}).limit(limit):
+                    results.append(d)
+                if MULTIPLE_DATABASE and len(results) < limit:
+                    for d in sec_col.find({"file_name": reg_year}).limit(limit - len(results)):
+                        results.append(d)
+                if results:
+                    logger.info(f"[AUTO MOVIE DB QUERY WITH YEAR DONE] year={year_str} count={len(results)}")
+                    return results
+            except Exception as e:
+                logger.error(f"[AUTO MOVIE DB QUERY WITH YEAR ERROR] {e}")
+
+        # 2. Fallback query: Title tokens
+        tok_pat = ".*".join(re.escape(t) for t in q_tokens[:3])
         try:
-            files, next_offset, total = await get_search_results(
-                chat_id,
-                clean_title,
-                max_results=fetch_count,
-                offset=offset,
-                filter=True
-            )
+            reg_title = re.compile(tok_pat, re.IGNORECASE)
+            for d in col.find({"file_name": reg_title}).limit(limit):
+                results.append(d)
+            if MULTIPLE_DATABASE and len(results) < limit:
+                for d in sec_col.find({"file_name": reg_title}).limit(limit - len(results)):
+                    results.append(d)
+            logger.info(f"[AUTO MOVIE DB QUERY TITLE DONE] count={len(results)}")
         except Exception as e:
-            logger.error(f"[AUTO CANDIDATE QUERY ERROR] chat_id={chat_id} query={clean_title} error={e}")
-            break
+            logger.error(f"[AUTO MOVIE DB QUERY TITLE ERROR] {e}")
 
-        if not files:
-            break
+        return results
 
-        all_files.extend(files)
-        logger.info(
-            f"[AUTO MOVIE CANDIDATE PAGE]\n"
-            f"page={page}\n"
-            f"count={len(files)}"
-        )
-        page += 1
-
-        if not next_offset or next_offset == offset or len(files) == 0:
-            break
-
-        offset = next_offset
-
-    return all_files
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(None, _fetch)
 
 
 async def scan_sdatabase_for_series(chat_id: int | str, title: str, season: int = None, series_id: str = None, client: Client = None) -> dict:
@@ -564,7 +568,7 @@ async def scan_sdatabase_for_movie(
 
     from utils import extract_release_year, normalize_title_for_matching
 
-    docs = await get_movie_candidates(chat_id, title, limit=500)
+    docs = await get_movie_candidates(chat_id, title, year=year, limit=500)
 
     # Stage 2: Fast In-Memory Strict Title + Year Matching
     start_match = time.monotonic()
