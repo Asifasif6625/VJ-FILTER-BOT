@@ -3254,7 +3254,7 @@ async def auto_filter(client, name, msg, reply_msg=None, ai_search=True, spoll=F
             chat_type = str(message.chat.type if message.chat else "UNKNOWN")
 
             logger.info(
-                f"[SEARCH ROUTING]\n"
+                f"[NORMAL SEARCH ROUTE]\n"
                 f"user_id={user_id}\n"
                 f"is_admin={is_admin}\n"
                 f"is_owner={is_owner}\n"
@@ -3277,36 +3277,26 @@ async def auto_filter(client, name, msg, reply_msg=None, ai_search=True, spoll=F
                 logger.error(f"[SUPER MOVIE SEARCH ROUTING ERROR] {e}")
 
             # -- 2. Check Series Filter BEFORE ia_filterdb movie search --
-            # process_series_search returns False immediately if no series matches,
-            # so normal movies are not affected.
             try:
                 from plugins.series import process_series_search
                 is_series = await process_series_search(client, message, search if search else name, reply_msg)
                 if is_series:
-                    logger.info(
-                        f"[SEARCH ROUTING]\n"
-                        f"query={search}\n"
-                        f"decision=SERIES_FILTER"
-                    )
                     return
             except Exception as e:
-                logger.error(
-                    f"[SEARCH ROUTING ERROR]\n"
-                    f"user_id={user_id}\n"
-                    f"chat_type={chat_type}\n"
-                    f"query={name}\n"
-                    f"stage=SERIES_CHECK\n"
-                    f"exception={e}",
-                    exc_info=True
-                )
+                logger.error(f"[SERIES SEARCH ROUTING ERROR] {e}")
 
             # -- 3. Normal Movie Filter (ia_filterdb) --
             page_limit = int(MAX_B_TN) if MAX_B_TN else 5
             files, offset, total_results = await get_search_results(message.chat.id, search, max_results=page_limit, offset=0, filter=True)
-            logger.info(f"[NORMAL MOVIE SEARCH]\nquery={search}\ndb_files={len(files)}")
+            logger.info(
+                f"[FILE SEARCH]\n"
+                f"query={search}\n"
+                f"matches={len(files) if files else 0}"
+            )
             settings = await get_settings(message.chat.id)
 
             if not files:
+                logger.info(f"[SEARCH ROUTE] type=no_result query={search}")
                 # -- 4. No files in database -> Check IMDb for details & poster --
                 imdb = None
                 try:
