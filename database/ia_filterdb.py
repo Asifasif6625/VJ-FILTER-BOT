@@ -19,6 +19,17 @@ sec_client = MongoClient(SEC_FILE_DB_URI)
 sec_db = sec_client[DATABASE_NAME]
 sec_col = sec_db[COLLECTION_NAME]
 
+try:
+    col.create_index([("file_name", 1)], background=True)
+except Exception:
+    pass
+
+if MULTIPLE_DATABASE:
+    try:
+        sec_col.create_index([("file_name", 1)], background=True)
+    except Exception:
+        pass
+
 
 async def save_file(media):
     """Save file in the database."""
