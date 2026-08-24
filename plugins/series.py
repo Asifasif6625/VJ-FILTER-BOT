@@ -366,15 +366,12 @@ def _fetch_movie_candidates_sync(title: str, year: str | int = None, limit: int 
 
     year_str = str(year).strip() if (year and str(year).strip() not in ["N/A", "None", "0", ""]) else None
     results = []
+    seen_ids = set()
 
     logger.info(f"[AUTO MOVIE SCAN] DB QUERY START title={title} year={year_str}")
 
-    # Build targeted regex
-    if year_str:
-        tok_pat = ".*".join(re.escape(t) for t in q_tokens[:3]) + f".*{re.escape(year_str)}"
-    else:
-        tok_pat = ".*".join(re.escape(t) for t in q_tokens[:3])
-
+    # Build targeted regex with title tokens
+    tok_pat = ".*".join(re.escape(t) for t in q_tokens[:3])
     try:
         reg = re.compile(tok_pat, re.IGNORECASE)
     except Exception:
@@ -385,7 +382,10 @@ def _fetch_movie_candidates_sync(title: str, year: str | int = None, limit: int 
     try:
         cursor = col.find({"file_name": reg}).max_time_ms(4000).limit(limit)
         for doc in cursor:
-            results.append(doc)
+            fid = doc.get("file_id")
+            if fid and fid not in seen_ids:
+                seen_ids.add(fid)
+                results.append(doc)
     except Exception as e:
         logger.error(f"[AUTO MOVIE SCAN] DB QUERY ERROR {e}")
     finally:
@@ -401,7 +401,10 @@ def _fetch_movie_candidates_sync(title: str, year: str | int = None, limit: int 
         try:
             sec_cursor = sec_col.find({"file_name": reg}).max_time_ms(4000).limit(limit - len(results))
             for doc in sec_cursor:
-                results.append(doc)
+                fid = doc.get("file_id")
+                if fid and fid not in seen_ids:
+                    seen_ids.add(fid)
+                    results.append(doc)
         except Exception as e:
             logger.error(f"[AUTO MOVIE SCAN] DB QUERY SEC ERROR {e}")
         finally:
