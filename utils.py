@@ -424,15 +424,24 @@ async def is_subscribed(bot, query):
     return False
 
 def _fetch_url_sync(url):
+    import ssl
+    import urllib.request
+    import urllib.error
     headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
         'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
         'Accept-Language': 'en-US,en;q=0.5'
     }
-    import urllib.request
-    req = urllib.request.Request(url, headers=headers)
-    with urllib.request.urlopen(req, timeout=6) as resp:
-        return resp.read().decode('utf-8', errors='ignore')
+    try:
+        ctx = ssl.create_default_context()
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+        req = urllib.request.Request(url, headers=headers)
+        with urllib.request.urlopen(req, context=ctx, timeout=15) as resp:
+            return resp.read().decode('utf-8', errors='ignore')
+    except Exception as e:
+        logger.warning(f"_fetch_url_sync error for {url}: {e}")
+        return None
 
 async def get_public_tmdb_poster(query, bulk=False, id=False, file=None):
     """
