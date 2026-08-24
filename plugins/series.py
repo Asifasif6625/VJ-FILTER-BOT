@@ -337,39 +337,45 @@ async def scan_sdatabase_for_series(title: str, season: int = None, series_id: s
     from database.ia_filterdb import col, sec_col, MULTIPLE_DATABASE
     from database.series_db import check_episode_exists
 
-    clean_title = clean_series_title(title)
-    q_tokens = [w for w in _normalize(clean_title).split() if len(w) > 1]
+    clean_title = re.sub(r"[\._\-\+\[\]\(\)\{\}:;!?,/\\~|#*\"\'`]", " ", clean_series_title(title))
+    q_tokens = [w for w in clean_title.lower().split() if len(w) > 1]
     if not q_tokens:
-        q_tokens = [_normalize(clean_title)]
+        q_tokens = [clean_title.lower().strip()] if clean_title.strip() else ["a"]
 
-    tok_pattern = ".*".join(re.escape(t) for t in q_tokens)
-    query_regex = re.compile(tok_pattern, re.IGNORECASE)
+    tok_pattern = ".*".join(re.escape(t) for t in q_tokens[:3])
+    try:
+        query_regex = re.compile(tok_pattern, re.IGNORECASE)
+    except Exception:
+        query_regex = re.compile(re.escape(clean_title), re.IGNORECASE)
 
-    cursor1 = col.find({"file_name": query_regex}).limit(1000)
-    docs = [d for d in cursor1]
-    if MULTIPLE_DATABASE:
-        cursor2 = sec_col.find({"file_name": query_regex}).limit(1000)
-        docs.extend([d for d in cursor2])
-
-    # Direct search in SDATABASE_CHANNEL if client is available
-    if client and SDATABASE_CHANNEL:
+    docs = []
+    def _fetch_series_candidates():
+        results = []
         try:
-            search_query = " ".join(q_tokens[:3])
-            async for msg in client.search_messages(chat_id=SDATABASE_CHANNEL, query=search_query, limit=500):
-                media = getattr(msg, msg.media.value, None) if msg.media else None
-                if not media:
-                    continue
-                file_name = getattr(media, "file_name", None) or getattr(msg, "caption", "") or ""
-                docs.append({
-                    "file_name": file_name,
-                    "file_id": getattr(media, "file_id", ""),
-                    "file_size": getattr(media, "file_size", 0),
-                    "caption": msg.caption.html if msg.caption else None,
-                    "message_id": msg.id,
-                    "chat_id": msg.chat.id,
-                })
-        except Exception as e:
-            logger.warning(f"Telegram channel search in SDATABASE_CHANNEL ({SDATABASE_CHANNEL}): {e}")
+            cur1 = col.find({"file_name": query_regex}).limit(500)
+            for d in cur1:
+                results.append(d)
+            if MULTIPLE_DATABASE and len(results) < 500:
+                cur2 = sec_col.find({"file_name": query_regex}).limit(500 - len(results))
+                for d in cur2:
+                    results.append(d)
+            if not results and len(q_tokens) >= 2:
+                longest_tok = max(q_tokens, key=len)
+                if len(longest_tok) >= 4:
+                    fallback_regex = re.compile(re.escape(longest_tok), re.IGNORECASE)
+                    cur_fb = col.find({"file_name": fallback_regex}).limit(500)
+                    for d in cur_fb:
+                        results.append(d)
+                    if MULTIPLE_DATABASE and len(results) < 500:
+                        cur_fb2 = sec_col.find({"file_name": fallback_regex}).limit(500 - len(results))
+                        for d in cur_fb2:
+                            results.append(d)
+        except Exception as qe:
+            logger.error(f"[AUTO SERIES QUERY ERROR] {qe}")
+        return results
+
+    loop = asyncio.get_running_loop()
+    docs = await loop.run_in_executor(None, _fetch_series_candidates)
 
     valid_new_files = []
     duplicate_files = []
