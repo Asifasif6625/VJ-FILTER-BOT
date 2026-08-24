@@ -182,6 +182,125 @@ def cancel_wizard_session(user_id: int) -> str | None:
     return workflow
 
 
+def extract_release_year(filename: str, caption: str = None) -> str | None:
+    """
+    Extracts a 4-digit release year (1900-2099) from a filename or caption.
+    Avoids mistaking resolutions (1080, 720, 2160, 480), codecs (x264, x265),
+    or audio channel configurations (5.1, 7.1) for release years.
+    """
+    text = f"{filename or ''} {caption or ''}"
+    if not text.strip():
+        return None
+
+    cleaned = re.sub(r'(?i)\b(2160|1440|1080|720|576|480|360|240)p?\b', ' ', text)
+    cleaned = re.sub(r'(?i)\b(x264|x265|h264|h265|hevc|avc|10bit|8bit|ddp?5\.1|dd5\.1|7\.1|2\.0)\b', ' ', cleaned)
+    cleaned = re.sub(r'(?i)\b(5\.1|7\.1|2\.0)\b', ' ', cleaned)
+
+    matches = re.findall(r'(?<!\d)(19\d{2}|20\d{2})(?!\d)', cleaned)
+    if matches:
+        return matches[-1]
+    return None
+
+
+def normalize_title_for_matching(text: str) -> str:
+    """
+    Normalizes a movie or series title or filename for strict identity matching.
+    Strips technical tokens, resolutions, codecs, sources, extensions, and years,
+    while PRESERVING meaningful sequel/chapter/part/season numbers (e.g. '2', '3', 'ii', 'iii', 'chapter 2', 'part 2').
+    """
+    if not text:
+        return ""
+    
+    t = str(text).strip()
+    t = re.sub(r"\.(mkv|mp4|avi|mov|wmv|flv|webm|m4v|ts|zip|rar)$", "", t, flags=re.I)
+    t = re.sub(r"(?i)https?://\S+|www\.\S+|@\w+|t\.me/\S+", " ", t)
+    t = re.sub(r"\[.*?\]|\(.*?\)", lambda m: "" if any(k in m.group(0).lower() for k in ["t.me", "@", "join", "channel", "link", "credit", "team"]) else m.group(0), t)
+
+    t = re.sub(r"[\._\-\+\[\]\(\)\{\}:;!?,/\\~|#*\"\'`]", " ", t)
+
+    tech_patterns = [
+        r"\b(2160p|1440p|1080p|720p|576p|480p|360p|240p|4k|2k|uhd|fhd|hd|sd)\b",
+        r"\b(bluray|bdrip|brrip|web-dl|webdl|web-rip|webrip|hdrip|hdtv|dvdrip|dvd|vcd|vcdr|camrip|hdcam|web\s*dl|web\s*rip|hd\s*rip|bd\s*rip|br\s*rip|dvd\s*rip|cam\s*rip)\b",
+        r"\b(hevc|x264|x265|h264|h265|avc|10bit|8bit|hdr|hdr10|hdr10plus|hdr10\+|dv|dolby\s*vision|sdr)\b",
+        r"\b(aac|aac2\.0|aac\s*2\s*0|ac3|eac3|ddp|ddp5\.1|ddp\s*5\s*1|dd5\.1|dd\s*5\s*1|dts|dts-hd|dts\s*hd|truehd|atmos|mp3|flac|5\s*1|7\s*1|2\s*0)\b",
+        r"\b(esub|esubs|sub|subs|subtitles|english\s*subtitle|english\s*subtitles|multi\s*sub)\b",
+        r"\b(nf|amzn|dsnp|hotstar|zee5|sonyliv|aha|sunnxt|mx|voot|prime|hulu|max|apple|atvp|lionsgate)\b",
+        r"\b(proper|repack|unrated|directors\s*cut|extended|remastered|imax)\b",
+        r"\b(malayalam|tamil|telugu|hindi|kannada|english|bengali|marathi|punjabi|gujarati)\b",
+        r"\b(dual\s*audio|multi\s*audio|org\s*audio|clean\s*audio|line\s*audio|hq\s*audio|dual|multi|org|clean|hq|line)\b",
+    ]
+    for pat in tech_patterns:
+        t = re.sub(pat, " ", t, flags=re.I)
+
+    t = re.sub(r"(?<!\d)(19\d{2}|20\d{2})(?!\d)", " ", t)
+
+    words = t.lower().split()
+    roman_map = {"ii": "2", "iii": "3", "iv": "4", "v": "5", "vi": "6", "vii": "7", "viii": "8", "ix": "9", "x": "10"}
+    norm_words = []
+    for w in words:
+        if w in roman_map:
+            norm_words.append(roman_map[w])
+        else:
+            norm_words.append(w)
+
+    return " ".join(norm_words).strip()
+
+
+def match_movie_identity(file_doc: dict, requested_title: str, requested_year: str | int = None, imdb_id: str = None, tmdb_id: str = None, known_conflicts: set = None) -> tuple[bool, str]:
+    """
+    Strict identity matcher for Auto Movie Add / Super Movie Filter synchronization.
+    Enforces BOTH Title and Release Year matching to prevent cross-contamination across sequels/different years.
+    Returns: (is_match: bool, reason: str)
+    """
+    file_name = file_doc.get("file_name", "") or ""
+    caption = file_doc.get("caption", "") or ""
+    combined_text = f"{file_name} {caption}"
+
+    # 1. Exact IMDb ID match if present
+    if imdb_id and str(imdb_id).startswith("tt"):
+        file_imdb = re.search(r"\b(tt\d{7,10})\b", combined_text, re.I)
+        if file_imdb:
+            if file_imdb.group(1).lower() == imdb_id.lower():
+                return True, "IMDB_ID_MATCH"
+            else:
+                return False, "IMDB_ID_MISMATCH"
+
+    # 2. Reject series files
+    token_text = " " + re.sub(r"[\._\-\+\[\]\(\)\{\}]", " ", file_name) + " "
+    if re.search(r"(?i)\b(?:s\d{1,2}[\s\.\-_]?e\d{1,4}|\d{1,2}x\d{1,4}|(?:season|series)\s*\d{1,2}|ep(?:isode)?\s*\d{1,4})\b", token_text):
+        return False, "IS_SERIES"
+
+    # 3. Extract Titles and Years
+    file_year = extract_release_year(file_name, caption)
+    norm_file_title = normalize_title_for_matching(file_name)
+    norm_req_title = normalize_title_for_matching(requested_title)
+
+    req_year_str = str(requested_year).strip() if (requested_year and str(requested_year).strip() not in ["N/A", "None", "0", ""]) else None
+
+    # Title Comparison
+    if not norm_file_title or not norm_req_title:
+        return False, "EMPTY_TITLE"
+
+    f_tokens = norm_file_title.split()
+    r_tokens = norm_req_title.split()
+
+    if f_tokens != r_tokens:
+        return False, "TITLE_MISMATCH"
+
+    # Year Comparison
+    if req_year_str and file_year:
+        if file_year == req_year_str:
+            return True, "TITLE_AND_YEAR_MATCH"
+        else:
+            return False, "YEAR_MISMATCH"
+
+    if req_year_str and not file_year:
+        if known_conflicts and len(known_conflicts) > 1:
+            return False, "YEAR_NOT_FOUND_IN_FILENAME"
+        return True, "TITLE_MATCH_UNAMBIGUOUS"
+
+    return True, "TITLE_MATCH"
+
 
 async def pub_is_subscribed(bot, query, channel):
     btn = []
