@@ -231,7 +231,7 @@ async def pm_text(bot, message):
         ai_search = True
         await auto_filter(bot, content, message, None, ai_search)
 
-@Client.on_callback_query(filters.regex(r"^english_only_reason$"))
+@Client.on_callback_query(filters.regex(r"^english_only_reason$"), group=-100)
 async def english_only_reason_alert(bot, query):
     """Show a popup alert when user clicks the Reason button for non-English search."""
     await query.answer(
@@ -239,7 +239,7 @@ async def english_only_reason_alert(bot, query):
         show_alert=True
     )
 
-@Client.on_callback_query(filters.regex(r"^not_in_db_reason$"))
+@Client.on_callback_query(filters.regex(r"^not_in_db_reason$"), group=-100)
 async def not_in_db_reason_alert(bot, query):
     """Show a popup alert when user clicks the Reason button for movie not in db."""
     alert_text = (
@@ -1523,6 +1523,16 @@ async def filter_qualities_cb_handler(client: Client, query: CallbackQuery):
                 
 @Client.on_callback_query()
 async def cb_handler(client: Client, query: CallbackQuery):
+    if query.data == "not_in_db_reason":
+        alert_text = (
+            "➸ നിങ്ങൾ സെർച്ച് ചെയ്ത മൂവി Database ൽ കാണില്ല.\n\n"
+            "➸ സ്പെല്ലിംഗ് ഒന്നും കൂടെ ഗൂഗിളിൽ ചെക്ക് ചെയ്ത് അയക്കുക.\n\n"
+            "➸ മൂവിൻ്റെ കൂടെ റിലീസ് year കൂടെ ചേർത്ത് അയക്കുക. (Lift 2021)\n\n"
+            "➸ Theatre print കിട്ടില്ല. 🙂 200/- അകത്ത് അല്ലേ ഉള്ളൂ പോയി കാണുക."
+        )
+        return await query.answer(alert_text, show_alert=True)
+    if query.data == "english_only_reason":
+        return await query.answer("⚠️ Send movie name in English\nOther language not supports !", show_alert=True)
     if query.data and query.data.startswith(("sr#", "sw#", "edser#", "vser#", "edmov#", "delmov#", "anomov#", "emovie_", "series_", "movie_", "smovie_", "send_fsall#", "am_", "slink_", "sfile_")):
         query.continue_propagation()
         return
@@ -3552,7 +3562,8 @@ async def advantage_spell_chok(client, name, msg, reply_msg, vj_search):
         logger.exception(e)
         reqst_gle = mv_rqst.replace(" ", "+")
         button = [[
-            InlineKeyboardButton("Gᴏᴏɢʟᴇ", url=f"https://www.google.com/search?q={reqst_gle}")
+            InlineKeyboardButton("Gᴏᴏɢʟᴇ", url=f"https://www.google.com/search?q={reqst_gle}"),
+            InlineKeyboardButton(chr(0x1F9A8) + " Reason", callback_data="not_in_db_reason")
         ]]
         if NO_RESULTS_MSG:
             await client.send_message(chat_id=LOG_CHANNEL, text=(script.NORSLTS.format(reqstr.id, reqstr.mention, mv_rqst)))
@@ -3564,7 +3575,8 @@ async def advantage_spell_chok(client, name, msg, reply_msg, vj_search):
     if not movies:
         reqst_gle = mv_rqst.replace(" ", "+")
         button = [[
-            InlineKeyboardButton("Gᴏᴏɢʟᴇ", url=f"https://www.google.com/search?q={reqst_gle}")
+            InlineKeyboardButton("Gᴏᴏɢʟᴇ", url=f"https://www.google.com/search?q={reqst_gle}"),
+            InlineKeyboardButton(chr(0x1F9A8) + " Reason", callback_data="not_in_db_reason")
         ]]
         if NO_RESULTS_MSG:
             await client.send_message(chat_id=LOG_CHANNEL, text=(script.NORSLTS.format(reqstr.id, reqstr.mention, mv_rqst)))
@@ -3590,7 +3602,8 @@ async def advantage_spell_chok(client, name, msg, reply_msg, vj_search):
                 break
         reqst_gle = mv_rqst.replace(" ", "+")
         button = [[
-            InlineKeyboardButton("Gᴏᴏɢʟᴇ", url=f"https://www.google.com/search?q={reqst_gle}")
+            InlineKeyboardButton("Gᴏᴏɢʟᴇ", url=f"https://www.google.com/search?q={reqst_gle}"),
+            InlineKeyboardButton(chr(0x1F9A8) + " Reason", callback_data="not_in_db_reason")
         ]]
         if NO_RESULTS_MSG:
             await client.send_message(chat_id=LOG_CHANNEL, text=(script.NORSLTS.format(reqstr.id, reqstr.mention, mv_rqst)))
@@ -3608,7 +3621,10 @@ async def advantage_spell_chok(client, name, msg, reply_msg, vj_search):
             ]
             for k, movie_name in enumerate(movielist)
         ]
-        btn.append([InlineKeyboardButton(text="Close", callback_data=f'spol#{reqstr1}#close_spellcheck')])
+        btn.append([
+            InlineKeyboardButton(chr(0x1F9A8) + " Reason", callback_data="not_in_db_reason"),
+            InlineKeyboardButton(text="Close", callback_data=f'spol#{reqstr1}#close_spellcheck')
+        ])
         spell_check_del = await reply_msg.edit_text(
             text=script.CUDNT_FND.format(mv_rqst),
             reply_markup=InlineKeyboardMarkup(btn)
