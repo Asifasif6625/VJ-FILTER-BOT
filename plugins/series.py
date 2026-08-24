@@ -540,7 +540,17 @@ def parse_movie_filename(filename: str, movie_title: str, movie_year: str = None
     if not filename:
         return {"status": "invalid", "reason": "empty_filename"}
 
-    from utils import match_movie_identity
+    from utils import match_movie_identity, normalize_title_for_matching, extract_release_year
+
+    logger.info(
+        "[AUTO MOVIE MATCH DEBUG] "
+        f"requested_title={movie_title!r} "
+        f"requested_year={movie_year!r} "
+        f"filename={filename!r} "
+        f"caption={caption!r} "
+        f"imdb_id={imdb_id!r} "
+        f"tmdb_id={tmdb_id!r}"
+    )
 
     file_doc = {"file_name": filename, "caption": caption}
     is_match, reason = match_movie_identity(
@@ -552,8 +562,28 @@ def parse_movie_filename(filename: str, movie_title: str, movie_year: str = None
         known_conflicts=known_conflicts
     )
 
+    norm_req = normalize_title_for_matching(movie_title)
+    norm_fn = normalize_title_for_matching(filename)
+    f_yr = extract_release_year(filename, caption)
+
     if not is_match:
+        logger.warning(
+            "[AUTO MOVIE MATCH REJECT] "
+            f"filename={filename!r} "
+            f"requested_title={movie_title!r} "
+            f"requested_year={movie_year!r} "
+            f"reason={reason}"
+        )
         return {"status": "invalid", "reason": reason}
+
+    logger.info(
+        f"[AUTO MOVIE MATCH DEBUG] "
+        f"requested_normalized={norm_req!r} "
+        f"filename_normalized={norm_fn!r} "
+        f"requested_year={movie_year!r} "
+        f"filename_year={f_yr!r} "
+        f"result=MATCHED"
+    )
 
     raw_name = str(filename)
     detected_quality = extract_quality_from_filename(raw_name)
@@ -2375,40 +2405,85 @@ async def wizard_text_handler(client: Client, message: Message):
 
             info = None
             imdb_id = None
+            is_meta_timeout = False
             if m_tmdb:
                 from utils import get_tmdb_by_url
-                info = await get_tmdb_by_url(text)
-                if info:
-                    logger.info(f"[AUTO_MOVIE TMDB]\nuser_id={uid}\ntmdb_id={info.get('tmdb_id')}\ntitle={info.get('title')}\nyear={info.get('year')}\nkind={info.get('kind')}\ntype=MOVIE")
-                else:
-                    logger.warning(f"[AUTO_MOVIE TMDB] query={text} status=failed")
+                try:
+                    info = await asyncio.wait_for(
+                        get_tmdb_by_url(text),
+                        timeout=12
+                    )
+                    if info:
+                        logger.info(f"[AUTO_MOVIE TMDB]\nuser_id={uid}\ntmdb_id={info.get('tmdb_id')}\ntitle={info.get('title')}\nyear={info.get('year')}\nkind={info.get('kind')}\ntype=MOVIE")
+                    else:
+                        logger.warning(f"[AUTO_MOVIE TMDB] query={text} status=failed")
+                except asyncio.TimeoutError:
+                    logger.error(f"[AUTO MOVIE] METADATA TIMEOUT query={text}")
+                    is_meta_timeout = True
+                    info = None
+                except Exception as e:
+                    logger.exception(f"[AUTO MOVIE] METADATA ERROR query={text}: {e}")
+                    info = None
             elif m_imdb:
                 imdb_id = m_imdb.group(1).lower()
                 try:
-                    info = await get_poster(imdb_id, id=True)
+                    info = await asyncio.wait_for(
+                        get_poster(imdb_id, id=True),
+                        timeout=12
+                    )
                     if info:
                         logger.info(f"[AUTO_MOVIE IMDb]\nuser_id={uid}\nimdb_id={info.get('imdb_id')}\ntitle={info.get('title')}\nyear={info.get('year')}\nkind={info.get('kind')}\ntype=MOVIE")
                     else:
                         logger.warning(f"[AUTO_MOVIE IMDb] query={text} status=failed")
+                except asyncio.TimeoutError:
+                    logger.error(f"[AUTO MOVIE] METADATA TIMEOUT imdb_id={imdb_id}")
+                    is_meta_timeout = True
+                    info = None
                 except Exception as e:
-                    logger.error(f"[AUTO_MOVIE IMDb] query={text} error={e}")
+                    logger.exception(f"[AUTO MOVIE] METADATA ERROR imdb_id={imdb_id}: {e}")
                     info = None
 
-            logger.info(f"[AUTO MOVIE] METADATA DONE title={info.get('title') if info else None}")
+            if info and info.get("title"):
+                logger.info(f"[AUTO MOVIE] METADATA DONE title={info.get('title')}")
+            elif not is_meta_timeout:
+                logger.warning(f"[AUTO MOVIE] METADATA ERROR query={text} info={bool(info)}")
 
             if not info or not info.get("title"):
-                return await loading_msg.edit_text(
-                    f"❌ <b>Could not retrieve data for <code>{text}</code>.</b>\n\n"
-                    "Please provide a valid IMDb URL (e.g. <code>https://www.imdb.com/title/tt0111161/</code>) or TMDB URL (e.g. <code>https://www.themoviedb.org/movie/863530</code>), or send /cancel to abort.",
-                    parse_mode=enums.ParseMode.HTML,
-                )
+                clear_wizard_session(uid)
+                temp.AUTO_MOVIE.pop(uid, None)
+
+                err_markup = InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🔄 Retry", callback_data="sw#auto_movie")],
+                    [InlineKeyboardButton("❌ Cancel", callback_data="sw#auto_cancel")]
+                ])
+
+                if is_meta_timeout:
+                    return await loading_msg.edit_text(
+                        "⚠️ <b>Movie metadata request timed out.</b>\n\n"
+                        "Could not fetch IMDb/TMDB details in time. Please check your connection and try again.",
+                        reply_markup=err_markup,
+                        parse_mode=enums.ParseMode.HTML
+                    )
+                else:
+                    return await loading_msg.edit_text(
+                        f"❌ <b>Could not retrieve movie data for <code>{text}</code>.</b>\n\n"
+                        "Please provide a valid IMDb URL (e.g. <code>https://www.imdb.com/title/tt0111161/</code>) or TMDB URL (e.g. <code>https://www.themoviedb.org/movie/863530</code>).",
+                        reply_markup=err_markup,
+                        parse_mode=enums.ParseMode.HTML,
+                    )
 
             # ── Movie vs Series Validation ──
             kind = str(info.get("kind", "")).lower()
             is_series = kind in ["tv series", "tv mini series", "series", "tvseries", "tv mini-series"] or (info.get("seasons") and str(info["seasons"]).isdigit() and int(info["seasons"]) > 0)
             if is_series:
+                clear_wizard_session(uid)
+                temp.AUTO_MOVIE.pop(uid, None)
                 return await loading_msg.edit_text(
                     "⚠️ <b>This title is a TV Series.</b>\n\nPlease use Auto Series Add instead.",
+                    reply_markup=InlineKeyboardMarkup([[
+                        InlineKeyboardButton("📺 Auto Series Add", callback_data="sw#auto_series"),
+                        InlineKeyboardButton("❌ Cancel", callback_data="sw#auto_cancel")
+                    ]]),
                     parse_mode=enums.ParseMode.HTML,
                 )
 
