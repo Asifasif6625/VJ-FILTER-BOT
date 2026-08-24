@@ -1011,64 +1011,153 @@ async def update_super_movie(movie_id: str, fields: dict) -> bool:
 
 async def find_matching_super_movie(file_name: str, caption: str = "") -> dict | None:
     """
-    Find an existing Super Movie Filter matching a given file name or caption.
-    Uses IMDb ID, normalized title + year, or fuzzy token match.
+    Strict identity matcher for incoming movie file against existing Super Movie filters.
+    Requires EXACT Title + Release Year match or exact IMDb ID match to prevent cross-contamination.
     """
     if not file_name:
         return None
 
+    from utils import extract_release_year, normalize_title_for_matching, match_movie_identity
+
+    # Reject series files immediately
+    token_text = " " + re.sub(r"[\._\-\+\[\]\(\)\{\}]", " ", file_name) + " "
+    if re.search(r"(?i)\b(?:s\d{1,2}[\s\.\-_]?e\d{1,4}|\d{1,2}x\d{1,4}|(?:season|series)\s*\d{1,2}|ep(?:isode)?\s*\d{1,4})\b", token_text):
+        return None
+
     # 1. Check IMDb ID in caption or filename (e.g. tt1234567)
-    imdb_match = re.search(r"\b(tt\d{7,8})\b", f"{file_name} {caption}")
+    imdb_match = re.search(r"\b(tt\d{7,10})\b", f"{file_name} {caption}", re.I)
     if imdb_match:
-        imdb_id = imdb_match.group(1)
+        imdb_id = imdb_match.group(1).lower()
         doc = await super_movies_col.find_one({"imdb_id": imdb_id, "status": {"$ne": "deleted"}})
         if doc:
             return doc
 
-    # 2. Extract year from filename if present
-    year_match = re.search(r"\b(19\d{2}|20\d{2})\b", file_name)
-    file_year = year_match.group(1) if year_match else None
+    # 2. Extract release year and normalized title
+    file_year = extract_release_year(file_name, caption)
+    norm_title = normalize_title_for_matching(file_name)
 
-    # Clean title part before the year (if year exists)
-    if file_year and year_match:
-        title_part = file_name[:year_match.start()].strip()
-    else:
-        title_part = file_name
+    if not norm_title:
+        return None
 
-    clean_name = clean_series_title(title_part)
-    norm_name = _normalize(clean_name)
+    # Find candidates with matching normalized title
+    cursor = super_movies_col.find({"status": {"$ne": "deleted"}})
+    candidates = [doc async for doc in cursor]
 
-    if norm_name:
-        # Check exact normalized_name + year
-        if file_year:
-            doc = await super_movies_col.find_one({
-                "normalized_name": norm_name,
-                "year": file_year,
-                "status": {"$ne": "deleted"}
-            })
-            if doc:
-                return doc
+    known_years = set()
+    matching_cands = []
+    for cand in candidates:
+        cand_norm = cand.get("normalized_name") or normalize_title_for_matching(cand.get("title", ""))
+        if cand_norm == norm_title:
+            matching_cands.append(cand)
+            c_yr = str(cand.get("year", "")).strip()
+            if c_yr and c_yr not in ["N/A", "None", "0", ""]:
+                known_years.add(c_yr)
 
-        # Check normalized_name without year
-        doc = await super_movies_col.find_one({
-            "normalized_name": norm_name,
-            "status": {"$ne": "deleted"}
-        })
-        if doc:
-            m_year = doc.get("year", "N/A")
-            if not file_year or m_year == "N/A" or file_year == str(m_year):
-                return doc
+    if not matching_cands:
+        return None
 
-    # 3. Use search_super_movies candidate tokens matching
-    candidates = await search_super_movies(title_part or file_name)
-    if candidates:
-        for cand in candidates:
-            c_year = str(cand.get("year", "N/A"))
-            if not file_year or c_year == "N/A" or file_year == c_year:
-                return cand
-        return candidates[0]
+    for cand in matching_cands:
+        c_title = cand.get("title", "")
+        c_year = cand.get("year")
+        c_imdb = cand.get("imdb_id")
+        c_tmdb = cand.get("tmdb_id")
+
+        matched, reason = match_movie_identity(
+            {"file_name": file_name, "caption": caption},
+            requested_title=c_title,
+            requested_year=c_year,
+            imdb_id=c_imdb,
+            tmdb_id=c_tmdb,
+            known_conflicts=known_years
+        )
+        if matched:
+            return cand
+        else:
+            if reason == "YEAR_MISMATCH":
+                logger.info(f"[AUTO MOVIE FILTER SYNC SKIP]\nreason=YEAR_MISMATCH\nfilter_title={c_title}\nfilter_year={c_year}\nfile_year={file_year}\nfile_name={file_name}")
 
     return None
+
+
+async def resync_super_movie_filter(movie_id: str) -> dict | None:
+    """
+    Repairs and re-synchronizes an existing Super Movie Filter by removing any wrong-year
+    or mismatched files, retaining only strictly matching files.
+    """
+    from database.ia_filterdb import get_file_details
+    from plugins.pm_filter import detect_file_languages
+    from plugins.series import extract_quality_from_filename
+    from utils import match_movie_identity
+
+    movie = await get_super_movie(movie_id)
+    if not movie:
+        return None
+
+    mid = str(movie["_id"])
+    title = movie.get("title", "")
+    year = movie.get("year")
+    imdb_id = movie.get("imdb_id")
+    tmdb_id = movie.get("tmdb_id")
+    old_fids = movie.get("file_ids") or []
+
+    valid_fids = []
+    removed_fids = []
+    new_langs = set()
+    new_quals = set()
+
+    for fid in old_fids:
+        fdoc = await get_file_details(fid)
+        if not fdoc:
+            removed_fids.append(fid)
+            continue
+        
+        is_match, reason = match_movie_identity(
+            fdoc,
+            requested_title=title,
+            requested_year=year,
+            imdb_id=imdb_id,
+            tmdb_id=tmdb_id
+        )
+        if is_match:
+            valid_fids.append(fid)
+            fname = fdoc.get("file_name", "")
+            caption = fdoc.get("caption", "") or ""
+            langs = detect_file_languages(fname, caption)
+            for l in langs:
+                if l:
+                    new_langs.add(l)
+            q = extract_quality_from_filename(fname)
+            if q and q != "Unknown":
+                new_quals.add(q)
+        else:
+            removed_fids.append(fid)
+            logger.info(f"[RESYNC MOVIE REJECT]\nmovie_id={mid}\ntitle={title}\nyear={year}\nfile_name={fdoc.get('file_name')}\nreason={reason}")
+
+    # Update database
+    await super_movies_col.update_one(
+        {"_id": ObjectId(mid)},
+        {
+            "$set": {
+                "file_ids": valid_fids,
+                "languages": list(new_langs) if new_langs else (movie.get("languages") or []),
+                "qualities": list(new_quals) if new_quals else (movie.get("qualities") or []),
+                "updated_at": datetime.utcnow()
+            }
+        }
+    )
+
+    stats = {
+        "movie_id": mid,
+        "title": title,
+        "year": str(year),
+        "total_initial": len(old_fids),
+        "valid_retained": len(valid_fids),
+        "removed_mismatches": len(removed_fids),
+        "languages": list(new_langs),
+        "qualities": list(new_quals)
+    }
+    logger.info(f"[RESYNC MOVIE FINISHED]\nstats={stats}")
+    return stats
 
 
 async def sync_movie_filter_for_files(file_docs, *, trigger="file_add"):
@@ -1207,20 +1296,24 @@ async def sync_movie_filter_for_files(file_docs, *, trigger="file_add"):
 async def sync_existing_movie_filter(movie_id: str) -> dict:
     """
     Admin helper to resync an existing Super Movie Filter by searching ia_filterdb
-    for matching title/year files, merging all file IDs, rebuilding languages & qualities.
+    for strictly matching title/year files, removing mismatched files, rebuilding languages & qualities.
     """
     movie = await get_super_movie(movie_id)
     if not movie or movie.get("status") == "deleted":
         return {"success": False, "error": "Movie not found"}
 
     title = movie.get("title", "")
+    year = movie.get("year")
+    imdb_id = movie.get("imdb_id")
+    tmdb_id = movie.get("tmdb_id")
     clean_title = clean_series_title(title)
     
-    from database.ia_filterdb import col, sec_col, MULTIPLE_DATABASE, get_search_results
+    from database.ia_filterdb import col, sec_col, MULTIPLE_DATABASE, get_search_results, get_file_details
     from plugins.pm_filter import detect_file_languages
     from plugins.series import extract_quality_from_filename
+    from utils import match_movie_identity, extract_release_year, normalize_title_for_matching
 
-    matched_files = []
+    candidate_docs = []
     seen_fids = set()
 
     files, _, _ = await get_search_results(0, clean_title, max_results=500, offset=0, filter=True)
@@ -1228,42 +1321,129 @@ async def sync_existing_movie_filter(movie_id: str) -> dict:
         fid = f.get("file_id")
         if fid and fid not in seen_fids:
             seen_fids.add(fid)
-            matched_files.append(f)
+            candidate_docs.append(f)
 
     existing_fids = movie.get("file_ids") or []
     for fid in existing_fids:
         if fid not in seen_fids:
             seen_fids.add(fid)
-            doc = col.find_one({"file_id": fid}) or (sec_col.find_one({"file_id": fid}) if MULTIPLE_DATABASE else None)
-            if doc:
-                matched_files.append(doc)
+            fdoc = await get_file_details(fid)
+            if fdoc:
+                candidate_docs.append(fdoc)
 
-    all_fids = list(seen_fids)
-    all_langs = list(movie.get("languages") or [])
-    all_quals = list(movie.get("qualities") or [])
+    # Detect known conflicting years for this normalized title
+    known_conflicts = set()
+    norm_req = normalize_title_for_matching(title)
+    for d in candidate_docs:
+        fn = d.get("file_name", "")
+        if normalize_title_for_matching(fn) == norm_req:
+            fy = extract_release_year(fn, d.get("caption", ""))
+            if fy:
+                known_conflicts.add(fy)
 
-    for f in matched_files:
-        fn = f.get("file_name", "")
+    valid_fids = []
+    removed_fids = []
+    all_langs = set()
+    all_quals = set()
+
+    for f in candidate_docs:
+        fid = f.get("file_id")
+        if not fid:
+            continue
+        fname = f.get("file_name", "")
         cap = f.get("caption", "") or ""
-        flangs = detect_file_languages(fn, cap)
-        fqual = extract_quality_from_filename(fn)
-        for l in flangs:
-            if l and l not in all_langs:
-                all_langs.append(l)
-        if fqual and fqual != "Unknown" and fqual not in all_quals:
-            all_quals.append(fqual)
+        
+        is_match, reason = match_movie_identity(
+            f,
+            requested_title=title,
+            requested_year=year,
+            imdb_id=imdb_id,
+            tmdb_id=tmdb_id,
+            known_conflicts=known_conflicts
+        )
+
+        if is_match:
+            valid_fids.append(fid)
+            flangs = detect_file_languages(fname, cap)
+            fqual = extract_quality_from_filename(fname)
+            for l in flangs:
+                if l:
+                    all_langs.add(l)
+            if fqual and fqual != "Unknown":
+                all_quals.add(fqual)
+        else:
+            removed_fids.append(fid)
+            logger.info(f"[SYNC MOVIE FILTER REJECT]\nmovie_id={movie_id}\ntitle={title}\nyear={year}\nfile_name={fname}\nreason={reason}")
+
+    valid_fids = list(dict.fromkeys(valid_fids))
+    languages_list = list(all_langs) if all_langs else (movie.get("languages") or [])
+    qualities_list = list(all_quals) if all_quals else (movie.get("qualities") or [])
 
     await super_movies_col.update_one(
         {"_id": ObjectId(movie_id)},
         {
             "$set": {
-                "file_ids": all_fids,
-                "languages": all_langs,
-                "qualities": all_quals,
+                "file_ids": valid_fids,
+                "languages": languages_list,
+                "qualities": qualities_list,
                 "updated_at": datetime.utcnow()
             }
         }
     )
 
-    logger.info(f"[AUTO MOVIE FILTER SYNC]\nmovie_id={movie_id}\ntitle={title}\ntotal_files={len(all_fids)}\ntrigger=admin_resync")
-    return {"success": True, "total_files": len(all_fids), "languages": all_langs, "qualities": all_quals}
+    logger.info(
+        f"[AUTO MOVIE FILTER SYNC]\n"
+        f"movie_id={movie_id}\n"
+        f"title={title}\n"
+        f"year={year}\n"
+        f"total_files={len(valid_fids)}\n"
+        f"removed_mismatches={len(removed_fids)}\n"
+        f"trigger=admin_resync"
+    )
+
+    return {
+        "success": True,
+        "total_files": len(valid_fids),
+        "removed_mismatches": len(removed_fids),
+        "languages": languages_list,
+        "qualities": qualities_list
+    }
+
+
+async def get_movie_files_for_identity(title: str, year: str | int = None, imdb_id: str = None, tmdb_id: str = None) -> list:
+    from database.ia_filterdb import get_search_results
+    from utils import match_movie_identity, normalize_title_for_matching, extract_release_year
+
+    clean_title = clean_series_title(title)
+    files, _, _ = await get_search_results(0, clean_title, max_results=500, offset=0, filter=True)
+    if not files:
+        return []
+
+    # Detect known conflicting years for this normalized title
+    known_conflicts = set()
+    norm_req = normalize_title_for_matching(title)
+    for d in files:
+        fn = d.get("file_name", "")
+        if normalize_title_for_matching(fn) == norm_req:
+            fy = extract_release_year(fn, d.get("caption", ""))
+            if fy:
+                known_conflicts.add(fy)
+
+    matched = []
+    seen = set()
+    for f in files:
+        fid = f.get("file_id")
+        if fid and fid not in seen:
+            is_match, reason = match_movie_identity(
+                f,
+                requested_title=title,
+                requested_year=year,
+                imdb_id=imdb_id,
+                tmdb_id=tmdb_id,
+                known_conflicts=known_conflicts
+            )
+            if is_match:
+                seen.add(fid)
+                matched.append(f)
+
+    return matched
