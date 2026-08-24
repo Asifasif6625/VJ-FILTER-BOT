@@ -328,54 +328,64 @@ def parse_series_filename(filename: str, series_title: str, target_season: int =
     }
 
 
-async def scan_sdatabase_for_series(title: str, season: int = None, series_id: str = None, client: Client = None) -> dict:
+async def get_movie_candidates(chat_id: int | str, title: str, limit: int = 500) -> list:
     """
-    Scan the stored file database (SDatabase) for files matching the given Series and Season.
+    Reuse existing get_search_results() async search engine.
+    Fetch all pages asynchronously until:
+    - no more results
+    - or limit (500) candidates collected
+    """
+    from database.ia_filterdb import get_search_results
+
+    clean_title = clean_series_title(title)
+    all_files = []
+    offset = 0
+    page = 1
+    page_size = 50
+
+    while len(all_files) < limit:
+        fetch_count = min(page_size, limit - len(all_files))
+        try:
+            files, next_offset, total = await get_search_results(
+                chat_id,
+                clean_title,
+                max_results=fetch_count,
+                offset=offset,
+                filter=True
+            )
+        except Exception as e:
+            logger.error(f"[AUTO CANDIDATE QUERY ERROR] chat_id={chat_id} query={clean_title} error={e}")
+            break
+
+        if not files:
+            break
+
+        all_files.extend(files)
+        logger.info(
+            f"[AUTO MOVIE CANDIDATE PAGE]\n"
+            f"page={page}\n"
+            f"count={len(files)}"
+        )
+        page += 1
+
+        if not next_offset or next_offset == offset or len(files) == 0:
+            break
+
+        offset = next_offset
+
+    return all_files
+
+
+async def scan_sdatabase_for_series(chat_id: int | str, title: str, season: int = None, series_id: str = None, client: Client = None) -> dict:
+    """
+    Scan the stored file database for files matching the given Series and Season.
     If season is None (Skip Season mode), automatically scans and detects all available seasons.
     Returns structured results with valid files, organized hierarchy, and accurate statistics.
     """
-    from database.ia_filterdb import col, sec_col, MULTIPLE_DATABASE
     from database.series_db import check_episode_exists
 
-    clean_title = re.sub(r"[\._\-\+\[\]\(\)\{\}:;!?,/\\~|#*\"\'`]", " ", clean_series_title(title))
-    q_tokens = [w for w in clean_title.lower().split() if len(w) > 1]
-    if not q_tokens:
-        q_tokens = [clean_title.lower().strip()] if clean_title.strip() else ["a"]
-
-    tok_pattern = ".*".join(re.escape(t) for t in q_tokens[:3])
-    try:
-        query_regex = re.compile(tok_pattern, re.IGNORECASE)
-    except Exception:
-        query_regex = re.compile(re.escape(clean_title), re.IGNORECASE)
-
-    docs = []
-    def _fetch_series_candidates():
-        results = []
-        try:
-            cur1 = col.find({"file_name": query_regex}).limit(500)
-            for d in cur1:
-                results.append(d)
-            if MULTIPLE_DATABASE and len(results) < 500:
-                cur2 = sec_col.find({"file_name": query_regex}).limit(500 - len(results))
-                for d in cur2:
-                    results.append(d)
-            if not results and len(q_tokens) >= 2:
-                longest_tok = max(q_tokens, key=len)
-                if len(longest_tok) >= 4:
-                    fallback_regex = re.compile(re.escape(longest_tok), re.IGNORECASE)
-                    cur_fb = col.find({"file_name": fallback_regex}).limit(500)
-                    for d in cur_fb:
-                        results.append(d)
-                    if MULTIPLE_DATABASE and len(results) < 500:
-                        cur_fb2 = sec_col.find({"file_name": fallback_regex}).limit(500 - len(results))
-                        for d in cur_fb2:
-                            results.append(d)
-        except Exception as qe:
-            logger.error(f"[AUTO SERIES QUERY ERROR] {qe}")
-        return results
-
-    loop = asyncio.get_running_loop()
-    docs = await loop.run_in_executor(None, _fetch_series_candidates)
+    clean_title = clean_series_title(title)
+    docs = await get_movie_candidates(chat_id, title, limit=500)
 
     valid_new_files = []
     duplicate_files = []
@@ -428,7 +438,10 @@ async def scan_sdatabase_for_series(title: str, season: int = None, series_id: s
 
         is_dup = False
         if series_id:
-            is_dup = await check_episode_exists(series_id, lang, s_val, ep, qual)
+            try:
+                is_dup = await check_episode_exists(series_id, lang, s_val, ep, qual)
+            except Exception:
+                pass
 
         if is_dup:
             total_duplicates += 1
@@ -458,7 +471,7 @@ async def scan_sdatabase_for_series(title: str, season: int = None, series_id: s
         if not any(x["episode"] == f["episode"] for x in organized_by_season[s][l][q]):
             organized_by_season[s][l][q].append(f)
 
-    # Flat organized for single season display
+    # Simple flattened organization for single-season mode
     organized = {}
     for f in display_source:
         l = f["language"]
@@ -477,6 +490,8 @@ async def scan_sdatabase_for_series(title: str, season: int = None, series_id: s
         "valid_new_files": valid_new_files,
         "all_matching_files": all_matching_files,
         "duplicate_files": duplicate_files,
+        "matching_files": all_matching_files,
+        "rejected_files": [],
         "organized": organized,
         "organized_by_season": organized_by_season,
         "total_scanned": total_scanned,
@@ -490,8 +505,7 @@ async def scan_sdatabase_for_series(title: str, season: int = None, series_id: s
 
 def parse_movie_filename(filename: str, movie_title: str, movie_year: str = None, imdb_id: str = None, tmdb_id: str = None, known_conflicts: set = None, caption: str = "") -> dict:
     """
-    Parse a media filename to check if it strictly matches a movie and extract language & quality.
-    Enforces BOTH Title and Release Year matching.
+    Validates whether a candidate file belongs to requested movie using strict identity matching.
     """
     if not filename:
         return {"status": "invalid", "reason": "empty_filename"}
@@ -530,81 +544,32 @@ def parse_movie_filename(filename: str, movie_title: str, movie_year: str = None
     }
 
 
-async def scan_sdatabase_for_movie(title: str, year: str = None, client: Client = None, imdb_id: str = None, tmdb_id: str = None, movie_id: str = None) -> dict:
+async def scan_sdatabase_for_movie(
+    chat_id: int | str,
+    title: str,
+    year: str = None,
+    client: Client = None,
+    imdb_id: str = None,
+    tmdb_id: str = None,
+    movie_id: str = None
+) -> dict:
     """
     Scan database for files belonging strictly to the specified movie (Title + Release Year).
-    Uses fast two-stage candidate retrieval and strict in-memory matching with zero per-file network calls.
+    Uses get_movie_candidates() to reuse get_search_results() async search engine, followed by
+    strict in-memory Title + Release Year identity verification.
     """
     import time
     start_total = time.monotonic()
-    logger.info(f"[AUTO MOVIE SCAN START]\ntitle={title}\nyear={year}")
+    logger.info(f"[AUTO MOVIE SCAN START]\ntitle={title}\nyear={year}\nchat_id={chat_id}")
 
-    from database.ia_filterdb import col, sec_col, MULTIPLE_DATABASE
     from utils import extract_release_year, normalize_title_for_matching
 
-    logger.info(
-        f"[AUTO MOVIE DB DRIVER] "
-        f"col_type={type(col).__name__} "
-        f"sec_col_type={type(sec_col).__name__}"
-    )
-
-    # Stage 1: Fast Bounded Database Candidate Query
-    start_query = time.monotonic()
-    logger.info("[AUTO MOVIE SCAN QUERY START]\ncandidate_limit=500")
-
-    clean_title = re.sub(r"[\._\-\+\[\]\(\)\{\}:;!?,/\\~|#*\"\'`]", " ", clean_series_title(title))
-    q_tokens = [w for w in clean_title.lower().split() if len(w) > 1]
-    if not q_tokens:
-        q_tokens = [clean_title.lower().strip()] if clean_title.strip() else ["a"]
-
-    tok_pattern = ".*".join(re.escape(t) for t in q_tokens[:3])
-    try:
-        query_regex = re.compile(tok_pattern, re.IGNORECASE)
-    except Exception:
-        query_regex = re.compile(re.escape(clean_title), re.IGNORECASE)
-
-    docs = []
-    def _fetch_candidates():
-        results = []
-        logger.info("[AUTO MOVIE DB QUERY START]")
-        try:
-            cur1 = col.find({"file_name": query_regex}).limit(500)
-            for d in cur1:
-                results.append(d)
-            logger.info(f"[AUTO MOVIE DB QUERY COL DONE] count={len(results)}")
-            if MULTIPLE_DATABASE and len(results) < 500:
-                cur2 = sec_col.find({"file_name": query_regex}).limit(500 - len(results))
-                for d in cur2:
-                    results.append(d)
-            logger.info(f"[AUTO MOVIE DB QUERY SEC DONE] count={len(results)}")
-            # Fallback to longest token if initial ordered regex returned 0
-            if not results and len(q_tokens) >= 2:
-                longest_tok = max(q_tokens, key=len)
-                if len(longest_tok) >= 4:
-                    logger.info("[AUTO MOVIE DB FALLBACK START]")
-                    fallback_regex = re.compile(re.escape(longest_tok), re.IGNORECASE)
-                    cur_fb = col.find({"file_name": fallback_regex}).limit(500)
-                    for d in cur_fb:
-                        results.append(d)
-                    if MULTIPLE_DATABASE and len(results) < 500:
-                        cur_fb2 = sec_col.find({"file_name": fallback_regex}).limit(500 - len(results))
-                        for d in cur_fb2:
-                            results.append(d)
-                    logger.info(f"[AUTO MOVIE DB FALLBACK DONE] count={len(results)}")
-        except Exception as qe:
-            logger.error(f"[AUTO MOVIE QUERY ERROR] {qe}")
-        return results
-
-    loop = asyncio.get_running_loop()
-    docs = await loop.run_in_executor(None, _fetch_candidates)
-    query_dur = time.monotonic() - start_query
-    logger.info(f"[AUTO MOVIE SCAN QUERY DONE]\ncandidate_count={len(docs)}\nduration={query_dur:.2f}s")
+    docs = await get_movie_candidates(chat_id, title, limit=500)
 
     # Stage 2: Fast In-Memory Strict Title + Year Matching
     start_match = time.monotonic()
-    logger.info("[AUTO MOVIE SCAN MATCH START]")
+    logger.info(f"[AUTO MOVIE MATCH START]\ntotal_candidates={len(docs)}")
 
-    # Check already linked file IDs if movie_id is provided
     existing_fids = set()
     if movie_id:
         try:
@@ -705,9 +670,21 @@ async def scan_sdatabase_for_movie(title: str, year: str = None, client: Client 
     match_dur = time.monotonic() - start_match
     total_dur = time.monotonic() - start_total
 
-    logger.info(f"[AUTO MOVIE SCAN MATCH DONE]\nmatched={total_matched}\nrejected_year={total_rejected_year}\nrejected_title={total_rejected_title}\nduration={match_dur:.2f}s")
-    logger.info(f"[AUTO MOVIE SCAN COMPLETE]\ntotal_scanned={total_scanned}\ntotal_matched={total_matched}\nduration={total_dur:.2f}s")
-    logger.info(f"[AUTO MOVIE SCAN TIMING]\nquery={query_dur:.2f}s\nmatching={match_dur:.2f}s\ntotal={total_dur:.2f}s")
+    logger.info(
+        f"[AUTO MOVIE MATCH COMPLETE]\n"
+        f"matched={total_matched}\n"
+        f"rejected_year={total_rejected_year}\n"
+        f"rejected_title={total_rejected_title}\n"
+        f"duration={match_dur:.2f}s"
+    )
+    logger.info(
+        f"[AUTO MOVIE RESULT]\n"
+        f"matched={total_matched}\n"
+        f"new={total_new}\n"
+        f"duplicates={total_duplicates}\n"
+        f"total_scanned={total_scanned}\n"
+        f"total_duration={total_dur:.2f}s"
+    )
 
     if total_dur > 5.0:
         logger.warning(f"[AUTO MOVIE SCAN SLOW]\ntitle={title}\nyear={year}\nduration={total_dur:.2f}s")
@@ -2283,6 +2260,7 @@ async def wizard_text_handler(client: Client, message: Message):
             try:
                 res = await asyncio.wait_for(
                     scan_sdatabase_for_movie(
+                        message.chat.id,
                         movie_data["title"],
                         movie_data["year"],
                         client=client,
@@ -3135,7 +3113,7 @@ async def _handle_wizard_callback(client: Client, query: CallbackQuery):
             parse_mode=enums.ParseMode.HTML,
         )
 
-        res = await scan_sdatabase_for_series(auto_data["title"], season=None, series_id=auto_data.get("existing_series_id"), client=client)
+        res = await scan_sdatabase_for_series(query.message.chat.id, auto_data["title"], season=None, series_id=auto_data.get("existing_series_id"), client=client)
         auto_data["scan"] = res
 
         if res["total_matched"] == 0:
@@ -3257,7 +3235,7 @@ async def _handle_wizard_callback(client: Client, query: CallbackQuery):
             parse_mode=enums.ParseMode.HTML,
         )
 
-        res = await scan_sdatabase_for_series(auto_data["title"], season_num, auto_data.get("existing_series_id"), client=client)
+        res = await scan_sdatabase_for_series(query.message.chat.id, auto_data["title"], season_num, auto_data.get("existing_series_id"), client=client)
         auto_data["scan"] = res
 
         if res["total_matched"] == 0:
@@ -3355,7 +3333,7 @@ async def _handle_wizard_callback(client: Client, query: CallbackQuery):
             parse_mode=enums.ParseMode.HTML,
         )
 
-        res = await scan_sdatabase_for_series(auto_data["title"], season_num, auto_data.get("existing_series_id"), client=client)
+        res = await scan_sdatabase_for_series(query.message.chat.id, auto_data["title"], season_num, auto_data.get("existing_series_id"), client=client)
         auto_data["scan"] = res
 
         if res["total_matched"] == 0:
@@ -4764,6 +4742,7 @@ async def _handle_auto_movie_hierarchical_callbacks(client: Client, query: Callb
         try:
             res = await asyncio.wait_for(
                 scan_sdatabase_for_movie(
+                    query.message.chat.id,
                     movie_data["title"],
                     movie_data["year"],
                     client=client,
