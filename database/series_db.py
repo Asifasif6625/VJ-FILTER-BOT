@@ -1447,3 +1447,161 @@ async def get_movie_files_for_identity(title: str, year: str | int = None, imdb_
                 matched.append(f)
 
     return matched
+
+
+async def scan_movie_files_by_identity(
+    title: str,
+    year: str | int = None,
+    imdb_id: str = None,
+    tmdb_id: str = None
+) -> dict:
+    """
+    Dedicated scanner to find ONLY files belonging strictly to an exact movie identity.
+    Searches candidates broadly (up to 500), enforces strict Title + Release Year / IMDb ID
+    validation on every candidate, and returns a structured scan report.
+    """
+    from database.ia_filterdb import get_search_results
+    from utils import match_movie_identity, normalize_title_for_matching, extract_release_year
+    from plugins.pm_filter import detect_file_languages
+    from plugins.series import extract_quality_from_filename
+
+    clean_t = clean_series_title(title)
+    req_year_str = str(year).strip() if (year and str(year).strip() not in ["N/A", "None", "0", ""]) else None
+
+    logger.info(
+        f"[AUTO MOVIE METADATA]\n"
+        f"title={title}\n"
+        f"year={year}\n"
+        f"imdb_id={imdb_id}\n"
+        f"tmdb_id={tmdb_id}"
+    )
+    logger.info("[AUTO MOVIE FILE SCAN START]")
+
+    # 1. Retrieve candidates broadly from database
+    candidate_docs = []
+    seen_fids = set()
+
+    # Search with title
+    files, _, _ = await get_search_results(0, clean_t, max_results=500, offset=0, filter=True)
+    for f in (files or []):
+        fid = f.get("file_id")
+        if fid and fid not in seen_fids:
+            seen_fids.add(fid)
+            candidate_docs.append(f)
+
+    # Search with title + year if available
+    if req_year_str:
+        y_files, _, _ = await get_search_results(0, f"{clean_t} {req_year_str}", max_results=500, offset=0, filter=True)
+        for f in (y_files or []):
+            fid = f.get("file_id")
+            if fid and fid not in seen_fids:
+                seen_fids.add(fid)
+                candidate_docs.append(f)
+
+    # Search with IMDb ID if available
+    if imdb_id and str(imdb_id).startswith("tt"):
+        id_files, _, _ = await get_search_results(0, str(imdb_id), max_results=100, offset=0, filter=True)
+        for f in (id_files or []):
+            fid = f.get("file_id")
+            if fid and fid not in seen_fids:
+                seen_fids.add(fid)
+                candidate_docs.append(f)
+
+    logger.info(f"[AUTO MOVIE CANDIDATES] count={len(candidate_docs)}")
+
+    matching_files = []
+    year_mismatch_count = 0
+    title_mismatch_count = 0
+    unknown_year_count = 0
+    series_count = 0
+
+    norm_req_title = normalize_title_for_matching(title)
+    known_conflicts = set()
+    for d in candidate_docs:
+        fn = d.get("file_name", "")
+        if normalize_title_for_matching(fn) == norm_req_title:
+            fy = extract_release_year(fn, d.get("caption", ""))
+            if fy:
+                known_conflicts.add(fy)
+
+    for fdoc in candidate_docs:
+        fname = fdoc.get("file_name", "")
+        cap = fdoc.get("caption", "") or ""
+        f_year = extract_release_year(fname, cap)
+
+        is_match, reason = match_movie_identity(
+            fdoc,
+            requested_title=title,
+            requested_year=year,
+            imdb_id=imdb_id,
+            tmdb_id=tmdb_id,
+            known_conflicts=known_conflicts
+        )
+
+        if is_match:
+            logger.info(
+                f"[AUTO MOVIE MATCH]\n"
+                f"filename={fname}\n"
+                f"title_match=True\n"
+                f"year_match={bool(f_year == req_year_str) if req_year_str else True}\n"
+                f"identity_match={reason}"
+            )
+            # Enrich file doc with language and quality
+            langs = detect_file_languages(fname, cap)
+            l_val = langs[0] if langs else "English"
+            q_val = extract_quality_from_filename(fname)
+
+            fdoc_copy = dict(fdoc)
+            fdoc_copy["language"] = l_val
+            fdoc_copy["quality"] = q_val
+            fdoc_copy["title"] = title
+            matching_files.append(fdoc_copy)
+        else:
+            logger.info(
+                f"[AUTO MOVIE REJECT]\n"
+                f"filename={fname}\n"
+                f"reason={reason}"
+            )
+            if reason == "YEAR_MISMATCH":
+                year_mismatch_count += 1
+            elif reason == "TITLE_MISMATCH":
+                title_mismatch_count += 1
+            elif reason in ("UNKNOWN_YEAR", "YEAR_NOT_FOUND_IN_FILENAME"):
+                unknown_year_count += 1
+            elif reason == "IS_SERIES":
+                series_count += 1
+            else:
+                title_mismatch_count += 1
+
+    result = {
+        "requested_title": title,
+        "requested_year": str(year) if year else "",
+        "imdb_id": imdb_id,
+        "tmdb_id": tmdb_id,
+        "files_scanned": len(candidate_docs),
+        "matching_files": matching_files,
+        "matched_count": len(matching_files),
+        "year_mismatch_count": year_mismatch_count,
+        "title_mismatch_count": title_mismatch_count,
+        "unknown_year_count": unknown_year_count,
+        "series_count": series_count,
+        "all_matching_files": matching_files,
+        "valid_files": matching_files,
+        "total_scanned": len(candidate_docs),
+        "total_matched": len(matching_files),
+        "total_rejected_year": year_mismatch_count,
+        "total_rejected_title": title_mismatch_count,
+        "total_new": len(matching_files),
+        "total_duplicates": 0
+    }
+
+    logger.info(
+        f"[AUTO MOVIE SCAN RESULT]\n"
+        f"scanned={result['files_scanned']}\n"
+        f"matched={result['matched_count']}\n"
+        f"year_mismatch={result['year_mismatch_count']}\n"
+        f"title_mismatch={result['title_mismatch_count']}\n"
+        f"unknown_year={result['unknown_year_count']}"
+    )
+    return result
+
