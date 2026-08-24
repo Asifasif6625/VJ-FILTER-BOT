@@ -274,16 +274,22 @@ def parse_series_filename(filename: str, series_title: str, target_season: int =
         return {"status": "invalid", "reason": "missing_season_or_episode"}
 
     # 2. Series Title Match Validation
-    title_norm = _normalize(series_title)
-    title_tokens = [w for w in title_norm.split() if len(w) > 1]
-    if not title_tokens:
-        title_tokens = [title_norm]
+    from utils import normalize_title_for_matching
+    norm_series = normalize_title_for_matching(series_title)
+    clean_no_ep = re.sub(r"(?i)\b(?:s\d{1,2}|season\s*\d{1,2}|e\d{1,4}|ep\s*\d{1,4}|\d{1,2}x\d{1,4})\b", " ", cleaned)
+    norm_fname = normalize_title_for_matching(clean_no_ep)
 
-    clean_f_norm = _normalize(cleaned)
-    matched_tokens = sum(1 for tok in title_tokens if tok in clean_f_norm)
-    min_match = max(1, len(title_tokens) - (1 if len(title_tokens) >= 4 else 0))
-    if matched_tokens < min_match:
-        return {"status": "invalid", "reason": "title_mismatch"}
+    if not norm_fname or not norm_series:
+        return {"status": "invalid", "reason": "empty_title"}
+
+    f_toks = norm_fname.split()
+    s_toks = norm_series.split()
+
+    if f_toks != s_toks:
+        if any(t in f_toks and t not in s_toks for t in ["2", "3", "4", "5", "6", "7", "8", "9", "10", "chapter", "part", "korea"]):
+            return {"status": "invalid", "reason": "title_mismatch"}
+        if sum(1 for tok in s_toks if tok in f_toks) < max(1, len(s_toks) - (1 if len(s_toks) >= 4 else 0)):
+            return {"status": "invalid", "reason": "title_mismatch"}
 
     # 3. Check Target Season
     if target_season is not None and int(season_val) != int(target_season):
@@ -476,64 +482,36 @@ async def scan_sdatabase_for_series(title: str, season: int = None, series_id: s
     }
 
 
-def parse_movie_filename(filename: str, movie_title: str, movie_year: str = None) -> dict:
+def parse_movie_filename(filename: str, movie_title: str, movie_year: str = None, imdb_id: str = None, tmdb_id: str = None, known_conflicts: set = None, caption: str = "") -> dict:
     """
-    Parse a media filename to check if it matches a movie and extract language & quality.
-    Ignores TV series episode files (e.g. S01E01, Ep 01, etc.).
-    Validates movie title and year (avoids matching wrong year release).
+    Parse a media filename to check if it strictly matches a movie and extract language & quality.
+    Enforces BOTH Title and Release Year matching.
     """
     if not filename:
         return {"status": "invalid", "reason": "empty_filename"}
 
+    from utils import match_movie_identity, extract_quality_from_filename
+
+    file_doc = {"file_name": filename, "caption": caption}
+    is_match, reason = match_movie_identity(
+        file_doc,
+        requested_title=movie_title,
+        requested_year=movie_year,
+        imdb_id=imdb_id,
+        tmdb_id=tmdb_id,
+        known_conflicts=known_conflicts
+    )
+
+    if not is_match:
+        return {"status": "invalid", "reason": reason}
+
     raw_name = str(filename)
-    raw_name = re.sub(r"\.(mkv|mp4|avi|mov|wmv|flv|webm|m4v|ts)$", "", raw_name, flags=re.I)
-    cleaned = ' '.join(filter(lambda x: not x.startswith('@') and not x.startswith('http') and not x.startswith('www.') and not x.startswith('t.me'), raw_name.split()))
-    token_text = " " + re.sub(r"[\._\-\+\[\]\(\)\{\}]", " ", cleaned) + " "
-
-    # 1. Reject Series files (contain S01E01, Season 1, Episode 1, Ep 01, etc.)
-    if re.search(r"(?i)\b(?:s\d{1,2}[\s\.\-_]?e\d{1,4}|\d{1,2}x\d{1,4}|(?:season|series)\s*\d{1,2}|ep(?:isode)?\s*\d{1,4})\b", token_text):
-        return {"status": "is_series", "reason": "contains_series_tags"}
-
-    # 2. Title Match Validation
-    title_norm = _normalize(movie_title)
-    title_tokens = [w for w in title_norm.split() if len(w) > 1]
-    if not title_tokens:
-        title_tokens = [title_norm]
-
-    clean_f_norm = _normalize(cleaned)
-    matched_tokens = sum(1 for tok in title_tokens if tok in clean_f_norm)
-    min_match = max(1, len(title_tokens) - (1 if len(title_tokens) >= 4 else 0))
-    if matched_tokens < min_match:
-        return {"status": "invalid", "reason": "title_mismatch"}
-
-    # 3. Year Match Validation
-    if movie_year and str(movie_year).strip().isdigit() and len(str(movie_year).strip()) == 4:
-        target_y = int(str(movie_year).strip())
-        f_years = re.findall(r"\b(19\d{2}|20\d{2})\b", token_text)
-        if f_years:
-            fn_years = [int(y) for y in f_years]
-            if target_y not in fn_years and all(abs(target_y - fy) > 1 for fy in fn_years):
-                return {"status": "invalid", "reason": "year_mismatch"}
-
-    # 4. Quality Detection
     detected_quality = extract_quality_from_filename(raw_name)
 
-    # 5. Language Detection
-    f_words = re.split(r"[\s._\-\[\]\(\)\{\}\+]+", cleaned.lower())
-    is_multi_kw = ("multi" in f_words or "multiaudio" in f_words or "multi-audio" in cleaned.lower() or "multi audio" in cleaned.lower())
-    is_dual_kw = (("dual" in f_words and "audio" in f_words) or "dualaudio" in f_words or "dual-audio" in cleaned.lower())
-
-    found_langs = set()
-    for w in f_words:
-        if w in AUTO_LANGUAGE_MAP:
-            found_langs.add(AUTO_LANGUAGE_MAP[w])
-
-    if is_multi_kw or len(found_langs) >= 2:
-        detected_lang = "Multi"
-    elif is_dual_kw:
-        detected_lang = "Dual Audio"
-    elif len(found_langs) == 1:
-        detected_lang = list(found_langs)[0]
+    from plugins.pm_filter import detect_file_languages
+    langs = detect_file_languages(raw_name, caption)
+    if langs:
+        detected_lang = langs[0]
     else:
         detected_lang = "English"
 
@@ -542,15 +520,16 @@ def parse_movie_filename(filename: str, movie_title: str, movie_year: str = None
         "title": movie_title,
         "language": detected_lang,
         "quality": detected_quality,
-        "reason": "movie_matched",
+        "reason": reason,
     }
 
 
-async def scan_sdatabase_for_movie(title: str, year: str = None, client: Client = None) -> dict:
+async def scan_sdatabase_for_movie(title: str, year: str = None, client: Client = None, imdb_id: str = None, tmdb_id: str = None) -> dict:
     """
-    Scan file collections and SDatabase for files belonging to the specified movie.
+    Scan file collections and SDatabase for files belonging strictly to the specified movie (Title + Release Year).
     """
     from database.ia_filterdb import col, sec_col, MULTIPLE_DATABASE, is_file_already_saved, clean_file_name
+    from utils import extract_release_year, normalize_title_for_matching
 
     clean_title = clean_series_title(title)
     q_tokens = [w for w in _normalize(clean_title).split() if len(w) > 1]
@@ -561,10 +540,10 @@ async def scan_sdatabase_for_movie(title: str, year: str = None, client: Client 
     query_regex = re.compile(tok_pattern, re.IGNORECASE)
 
     cursor1 = col.find({"file_name": query_regex}).limit(1000)
-    docs = [d for d in cursor1]
+    docs = [d async for d in cursor1]
     if MULTIPLE_DATABASE:
         cursor2 = sec_col.find({"file_name": query_regex}).limit(1000)
-        docs.extend([d for d in cursor2])
+        docs.extend([d async for d in cursor2])
 
     if client and SDATABASE_CHANNEL:
         try:
@@ -585,6 +564,24 @@ async def scan_sdatabase_for_movie(title: str, year: str = None, client: Client 
         except Exception as e:
             logger.warning(f"Telegram channel search in SDATABASE_CHANNEL ({SDATABASE_CHANNEL}): {e}")
 
+    logger.info(
+        f"[AUTO MOVIE IDENTITY]\n"
+        f"requested_title={title}\n"
+        f"requested_year={year}\n"
+        f"imdb_id={imdb_id}\n"
+        f"tmdb_id={tmdb_id}"
+    )
+
+    # Detect known conflicting years for this normalized title across candidates
+    known_conflicts = set()
+    norm_req = normalize_title_for_matching(title)
+    for d in docs:
+        fn = d.get("file_name", "")
+        if normalize_title_for_matching(fn) == norm_req:
+            fy = extract_release_year(fn, d.get("caption", ""))
+            if fy:
+                known_conflicts.add(fy)
+
     valid_new_files = []
     duplicate_files = []
     all_matching_files = []
@@ -593,19 +590,50 @@ async def scan_sdatabase_for_movie(title: str, year: str = None, client: Client 
     total_new = 0
     total_duplicates = 0
     total_unknown_quality = 0
+    total_rejected_year = 0
+    total_rejected_title = 0
     total_invalid = 0
     seen_file_keys = set()
 
     for doc in docs:
         fname = doc.get("file_name", "")
-        parsed = parse_movie_filename(fname, clean_title, year)
+        caption = doc.get("caption", "") or ""
+        parsed = parse_movie_filename(fname, title, year, imdb_id=imdb_id, tmdb_id=tmdb_id, known_conflicts=known_conflicts, caption=caption)
 
         status = parsed.get("status")
+        reason = parsed.get("reason")
+        file_yr = extract_release_year(fname, caption)
+
         if status != "matched":
             total_invalid += 1
+            if reason == "YEAR_MISMATCH":
+                total_rejected_year += 1
+                logger.info(
+                    f"[AUTO MOVIE FILE REJECT]\n"
+                    f"reason=YEAR_MISMATCH\n"
+                    f"file_name={fname}\n"
+                    f"file_year={file_yr}\n"
+                    f"requested_year={year}"
+                )
+            elif reason == "TITLE_MISMATCH":
+                total_rejected_title += 1
+                logger.info(
+                    f"[AUTO MOVIE FILE REJECT]\n"
+                    f"reason=TITLE_MISMATCH\n"
+                    f"file_name={fname}"
+                )
             continue
 
         total_matched += 1
+        logger.info(
+            f"[AUTO MOVIE FILE MATCH]\n"
+            f"file_name={fname}\n"
+            f"file_year={file_yr}\n"
+            f"requested_year={year}\n"
+            f"title_match=True\n"
+            f"year_match=True\n"
+            f"identity_match=True"
+        )
         lang = parsed["language"]
         qual = parsed["quality"]
         if qual == "Unknown":
@@ -651,7 +679,14 @@ async def scan_sdatabase_for_movie(title: str, year: str = None, client: Client 
         if q not in organized[l]:
             organized[l].append(q)
 
-    logger.info(f"[AUTO_MOVIE SCAN]\ntitle={title}\nyear={year}\nscanned={total_scanned}\nmatched={total_matched}\nnew={total_new}\nduplicates={total_duplicates}")
+    logger.info(
+        f"[AUTO MOVIE FILTER SYNC]\n"
+        f"matched_files={total_matched}\n"
+        f"rejected_files={total_invalid}\n"
+        f"rejected_year_files={total_rejected_year}\n"
+        f"rejected_title_files={total_rejected_title}\n"
+        f"year={year}"
+    )
 
     return {
         "valid_files": valid_new_files,
@@ -663,6 +698,8 @@ async def scan_sdatabase_for_movie(title: str, year: str = None, client: Client 
         "total_matched": total_matched,
         "total_new": total_new,
         "total_duplicates": total_duplicates,
+        "total_rejected_year": total_rejected_year,
+        "total_rejected_title": total_rejected_title,
         "total_unknown_quality": total_unknown_quality,
         "total_invalid": total_invalid,
     }
@@ -702,8 +739,8 @@ def _group_auto_movie_files(res):
     match_list = res.get("all_matching_files") or res.get("valid_files") or []
     grouped = {}
     for f in match_list:
-        l = f.get("language", "English")
-        q = f.get("quality", "Unknown")
+        l = f.get("language") or "English"
+        q = f.get("quality") or "Unknown"
         if l not in grouped:
             grouped[l] = {}
         if q not in grouped[l]:
@@ -725,8 +762,25 @@ def _build_auto_movie_lang_text(movie_data):
     tot_matched = res.get('total_matched', 0)
     tot_new = res.get('total_new', 0)
     tot_dup = res.get('total_duplicates', 0)
-    tot_unk = res.get('total_unknown_quality', 0)
+    tot_rej_year = res.get('total_rejected_year', 0)
+    tot_rej_title = res.get('total_rejected_title', 0)
     runtime_str = f"\n⏱ {movie_data['runtime']}" if movie_data.get("runtime") else ""
+
+    # Build stats block
+    stats_lines = [
+        f"📁 <b>Files scanned:</b> {tot_scanned}",
+        f"✅ <b>Matching files:</b> {tot_matched}",
+    ]
+    if tot_rej_year > 0:
+        stats_lines.append(f"❌ <b>Rejected other-year files:</b> {tot_rej_year}")
+    if tot_rej_title > 0:
+        stats_lines.append(f"❌ <b>Rejected other-title files:</b> {tot_rej_title}")
+    if tot_new > 0:
+        stats_lines.append(f"🆕 <b>New files:</b> {tot_new}")
+    if tot_dup > 0:
+        stats_lines.append(f"⚠️ <b>Already linked:</b> {tot_dup}")
+
+    stats_block = "\n".join(stats_lines)
 
     # 1. Zero matching files
     if tot_matched == 0:
@@ -737,9 +791,8 @@ def _build_auto_movie_lang_text(movie_data):
             f"{genre_str}"
             f"{runtime_str}\n\n"
             f"❌ <b>NO MATCHING MOVIE FILES FOUND</b>\n\n"
-            f"📁 <b>Files scanned:</b> {tot_scanned}\n"
-            f"✅ <b>Matching files:</b> 0\n\n"
-            "<i>Make sure files contain proper movie title words.</i>"
+            f"{stats_block}\n\n"
+            "<i>Make sure files in database contain exact title and year.</i>"
         )
 
     # 2. Languages & Qualities Breakdown string
@@ -769,10 +822,7 @@ def _build_auto_movie_lang_text(movie_data):
             f"{genre_str}"
             f"{runtime_str}\n\n"
             f"📊 <b>Scan Result</b>\n\n"
-            f"📁 <b>Files scanned:</b> {tot_scanned}\n"
-            f"✅ <b>Matching files:</b> {tot_matched}\n"
-            f"🆕 <b>New files:</b> 0\n"
-            f"⚠️ <b>Existing duplicates:</b> {tot_dup}\n\n"
+            f"{stats_block}\n\n"
             f"♻️ <i>All {tot_matched} matching files already exist in the database. Click below to create/sync the Super Movie Filter.</i>\n\n"
             f"🌐 <b>Languages & Qualities:</b>\n\n"
             f"{breakdown_str}"
@@ -786,10 +836,7 @@ def _build_auto_movie_lang_text(movie_data):
         f"{genre_str}"
         f"{runtime_str}\n\n"
         f"📊 <b>Scan Result</b>\n\n"
-        f"📁 <b>Files scanned:</b> {tot_scanned}\n"
-        f"✅ <b>Matching files:</b> {tot_matched}\n"
-        f"🆕 <b>New files:</b> {tot_new}\n"
-        f"⚠️ <b>Existing duplicates:</b> {tot_dup}\n\n"
+        f"{stats_block}\n\n"
         f"🌐 <b>Languages & Qualities:</b>\n\n"
         f"{breakdown_str}"
     )
@@ -2204,7 +2251,7 @@ async def wizard_text_handler(client: Client, message: Message):
                 parse_mode=enums.ParseMode.HTML
             )
 
-            res = await scan_sdatabase_for_movie(movie_data["title"], movie_data["year"], client=client)
+            res = await scan_sdatabase_for_movie(movie_data["title"], movie_data["year"], client=client, imdb_id=movie_data.get("imdb_id"), tmdb_id=movie_data.get("tmdb_id"))
             movie_data["scan"] = res
             movie_data["grouped"] = _group_auto_movie_files(res)
             movie_data["state"] = "RESULT"
@@ -4610,7 +4657,7 @@ async def _handle_auto_movie_hierarchical_callbacks(client: Client, query: Callb
             f"🔄 <b>Rescanning database for {movie_data['title']} ({movie_data['year']})...</b>",
             parse_mode=enums.ParseMode.HTML
         )
-        res = await scan_sdatabase_for_movie(movie_data["title"], movie_data["year"], client=client)
+        res = await scan_sdatabase_for_movie(movie_data["title"], movie_data["year"], client=client, imdb_id=movie_data.get("imdb_id"), tmdb_id=movie_data.get("tmdb_id"))
         movie_data["scan"] = res
         movie_data["grouped"] = _group_auto_movie_files(res)
         text_res = _build_auto_movie_lang_text(movie_data)
@@ -7284,7 +7331,7 @@ async def cb_emovie(client: Client, query: CallbackQuery):
             pass
 
 
-@Client.on_message(filters.command(["sync_movie", "sync_movies", "syncmovie"]), group=1)
+@Client.on_message(filters.command(["sync_movie", "sync_movies", "syncmovie", "resync_super_movie", "resync_movie"]), group=1)
 async def cmd_sync_movie(client: Client, message: Message):
     if not _is_admin(message.from_user.id if message.from_user else 0):
         return await message.reply_text("❌ You are not authorized to use this command.")
@@ -7293,7 +7340,7 @@ async def cmd_sync_movie(client: Client, message: Message):
     if len(args) < 2:
         return await message.reply_text(
             "ℹ️ <b>Usage:</b>\n<code>/sync_movie &lt;movie_id or movie_title&gt;</code>\n\n"
-            "Rescans the database and links all matching files to the Super Movie Filter.",
+            "Rescans the database and links strictly matching Title + Release Year files to the Super Movie Filter, removing any mismatched files.",
             parse_mode=enums.ParseMode.HTML
         )
 
@@ -7313,12 +7360,15 @@ async def cmd_sync_movie(client: Client, message: Message):
     res = await sync_existing_movie_filter(movie_id)
     if res.get("success"):
         updated_movie = await get_super_movie(movie_id)
+        rem_count = res.get("removed_mismatches", 0)
+        rem_text = f"\n🗑 <b>Removed Mismatches:</b> {rem_count}" if rem_count > 0 else ""
         await message.reply_text(
-            f"✅ <b>Super Movie Filter Synced Successfully!</b>\n\n"
-            f"🎬 <b>Title:</b> {updated_movie.get('title')}\n"
-            f"📦 <b>Total Linked Files:</b> {res.get('total_files')}\n"
-            f"🌐 <b>Languages:</b> {', '.join(res.get('languages', []))}\n"
-            f"🎞 <b>Qualities:</b> {', '.join(res.get('qualities', []))}",
+            f"✅ <b>Super Movie Filter Synced & Repaired!</b>\n\n"
+            f"🎬 <b>Title:</b> {updated_movie.get('title')} ({updated_movie.get('year', 'N/A')})\n"
+            f"📦 <b>Total Verified Files:</b> {res.get('total_files')}"
+            f"{rem_text}\n"
+            f"🌐 <b>Languages:</b> {', '.join(res.get('languages', [])) or 'None'}\n"
+            f"🎞 <b>Qualities:</b> {', '.join(res.get('qualities', [])) or 'None'}",
             parse_mode=enums.ParseMode.HTML
         )
     else:
