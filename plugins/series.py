@@ -2511,12 +2511,16 @@ async def wizard_text_handler(client: Client, message: Message):
 
         s_title = info["title"]
         s_year = str(info.get("year") or "")
-        s_genre = info.get("genres") or "Drama"
+        raw_genres = info.get("genres") or "Drama"
+        if isinstance(raw_genres, list):
+            s_genre = ", ".join(str(g) for g in raw_genres)
+        else:
+            s_genre = str(raw_genres)
         s_rating = str(info.get("rating") or "")
         s_poster = info.get("poster") or ""
         s_plot = info.get("plot") or ""
 
-        from database.series_db import get_series_by_name, create_series
+        from database.series_db import get_series_by_name, create_series, add_series_file
         existing = await get_series_by_name(_normalize(s_title))
         if existing:
             series_id = str(existing["_id"])
@@ -2534,15 +2538,46 @@ async def wizard_text_handler(client: Client, message: Message):
                 "created_by": uid
             })
 
-        logger.info(f"[AUTO SERIES COMPLETE] title={s_title} series_id={series_id}")
+        try:
+            await loading_msg.edit_text(
+                f"📺 <b>Series Found:</b> {html.escape(str(s_title))} ({s_year})\n\n"
+                f"🔍 <b>Scanning database for series episodes...</b>",
+                parse_mode=enums.ParseMode.HTML
+            )
+        except Exception:
+            pass
+
+        scan_res = await scan_sdatabase_for_series(chat_id, s_title, season=None, series_id=series_id, client=client)
+        new_files = scan_res.get("valid_new_files") or []
+        for f in new_files:
+            try:
+                await add_series_file({
+                    "series_id": series_id,
+                    "language": f["language"],
+                    "season": f["season"],
+                    "episode": f["episode"],
+                    "quality": f["quality"],
+                    "chat_id": chat_id,
+                    "file_id": f.get("file_id"),
+                    "file_name": f.get("file_name"),
+                    "file_size": f.get("file_size", 0)
+                })
+            except Exception as fe:
+                logger.error(f"[AUTO SERIES FILE ADD ERROR] {fe}")
+
+        logger.info(f"[AUTO SERIES COMPLETE] title={s_title} series_id={series_id} matched={scan_res.get('total_matched', 0)} new={len(new_files)}")
         clear_wizard_session(uid)
         temp.AUTO_SERIES.pop(uid, None)
 
         card_text = (
             f"📺 <b>Auto Series Configured</b>\n\n"
-            f"<b>{html.escape(s_title)}</b> ({s_year})\n"
-            f"⭐ Rating: {s_rating}/10\n"
-            f"🎭 Genre: {html.escape(s_genre)}\n\n"
+            f"<b>{html.escape(str(s_title))}</b> ({s_year})\n"
+            f"⭐ Rating: {html.escape(str(s_rating))}/10\n"
+            f"🎭 Genre: {html.escape(str(s_genre))}\n\n"
+            f"📁 <b>Files Scanned:</b> {scan_res.get('total_scanned', 0)}\n"
+            f"✅ <b>Matching Episodes:</b> {scan_res.get('total_matched', 0)}\n"
+            f"➕ <b>New Episodes Added:</b> {len(new_files)}\n"
+            f"♻️ <b>Existing/Duplicates:</b> {scan_res.get('total_duplicates', 0)}\n\n"
             f"<i>Series Filter ID: <code>{series_id}</code></i>"
         )
         markup = InlineKeyboardMarkup([

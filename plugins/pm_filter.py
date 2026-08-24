@@ -199,6 +199,10 @@ async def pm_text(bot, message):
     if not content or content.startswith("/") or content.startswith("#"):
         logger.info(f"[PM SEARCH SKIP]\nreason=start_command\ntext={content}")
         return  # ignore commands and hashtags
+
+    if re.search(r"(?i)^(?:https?://|www\.|t\.me/|tt\d{5,12})", content.strip()):
+        logger.info(f"[PM SEARCH SKIP]\nreason=url_or_id\ntext={content}")
+        return
     
     # ── Check active wizard session ──
     from utils import get_wizard_session, temp
