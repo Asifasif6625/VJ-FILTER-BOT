@@ -1541,7 +1541,7 @@ async def cb_handler(client: Client, query: CallbackQuery):
         return await query.answer(alert_text, show_alert=True)
     if query.data == "english_only_reason":
         return await query.answer("⚠️ Send movie name in English\nOther language not supports !", show_alert=True)
-    if query.data and query.data.startswith(("sr#", "sw#", "edser#", "vser#", "edmov#", "delmov#", "anomov#", "emovie_", "series_", "movie_", "smovie_", "send_fsall#", "am_", "slink_", "sfile_")):
+    if query.data and query.data.startswith(("sr#", "sw#", "edser#", "vser#", "edmov#", "delmov#", "anomov#", "emovie_", "emov#", "series_", "movie_", "smovie_", "send_fsall#", "am_", "slink_", "sfile_", "ser_")):
         query.continue_propagation()
         return
     if query.data == "close_data":
