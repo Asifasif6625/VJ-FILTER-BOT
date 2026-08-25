@@ -2494,12 +2494,9 @@ async def announce_filter_created(client: Client, filter_type: str = "series", f
             else:
                 season_str = "Season 1"
 
-            import urllib.parse
-            search_query_enc = urllib.parse.quote_plus(name)
             buttons = [
                 [
-                    InlineKeyboardButton("🔍 Search Series", url=f"https://t.me/{bot_username}?start=search_{search_query_enc}"),
-                    InlineKeyboardButton("🤖 Open Bot", url=f"https://t.me/{bot_username}")
+                    InlineKeyboardButton("⬇️ Download", url=f"https://t.me/{bot_username}?start=series_{filter_id}")
                 ]
             ]
             markup = InlineKeyboardMarkup(buttons)
@@ -2511,7 +2508,7 @@ async def announce_filter_created(client: Client, filter_type: str = "series", f
                 f"{genre_str}\n"
                 f"🌐 <b>Languages:</b> <code>{html.escape(lang_str)}</code>\n"
                 f"🎞 <b>Available:</b> <code>{html.escape(season_str)}</code>\n\n"
-                f"<blockquote>⚡ <b>Search in bot or group to download!</b></blockquote>\n\n"
+                f"<blockquote>⚡ <b>Click Download button below to get files!</b></blockquote>\n\n"
                 f"@{bot_username}"
             )
 
@@ -2539,12 +2536,9 @@ async def announce_filter_created(client: Client, filter_type: str = "series", f
             qualities = movie.get("qualities", [])
             qual_str = ", ".join(qualities) if qualities else "1080p, 720p, 480p"
 
-            import urllib.parse
-            search_query_enc = urllib.parse.quote_plus(f"{title} {year}".strip() if year and year != "N/A" else title)
             buttons = [
                 [
-                    InlineKeyboardButton("🎬 Search Movie", url=f"https://t.me/{bot_username}?start=search_{search_query_enc}"),
-                    InlineKeyboardButton("🤖 Open Bot", url=f"https://t.me/{bot_username}")
+                    InlineKeyboardButton("⬇️ Download", url=f"https://t.me/{bot_username}?start=movie_{filter_id}")
                 ]
             ]
             markup = InlineKeyboardMarkup(buttons)
@@ -2556,7 +2550,7 @@ async def announce_filter_created(client: Client, filter_type: str = "series", f
                 f"{genre_str}\n"
                 f"🌐 <b>Languages:</b> <code>{html.escape(lang_str)}</code>\n"
                 f"⚡ <b>Qualities:</b> <code>{html.escape(qual_str)}</code>\n\n"
-                f"<blockquote>⚡ <b>Search in bot or group to download!</b></blockquote>\n\n"
+                f"<blockquote>⚡ <b>Click Download button below to get files!</b></blockquote>\n\n"
                 f"@{bot_username}"
             )
         else:
@@ -4121,13 +4115,13 @@ async def auto_movie_callbacks(client: Client, query: CallbackQuery):
         )
 
 
-# ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ 
+# ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═  
 # ─── USER SEARCH ROUTERS (Super Movie & Series Search) ───────────────────────
-# ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ 
+# ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═  
 
-async def render_super_movie_direct(client: Client, message: Message, movie: dict, reply_msg: Message = None) -> bool:
-    """Renders the language selection UI for a specific Super Movie."""
-    from database.ia_filterdb import get_file_details
+async def render_super_movie_direct(client: Client, message: Message, movie: dict, reply_msg: Message = None, user_id: int = None) -> bool:
+    """Renders the language selection UI for a specific Super Movie Filter."""
+    from database.series_db import get_file_details
     from plugins.pm_filter import group_movie_files, build_movie_language_keyboard, BUTTON_OWNERS
 
     movie_id = str(movie["_id"])
@@ -4253,7 +4247,7 @@ async def render_super_movie_direct(client: Client, message: Message, movie: dic
     return True
 
 
-async def render_series_direct(client: Client, message: Message, series_doc: dict, reply_msg: Message = None) -> bool:
+async def render_series_direct(client: Client, message: Message, series_doc: dict, reply_msg: Message = None, user_id: int = None) -> bool:
     """Renders the language selection UI for a specific Series Filter."""
     from database.series_db import list_series_languages
     from plugins.pm_filter import BUTTON_OWNERS
@@ -4275,8 +4269,21 @@ async def render_series_direct(client: Client, message: Message, series_doc: dic
     chat_id = message.chat.id if message and message.chat else (reply_msg.chat.id if reply_msg else 0)
     msg_id = message.id if message else (reply_msg.id if reply_msg else 0)
     key = f"{chat_id}-{msg_id}"
-    user_id = message.from_user.id if (message and message.from_user) else (reply_msg.from_user.id if reply_msg and reply_msg.from_user else chat_id)
-    BUTTON_OWNERS[key] = user_id
+
+    real_user_id = user_id
+    if not real_user_id:
+        if message and message.from_user and not message.from_user.is_bot:
+            real_user_id = message.from_user.id
+        elif message and message.reply_to_message and message.reply_to_message.from_user:
+            real_user_id = message.reply_to_message.from_user.id
+        elif reply_msg and reply_msg.reply_to_message and reply_msg.reply_to_message.from_user:
+            real_user_id = reply_msg.reply_to_message.from_user.id
+        elif reply_msg and reply_msg.from_user and not reply_msg.from_user.is_bot:
+            real_user_id = reply_msg.from_user.id
+        elif chat_id > 0:
+            real_user_id = chat_id
+
+    BUTTON_OWNERS[key] = real_user_id
 
     buttons = []
     preferred_order = ["Malayalam", "Tamil", "Hindi", "Telugu", "Kannada", "English", "Dual Audio", "Multi Audio"]
@@ -4335,7 +4342,7 @@ async def render_series_direct(client: Client, message: Message, series_doc: dic
 
     if poster:
         try:
-            await (message.reply_photo(
+            sent_p = await (message.reply_photo(
                 photo=poster,
                 caption=caption_text,
                 reply_markup=markup,
@@ -4347,11 +4354,13 @@ async def render_series_direct(client: Client, message: Message, series_doc: dic
                 reply_markup=markup,
                 parse_mode=enums.ParseMode.HTML
             ))
+            if sent_p:
+                BUTTON_OWNERS[f"{sent_p.chat.id}-{sent_p.id}"] = real_user_id
             return True
         except Exception as pe:
             logger.warning(f"[SERIES PHOTO ERROR] {pe}")
 
-    await (message.reply_text(
+    sent_t = await (message.reply_text(
         text=caption_text,
         reply_markup=markup,
         parse_mode=enums.ParseMode.HTML
@@ -4361,6 +4370,8 @@ async def render_series_direct(client: Client, message: Message, series_doc: dic
         reply_markup=markup,
         parse_mode=enums.ParseMode.HTML
     ))
+    if sent_t:
+        BUTTON_OWNERS[f"{sent_t.chat.id}-{sent_t.id}"] = real_user_id
     return True
 
 
@@ -4472,7 +4483,7 @@ async def cb_sug_movie(client: Client, query: CallbackQuery):
     movie = await get_super_movie(movie_id)
     if not movie:
         return await query.answer("❌ Movie not found.", show_alert=True)
-    await render_super_movie_direct(client, query.message, movie, reply_msg=query.message)
+    await render_super_movie_direct(client, query.message, movie, reply_msg=query.message, user_id=query.from_user.id)
 
 
 @Client.on_callback_query(filters.regex(r"^sug_ser#"), group=-15)
@@ -4489,7 +4500,7 @@ async def cb_sug_series(client: Client, query: CallbackQuery):
     series_doc = await get_series(series_id)
     if not series_doc:
         return await query.answer("❌ Series not found.", show_alert=True)
-    await render_series_direct(client, query.message, series_doc, reply_msg=query.message)
+    await render_series_direct(client, query.message, series_doc, reply_msg=query.message, user_id=query.from_user.id)
 
 
 async def process_super_movie_search(client: Client, message: Message, query_text: str, reply_msg: Message = None) -> bool:
@@ -4500,6 +4511,50 @@ async def process_super_movie_search(client: Client, message: Message, query_tex
 async def process_series_search(client: Client, message: Message, query_text: str, reply_msg: Message = None) -> bool:
     """Backward-compatible alias for process_unified_filter_search."""
     return await process_unified_filter_search(client, message, query_text, reply_msg)
+
+
+async def process_series_deeplink(client: Client, message: Message, series_key: str) -> bool:
+    """
+    Handles /start series_{series_id/series_key} deep link in PM.
+    Directly renders the Series filter language selection UI.
+    """
+    from database.series_db import get_series, get_series_by_key, series_col
+    from bson import ObjectId
+
+    series_doc = await get_series(series_key)
+    if not series_doc:
+        series_doc = await get_series_by_key(series_key)
+    if not series_doc:
+        try:
+            series_doc = await series_col.find_one({"_id": ObjectId(series_key)})
+        except Exception:
+            pass
+    if not series_doc:
+        await message.reply_text("<b>❌ Requested series filter was not found or has been removed.</b>")
+        return False
+    u_id = message.from_user.id if message.from_user else (message.chat.id if message.chat else 0)
+    return await render_series_direct(client, message, series_doc, reply_msg=None, user_id=u_id)
+
+
+async def process_movie_deeplink(client: Client, message: Message, movie_key: str) -> bool:
+    """
+    Handles /start movie_{movie_id} deep link in PM.
+    Directly renders the Super Movie filter language selection UI.
+    """
+    from database.series_db import get_super_movie, super_movies_col
+    from bson import ObjectId
+
+    movie_doc = await get_super_movie(movie_key)
+    if not movie_doc:
+        try:
+            movie_doc = await super_movies_col.find_one({"_id": ObjectId(movie_key)})
+        except Exception:
+            pass
+    if not movie_doc:
+        await message.reply_text("<b>❌ Requested movie filter was not found or has been removed.</b>")
+        return False
+    u_id = message.from_user.id if message.from_user else (message.chat.id if message.chat else 0)
+    return await render_super_movie_direct(client, message, movie_doc, reply_msg=None, user_id=u_id)
 
 
 # ─── SERIES FILTER NAVIGATION CALLBACKS (Language -> Season (if multiple) -> Quality -> Delivery) ───

@@ -39,6 +39,16 @@ def is_button_owner(query: CallbackQuery, key: str) -> tuple[bool, str | None]:
     chat_id = query.message.chat.id if (query.message and query.message.chat) else None
     message_id = query.message.id if query.message else None
 
+    # In PM chat, the user interacting with the bot is always the owner
+    if query.message and query.message.chat and query.message.chat.type == enums.ChatType.PRIVATE:
+        BUTTON_OWNERS[key] = click_user
+        return True, None
+
+    # Ignore bot's own ID if accidentally stored as owner
+    bot_id = getattr(temp, "ME", None)
+    if stored_owner and bot_id and stored_owner == bot_id:
+        stored_owner = None
+
     # 1. If not found in BUTTON_OWNERS, check if key is "{chat_id}-{msg_id}"
     if stored_owner is None and "-" in str(key):
         try:
@@ -50,19 +60,14 @@ def is_button_owner(query: CallbackQuery, key: str) -> tuple[bool, str | None]:
         except Exception:
             pass
 
-    # 2. In PM chat, the chat ID is the original requester's user ID
-    if stored_owner is None and query.message and query.message.chat and query.message.chat.type == enums.ChatType.PRIVATE:
-        stored_owner = query.message.chat.id
-        BUTTON_OWNERS[key] = stored_owner
-
-    # 3. Check reply_to_message if present
+    # 2. Check reply_to_message if present
     if stored_owner is None and query.message and query.message.reply_to_message and query.message.reply_to_message.from_user:
         rep_user = query.message.reply_to_message.from_user.id
-        if rep_user != 0:
+        if rep_user and (not bot_id or rep_user != bot_id):
             stored_owner = rep_user
             BUTTON_OWNERS[key] = stored_owner
 
-    # 4. Validation
+    # 3. Validation
     if stored_owner is not None and stored_owner != 0:
         if click_user == stored_owner:
             logger.info(
@@ -87,11 +92,12 @@ def is_button_owner(query: CallbackQuery, key: str) -> tuple[bool, str | None]:
             )
             return False, "⚠️ This is not your button."
 
-    # 5. Fail-closed if context expired or missing
+    # 4. Fail-closed if context expired or missing
     has_state = (
         key in FRESH or 
         key in temp.GETALL or 
-        (hasattr(temp, "MOVIE_STATE") and key in temp.MOVIE_STATE)
+        (hasattr(temp, "MOVIE_STATE") and key in temp.MOVIE_STATE) or
+        (hasattr(temp, "SERIES_STATE") and key in temp.SERIES_STATE)
     )
     if not has_state:
         logger.info(
