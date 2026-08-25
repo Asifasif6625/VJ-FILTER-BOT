@@ -86,8 +86,8 @@ from utils import (
 )
 
 logger = logging.getLogger(__name__)
-print("### AUTO_MOVIE_METADATA_FIX_V4 ACTIVE ###", flush=True)
-logger.info("[AUTO MOVIE BUILD] METADATA_FIX_V4")
+print("### AUTO_MOVIE_SERIES_METADATA_FIX_V5 ACTIVE ###", flush=True)
+logger.info("### AUTO_MOVIE_SERIES_METADATA_FIX_V5 ACTIVE ###")
 
 
 def _is_admin(user_id: int) -> bool:
@@ -976,43 +976,401 @@ def _build_auto_movie_file_keyboard(session_id, lang, qual, files, page=0, pre="
 
 
 
-
-
-
-# ═════════════════════════════════════════════════════════════════════════════
-# ─── HELPERS ─────────────────────────────────────────────────────────────────
-# ═════════════════════════════════════════════════════════════════════════════
-
-
-
-def _is_admin(user_id: int | str) -> bool:
-    if not user_id:
-        return False
+async def fetch_auto_movie_metadata(client: Client, chat_id: int | str, loading_msg: Message, session_id: str, text: str, uid: int):
+    """
+    Dedicated metadata task for Auto Movie Add.
+    Executes with hard deadline (15s), manages exact state transitions:
+    WAIT_IMDB -> FETCHING_METADATA -> METADATA_COMPLETE -> SCANNING -> RESULT / ERROR / CANCELLED.
+    """
     try:
-        from info import ADMINS, AUTH_USERS
-        admin_list = [str(a).strip() for a in (ADMINS or []) if a] + [str(u).strip() for u in (AUTH_USERS or []) if u]
-        u_str = str(user_id).strip()
-        if u_str in admin_list:
-            return True
+        movie_data = temp.AUTO_MOVIE.get(session_id) or temp.AUTO_MOVIE.get(uid) or {}
+        movie_data.update({
+            "session_id": session_id,
+            "user_id": uid,
+            "state": "FETCHING_METADATA",
+            "metadata_complete": False,
+            "title": None,
+            "year": None,
+            "imdb_id": None,
+            "tmdb_id": None,
+        })
+        temp.AUTO_MOVIE[session_id] = movie_data
+        temp.AUTO_MOVIE[uid] = movie_data
+        set_wizard_session(uid, workflow="AUTO_MOVIE", state="FETCHING_METADATA", data=movie_data, chat_id=chat_id)
+
+        m_imdb = re.search(r"(?:imdb\.com/title/)?(tt\d{5,12})", text, re.I)
+        m_tmdb = re.search(r'(?:https?://)?(?:www\.)?themoviedb\.org/(movie|tv)/(\d+)', text, re.I)
+
+        logger.info(f"[AUTO MOVIE] METADATA ROUTE\nimdb={bool(m_imdb)}\ntmdb={bool(m_tmdb)}")
+        logger.info("[AUTO MOVIE] METADATA TASK START")
+
+        info = None
+        imdb_id = None
+        is_timeout = False
+        is_error = False
+
         try:
-            u_int = int(user_id)
-            for a in (ADMINS or []):
-                if str(a).lstrip("-").isdigit() and int(a) == u_int:
-                    return True
-            for u in (AUTH_USERS or []):
-                if str(u).lstrip("-").isdigit() and int(u) == u_int:
-                    return True
+            if m_tmdb:
+                from utils import get_tmdb_by_url
+                logger.info("[AUTO MOVIE] TMDB REQUEST START")
+                info = await asyncio.wait_for(get_tmdb_by_url(text), timeout=15)
+                logger.info(f"[AUTO MOVIE] TMDB REQUEST DONE\ntitle={info.get('title') if info else None}\nyear={info.get('year') if info else None}")
+            elif m_imdb:
+                imdb_id = m_imdb.group(1).lower()
+                logger.info("[AUTO MOVIE] IMDb REQUEST START")
+                info = await asyncio.wait_for(get_poster(imdb_id, id=True), timeout=15)
+                logger.info(f"[AUTO MOVIE] IMDb REQUEST DONE\ntitle={info.get('title') if info else None}\nyear={info.get('year') if info else None}")
+        except asyncio.TimeoutError:
+            logger.error(f"[AUTO MOVIE] METADATA TIMEOUT query={text}")
+            is_timeout = True
+            info = None
+        except asyncio.CancelledError:
+            logger.info(f"[AUTO MOVIE] METADATA CANCELLED query={text}")
+            movie_data["state"] = "CANCELLED"
+            temp.AUTO_MOVIE[session_id] = movie_data
+            if uid:
+                temp.AUTO_MOVIE[uid] = movie_data
+            try:
+                await loading_msg.edit_text("❌ <b>Auto Movie Add cancelled.</b>", parse_mode=enums.ParseMode.HTML)
+            except Exception:
+                pass
+            return
+        except Exception as e:
+            logger.exception(f"[AUTO MOVIE] METADATA ERROR query={text}: {e}")
+            is_error = True
+            info = None
+
+        if not info or not info.get("title"):
+            movie_data["state"] = "ERROR"
+            temp.AUTO_MOVIE[session_id] = movie_data
+            if uid:
+                temp.AUTO_MOVIE[uid] = movie_data
+                clear_wizard_session(uid)
+
+            retry_markup = InlineKeyboardMarkup([
+                [
+                    InlineKeyboardButton("🔄 Retry", callback_data="sw#start_auto_movie"),
+                    InlineKeyboardButton("❌ Cancel", callback_data="sw#auto_cancel")
+                ]
+            ])
+
+            if is_timeout:
+                err_text = (
+                    "⚠️ <b>Movie metadata timed out.</b>\n\n"
+                    f"Query: <code>{text}</code>\n\n"
+                    "The metadata service did not respond in time. Please try again."
+                )
+            elif is_error:
+                err_text = (
+                    "❌ <b>Movie metadata failed.</b>\n\n"
+                    f"Query: <code>{text}</code>\n\n"
+                    "Could not fetch movie details. Please verify the URL and try again."
+                )
+            else:
+                err_text = (
+                    "❌ <b>Could not retrieve movie data.</b>\n\n"
+                    f"Query: <code>{text}</code>\n\n"
+                    "Please provide a valid IMDb movie URL or TMDB movie URL."
+                )
+
+            try:
+                await loading_msg.edit_text(err_text, reply_markup=retry_markup, parse_mode=enums.ParseMode.HTML)
+            except Exception:
+                try:
+                    await client.send_message(chat_id, err_text, reply_markup=retry_markup, parse_mode=enums.ParseMode.HTML)
+                except Exception:
+                    pass
+            return
+
+        # Check for TV Series
+        kind = str(info.get("kind", "")).lower()
+        is_series = kind in ["tv series", "tv mini series", "series", "tvseries", "tv mini-series"] or (info.get("seasons") and str(info["seasons"]).isdigit() and int(info["seasons"]) > 0)
+        if is_series:
+            clear_wizard_session(uid)
+            movie_data["state"] = "ERROR"
+            temp.AUTO_MOVIE.pop(uid, None)
+            try:
+                await loading_msg.edit_text(
+                    "⚠️ <b>This title is a TV Series.</b>\n\nPlease use Auto Series Add instead.",
+                    reply_markup=InlineKeyboardMarkup([[
+                        InlineKeyboardButton("📺 Auto Series Add", callback_data="sw#start_auto"),
+                        InlineKeyboardButton("❌ Cancel", callback_data="sw#auto_cancel")
+                    ]]),
+                    parse_mode=enums.ParseMode.HTML,
+                )
+            except Exception:
+                pass
+            return
+
+        title = str(info["title"]).strip()
+        year = str(info.get("year") or "N/A").strip()
+        raw_genres = info.get("genres") or "N/A"
+        genre = ", ".join(str(g) for g in raw_genres) if isinstance(raw_genres, list) else str(raw_genres)
+        rating = str(info.get("rating") or "").strip()
+        poster = info.get("poster") or ""
+        description = info.get("plot") or ""
+        resolved_imdb_id = info.get("imdb_id") or imdb_id or "tmdb"
+        resolved_tmdb_id = info.get("tmdb_id")
+
+        movie_data.update({
+            "session_id": session_id,
+            "user_id": uid,
+            "title": title,
+            "year": year,
+            "genre": genre,
+            "rating": rating,
+            "poster": poster,
+            "description": description,
+            "imdb_id": resolved_imdb_id,
+            "tmdb_id": resolved_tmdb_id,
+            "metadata_complete": True,
+            "state": "METADATA_COMPLETE",
+            "created_at": time.time(),
+        })
+        temp.AUTO_MOVIE[session_id] = movie_data
+        temp.AUTO_MOVIE[uid] = movie_data
+        set_wizard_session(uid, workflow="AUTO_MOVIE", state="METADATA_COMPLETE", data=movie_data, chat_id=chat_id)
+
+        logger.info(
+            f"[AUTO MOVIE] METADATA COMPLETE\n"
+            f"title={title}\n"
+            f"year={year}\n"
+            f"imdb_id={resolved_imdb_id}\n"
+            f"tmdb_id={resolved_tmdb_id}"
+        )
+
+        rating_str = f"\n⭐ {rating}/10" if rating else ""
+        genre_str = f"\n🎭 {genre}" if genre and genre != "N/A" else ""
+
+        movie_found_text = (
+            f"🎬 <b>Movie Found</b>\n\n"
+            f"<b>{html.escape(title)}</b> ({year})"
+            f"{rating_str}"
+            f"{genre_str}\n\n"
+            f"🔍 <b>Scanning database for files...</b>"
+        )
+
+        try:
+            await loading_msg.edit_text(movie_found_text, parse_mode=enums.ParseMode.HTML)
+        except Exception as e:
+            logger.warning(f"[AUTO MOVIE UI EDIT FAILED] {e}")
+
+        logger.info("[AUTO MOVIE] STARTING SCAN")
+        await run_auto_movie_scan(client, chat_id, loading_msg, session_id, movie_data)
+    finally:
+        AUTO_MOVIE_METADATA_TASKS.pop(session_id, None)
+
+
+async def fetch_auto_series_metadata(client: Client, chat_id: int | str, loading_msg: Message, session_id: str, text: str, uid: int):
+    """
+    Dedicated metadata task for Auto Series Add.
+    Executes with hard deadline (15s), manages exact state transitions:
+    WAIT_IMDB -> FETCHING_METADATA -> METADATA_COMPLETE -> SCANNING -> RESULT / ERROR / CANCELLED.
+    """
+    try:
+        s_data = temp.AUTO_SERIES.get(session_id) or temp.AUTO_SERIES.get(uid) or {}
+        s_data.update({
+            "session_id": session_id,
+            "user_id": uid,
+            "state": "FETCHING_METADATA",
+            "metadata_complete": False,
+            "title": None,
+            "year": None,
+        })
+        temp.AUTO_SERIES[session_id] = s_data
+        temp.AUTO_SERIES[uid] = s_data
+        set_wizard_session(uid, workflow="AUTO_SERIES", state="FETCHING_METADATA", data=s_data, chat_id=chat_id)
+
+        m_imdb = re.search(r"(?:imdb\.com/title/)?(tt\d{5,12})", text, re.I)
+        m_tmdb = re.search(r'(?:https?://)?(?:www\.)?themoviedb\.org/(movie|tv)/(\d+)', text, re.I)
+
+        logger.info(f"[AUTO SERIES] METADATA ROUTE\nimdb={bool(m_imdb)}\ntmdb={bool(m_tmdb)}")
+        logger.info("[AUTO SERIES] METADATA TASK START")
+
+        info = None
+        is_timeout = False
+        is_error = False
+
+        try:
+            if m_tmdb:
+                from utils import get_tmdb_by_url
+                logger.info("[AUTO SERIES] TMDB REQUEST START")
+                info = await asyncio.wait_for(get_tmdb_by_url(text), timeout=15)
+                logger.info(f"[AUTO SERIES] TMDB REQUEST DONE\ntitle={info.get('title') if info else None}\nyear={info.get('year') if info else None}")
+            elif m_imdb:
+                imdb_id = m_imdb.group(1).lower()
+                logger.info("[AUTO SERIES] IMDb REQUEST START")
+                info = await asyncio.wait_for(get_poster(imdb_id, id=True), timeout=15)
+                logger.info(f"[AUTO SERIES] IMDb REQUEST DONE\ntitle={info.get('title') if info else None}\nyear={info.get('year') if info else None}")
+        except asyncio.TimeoutError:
+            logger.error(f"[AUTO SERIES] METADATA TIMEOUT query={text}")
+            is_timeout = True
+            info = None
+        except asyncio.CancelledError:
+            logger.info(f"[AUTO SERIES] METADATA CANCELLED query={text}")
+            s_data["state"] = "CANCELLED"
+            temp.AUTO_SERIES[session_id] = s_data
+            if uid:
+                temp.AUTO_SERIES[uid] = s_data
+            try:
+                await loading_msg.edit_text("❌ <b>Auto Series Add cancelled.</b>", parse_mode=enums.ParseMode.HTML)
+            except Exception:
+                pass
+            return
+        except Exception as e:
+            logger.exception(f"[AUTO SERIES] METADATA ERROR query={text}: {e}")
+            is_error = True
+            info = None
+
+        if not info or not info.get("title"):
+            s_data["state"] = "ERROR"
+            temp.AUTO_SERIES[session_id] = s_data
+            if uid:
+                temp.AUTO_SERIES[uid] = s_data
+                clear_wizard_session(uid)
+
+            retry_markup = InlineKeyboardMarkup([
+                [
+                    InlineKeyboardButton("🔄 Retry", callback_data="sw#start_auto"),
+                    InlineKeyboardButton("❌ Cancel", callback_data="sw#auto_cancel")
+                ]
+            ])
+
+            if is_timeout:
+                err_text = "⚠️ <b>Series metadata timed out.</b>\n\nPlease try again."
+            elif is_error:
+                err_text = "❌ <b>Series metadata failed.</b>\n\nPlease try again."
+            else:
+                err_text = "❌ <b>Failed to fetch series data.</b>\n\nPlease try again."
+
+            try:
+                await loading_msg.edit_text(err_text, reply_markup=retry_markup, parse_mode=enums.ParseMode.HTML)
+            except Exception:
+                try:
+                    await client.send_message(chat_id, err_text, reply_markup=retry_markup, parse_mode=enums.ParseMode.HTML)
+                except Exception:
+                    pass
+            return
+
+        kind = str(info.get("kind", "")).lower()
+        if kind == "movie" and not info.get("seasons"):
+            clear_wizard_session(uid)
+            s_data["state"] = "ERROR"
+            temp.AUTO_SERIES.pop(uid, None)
+            try:
+                await loading_msg.edit_text(
+                    "⚠️ <b>This title is a Movie.</b>\n\nPlease use Auto Movie Add instead.",
+                    reply_markup=InlineKeyboardMarkup([[
+                        InlineKeyboardButton("🎬 Auto Movie Add", callback_data="sw#start_auto_movie"),
+                        InlineKeyboardButton("❌ Cancel", callback_data="sw#auto_cancel")
+                    ]]),
+                    parse_mode=enums.ParseMode.HTML,
+                )
+            except Exception:
+                pass
+            return
+
+        s_title = str(info["title"]).strip()
+        s_year = str(info.get("year") or "").strip()
+        raw_genres = info.get("genres") or "Drama"
+        s_genre = ", ".join(str(g) for g in raw_genres) if isinstance(raw_genres, list) else str(raw_genres)
+        s_rating = str(info.get("rating") or "").strip()
+        s_poster = info.get("poster") or ""
+        s_plot = info.get("plot") or ""
+
+        s_data.update({
+            "session_id": session_id,
+            "user_id": uid,
+            "title": s_title,
+            "year": s_year,
+            "genre": s_genre,
+            "rating": s_rating,
+            "poster": s_poster,
+            "description": s_plot,
+            "metadata_complete": True,
+            "state": "METADATA_COMPLETE",
+        })
+        temp.AUTO_SERIES[session_id] = s_data
+        temp.AUTO_SERIES[uid] = s_data
+        set_wizard_session(uid, workflow="AUTO_SERIES", state="METADATA_COMPLETE", data=s_data, chat_id=chat_id)
+
+        logger.info(f"[AUTO SERIES] METADATA COMPLETE\ntitle={s_title}\nyear={s_year}")
+
+        from database.series_db import get_series_by_name, create_series, add_series_file
+        existing = await get_series_by_name(_normalize(s_title))
+        if existing:
+            series_id = str(existing["_id"])
+        else:
+            series_id = await create_series({
+                "name": s_title,
+                "year": s_year,
+                "genre": s_genre,
+                "rating": s_rating,
+                "poster": s_poster,
+                "description": s_plot,
+                "languages": ["Malayalam", "Tamil", "Hindi", "English"],
+                "seasons": [1, 2, 3] if not info.get("seasons") else list(range(1, int(info["seasons"]) + 1)),
+                "qualities": ["480p", "720p", "1080p"],
+                "created_by": uid
+            })
+
+        try:
+            await loading_msg.edit_text(
+                f"📺 <b>Series Found:</b> {html.escape(str(s_title))} ({s_year})\n\n"
+                f"🔍 <b>Scanning database for series episodes...</b>",
+                parse_mode=enums.ParseMode.HTML
+            )
         except Exception:
             pass
-        return False
-    except Exception:
-        try:
-            from info import ADMINS
-            u_str = str(user_id).strip()
-            return u_str in [str(a).strip() for a in (ADMINS or []) if a]
-        except Exception:
-            return False
 
+        logger.info("[AUTO SERIES] STARTING SCAN")
+        s_data["state"] = "SCANNING"
+        scan_res = await scan_sdatabase_for_series(chat_id, s_title, season=None, series_id=series_id, client=client)
+        new_files = scan_res.get("valid_new_files") or []
+        for f in new_files:
+            try:
+                await add_series_file({
+                    "series_id": series_id,
+                    "language": f["language"],
+                    "season": f["season"],
+                    "episode": f["episode"],
+                    "quality": f["quality"],
+                    "chat_id": chat_id,
+                    "file_id": f.get("file_id"),
+                    "file_name": f.get("file_name"),
+                    "file_size": f.get("file_size", 0)
+                })
+            except Exception as fe:
+                logger.error(f"[AUTO SERIES FILE ADD ERROR] {fe}")
+
+        logger.info(f"[AUTO SERIES COMPLETE] title={s_title} series_id={series_id} matched={scan_res.get('total_matched', 0)} new={len(new_files)}")
+        clear_wizard_session(uid)
+        temp.AUTO_SERIES.pop(uid, None)
+
+        s_data["state"] = "RESULT"
+        card_text = (
+            f"📺 <b>Auto Series Configured</b>\n\n"
+            f"<b>{html.escape(str(s_title))}</b> ({s_year})\n"
+            f"⭐ Rating: {html.escape(str(s_rating))}/10\n"
+            f"🎭 Genre: {html.escape(str(s_genre))}\n\n"
+            f"📁 <b>Files Scanned:</b> {scan_res.get('total_scanned', 0)}\n"
+            f"✅ <b>Matching Episodes:</b> {scan_res.get('total_matched', 0)}\n"
+            f"🆕 <b>New Files Added:</b> {len(new_files)}\n"
+            f"⚠️ <b>Duplicates Skipped:</b> {scan_res.get('duplicates_skipped', 0)}\n\n"
+            "Series is ready and searchable by users."
+        )
+        markup = InlineKeyboardMarkup([
+            [InlineKeyboardButton("➕ Add More Episodes", callback_data=f"sw#sfiles:{series_id}")],
+            [InlineKeyboardButton("🖼 Change Poster", callback_data=f"sw#sthumb:{series_id}")],
+            [InlineKeyboardButton("🗑 Delete Series", callback_data=f"sw#sdel:{series_id}")],
+            [InlineKeyboardButton("« Back to Menu", callback_data="sw#menu")]
+        ])
+        try:
+            await loading_msg.edit_text(card_text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
+        except Exception:
+            await client.send_message(chat_id, card_text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
+    finally:
+        AUTO_SERIES_METADATA_TASKS.pop(session_id, None)
 
 AUTO_MOVIE_SCAN_LOCKS = {}
 AUTO_MOVIE_SCAN_TASKS = {}
@@ -2044,22 +2402,31 @@ async def cmd_ed_series(client: Client, message: Message):
 async def cmd_cancel(client: Client, message: Message):
     uid = message.from_user.id if message.from_user else 0
 
-    # Cancel any active metadata watchdogs for this user
-    for sess_id, wd in list(AUTO_MOVIE_METADATA_WATCHDOGS.items()):
+    # 1. Cancel any active metadata tasks for this user
+    for sess_id, t in list(AUTO_MOVIE_METADATA_TASKS.items()):
         m_data = getattr(temp, "AUTO_MOVIE", {}).get(sess_id, {})
-        if m_data.get("user_id") == uid:
-            if wd and not wd.done():
-                wd.cancel()
-            AUTO_MOVIE_METADATA_WATCHDOGS.pop(sess_id, None)
-    # 1. Cancel any active running Auto Movie scans for this user
+        if m_data.get("user_id") == uid or m_data.get("admin_id") == uid:
+            if t and not t.done():
+                t.cancel()
+            AUTO_MOVIE_METADATA_TASKS.pop(sess_id, None)
+
+    for sess_id, t in list(AUTO_SERIES_METADATA_TASKS.items()):
+        s_data = getattr(temp, "AUTO_SERIES", {}).get(sess_id, {})
+        if s_data.get("user_id") == uid or s_data.get("admin_id") == uid:
+            if t and not t.done():
+                t.cancel()
+            AUTO_SERIES_METADATA_TASKS.pop(sess_id, None)
+
+    # 2. Cancel any active running Auto Movie scans for this user
     for sess_id, t in list(AUTO_MOVIE_SCAN_TASKS.items()):
         m_data = getattr(temp, "AUTO_MOVIE", {}).get(sess_id, {})
-        if m_data.get("user_id") == uid:
+        if m_data.get("user_id") == uid or m_data.get("admin_id") == uid:
             ev = AUTO_MOVIE_CANCEL_EVENTS.get(sess_id)
             if ev:
                 ev.set()
             if t and not t.done():
                 t.cancel()
+            AUTO_MOVIE_SCAN_TASKS.pop(sess_id, None)
 
     workflow = cancel_wizard_session(uid)
     clear_wizard_session(uid)
@@ -2174,10 +2541,10 @@ async def wizard_text_handler(client: Client, message: Message):
     )
     print(log_input, flush=True)
     logger.info(log_input)
-    # ?? Auto Movie Add IMDb/TMDB Input Handler ?????????????????????????????????
+    # ── Auto Movie Add IMDb/TMDB Input Handler ─────────────────────────────────
     if workflow == "AUTO_MOVIE":
         movie_data = sess.get("data") or temp.AUTO_MOVIE.get(uid, {})
-        if sess.get("state") == "WAIT_IMDB" or movie_data.get("state") == "WAIT_IMDB" or movie_data.get("state") == "FETCHING_METADATA":
+        if sess.get("state") in ("WAIT_IMDB", "FETCHING_METADATA") or movie_data.get("state") in ("WAIT_IMDB", "FETCHING_METADATA"):
             m_imdb = re.search(r"(?:imdb\.com/title/)?(tt\d{5,12})", text, re.I)
             m_tmdb = re.search(r'(?:https?://)?(?:www\.)?themoviedb\.org/(movie|tv)/(\d+)', text, re.I)
 
@@ -2195,15 +2562,15 @@ async def wizard_text_handler(client: Client, message: Message):
                 pmsg = await client.send_message(
                     chat_id=chat_id,
                     text=(
-                        "? <b>Invalid IMDb or TMDB URL.</b>\n\n"
+                        "❌ <b>Invalid IMDb or TMDB URL.</b>\n\n"
                         "Please send:\n\n"
                         "<b>IMDb Movie:</b>\n"
-                        "<code>https://www.imdb.com/title/tt35723557/</code> or <code>tt35723557</code>\n\n"
+                        "<code>https://www.imdb.com/title/tt11948256/</code> or <code>tt11948256</code>\n\n"
                         "<b>TMDB Movie:</b>\n"
                         "<code>https://www.themoviedb.org/movie/863530</code>"
                     ),
                     reply_markup=InlineKeyboardMarkup([[
-                        InlineKeyboardButton("? Cancel", callback_data="sw#auto_cancel")
+                        InlineKeyboardButton("❌ Cancel", callback_data="sw#auto_cancel")
                     ]]),
                     parse_mode=enums.ParseMode.HTML
                 )
@@ -2223,231 +2590,33 @@ async def wizard_text_handler(client: Client, message: Message):
                 except Exception:
                     pass
 
-            logger.info(f"[AUTO MOVIE] METADATA START query={text}")
+            logger.info(f"[AUTO MOVIE INPUT]\ntext={text}")
             loading_msg = await client.send_message(
                 chat_id=chat_id,
                 text=(
-                    "?? <b>Processing Movie Data...</b>\n\n"
+                    "🔎 <b>Processing Movie Data...</b>\n\n"
                     f"Query:\n<code>{text}</code>\n\n"
                     "Please wait..."
                 ),
                 parse_mode=enums.ParseMode.HTML
             )
-            print("### AUTO MOVIE STEP 1: PROCESSING MESSAGE SENT", flush=True)
+            logger.info("[AUTO MOVIE] PROCESSING MESSAGE SENT")
 
             import uuid
             session_id = str(uuid.uuid4())[:8]
 
-            movie_data["state"] = "FETCHING_METADATA"
-            movie_data["metadata_complete"] = False
-            temp.AUTO_MOVIE[session_id] = movie_data
-            temp.AUTO_MOVIE[uid] = movie_data
+            old_task = AUTO_MOVIE_METADATA_TASKS.pop(session_id, None)
+            if old_task and not old_task.done():
+                old_task.cancel()
 
-            watchdog_task = asyncio.create_task(
-                _auto_movie_metadata_watchdog(client, chat_id, loading_msg, session_id)
+            task = asyncio.create_task(
+                fetch_auto_movie_metadata(client, chat_id, loading_msg, session_id, text, uid)
             )
-            AUTO_MOVIE_METADATA_WATCHDOGS[session_id] = watchdog_task
+            AUTO_MOVIE_METADATA_TASKS[session_id] = task
 
-            print(
-                f"### AUTO MOVIE STEP 2: META ROUTE tmdb={bool(m_tmdb)} imdb={bool(m_imdb)} text={text}",
-                flush=True
-            )
-
-            info = None
-            imdb_id = None
-            is_meta_timeout = False
-            is_meta_error = False
-
-            if m_tmdb:
-                from utils import get_tmdb_by_url
-                print("### AUTO MOVIE STEP 3: BEFORE TMDB CALL", flush=True)
-                try:
-                    logger.info(f"[AUTO MOVIE] TMDB metadata START url={text}")
-                    info = await asyncio.wait_for(
-                        get_tmdb_by_url(text),
-                        timeout=20
-                    )
-                    print("### AUTO MOVIE STEP 4: AFTER TMDB CALL", flush=True)
-                    if info:
-                        logger.info(
-                            f"[AUTO MOVIE] TMDB metadata DONE "
-                            f"title={info.get('title')} year={info.get('year')}"
-                        )
-                        logger.info(f"[AUTO_MOVIE TMDB]\nuser_id={uid}\ntmdb_id={info.get('tmdb_id')}\ntitle={info.get('title')}\nyear={info.get('year')}\nkind={info.get('kind')}\ntype=MOVIE")
-                    else:
-                        logger.warning(f"[AUTO MOVIE] TMDB metadata FAILED url={text}")
-                        logger.warning(f"[AUTO_MOVIE TMDB] query={text} status=failed")
-                except asyncio.TimeoutError:
-                    logger.error(f"[AUTO MOVIE] TMDB metadata TIMEOUT url={text}")
-                    logger.error(f"[AUTO MOVIE] METADATA TIMEOUT query={text}")
-                    is_meta_timeout = True
-                    info = None
-                except asyncio.CancelledError:
-                    logger.info(f"[AUTO MOVIE] TMDB metadata CANCELLED url={text}")
-                    logger.info(f"[AUTO MOVIE] METADATA CANCELLED")
-                    raise
-                except Exception as e:
-                    logger.exception(f"[AUTO MOVIE] TMDB metadata ERROR url={text}: {e}")
-                    is_meta_error = True
-                    info = None
-            elif m_imdb:
-                imdb_id = m_imdb.group(1).lower()
-                print("### AUTO MOVIE STEP 3: BEFORE IMDb CALL", flush=True)
-                try:
-                    logger.info(f"[AUTO MOVIE] IMDb metadata START id={imdb_id}")
-                    info = await asyncio.wait_for(
-                        get_poster(imdb_id, id=True),
-                        timeout=20
-                    )
-                    print("### AUTO MOVIE STEP 4: AFTER IMDb CALL", flush=True)
-                    if info:
-                        logger.info(
-                            f"[AUTO MOVIE] IMDb metadata DONE "
-                            f"title={info.get('title')} year={info.get('year')}"
-                        )
-                        logger.info(f"[AUTO_MOVIE IMDb]\nuser_id={uid}\nimdb_id={info.get('imdb_id')}\ntitle={info.get('title')}\nyear={info.get('year')}\nkind={info.get('kind')}\ntype=MOVIE")
-                    else:
-                        logger.warning(f"[AUTO MOVIE] IMDb metadata FAILED id={imdb_id}")
-                        logger.warning(f"[AUTO_MOVIE IMDb] query={text} status=failed")
-                except asyncio.TimeoutError:
-                    logger.error(f"[AUTO MOVIE] IMDb metadata TIMEOUT id={imdb_id}")
-                    logger.error(f"[AUTO MOVIE] METADATA TIMEOUT imdb_id={imdb_id}")
-                    is_meta_timeout = True
-                    info = None
-                except asyncio.CancelledError:
-                    logger.info(f"[AUTO MOVIE] IMDb metadata CANCELLED id={imdb_id}")
-                    logger.info(f"[AUTO MOVIE] METADATA CANCELLED")
-                    raise
-                except Exception as e:
-                    logger.exception(f"[AUTO MOVIE] IMDb metadata ERROR id={imdb_id}: {e}")
-                    is_meta_error = True
-                    info = None
-
-            # Cancel and cleanup watchdog immediately
-            _wd = AUTO_MOVIE_METADATA_WATCHDOGS.pop(session_id, None)
-            if _wd and not _wd.done():
-                _wd.cancel()
-
-            if info and info.get("title"):
-                print(
-                    f"### AUTO MOVIE STEP 5: METADATA COMPLETE "
-                    f"title={info.get('title')} "
-                    f"year={info.get('year')}",
-                    flush=True
-                )
-                logger.info(f"[AUTO MOVIE] METADATA COMPLETE title={info.get('title')}")
-            elif is_meta_timeout:
-                logger.error(f"[AUTO MOVIE] METADATA TIMEOUT query={text}")
-            elif is_meta_error:
-                logger.error(f"[AUTO MOVIE] METADATA FAILED query={text}")
-            else:
-                logger.warning(f"[AUTO MOVIE] METADATA FAILED query={text} info={bool(info)}")
-
-            if not info or not info.get("title"):
-                clear_wizard_session(uid)
-                temp.AUTO_MOVIE.pop(uid, None)
-
-                retry_markup = InlineKeyboardMarkup([
-                    [
-                        InlineKeyboardButton("?? Retry", callback_data="sw#auto_movie"),
-                        InlineKeyboardButton("? Cancel", callback_data="sw#auto_cancel")
-                    ]
-                ])
-
-                if is_meta_timeout:
-                    if m_tmdb:
-                        _tmsg = "? <b>TMDB metadata request timed out.</b>\n\nPlease try again."
-                    else:
-                        _tmsg = "? <b>IMDb metadata request timed out.</b>\n\nPlease try again."
-                    return await loading_msg.edit_text(
-                        _tmsg,
-                        reply_markup=retry_markup,
-                        parse_mode=enums.ParseMode.HTML
-                    )
-                elif is_meta_error:
-                    if m_tmdb:
-                        _emsg = "? <b>Failed to fetch TMDB movie data.</b>\n\nPlease try again."
-                    else:
-                        _emsg = "? <b>Failed to fetch IMDb movie data.</b>\n\nPlease try again."
-                    return await loading_msg.edit_text(
-                        _emsg,
-                        reply_markup=retry_markup,
-                        parse_mode=enums.ParseMode.HTML
-                    )
-                else:
-                    return await loading_msg.edit_text(
-                        f"? <b>Could not retrieve movie data for <code>{text}</code>.</b>\n\n"
-                        "Please provide a valid IMDb URL (e.g. <code>https://www.imdb.com/title/tt0111161/</code>) or TMDB URL (e.g. <code>https://www.themoviedb.org/movie/863530</code>).",
-                        reply_markup=retry_markup,
-                        parse_mode=enums.ParseMode.HTML,
-                    )
-
-            # ?? Movie vs Series Validation ??
-            kind = str(info.get("kind", "")).lower()
-            is_series = kind in ["tv series", "tv mini series", "series", "tvseries", "tv mini-series"] or (info.get("seasons") and str(info["seasons"]).isdigit() and int(info["seasons"]) > 0)
-            if is_series:
-                clear_wizard_session(uid)
-                temp.AUTO_MOVIE.pop(uid, None)
-                return await loading_msg.edit_text(
-                    "?? <b>This title is a TV Series.</b>\n\nPlease use Auto Series Add instead.",
-                    reply_markup=InlineKeyboardMarkup([[
-                        InlineKeyboardButton("?? Auto Series Add", callback_data="sw#auto_series"),
-                        InlineKeyboardButton("? Cancel", callback_data="sw#auto_cancel")
-                    ]]),
-                    parse_mode=enums.ParseMode.HTML,
-                )
-
-            movie_data.update({
-                "session_id": session_id,
-                "user_id": uid,
-                "title": info["title"],
-                "year": str(info.get("year") or "N/A"),
-                "genre": info.get("genres", "N/A"),
-                "rating": str(info.get("rating") or ""),
-                "description": info.get("plot", ""),
-                "poster": info.get("poster") or "",
-                "metadata_complete": True,
-                "state": "METADATA_COMPLETE",
-                "imdb_id": info.get("imdb_id") or info.get("tmdb_id") or imdb_id or "tmdb",
-                "created_at": time.time(),
-            })
-            temp.AUTO_MOVIE[session_id] = movie_data
-            temp.AUTO_MOVIE[uid] = movie_data
-            set_wizard_session(
-                uid,
-                workflow="AUTO_MOVIE",
-                state="METADATA_COMPLETE",
-                data=movie_data,
-                chat_id=chat_id
-            )
-
-            # Update UI to Movie Found before starting database scan
-            rating_str = f"\n⭐ {movie_data['rating']}/10" if movie_data.get('rating') else ""
-            genre_str = f"\n🎭 {movie_data['genre']}" if movie_data.get('genre') and movie_data['genre'] != "N/A" else ""
-
-            movie_found_text = (
-                f"🎬 <b>Movie Found</b>\n\n"
-                f"<b>{html.escape(str(movie_data['title']))}</b> ({movie_data['year']})"
-                f"{rating_str}"
-                f"{genre_str}\n\n"
-                f"🔍 <b>Scanning database for files...</b>"
-            )
-            target_msg = loading_msg
-            try:
-                await loading_msg.edit_text(movie_found_text, parse_mode=enums.ParseMode.HTML)
-            except Exception as e:
-                logger.warning(f"[AUTO MOVIE UI EDIT FAILED] {e}")
-                try:
-                    target_msg = await client.send_message(chat_id, movie_found_text, parse_mode=enums.ParseMode.HTML)
-                except Exception:
-                    target_msg = loading_msg
-
-            print("### AUTO MOVIE STEP 6: STARTING DATABASE SCAN", flush=True)
-            await run_auto_movie_scan(client, chat_id, target_msg, session_id, movie_data)
-            try:
-                message.stop_propagation()
-            except Exception:
-                pass
+            def _done_movie_cb(t):
+                AUTO_MOVIE_METADATA_TASKS.pop(session_id, None)
+            task.add_done_callback(_done_movie_cb)
             return
 
     # ── Auto Series Add Handler ──────────────────────────────────────────────
@@ -2465,130 +2634,31 @@ async def wizard_text_handler(client: Client, message: Message):
                 parse_mode=enums.ParseMode.HTML
             )
 
-        logger.info(f"[AUTO SERIES] METADATA START query={text}")
+        logger.info(f"[AUTO SERIES INPUT]\ntext={text}")
         loading_msg = await message.reply_text(
-            "🔎 <b>Processing Series Data...</b>\n\nPlease wait...",
+            "🔎 <b>Processing Series Data...</b>\n\n"
+            f"Query:\n<code>{text}</code>\n\n"
+            "Please wait...",
             parse_mode=enums.ParseMode.HTML
         )
+        logger.info("[AUTO SERIES] PROCESSING MESSAGE SENT")
 
-        info = None
-        if m_tmdb:
-            from utils import get_tmdb_by_url
-            try:
-                info = await asyncio.wait_for(get_tmdb_by_url(text), timeout=20)
-            except Exception as e:
-                logger.warning(f"[AUTO SERIES] TMDB error: {e}")
-                info = None
-        elif m_imdb:
-            imdb_id = m_imdb.group(1).lower()
-            try:
-                info = await asyncio.wait_for(get_poster(imdb_id, id=True), timeout=20)
-            except Exception as e:
-                logger.warning(f"[AUTO SERIES] IMDb error: {e}")
-                info = None
+        import uuid
+        session_id = str(uuid.uuid4())[:8]
 
-        if not info or not info.get("title"):
-            clear_wizard_session(uid)
-            temp.AUTO_SERIES.pop(uid, None)
-            return await loading_msg.edit_text(
-                "❌ <b>Failed to fetch series data.</b>\n\nPlease try again.",
-                reply_markup=InlineKeyboardMarkup([[
-                    InlineKeyboardButton("🔄 Retry", callback_data="sw#start_auto"),
-                    InlineKeyboardButton("❌ Cancel", callback_data="sw#auto_cancel")
-                ]]),
-                parse_mode=enums.ParseMode.HTML
-            )
+        old_task = AUTO_SERIES_METADATA_TASKS.pop(session_id, None)
+        if old_task and not old_task.done():
+            old_task.cancel()
 
-        kind = str(info.get("kind", "")).lower()
-        if kind == "movie" and not info.get("seasons"):
-            clear_wizard_session(uid)
-            temp.AUTO_SERIES.pop(uid, None)
-            return await loading_msg.edit_text(
-                "⚠️ <b>This title is a Movie.</b>\n\nPlease use Auto Movie Add instead.",
-                reply_markup=InlineKeyboardMarkup([[
-                    InlineKeyboardButton("🎬 Auto Movie Add", callback_data="sw#start_auto_movie"),
-                    InlineKeyboardButton("❌ Cancel", callback_data="sw#auto_cancel")
-                ]]),
-                parse_mode=enums.ParseMode.HTML
-            )
-
-        s_title = info["title"]
-        s_year = str(info.get("year") or "")
-        raw_genres = info.get("genres") or "Drama"
-        if isinstance(raw_genres, list):
-            s_genre = ", ".join(str(g) for g in raw_genres)
-        else:
-            s_genre = str(raw_genres)
-        s_rating = str(info.get("rating") or "")
-        s_poster = info.get("poster") or ""
-        s_plot = info.get("plot") or ""
-
-        from database.series_db import get_series_by_name, create_series, add_series_file
-        existing = await get_series_by_name(_normalize(s_title))
-        if existing:
-            series_id = str(existing["_id"])
-        else:
-            series_id = await create_series({
-                "name": s_title,
-                "year": s_year,
-                "genre": s_genre,
-                "rating": s_rating,
-                "poster": s_poster,
-                "description": s_plot,
-                "languages": ["Malayalam", "Tamil", "Hindi", "English"],
-                "seasons": [1, 2, 3] if not info.get("seasons") else list(range(1, int(info["seasons"]) + 1)),
-                "qualities": ["480p", "720p", "1080p"],
-                "created_by": uid
-            })
-
-        try:
-            await loading_msg.edit_text(
-                f"📺 <b>Series Found:</b> {html.escape(str(s_title))} ({s_year})\n\n"
-                f"🔍 <b>Scanning database for series episodes...</b>",
-                parse_mode=enums.ParseMode.HTML
-            )
-        except Exception:
-            pass
-
-        scan_res = await scan_sdatabase_for_series(chat_id, s_title, season=None, series_id=series_id, client=client)
-        new_files = scan_res.get("valid_new_files") or []
-        for f in new_files:
-            try:
-                await add_series_file({
-                    "series_id": series_id,
-                    "language": f["language"],
-                    "season": f["season"],
-                    "episode": f["episode"],
-                    "quality": f["quality"],
-                    "chat_id": chat_id,
-                    "file_id": f.get("file_id"),
-                    "file_name": f.get("file_name"),
-                    "file_size": f.get("file_size", 0)
-                })
-            except Exception as fe:
-                logger.error(f"[AUTO SERIES FILE ADD ERROR] {fe}")
-
-        logger.info(f"[AUTO SERIES COMPLETE] title={s_title} series_id={series_id} matched={scan_res.get('total_matched', 0)} new={len(new_files)}")
-        clear_wizard_session(uid)
-        temp.AUTO_SERIES.pop(uid, None)
-
-        card_text = (
-            f"📺 <b>Auto Series Configured</b>\n\n"
-            f"<b>{html.escape(str(s_title))}</b> ({s_year})\n"
-            f"⭐ Rating: {html.escape(str(s_rating))}/10\n"
-            f"🎭 Genre: {html.escape(str(s_genre))}\n\n"
-            f"📁 <b>Files Scanned:</b> {scan_res.get('total_scanned', 0)}\n"
-            f"✅ <b>Matching Episodes:</b> {scan_res.get('total_matched', 0)}\n"
-            f"➕ <b>New Episodes Added:</b> {len(new_files)}\n"
-            f"♻️ <b>Existing/Duplicates:</b> {scan_res.get('total_duplicates', 0)}\n\n"
-            f"<i>Series Filter ID: <code>{series_id}</code></i>"
+        task = asyncio.create_task(
+            fetch_auto_series_metadata(client, chat_id, loading_msg, session_id, text, uid)
         )
-        markup = InlineKeyboardMarkup([
-            [InlineKeyboardButton("📁 Add Files / Batch", callback_data=f"sw#menu#batch#{series_id}")],
-            [InlineKeyboardButton("⚙️ Edit Configuration", callback_data=f"edser#edit#{series_id}")],
-            [InlineKeyboardButton("✅ Done", callback_data="sw#auto_cancel")]
-        ])
-        return await loading_msg.edit_text(card_text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
+        AUTO_SERIES_METADATA_TASKS[session_id] = task
+
+        def _done_series_cb(t):
+            AUTO_SERIES_METADATA_TASKS.pop(session_id, None)
+        task.add_done_callback(_done_series_cb)
+        return
 
     # ── Manual Series Wizard Handler ─────────────────────────────────────────
     elif workflow == "SERIES_WIZARD":
@@ -2774,6 +2844,30 @@ async def series_wizard_callback(client: Client, query: CallbackQuery):
         )
 
     elif data in ("sw#cancel", "sw#auto_cancel", "sw#auto_movie_cancel"):
+        for sess_id, t in list(AUTO_MOVIE_METADATA_TASKS.items()):
+            m_data = getattr(temp, "AUTO_MOVIE", {}).get(sess_id, {})
+            if m_data.get("user_id") == uid or m_data.get("admin_id") == uid:
+                if t and not t.done():
+                    t.cancel()
+                AUTO_MOVIE_METADATA_TASKS.pop(sess_id, None)
+
+        for sess_id, t in list(AUTO_SERIES_METADATA_TASKS.items()):
+            s_data = getattr(temp, "AUTO_SERIES", {}).get(sess_id, {})
+            if s_data.get("user_id") == uid or s_data.get("admin_id") == uid:
+                if t and not t.done():
+                    t.cancel()
+                AUTO_SERIES_METADATA_TASKS.pop(sess_id, None)
+
+        for sess_id, t in list(AUTO_MOVIE_SCAN_TASKS.items()):
+            m_data = getattr(temp, "AUTO_MOVIE", {}).get(sess_id, {})
+            if m_data.get("user_id") == uid or m_data.get("admin_id") == uid:
+                ev = AUTO_MOVIE_CANCEL_EVENTS.get(sess_id)
+                if ev:
+                    ev.set()
+                if t and not t.done():
+                    t.cancel()
+                AUTO_MOVIE_SCAN_TASKS.pop(sess_id, None)
+
         cancel_wizard_session(uid)
         clear_wizard_session(uid)
         temp.AUTO_MOVIE.pop(uid, None)
