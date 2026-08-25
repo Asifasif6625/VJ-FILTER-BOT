@@ -3493,108 +3493,107 @@ async def advantage_spell_chok(client, name, msg, reply_msg, vj_search):
     reqstr = await client.get_users(reqstr1) if reqstr1 else None
     settings = await get_settings(msg.chat.id)
 
-    movielist = []
+    # 1. First check if any saved filters match in database (Super Movies & Series)
+    from database.series_db import search_super_movies, search_series
+    saved_movies = await search_super_movies(mv_rqst)
+    saved_series = await search_series(mv_rqst)
 
-    # 1. Search Super Movies from database for suggestions
+    valid_movies = [m for m in saved_movies if m.get("file_ids")]
+    valid_series = saved_series
+
+    if valid_movies or valid_series:
+        from plugins.series import process_unified_filter_search
+        return await process_unified_filter_search(client, msg, mv_rqst, reply_msg)
+
+    # 2. No saved filter in database -> Check IMDb / TMDB for movie metadata
+    imdb = None
     try:
-        from database.series_db import search_super_movies
-        sm_results = await search_super_movies(mv_rqst)
-        for sm in sm_results:
-            t = sm.get("title")
-            y = sm.get("year")
-            if t:
-                combo = f"🎬 {t} ({y})" if y and y != "N/A" else f"🎬 {t}"
-                if combo not in movielist:
-                    movielist.append(combo)
+        imdb = await get_poster(mv_rqst)
     except Exception as e:
-        logger.warning(f"[SPELL CHECK] Super movie search error: {e}")
+        logger.warning(f"[IMDB NO-RESULT LOOKUP ERROR] {e}")
 
-    # 2. Search Series from database for suggestions
-    try:
-        from database.series_db import search_series
-        ser_results = await search_series(mv_rqst)
-        for s in ser_results:
-            n = s.get("name")
-            y = s.get("year")
-            if n:
-                combo = f"📺 {n} ({y})" if y and y != "N/A" else f"📺 {n}"
-                if combo not in movielist:
-                    movielist.append(combo)
-    except Exception as e:
-        logger.warning(f"[SPELL CHECK] Series search error: {e}")
+    reason_btn = [[
+        InlineKeyboardButton(chr(0x1F9A8) + " Reason", callback_data="not_in_db_reason")
+    ]]
+    markup = InlineKeyboardMarkup(reason_btn)
 
-    # 3. Search IMDb / Public metadata for suggestions (fallback)
-    try:
-        movies = await get_poster(mv_rqst, bulk=True)
-        if movies:
-            for movie in movies:
-                t = movie.get('title')
-                y = movie.get('year')
-                if t:
-                    combo = f"{t} ({y})" if y and y != "N/A" else t
-                    if combo not in movielist:
-                        movielist.append(combo)
-    except Exception as e:
-        logger.warning(f"[SPELL CHECK] IMDb suggestion error: {e}")
+    if imdb and imdb.get("title"):
+        title = imdb.get("title")
+        year = str(imdb.get("year", "")).strip()
+        year_str = f" ({year})" if year and year != "N/A" else ""
+        rating = str(imdb.get("rating", "")).strip()
+        rating_str = f"\n⭐ <b>Rating:</b> {rating}/10" if rating else ""
+        genres = imdb.get("genres") or imdb.get("genre") or ""
+        genre_str = f"\n🎭 <b>Genre:</b> {genres}" if genres and genres != "N/A" else ""
+        poster = imdb.get("poster")
 
-    # Deduplicate while preserving order & cap to 8
-    unique_movies = []
-    for m in movielist:
-        if m and m not in unique_movies:
-            unique_movies.append(m)
-    movielist = unique_movies[:8]
+        cap = (
+            f"🎬 <b>{title}{year_str}</b>"
+            f"{rating_str}"
+            f"{genre_str}\n\n"
+            f"😕 <b>Requested content is currently not available in our database.</b>\n\n"
+            f"<i>🕐 This message will be deleted in 50 seconds.</i>"
+        )
 
-    if not movielist:
-        reqst_gle = mv_rqst.replace(" ", "+")
-        button = [[
-            InlineKeyboardButton("Gᴏᴏɢʟᴇ", url=f"https://www.google.com/search?q={reqst_gle}"),
-            InlineKeyboardButton(chr(0x1F9A8) + " Reason", callback_data="not_in_db_reason")
-        ]]
-        if NO_RESULTS_MSG and reqstr:
-            await client.send_message(chat_id=LOG_CHANNEL, text=(script.NORSLTS.format(reqstr.id, reqstr.mention, mv_rqst)))
-        if reply_msg:
-            k = await reply_msg.edit_text(text=script.I_CUDNT.format(mv_rqst), reply_markup=InlineKeyboardMarkup(button))
+        sent_msg = None
+        if poster:
+            try:
+                if reply_msg:
+                    if reply_msg.photo:
+                        try:
+                            sent_msg = await reply_msg.edit_media(
+                                media=InputMediaPhoto(media=poster, caption=cap, parse_mode=enums.ParseMode.HTML),
+                                reply_markup=markup
+                            )
+                        except Exception:
+                            sent_msg = await reply_msg.edit_caption(caption=cap, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
+                    else:
+                        try:
+                            await reply_msg.delete()
+                        except Exception:
+                            pass
+                        sent_msg = await msg.reply_photo(photo=poster, caption=cap, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
+                else:
+                    sent_msg = await msg.reply_photo(photo=poster, caption=cap, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
+            except Exception as pe:
+                logger.warning(f"[NO RESULT PHOTO SEND ERROR] {pe}")
+                if reply_msg:
+                    sent_msg = await reply_msg.edit_text(text=cap, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
+                else:
+                    sent_msg = await msg.reply_text(text=cap, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
         else:
-            k = await msg.reply_text(text=script.I_CUDNT.format(mv_rqst), reply_markup=InlineKeyboardMarkup(button))
-        await asyncio.sleep(30)
+            if reply_msg:
+                sent_msg = await reply_msg.edit_text(text=cap, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
+            else:
+                sent_msg = await msg.reply_text(text=cap, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
+
+        await asyncio.sleep(50)
         try:
-            await k.delete()
+            if sent_msg:
+                await sent_msg.delete()
+            await msg.delete()
         except Exception:
             pass
         return
 
-    SPELL_CHECK[mv_id] = movielist
+    # 3. Not in IMDb / TMDB either -> Standard non-result message
+    msg_text = (
+        "<b>sᴏʀʀʏ ɴᴏ ꜰɪʟᴇs ᴡᴇʀᴇ ꜰᴏᴜɴᴅ ꜰᴏʀ ʏᴏᴜʀ ʀᴇǫᴜᴇꜱᴛ😕\n\n"
+        "ᴄʜᴇᴄᴋ ʏᴏᴜʀ sᴘᴇʟʟɪɴɢ ɪɴ ɢᴏᴏɢʟᴇ ᴀɴᴅ ᴛʀʏ ᴀɢᴀɪɴ 😃\n\n"
+        "<i>🕐 This message will be deleted in 50 seconds.</i></b>"
+    )
 
-    btn = [
-        [
-            InlineKeyboardButton(
-                text=movie_name.strip(),
-                callback_data=f"spol#{reqstr1}#{k}",
-            )
-        ]
-        for k, movie_name in enumerate(movielist)
-    ]
-    btn.append([
-        InlineKeyboardButton(chr(0x1F9A8) + " Reason", callback_data="not_in_db_reason"),
-        InlineKeyboardButton(text="Close", callback_data=f'spol#{reqstr1}#close_spellcheck')
-    ])
+    sent_msg = None
     if reply_msg:
-        spell_check_del = await reply_msg.edit_text(
-            text=script.CUDNT_FND.format(mv_rqst),
-            reply_markup=InlineKeyboardMarkup(btn)
-        )
+        sent_msg = await reply_msg.edit_text(msg_text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
     else:
-        spell_check_del = await msg.reply_text(
-            text=script.CUDNT_FND.format(mv_rqst),
-            reply_markup=InlineKeyboardMarkup(btn)
-        )
-    if spell_check_del:
-        SPELL_CHECK[spell_check_del.id] = movielist
+        sent_msg = await msg.reply_text(msg_text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
 
+    await asyncio.sleep(50)
     try:
-        if settings.get('auto_delete', True):
-            await asyncio.sleep(600)
-            await spell_check_del.delete()
+        if sent_msg:
+            await sent_msg.delete()
+        await msg.delete()
     except Exception:
         pass
 
