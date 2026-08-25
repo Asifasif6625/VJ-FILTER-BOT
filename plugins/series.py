@@ -2053,13 +2053,17 @@ def _should_show_skip_season(wiz: dict) -> bool:
 
 def _config_menu_keyboard(series_id: str = None, from_viewseries: bool = False) -> InlineKeyboardMarkup:
     if series_id:
-        # Existing series editing mode: show Add Episode, Add Files, Announcement, Delete
         buttons = [
             [
-                InlineKeyboardButton("➕ Add Episode", callback_data="sw#menu#add_ep"),
-                InlineKeyboardButton("📁 Add Files", callback_data="sw#menu#batch")
+                InlineKeyboardButton("🌐 Edit Languages", callback_data="sw#edit#langs"),
+                InlineKeyboardButton("📅 Edit Seasons", callback_data="sw#edit#seasons"),
             ],
             [
+                InlineKeyboardButton("⚡ Edit Qualities", callback_data="sw#edit#quals"),
+                InlineKeyboardButton("🖼 Edit Poster", callback_data="sw#edit#poster"),
+            ],
+            [
+                InlineKeyboardButton("📁 Add Files / Resync", callback_data=f"sw#menu#batch#{series_id}"),
                 InlineKeyboardButton("📢 Announcement", callback_data=f"edser#ano#{series_id}")
             ],
             [
@@ -2067,7 +2071,6 @@ def _config_menu_keyboard(series_id: str = None, from_viewseries: bool = False) 
             ]
         ]
     else:
-        # New series creation mode: only show Add Files
         buttons = [
             [
                 InlineKeyboardButton("📁 Add Files", callback_data="sw#menu#batch")
@@ -2990,6 +2993,16 @@ async def cb_movie_management(client: Client, query: CallbackQuery):
             parse_mode=enums.ParseMode.HTML
         )
 
+    if data.startswith("emov#edit_poster#"):
+        movie_id = data.split("#")[2]
+        from utils import set_wizard_session
+        set_wizard_session(uid, workflow="MOVIE_EDIT_POSTER", state="WAIT_POSTER", data={"movie_id": movie_id}, chat_id=query.message.chat.id)
+        return await query.message.edit_text(
+            "🖼 <b>Edit Movie Poster</b>\n\nPlease send the <b>new Poster Photo or URL</b>:\n(or click Cancel to return)",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data=f"emovie_select#{movie_id}")]]),
+            parse_mode=enums.ParseMode.HTML
+        )
+
     if data.startswith("emov#del_confirm#"):
         movie_id = data.split("#")[2]
         await super_movies_col.update_one(
@@ -3058,6 +3071,7 @@ async def cb_movie_management(client: Client, query: CallbackQuery):
             InlineKeyboardButton("📢 Announcement", callback_data=f"emov#ano#{movie_id}")
         ],
         [
+            InlineKeyboardButton("🖼 Edit Poster", callback_data=f"emov#edit_poster#{movie_id}"),
             InlineKeyboardButton("🗑 Delete Movie", callback_data=f"emov#del#{movie_id}")
         ],
         [
@@ -3493,6 +3507,51 @@ async def wizard_text_handler(client: Client, message: Message):
                 parse_mode=enums.ParseMode.HTML
             )
 
+    elif workflow == "SERIES_WIZARD_EDIT_POSTER":
+        wiz = temp.SERIES_WIZARD.get(uid) or sess.get("data", {})
+        poster_url = ""
+        if message.photo:
+            poster_url = message.photo.file_id
+        elif text and text.lower() != "/skip":
+            poster_url = text
+        if poster_url:
+            wiz["poster"] = poster_url
+            temp.SERIES_WIZARD[uid] = wiz
+            if wiz.get("series_id"):
+                from database.series_db import series_col
+                from bson import ObjectId
+                try:
+                    await series_col.update_one({"_id": ObjectId(wiz["series_id"])}, {"$set": {"poster": poster_url, "updated_at": datetime.utcnow()}})
+                except Exception:
+                    pass
+        clear_wizard_session(uid)
+        return await message.reply_text(
+            _series_card(wiz) + "\n\n✅ <b>Poster updated!</b>\n⚙️ <b>Series Configuration:</b>",
+            reply_markup=_config_menu_keyboard(wiz.get("series_id"), wiz.get("from_viewseries", True)),
+            parse_mode=enums.ParseMode.HTML
+        )
+
+    elif workflow == "MOVIE_EDIT_POSTER":
+        movie_data = sess.get("data", {})
+        movie_id = movie_data.get("movie_id")
+        poster_url = ""
+        if message.photo:
+            poster_url = message.photo.file_id
+        elif text and text.lower() != "/skip":
+            poster_url = text
+        if poster_url and movie_id:
+            from database.series_db import super_movies_col
+            from bson import ObjectId
+            try:
+                await super_movies_col.update_one({"_id": ObjectId(movie_id)}, {"$set": {"poster": poster_url, "updated_at": datetime.utcnow()}})
+            except Exception:
+                pass
+        clear_wizard_session(uid)
+        return await message.reply_text(
+            "✅ <b>Movie poster updated!</b>\nUse /viewmovies to inspect.",
+            parse_mode=enums.ParseMode.HTML
+        )
+
 
 # ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ 
 # ─── CANONICAL SERIES WIZARD CALLBACK HANDLER (sw#) ───────────────────────────
@@ -3691,6 +3750,62 @@ async def series_wizard_callback(client: Client, query: CallbackQuery):
     elif data.startswith("sw#menu#add_ep"):
         return await query.answer("Use '📁 Add Files' to scan database or forward episode files to the channel.", show_alert=True)
 
+    elif data.startswith("sw#edit#langs"):
+        wiz = temp.SERIES_WIZARD.get(uid)
+        if not wiz:
+            return await query.answer("Session expired.", show_alert=True)
+        langs = wiz.get("languages", [])
+        return await query.message.edit_text(
+            _series_card(wiz) + "\n\n🌐 <b>Toggle Available Languages:</b>\nClick a language to add/remove, then click Submit:",
+            reply_markup=_lang_keyboard(langs, show_custom=False),
+            parse_mode=enums.ParseMode.HTML
+        )
+
+    elif data.startswith("sw#edit#seasons"):
+        wiz = temp.SERIES_WIZARD.get(uid)
+        if not wiz:
+            return await query.answer("Session expired.", show_alert=True)
+        seasons = wiz.get("seasons", [])
+        return await query.message.edit_text(
+            _series_card(wiz) + "\n\n📅 <b>Toggle Available Seasons:</b>\nClick a season to add/remove, then click Submit:",
+            reply_markup=_season_keyboard(MAX_SEASONS, seasons, show_skip=False),
+            parse_mode=enums.ParseMode.HTML
+        )
+
+    elif data.startswith("sw#edit#quals"):
+        wiz = temp.SERIES_WIZARD.get(uid)
+        if not wiz:
+            return await query.answer("Session expired.", show_alert=True)
+        quals = wiz.get("qualities", [])
+        return await query.message.edit_text(
+            _series_card(wiz) + "\n\n⚡ <b>Toggle Available Qualities:</b>\nClick a quality to add/remove, then click Submit:",
+            reply_markup=_quality_keyboard(quals, show_custom=False),
+            parse_mode=enums.ParseMode.HTML
+        )
+
+    elif data.startswith("sw#edit#poster"):
+        wiz = temp.SERIES_WIZARD.get(uid)
+        if not wiz:
+            return await query.answer("Session expired.", show_alert=True)
+        set_wizard_session(uid, workflow="SERIES_WIZARD_EDIT_POSTER", state="WAIT_POSTER", data=wiz, chat_id=chat_id)
+        return await query.message.edit_text(
+            "🖼 <b>Edit Series Poster</b>\n\nPlease send the <b>new Poster Photo or URL</b>:\n(or click Cancel to return)",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="sw#edit#cancel")]]),
+            parse_mode=enums.ParseMode.HTML
+        )
+
+    elif data == "sw#edit#cancel":
+        wiz = temp.SERIES_WIZARD.get(uid)
+        clear_wizard_session(uid)
+        if wiz:
+            return await query.message.edit_text(
+                _series_card(wiz) + "\n\n⚙️ <b>Series Configuration</b>\nChoose an option to edit:",
+                reply_markup=_config_menu_keyboard(wiz.get("series_id"), wiz.get("from_viewseries", True)),
+                parse_mode=enums.ParseMode.HTML
+            )
+        else:
+            return await send_filter_manager(query, ftype="series", page=0)
+
     elif data in ("sw#cancel", "sw#auto_cancel", "sw#auto_movie_cancel"):
         wiz = temp.SERIES_WIZARD.get(uid)
         if wiz and wiz.get("from_viewseries"):
@@ -3741,6 +3856,12 @@ async def series_wizard_callback(client: Client, query: CallbackQuery):
         if val == "submit":
             if not wiz.get("languages"):
                 return await query.answer("Please select at least one language.", show_alert=True)
+            if wiz.get("mode") == "edit":
+                return await query.message.edit_text(
+                    _series_card(wiz) + "\n\n⚙️ <b>Edit Series Configuration</b>\nChoose an option to edit:",
+                    reply_markup=_config_menu_keyboard(wiz.get("series_id"), wiz.get("from_viewseries", True)),
+                    parse_mode=enums.ParseMode.HTML
+                )
             wiz["state"] = S_SEASONS
             set_wizard_session(uid, workflow="SERIES_WIZARD", state=S_SEASONS, data=wiz, chat_id=chat_id)
             return await query.message.edit_text(
@@ -3749,6 +3870,12 @@ async def series_wizard_callback(client: Client, query: CallbackQuery):
                 parse_mode=enums.ParseMode.HTML
             )
         elif val == "back":
+            if wiz.get("mode") == "edit":
+                return await query.message.edit_text(
+                    _series_card(wiz) + "\n\n⚙️ <b>Edit Series Configuration</b>\nChoose an option to edit:",
+                    reply_markup=_config_menu_keyboard(wiz.get("series_id"), wiz.get("from_viewseries", True)),
+                    parse_mode=enums.ParseMode.HTML
+                )
             wiz["state"] = S_POSTER
             set_wizard_session(uid, workflow="SERIES_WIZARD", state=S_POSTER, data=wiz, chat_id=chat_id)
             return await query.message.edit_text(
@@ -3762,11 +3889,17 @@ async def series_wizard_callback(client: Client, query: CallbackQuery):
                 langs.remove(val)
             else:
                 langs.append(val)
-            return await query.message.edit_reply_markup(reply_markup=_lang_keyboard(langs, show_custom=True))
+            return await query.message.edit_reply_markup(reply_markup=_lang_keyboard(langs, show_custom=(wiz.get("mode") != "edit")))
 
     elif data.startswith("sw#season#"):
         val = data.split("#")[2]
         if val in ("submit", "skip"):
+            if wiz.get("mode") == "edit":
+                return await query.message.edit_text(
+                    _series_card(wiz) + "\n\n⚙️ <b>Edit Series Configuration</b>\nChoose an option to edit:",
+                    reply_markup=_config_menu_keyboard(wiz.get("series_id"), wiz.get("from_viewseries", True)),
+                    parse_mode=enums.ParseMode.HTML
+                )
             wiz["state"] = S_QUALITY
             set_wizard_session(uid, workflow="SERIES_WIZARD", state=S_QUALITY, data=wiz, chat_id=chat_id)
             return await query.message.edit_text(
@@ -3775,6 +3908,12 @@ async def series_wizard_callback(client: Client, query: CallbackQuery):
                 parse_mode=enums.ParseMode.HTML
             )
         elif val == "back":
+            if wiz.get("mode") == "edit":
+                return await query.message.edit_text(
+                    _series_card(wiz) + "\n\n⚙️ <b>Edit Series Configuration</b>\nChoose an option to edit:",
+                    reply_markup=_config_menu_keyboard(wiz.get("series_id"), wiz.get("from_viewseries", True)),
+                    parse_mode=enums.ParseMode.HTML
+                )
             wiz["state"] = S_LANGS
             set_wizard_session(uid, workflow="SERIES_WIZARD", state=S_LANGS, data=wiz, chat_id=chat_id)
             return await query.message.edit_text(
@@ -3790,7 +3929,7 @@ async def series_wizard_callback(client: Client, query: CallbackQuery):
                     seasons.remove(s_int)
                 else:
                     seasons.append(s_int)
-                return await query.message.edit_reply_markup(reply_markup=_season_keyboard(MAX_SEASONS, seasons, show_skip=True))
+                return await query.message.edit_reply_markup(reply_markup=_season_keyboard(MAX_SEASONS, seasons, show_skip=(wiz.get("mode") != "edit")))
             except Exception:
                 pass
 
@@ -3799,7 +3938,13 @@ async def series_wizard_callback(client: Client, query: CallbackQuery):
         if val == "submit":
             if not wiz.get("qualities"):
                 return await query.answer("Please select at least one quality.", show_alert=True)
-            # Commit to database!
+            if wiz.get("mode") == "edit":
+                return await query.message.edit_text(
+                    _series_card(wiz) + "\n\n⚙️ <b>Edit Series Configuration</b>\nChoose an option to edit:",
+                    reply_markup=_config_menu_keyboard(wiz.get("series_id"), wiz.get("from_viewseries", True)),
+                    parse_mode=enums.ParseMode.HTML
+                )
+            # Create mode: Commit to database!
             from database.series_db import create_series, search_series
             series_id = await create_series({
                 "name": wiz["name"],
@@ -3822,6 +3967,12 @@ async def series_wizard_callback(client: Client, query: CallbackQuery):
                 parse_mode=enums.ParseMode.HTML
             )
         elif val == "back":
+            if wiz.get("mode") == "edit":
+                return await query.message.edit_text(
+                    _series_card(wiz) + "\n\n⚙️ <b>Edit Series Configuration</b>\nChoose an option to edit:",
+                    reply_markup=_config_menu_keyboard(wiz.get("series_id"), wiz.get("from_viewseries", True)),
+                    parse_mode=enums.ParseMode.HTML
+                )
             wiz["state"] = S_SEASONS
             set_wizard_session(uid, workflow="SERIES_WIZARD", state=S_SEASONS, data=wiz, chat_id=chat_id)
             return await query.message.edit_text(
@@ -3835,7 +3986,7 @@ async def series_wizard_callback(client: Client, query: CallbackQuery):
                 quals.remove(val)
             else:
                 quals.append(val)
-            return await query.message.edit_reply_markup(reply_markup=_quality_keyboard(quals, show_custom=True))
+            return await query.message.edit_reply_markup(reply_markup=_quality_keyboard(quals, show_custom=(wiz.get("mode") != "edit")))
 
 
 # ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ 
@@ -4045,27 +4196,54 @@ async def process_super_movie_search(client: Client, message: Message, query_tex
 
     if reply_msg:
         try:
-            await reply_msg.delete()
+            if reply_msg.photo or reply_msg.caption:
+                await reply_msg.edit_caption(
+                    caption=caption_text,
+                    reply_markup=markup,
+                    parse_mode=enums.ParseMode.HTML
+                )
+                return True
+            else:
+                await reply_msg.edit_text(
+                    text=caption_text,
+                    reply_markup=markup,
+                    parse_mode=enums.ParseMode.HTML
+                )
+                return True
         except Exception:
-            pass
+            try:
+                await reply_msg.delete()
+            except Exception:
+                pass
 
     if poster:
         try:
-            await message.reply_photo(
+            await (message.reply_photo(
                 photo=poster,
                 caption=caption_text,
                 reply_markup=markup,
                 parse_mode=enums.ParseMode.HTML
-            )
+            ) if message else client.send_photo(
+                chat_id=key.split("-")[0],
+                photo=poster,
+                caption=caption_text,
+                reply_markup=markup,
+                parse_mode=enums.ParseMode.HTML
+            ))
             return True
         except Exception as pe:
             logger.warning(f"[SUPER MOVIE PHOTO ERROR] {pe}")
 
-    await message.reply_text(
+    await (message.reply_text(
         text=caption_text,
         reply_markup=markup,
         parse_mode=enums.ParseMode.HTML
-    )
+    ) if message else client.send_message(
+        chat_id=key.split("-")[0],
+        text=caption_text,
+        reply_markup=markup,
+        parse_mode=enums.ParseMode.HTML
+    ))
     return True
 
 
@@ -4102,8 +4280,8 @@ async def process_series_search(client: Client, message: Message, query_text: st
     if not langs:
         langs = series_doc.get("languages", [])
 
-    key = f"{message.chat.id}-{message.id}"
-    BUTTON_OWNERS[key] = message.from_user.id if message.from_user else message.chat.id
+    key = f"{message.chat.id}-{message.id}" if message else f"{reply_msg.chat.id}-{reply_msg.id}"
+    BUTTON_OWNERS[key] = message.from_user.id if (message and message.from_user) else (reply_msg.from_user.id if reply_msg and reply_msg.from_user else 0)
 
     buttons = []
     preferred_order = ["Malayalam", "Tamil", "Hindi", "Telugu", "Kannada", "English", "Dual Audio", "Multi Audio"]
@@ -4126,27 +4304,54 @@ async def process_series_search(client: Client, message: Message, query_text: st
 
     if reply_msg:
         try:
-            await reply_msg.delete()
+            if reply_msg.photo or reply_msg.caption:
+                await reply_msg.edit_caption(
+                    caption=caption_text,
+                    reply_markup=markup,
+                    parse_mode=enums.ParseMode.HTML
+                )
+                return True
+            else:
+                await reply_msg.edit_text(
+                    text=caption_text,
+                    reply_markup=markup,
+                    parse_mode=enums.ParseMode.HTML
+                )
+                return True
         except Exception:
-            pass
+            try:
+                await reply_msg.delete()
+            except Exception:
+                pass
 
     if poster:
         try:
-            await message.reply_photo(
+            await (message.reply_photo(
                 photo=poster,
                 caption=caption_text,
                 reply_markup=markup,
                 parse_mode=enums.ParseMode.HTML
-            )
+            ) if message else client.send_photo(
+                chat_id=key.split("-")[0],
+                photo=poster,
+                caption=caption_text,
+                reply_markup=markup,
+                parse_mode=enums.ParseMode.HTML
+            ))
             return True
         except Exception as pe:
             logger.warning(f"[SERIES PHOTO ERROR] {pe}")
 
-    await message.reply_text(
+    await (message.reply_text(
         text=caption_text,
         reply_markup=markup,
         parse_mode=enums.ParseMode.HTML
-    )
+    ) if message else client.send_message(
+        chat_id=key.split("-")[0],
+        text=caption_text,
+        reply_markup=markup,
+        parse_mode=enums.ParseMode.HTML
+    ))
     return True
 
 
