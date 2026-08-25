@@ -1443,6 +1443,11 @@ async def fetch_auto_series_metadata(client: Client, chat_id: int | str, loading
         logger.info("[AUTO SERIES] FILTER VERIFY")
         logger.info(f"[AUTO SERIES COMPLETE] title={s_title} series_id={series_id} matched={scan_res.get('total_matched', 0)} new={len(new_files)}")
         clear_wizard_session(uid)
+
+        try:
+            await announce_filter_created(client, filter_type="series", filter_id=str(series_id))
+        except Exception as ae:
+            logger.warning(f"[AUTO SERIES ANNOUNCEMENT ERROR] {ae}")
         temp.AUTO_SERIES.pop(uid, None)
 
         s_data["state"] = "RESULT"
@@ -2271,6 +2276,325 @@ async def cmd_series_menu(client: Client, message: Message):
         reply_markup=markup,
         parse_mode=enums.ParseMode.HTML
     )
+
+
+# ─── ANNOUNCEMENT CONFIGURATION COMMANDS (/add_ano, /del_ano, /get_ano) ─────────
+
+@Client.on_message(filters.command(["add_ano", "set_ano"]), group=-1)
+async def cmd_set_announcement(client: Client, message: Message):
+    uid = message.from_user.id if message.from_user else (message.sender_chat.id if message.sender_chat else 0)
+    if not _is_admin(uid):
+        return await message.reply_text("❌ <b>You are not authorized.</b>", parse_mode=enums.ParseMode.HTML)
+
+    args = message.text.split()
+    if len(args) < 2:
+        return await message.reply_text(
+            "⚠️ <b>Usage:</b>\n"
+            "<code>/add_ano &lt;channel_id&gt;</code>\n\n"
+            "<b>Example:</b>\n"
+            "<code>/add_ano -1001234567890</code>",
+            parse_mode=enums.ParseMode.HTML
+        )
+
+    raw_cid = args[1].strip()
+    try:
+        cid = int(raw_cid)
+    except ValueError:
+        cid = raw_cid
+
+    from database.series_db import set_announcement_channel
+    await set_announcement_channel(cid)
+    logger.info(f"[ANNOUNCEMENT CONFIG] Channel set to {cid} by {uid}")
+
+    await message.reply_text(
+        f"✅ <b>Announcement channel configured successfully!</b>\n\n"
+        f"📢 Channel ID: <code>{cid}</code>",
+        parse_mode=enums.ParseMode.HTML
+    )
+
+
+@Client.on_message(filters.command(["del_ano", "rem_ano"]), group=-1)
+async def cmd_del_announcement(client: Client, message: Message):
+    uid = message.from_user.id if message.from_user else (message.sender_chat.id if message.sender_chat else 0)
+    if not _is_admin(uid):
+        return await message.reply_text("❌ <b>You are not authorized.</b>", parse_mode=enums.ParseMode.HTML)
+
+    from database.series_db import delete_announcement_channel
+    await delete_announcement_channel()
+    logger.info(f"[ANNOUNCEMENT CONFIG] Channel deleted by {uid}")
+
+    await message.reply_text(
+        "✅ <b>Announcement channel setting removed.</b>",
+        parse_mode=enums.ParseMode.HTML
+    )
+
+
+@Client.on_message(filters.command(["get_ano", "ano_channel"]), group=-1)
+async def cmd_get_announcement(client: Client, message: Message):
+    uid = message.from_user.id if message.from_user else (message.sender_chat.id if message.sender_chat else 0)
+    if not _is_admin(uid):
+        return await message.reply_text("❌ <b>You are not authorized.</b>", parse_mode=enums.ParseMode.HTML)
+
+    from database.series_db import get_announcement_channel
+    cid = await get_announcement_channel()
+    if cid:
+        await message.reply_text(
+            f"📢 <b>Current Announcement Channel:</b> <code>{cid}</code>",
+            parse_mode=enums.ParseMode.HTML
+        )
+    else:
+        await message.reply_text(
+            "⚠️ <b>Announcement channel is not configured.</b>\n\n"
+            "Use <code>/add_ano &lt;channel_id&gt;</code> to set one.",
+            parse_mode=enums.ParseMode.HTML
+        )
+
+
+@Client.on_message(filters.command(["sync_movies", "resync_movies"]), group=-1)
+async def cmd_sync_movies(client: Client, message: Message):
+    uid = message.from_user.id if message.from_user else (message.sender_chat.id if message.sender_chat else 0)
+    if not _is_admin(uid):
+        return await message.reply_text("❌ <b>You are not authorized.</b>", parse_mode=enums.ParseMode.HTML)
+
+    status_msg = await message.reply_text("🔄 <b>Synchronizing all Super Movie filters with database...</b>", parse_mode=enums.ParseMode.HTML)
+    from database.series_db import super_movies_col, sync_existing_movie_filter
+    cursor = super_movies_col.find({"status": {"$ne": "deleted"}})
+    movies = [doc async for doc in cursor]
+
+    synced = 0
+    total_added = 0
+    for m in movies:
+        mid = str(m["_id"])
+        res = await sync_existing_movie_filter(mid)
+        if res.get("success"):
+            synced += 1
+            total_added += res.get("new_files_added", 0)
+
+    await status_msg.edit_text(
+        f"✅ <b>Movie Filter Sync Complete!</b>\n\n"
+        f"🎬 <b>Movies Synced:</b> <code>{synced}/{len(movies)}</code>\n"
+        f"📁 <b>New Files Linked:</b> <code>{total_added}</code>",
+        parse_mode=enums.ParseMode.HTML
+    )
+
+
+@Client.on_message(filters.command(["sync_series", "resync_series"]), group=-1)
+async def cmd_sync_series(client: Client, message: Message):
+    uid = message.from_user.id if message.from_user else (message.sender_chat.id if message.sender_chat else 0)
+    if not _is_admin(uid):
+        return await message.reply_text("❌ <b>You are not authorized.</b>", parse_mode=enums.ParseMode.HTML)
+
+    status_msg = await message.reply_text("🔄 <b>Synchronizing all Series filters with database...</b>", parse_mode=enums.ParseMode.HTML)
+    from database.series_db import series_col, scan_sdatabase_for_series, add_series_file
+    cursor = series_col.find({"status": {"$ne": "deleted"}})
+    series_list = [doc async for doc in cursor]
+
+    synced = 0
+    total_added = 0
+    for s in series_list:
+        sid = str(s["_id"])
+        name = s.get("name", "")
+        res = await scan_sdatabase_for_series(message.chat.id, name, season=None, series_id=sid, client=client)
+        new_files = res.get("valid_new_files") or []
+        for f in new_files:
+            try:
+                await add_series_file({
+                    "series_id": sid,
+                    "language": f["language"],
+                    "season": f["season"],
+                    "episode": f["episode"],
+                    "quality": f["quality"],
+                    "chat_id": message.chat.id,
+                    "file_id": f.get("file_id"),
+                    "file_name": f.get("file_name"),
+                    "file_size": f.get("file_size", 0)
+                })
+                total_added += 1
+            except Exception:
+                pass
+        synced += 1
+
+    await status_msg.edit_text(
+        f"✅ <b>Series Filter Sync Complete!</b>\n\n"
+        f"📺 <b>Series Synced:</b> <code>{synced}/{len(series_list)}</code>\n"
+        f"📁 <b>New Episodes Linked:</b> <code>{total_added}</code>",
+        parse_mode=enums.ParseMode.HTML
+    )
+
+
+async def announce_filter_created(client: Client, filter_type: str = "series", filter_id: str = None, force: bool = False) -> bool:
+    """
+    Sends an announcement message/photo to the configured announcement channel.
+    Tracks sent state to avoid duplicate broadcasts unless force=True.
+    """
+    from database.series_db import (
+        get_announcement_channel,
+        is_announcement_sent,
+        save_announcement,
+        get_series,
+        get_super_movie,
+        list_series_languages,
+        series_col,
+        super_movies_col
+    )
+    from bson import ObjectId
+
+    if not filter_id:
+        return False
+
+    channel_id = await get_announcement_channel()
+    if not channel_id:
+        logger.warning(f"[ANNOUNCEMENT] Channel not configured for {filter_type}:{filter_id}")
+        return False
+
+    ann_key = f"{filter_type}:{filter_id}"
+    if not force and await is_announcement_sent(ann_key, filter_type=filter_type, filter_id=str(filter_id)):
+        logger.info(f"[ANNOUNCEMENT SKIPPED] Already sent for {ann_key}")
+        return True
+
+    bot_username = temp.U_NAME if (hasattr(temp, "U_NAME") and temp.U_NAME) else getattr(getattr(client, "me", None), "username", None)
+    if bot_username:
+        bot_username = str(bot_username).lstrip("@")
+    else:
+        bot_username = "Bot"
+
+    try:
+        if filter_type == "series":
+            series = await get_series(filter_id)
+            if not series:
+                try:
+                    series = await series_col.find_one({"_id": ObjectId(filter_id)})
+                except Exception:
+                    pass
+            if not series:
+                logger.warning(f"[ANNOUNCEMENT] Series not found id={filter_id}")
+                return False
+
+            name = series.get("name", "Series")
+            year = str(series.get("year", ""))
+            year_str = f" ({year})" if year and year != "N/A" else ""
+            rating = str(series.get("rating", ""))
+            rating_str = f"\n⭐ <b>Rating:</b> {rating}/10" if rating else ""
+            genre = series.get("genre", "")
+            genre_str = f"\n🎭 <b>Genre:</b> {genre}" if genre and genre != "N/A" else ""
+            poster = series.get("poster")
+
+            langs = await list_series_languages(str(filter_id))
+            if not langs:
+                langs = series.get("languages", [])
+            lang_str = ", ".join(langs) if langs else "All Languages"
+
+            seasons = series.get("seasons", [])
+            if isinstance(seasons, list) and seasons:
+                season_str = ", ".join(f"Season {s}" for s in sorted(seasons) if str(s).isdigit())
+            else:
+                season_str = "Season 1"
+
+            import urllib.parse
+            search_query_enc = urllib.parse.quote_plus(name)
+            buttons = [
+                [
+                    InlineKeyboardButton("🔍 Search Series", url=f"https://t.me/{bot_username}?start=search_{search_query_enc}"),
+                    InlineKeyboardButton("🤖 Open Bot", url=f"https://t.me/{bot_username}")
+                ]
+            ]
+            markup = InlineKeyboardMarkup(buttons)
+
+            caption = (
+                f"📢 <b>NEW SERIES ADDED!</b> 🎬\n\n"
+                f"📺 <b>Title:</b> <code>{html.escape(name)}{year_str}</code>"
+                f"{rating_str}"
+                f"{genre_str}\n"
+                f"🌐 <b>Languages:</b> <code>{html.escape(lang_str)}</code>\n"
+                f"🎞 <b>Available:</b> <code>{html.escape(season_str)}</code>\n\n"
+                f"<blockquote>⚡ <b>Search in bot or group to download!</b></blockquote>\n\n"
+                f"@{bot_username}"
+            )
+
+        elif filter_type == "movie":
+            movie = await get_super_movie(filter_id)
+            if not movie:
+                try:
+                    movie = await super_movies_col.find_one({"_id": ObjectId(filter_id)})
+                except Exception:
+                    pass
+            if not movie:
+                logger.warning(f"[ANNOUNCEMENT] Movie not found id={filter_id}")
+                return False
+
+            title = movie.get("title", "Movie")
+            year = str(movie.get("year", ""))
+            year_str = f" ({year})" if year and year != "N/A" else ""
+            rating = str(movie.get("rating", ""))
+            rating_str = f"\n⭐ <b>Rating:</b> {rating}/10" if rating else ""
+            genre = movie.get("genre", "")
+            genre_str = f"\n🎭 <b>Genre:</b> {genre}" if genre and genre != "N/A" else ""
+            poster = movie.get("poster")
+            langs = movie.get("languages", [])
+            lang_str = ", ".join(langs) if langs else "Multi"
+            qualities = movie.get("qualities", [])
+            qual_str = ", ".join(qualities) if qualities else "1080p, 720p, 480p"
+
+            import urllib.parse
+            search_query_enc = urllib.parse.quote_plus(f"{title} {year}".strip() if year and year != "N/A" else title)
+            buttons = [
+                [
+                    InlineKeyboardButton("🎬 Search Movie", url=f"https://t.me/{bot_username}?start=search_{search_query_enc}"),
+                    InlineKeyboardButton("🤖 Open Bot", url=f"https://t.me/{bot_username}")
+                ]
+            ]
+            markup = InlineKeyboardMarkup(buttons)
+
+            caption = (
+                f"📢 <b>NEW MOVIE ADDED!</b> 🎬\n\n"
+                f"🎬 <b>Title:</b> <code>{html.escape(title)}{year_str}</code>"
+                f"{rating_str}"
+                f"{genre_str}\n"
+                f"🌐 <b>Languages:</b> <code>{html.escape(lang_str)}</code>\n"
+                f"⚡ <b>Qualities:</b> <code>{html.escape(qual_str)}</code>\n\n"
+                f"<blockquote>⚡ <b>Search in bot or group to download!</b></blockquote>\n\n"
+                f"@{bot_username}"
+            )
+        else:
+            return False
+
+        # Send to channel
+        sent_msg = None
+        cid_int = int(channel_id) if str(channel_id).lstrip("-").isdigit() else str(channel_id)
+
+        if poster:
+            try:
+                sent_msg = await client.send_photo(
+                    chat_id=cid_int,
+                    photo=poster,
+                    caption=caption,
+                    reply_markup=markup,
+                    parse_mode=enums.ParseMode.HTML
+                )
+            except Exception as pe:
+                logger.warning(f"[ANNOUNCEMENT PHOTO FAILED] {pe} - falling back to text")
+
+        if not sent_msg:
+            sent_msg = await client.send_message(
+                chat_id=cid_int,
+                text=caption,
+                reply_markup=markup,
+                parse_mode=enums.ParseMode.HTML
+            )
+
+        if sent_msg:
+            await save_announcement(
+                filter_id=str(filter_id),
+                channel_id=cid_int,
+                message_id=sent_msg.id,
+                filter_type=filter_type
+            )
+            logger.info(f"[ANNOUNCEMENT SENT SUCCESS] type={filter_type} filter_id={filter_id} msg_id={sent_msg.id}")
+            return True
+        return False
+    except Exception as e:
+        logger.exception(f"[ANNOUNCEMENT BROADCAST ERROR] {e}")
+        return False
 
 
 
@@ -3179,6 +3503,11 @@ async def auto_movie_callbacks(client: Client, query: CallbackQuery):
         temp.AUTO_MOVIE.pop(uid, None)
         temp.AUTO_MOVIE.pop(session_id, None)
 
+        try:
+            await announce_filter_created(client, filter_type="movie", filter_id=str(movie_id))
+        except Exception as ae:
+            logger.warning(f"[AUTO MOVIE ANNOUNCEMENT ERROR] {ae}")
+
         title_esc = html.escape(str(movie_data.get('title', '')))
         year_esc = html.escape(str(movie_data.get('year', '')))
         tot_files = len(file_ids)
@@ -3375,8 +3704,10 @@ async def process_series_search(client: Client, message: Message, query_text: st
     for i in range(0, len(langs_sorted), 2):
         row = []
         for l in langs_sorted[i:i+2]:
-            row.append(InlineKeyboardButton(to_series_font(l), callback_data=f"languages#{series_id}#{l}#{key}"))
+            row.append(InlineKeyboardButton(to_series_font(l), callback_data=f"ser_lang#{series_id}#{l}#{key}"))
         buttons.append(row)
+
+    buttons.append([InlineKeyboardButton("❌ Close", callback_data=f"ser_close#{key}")])
 
     caption_text = (
         f"📺 <b>{name}{year_str}</b>"
@@ -3410,5 +3741,439 @@ async def process_series_search(client: Client, message: Message, query_text: st
         parse_mode=enums.ParseMode.HTML
     )
     return True
+
+
+# ─── SERIES FILTER NAVIGATION CALLBACKS ─────────────────────────────────────────
+
+@Client.on_callback_query(filters.regex(r"^ser_lang#"))
+async def ser_lang_callback(client: Client, query: CallbackQuery):
+    parts = query.data.split("#")
+    if len(parts) < 4:
+        return await query.answer("Invalid request.", show_alert=True)
+    _, series_id, lang, key = parts[0], parts[1], parts[2], parts[3]
+    
+    from plugins.pm_filter import is_button_owner
+    is_owner, err_msg = is_button_owner(query, key)
+    if not is_owner:
+        return await query.answer(err_msg, show_alert=True)
+
+    from database.series_db import get_series, list_series_seasons
+    series = await get_series(series_id)
+    if not series:
+        return await query.answer("⚠️ Series not found in database.", show_alert=True)
+
+    seasons = await list_series_seasons(series_id, lang)
+    if not seasons:
+        seasons = series.get("seasons", [1])
+        if isinstance(seasons, int):
+            seasons = list(range(1, seasons + 1))
+        elif not isinstance(seasons, list):
+            seasons = [1]
+
+    name = series.get("name", "Series")
+    year = str(series.get("year", ""))
+    year_str = f" ({year})" if year and year != "N/A" else ""
+    rating = str(series.get("rating", ""))
+    rating_str = f"\n⭐ <b>Rating:</b> {rating}/10" if rating else ""
+    genre = series.get("genre", "")
+    genre_str = f"\n🎭 <b>Genre:</b> {genre}" if genre and genre != "N/A" else ""
+
+    buttons = []
+    seasons_sorted = sorted([int(s) for s in seasons if str(s).isdigit()])
+    if not seasons_sorted:
+        seasons_sorted = [1]
+
+    for i in range(0, len(seasons_sorted), 2):
+        row = []
+        for s in seasons_sorted[i:i+2]:
+            row.append(InlineKeyboardButton(f"📅 Season {s}", callback_data=f"ser_season#{series_id}#{lang}#{s}#{key}"))
+        buttons.append(row)
+
+    buttons.append([
+        InlineKeyboardButton("⬅️ Language", callback_data=f"ser_back#{series_id}#langs#{lang}#{key}"),
+        InlineKeyboardButton("❌ Close", callback_data=f"ser_close#{key}")
+    ])
+
+    cap = (
+        f"📺 <b>{name}{year_str}</b>"
+        f"{rating_str}"
+        f"{genre_str}\n\n"
+        f"🌐 <b>Language:</b> {lang}\n\n"
+        f"📅 <b>Select Season:</b>"
+    )
+    markup = InlineKeyboardMarkup(buttons)
+    try:
+        if query.message.photo or query.message.caption:
+            await query.message.edit_caption(caption=cap, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
+        else:
+            await query.message.edit_text(text=cap, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
+    except MessageNotModified:
+        pass
+    from utils import schedule_filter_message_delete
+    schedule_filter_message_delete(client, query.message.chat.id, query.message.id, 600)
+    await query.answer()
+
+
+@Client.on_callback_query(filters.regex(r"^ser_season#"))
+async def ser_season_callback(client: Client, query: CallbackQuery):
+    parts = query.data.split("#")
+    if len(parts) < 5:
+        return await query.answer("Invalid request.", show_alert=True)
+    _, series_id, lang, season_str, key = parts[0], parts[1], parts[2], parts[3], parts[4]
+    season = int(season_str) if season_str.isdigit() else 1
+
+    from plugins.pm_filter import is_button_owner
+    is_owner, err_msg = is_button_owner(query, key)
+    if not is_owner:
+        return await query.answer(err_msg, show_alert=True)
+
+    from database.series_db import get_series, list_season_qualities, sfiles_col, _sid_query, _num_query
+    series = await get_series(series_id)
+    if not series:
+        return await query.answer("⚠️ Series not found in database.", show_alert=True)
+
+    name = series.get("name", "Series")
+    year = str(series.get("year", ""))
+    year_str = f" ({year})" if year and year != "N/A" else ""
+
+    # Fetch distinct episodes
+    ep_vals = await sfiles_col.distinct("episode", {
+        "series_id": _sid_query(series_id),
+        "language": lang,
+        "season": _num_query(season)
+    })
+    episodes = sorted([int(e) for e in ep_vals if (isinstance(e, int) or (isinstance(e, str) and str(e).isdigit())) and int(e) > 0])
+
+    buttons = []
+    if episodes:
+        for i in range(0, len(episodes), 4):
+            row = []
+            for ep in episodes[i:i+4]:
+                ep_text = f"🎬 Ep {ep:02d}" if ep < 100 else f"🎬 Ep {ep}"
+                row.append(InlineKeyboardButton(ep_text, callback_data=f"ser_ep#{series_id}#{lang}#{season}#{ep}#{key}"))
+            buttons.append(row)
+
+        buttons.append([
+            InlineKeyboardButton("⬅️ Season", callback_data=f"ser_lang#{series_id}#{lang}#{key}"),
+            InlineKeyboardButton("⬅️ Language", callback_data=f"ser_back#{series_id}#langs#{lang}#{key}")
+        ])
+        cap = (
+            f"📺 <b>{name}{year_str}</b>\n\n"
+            f"🌐 <b>Language:</b> {lang} | 📅 <b>Season {season}</b>\n\n"
+            f"🎬 <b>Select Episode:</b>"
+        )
+    else:
+        qualities = await list_season_qualities(series_id, lang, season)
+        if not qualities:
+            qualities = ["480p", "720p", "1080p"]
+        for i in range(0, len(qualities), 2):
+            row = []
+            for q in qualities[i:i+2]:
+                row.append(InlineKeyboardButton(f"⚡ {q}", callback_data=f"ser_qual#{series_id}#{lang}#{season}#0#{q}#{key}"))
+            buttons.append(row)
+        buttons.append([
+            InlineKeyboardButton("⬅️ Season", callback_data=f"ser_lang#{series_id}#{lang}#{key}"),
+            InlineKeyboardButton("⬅️ Language", callback_data=f"ser_back#{series_id}#langs#{lang}#{key}")
+        ])
+        cap = (
+            f"📺 <b>{name}{year_str}</b>\n\n"
+            f"🌐 <b>Language:</b> {lang} | 📅 <b>Season {season}</b>\n\n"
+            f"🎞 <b>Select Quality:</b>"
+        )
+
+    markup = InlineKeyboardMarkup(buttons)
+    try:
+        if query.message.photo or query.message.caption:
+            await query.message.edit_caption(caption=cap, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
+        else:
+            await query.message.edit_text(text=cap, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
+    except MessageNotModified:
+        pass
+    from utils import schedule_filter_message_delete
+    schedule_filter_message_delete(client, query.message.chat.id, query.message.id, 600)
+    await query.answer()
+
+
+@Client.on_callback_query(filters.regex(r"^ser_ep#"))
+async def ser_ep_callback(client: Client, query: CallbackQuery):
+    parts = query.data.split("#")
+    if len(parts) < 6:
+        return await query.answer("Invalid request.", show_alert=True)
+    _, series_id, lang, season_str, ep_str, key = parts[0], parts[1], parts[2], parts[3], parts[4], parts[5]
+    season = int(season_str) if season_str.isdigit() else 1
+    episode = int(ep_str) if ep_str.isdigit() else 1
+
+    from plugins.pm_filter import is_button_owner
+    is_owner, err_msg = is_button_owner(query, key)
+    if not is_owner:
+        return await query.answer(err_msg, show_alert=True)
+
+    from database.series_db import get_series, list_season_qualities, sfiles_col, _sid_query, _num_query
+    series = await get_series(series_id)
+    if not series:
+        return await query.answer("⚠️ Series not found in database.", show_alert=True)
+
+    name = series.get("name", "Series")
+    year = str(series.get("year", ""))
+    year_str = f" ({year})" if year and year != "N/A" else ""
+
+    qual_vals = await sfiles_col.distinct("quality", {
+        "series_id": _sid_query(series_id),
+        "language": lang,
+        "season": _num_query(season),
+        "episode": _num_query(episode)
+    })
+    qualities = [q for q in qual_vals if q]
+    if not qualities:
+        qualities = await list_season_qualities(series_id, lang, season)
+    if not qualities:
+        qualities = ["480p", "720p", "1080p"]
+
+    buttons = []
+    for i in range(0, len(qualities), 2):
+        row = []
+        for q in qualities[i:i+2]:
+            row.append(InlineKeyboardButton(f"⚡ {q}", callback_data=f"ser_qual#{series_id}#{lang}#{season}#{episode}#{q}#{key}"))
+        buttons.append(row)
+
+    buttons.append([
+        InlineKeyboardButton("⬅️ Episode", callback_data=f"ser_season#{series_id}#{lang}#{season}#{key}"),
+        InlineKeyboardButton("⬅️ Season", callback_data=f"ser_lang#{series_id}#{lang}#{key}")
+    ])
+
+    cap = (
+        f"📺 <b>{name}{year_str}</b>\n\n"
+        f"🌐 <b>Language:</b> {lang} | 📅 <b>Season {season}</b> | 🎬 <b>Episode {episode}</b>\n\n"
+        f"🎞 <b>Select Quality:</b>"
+    )
+    markup = InlineKeyboardMarkup(buttons)
+    try:
+        if query.message.photo or query.message.caption:
+            await query.message.edit_caption(caption=cap, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
+        else:
+            await query.message.edit_text(text=cap, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
+    except MessageNotModified:
+        pass
+    from utils import schedule_filter_message_delete
+    schedule_filter_message_delete(client, query.message.chat.id, query.message.id, 600)
+    await query.answer()
+
+
+@Client.on_callback_query(filters.regex(r"^ser_qual#"))
+async def ser_qual_callback(client: Client, query: CallbackQuery):
+    parts = query.data.split("#")
+    if len(parts) < 7:
+        return await query.answer("Invalid request.", show_alert=True)
+    _, series_id, lang, season_str, ep_str, qual, key = parts[0], parts[1], parts[2], parts[3], parts[4], parts[5], parts[6]
+    season = int(season_str) if season_str.isdigit() else 1
+    episode = int(ep_str) if ep_str.isdigit() else 0
+
+    from plugins.pm_filter import is_button_owner
+    is_owner, err_msg = is_button_owner(query, key)
+    if not is_owner:
+        return await query.answer(err_msg, show_alert=True)
+
+    from database.series_db import get_series, sfiles_col, _sid_query, _num_query, save_temp_request
+    series = await get_series(series_id)
+    if not series:
+        return await query.answer("⚠️ Series not found in database.", show_alert=True)
+
+    title = series.get("name", "Series")
+    query_filter = {
+        "series_id": _sid_query(series_id),
+        "language": lang,
+        "season": _num_query(season),
+        "quality": qual
+    }
+    if episode > 0:
+        query_filter["episode"] = _num_query(episode)
+
+    cursor = sfiles_col.find(query_filter)
+    files = [doc async for doc in cursor]
+    if not files:
+        cursor = sfiles_col.find({
+            "series_id": _sid_query(series_id),
+            "language": lang,
+            "season": _num_query(season),
+            "quality": qual
+        })
+        files = [doc async for doc in cursor]
+
+    if not files:
+        return await query.answer("⚠️ No files found for this quality.", show_alert=True)
+
+    logger.info(f"[SERIES QUALITY DELIVERY]\ntitle={title}\nlang={lang}\nseason={season}\nep={episode}\nqual={qual}\nfiles={len(files)}")
+
+    import uuid, time
+    req_key = str(uuid.uuid4())[:8]
+    req_data = {
+        "request_key": req_key,
+        "user": query.from_user.id,
+        "user_id": query.from_user.id,
+        "type": "series",
+        "request_type": "series",
+        "source": "SERIES_FILTER",
+        "series_id": series_id,
+        "full_id": series_id,
+        "series_title": title,
+        "title": title,
+        "language": lang,
+        "season": season,
+        "episode": episode,
+        "quality": qual,
+        "files": files,
+        "delivery_status": "pending",
+        "state": "PENDING",
+        "created_at": time.time()
+    }
+    if not hasattr(temp, "SERIES_STATE"):
+        temp.SERIES_STATE = {}
+    temp.SERIES_STATE[req_key] = req_data
+    if not hasattr(temp, "GETALL"):
+        temp.GETALL = {}
+    temp.GETALL[req_key] = req_data
+    try:
+        await save_temp_request(req_key, req_data)
+    except Exception:
+        pass
+
+    bot_username = temp.U_NAME if (hasattr(temp, "U_NAME") and temp.U_NAME) else getattr(getattr(client, "me", None), "username", None)
+    if bot_username:
+        bot_username = str(bot_username).lstrip("@")
+    else:
+        bot_username = "Bot"
+
+    start_url = f"https://t.me/{bot_username}?start=all_{req_key}"
+
+    if query.message.chat.type == enums.ChatType.PRIVATE:
+        await query.answer("🚀 Sending files...")
+        await deliver_series_request(client, req_key, query.from_user.id, query=query)
+        return
+
+    try:
+        return await query.answer(url=start_url)
+    except Exception as e:
+        logger.warning(f"[SERIES QUALITY ROUTING] query.answer(url=start_url) failed: {e}. Replying with fallback button.")
+        ep_label = f" (S{season:02d}E{episode:02d})" if episode > 0 else f" (Season {season})"
+        fb_msg = await query.message.reply_text(
+            f"📩 Open bot to get your requested <b>{title}</b>{ep_label} ({qual}) files:",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("📂 Open Bot", url=start_url)]
+            ])
+        )
+        from utils import schedule_filter_message_delete
+        if fb_msg:
+            schedule_filter_message_delete(client, fb_msg.chat.id, fb_msg.id, 600)
+        return
+
+
+@Client.on_callback_query(filters.regex(r"^ser_back#"))
+async def ser_back_callback(client: Client, query: CallbackQuery):
+    parts = query.data.split("#")
+    if len(parts) < 5:
+        return await query.answer("Invalid request.", show_alert=True)
+    _, series_id, target, lang, key = parts[0], parts[1], parts[2], parts[3], parts[4]
+
+    from plugins.pm_filter import is_button_owner
+    is_owner, err_msg = is_button_owner(query, key)
+    if not is_owner:
+        return await query.answer(err_msg, show_alert=True)
+
+    from database.series_db import get_series, list_series_languages
+    series = await get_series(series_id)
+    if not series:
+        return await query.answer("⚠️ Series not found in database.", show_alert=True)
+
+    name = series.get("name", "")
+    year = str(series.get("year", ""))
+    year_str = f" ({year})" if year and year != "N/A" else ""
+    rating = str(series.get("rating", ""))
+    rating_str = f"\n⭐ <b>Rating:</b> {rating}/10" if rating else ""
+    genre = series.get("genre", "")
+    genre_str = f"\n🎭 <b>Genre:</b> {genre}" if genre and genre != "N/A" else ""
+
+    langs = await list_series_languages(series_id)
+    if not langs:
+        langs = series.get("languages", [])
+
+    buttons = []
+    preferred_order = ["Malayalam", "Tamil", "Hindi", "Telugu", "Kannada", "English", "Dual Audio", "Multi Audio"]
+    langs_sorted = sorted(langs, key=lambda x: (preferred_order.index(x) if x in preferred_order else 99, x))
+    for i in range(0, len(langs_sorted), 2):
+        row = []
+        for l in langs_sorted[i:i+2]:
+            row.append(InlineKeyboardButton(to_series_font(l), callback_data=f"ser_lang#{series_id}#{l}#{key}"))
+        buttons.append(row)
+
+    buttons.append([InlineKeyboardButton("❌ Close", callback_data=f"ser_close#{key}")])
+
+    caption_text = (
+        f"📺 <b>{name}{year_str}</b>"
+        f"{rating_str}"
+        f"{genre_str}\n\n"
+        f"🌐 <b>Select Language:</b>"
+    )
+    markup = InlineKeyboardMarkup(buttons)
+    try:
+        if query.message.photo or query.message.caption:
+            await query.message.edit_caption(caption=caption_text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
+        else:
+            await query.message.edit_text(text=caption_text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
+    except MessageNotModified:
+        pass
+    await query.answer()
+
+
+@Client.on_callback_query(filters.regex(r"^ser_close#"))
+async def ser_close_callback(client: Client, query: CallbackQuery):
+    try:
+        await query.message.delete()
+    except Exception:
+        pass
+    await query.answer("Closed.")
+
+
+async def deliver_series_request(client, req_key, user_id, query=None, timing=None):
+    from utils import get_size, temp, schedule_filter_message_delete
+    from database.series_db import get_temp_request
+    import logging
+
+    log = logging.getLogger(__name__)
+    req = temp.SERIES_STATE.get(req_key) if hasattr(temp, "SERIES_STATE") else None
+    if not req:
+        req = temp.GETALL.get(req_key) if hasattr(temp, "GETALL") else None
+    if not req:
+        req = await get_temp_request(req_key)
+    if not req:
+        log.warning(f"[SERIES DELIVERY] Request expired or not found for req_key={req_key}")
+        if query:
+            await query.answer("⚠️ Request expired. Please search again.", show_alert=True)
+        return
+
+    files = req.get("files", [])
+    if not files:
+        if query:
+            await query.answer("⚠️ No files found for this request.", show_alert=True)
+        return
+
+    title = req.get("series_title") or req.get("title") or "Series"
+    lang = req.get("language")
+    season = req.get("season")
+    ep = req.get("episode")
+    qual = req.get("quality")
+
+    from plugins.commands import send_movie_files_to_user
+    ep_str = f" S{season:02d}E{ep:02d}" if (season and ep and int(ep) > 0) else (f" Season {season}" if season else "")
+    full_title = f"{title}{ep_str}"
+    await send_movie_files_to_user(
+        client=client,
+        user_id=user_id,
+        files=files,
+        query=query,
+        movie_title=full_title,
+        language=lang,
+        quality=qual
+    )
+
 
 
