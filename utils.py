@@ -19,6 +19,8 @@ from shortzy import Shortzy
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
+print("### AUTO_MOVIE_SERIES_METADATA_FIX_V5 ACTIVE ###", flush=True)
+logger.info("### AUTO_MOVIE_SERIES_METADATA_FIX_V5 ACTIVE ###")
 join_db = JoinReqs
 BTN_URL_REGEX = re.compile(r"(\[([^\[]+?)\]\((buttonurl|buttonalert):(?:/{0,2})(.+?)(:same)?\))")
 
