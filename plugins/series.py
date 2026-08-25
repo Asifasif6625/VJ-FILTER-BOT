@@ -71,11 +71,15 @@ from database.series_db import (
     sync_movie_filter_for_files,
     sync_existing_movie_filter,
     scan_movie_files_by_identity,
+    scan_movie_batch_by_name_year,
 )
 from utils import (
     temp,
     get_poster,
     get_imdb_metadata_direct,
+    get_imdb_public_metadata,
+    get_tmdb_public_metadata,
+    get_public_movie_metadata,
     set_wizard_session,
     get_wizard_session,
     clear_wizard_session,
@@ -649,7 +653,7 @@ async def scan_sdatabase_for_movie(
         except Exception:
             pass
 
-    scan_res = await scan_movie_files_by_identity(
+    scan_res = await scan_movie_batch_by_name_year(
         title=title,
         year=year,
         imdb_id=imdb_id,
@@ -809,9 +813,9 @@ def _build_auto_movie_lang_text(movie_data):
         f"✅ <b>Matching files:</b> {tot_matched}",
     ]
     if tot_rej_year > 0:
-        stats_lines.append(f"❌ <b>Rejected other-year files:</b> {tot_rej_year}")
+        stats_lines.append(f"❌ <b>Other-year files:</b> {tot_rej_year}")
     if tot_rej_title > 0:
-        stats_lines.append(f"❌ <b>Rejected other-title files:</b> {tot_rej_title}")
+        stats_lines.append(f"❌ <b>Other-title files:</b> {tot_rej_title}")
     if tot_new > 0:
         stats_lines.append(f"🆕 <b>New files:</b> {tot_new}")
     if tot_dup > 0:
@@ -858,7 +862,7 @@ def _build_auto_movie_lang_text(movie_data):
             f"{rating_str}"
             f"{genre_str}"
             f"{runtime_str}\n\n"
-            f"📊 <b>Scan Result</b>\n\n"
+            f"📊 <b>Batch Scan Result</b>\n\n"
             f"{stats_block}\n\n"
             f"♻️ <i>All {tot_matched} matching files already exist in the database. Click below to create/sync the Super Movie Filter.</i>\n\n"
             f"🌐 <b>Languages & Qualities:</b>\n\n"
@@ -872,7 +876,7 @@ def _build_auto_movie_lang_text(movie_data):
         f"{rating_str}"
         f"{genre_str}"
         f"{runtime_str}\n\n"
-        f"📊 <b>Scan Result</b>\n\n"
+        f"📊 <b>Batch Scan Result</b>\n\n"
         f"{stats_block}\n\n"
         f"🌐 <b>Languages & Qualities:</b>\n\n"
         f"{breakdown_str}"
@@ -1014,22 +1018,21 @@ async def fetch_auto_movie_metadata(client: Client, chat_id: int | str, loading_
 
         try:
             if m_tmdb:
-                from utils import get_tmdb_by_url
                 logger.info("[AUTO MOVIE] TMDB REQUEST START")
                 print("### AM_STEP_02_BEFORE_TMDB ###", flush=True)
-                info = await asyncio.wait_for(get_tmdb_by_url(text), timeout=15)
+                info = await asyncio.wait_for(get_tmdb_public_metadata(text), timeout=15)
                 print("### AM_STEP_03_AFTER_TMDB ###", flush=True)
                 logger.info(f"[AUTO MOVIE] TMDB REQUEST DONE\ntitle={info.get('title') if info else None}\nyear={info.get('year') if info else None}")
             elif m_imdb:
                 imdb_id = m_imdb.group(1).lower()
                 logger.info("[AUTO MOVIE] IMDb REQUEST START")
                 print("### AM_STEP_02_BEFORE_IMDB ###", flush=True)
-                info = await get_imdb_metadata_direct(imdb_id)
+                info = await asyncio.wait_for(get_imdb_public_metadata(imdb_id), timeout=15)
                 print("### AM_STEP_03_AFTER_IMDB ###", flush=True)
                 if info and info.get("title"):
-                    logger.info(f"[AUTO MOVIE] IMDb DIRECT METADATA COMPLETE\ntitle={info.get('title')}\nyear={info.get('year')}\nkind={info.get('kind')}")
+                    logger.info(f"[AUTO MOVIE] IMDb PUBLIC METADATA COMPLETE\ntitle={info.get('title')}\nyear={info.get('year')}\nkind={info.get('kind')}")
                 else:
-                    logger.warning(f"[AUTO MOVIE] IMDb DIRECT METADATA FAILED id={imdb_id}")
+                    logger.warning(f"[AUTO MOVIE] IMDb PUBLIC METADATA FAILED id={imdb_id}")
         except asyncio.TimeoutError:
             logger.error(f"[AUTO MOVIE] METADATA TIMEOUT query={text}")
             is_timeout = True
@@ -1159,7 +1162,7 @@ async def fetch_auto_movie_metadata(client: Client, chat_id: int | str, loading_
             f"<b>{html.escape(title)}</b> ({year})"
             f"{rating_str}"
             f"{genre_str}\n\n"
-            f"🔍 <b>Scanning database for files...</b>"
+            f"🔍 <b>Scanning database for matching files...</b>"
         )
 
         try:
@@ -1206,18 +1209,17 @@ async def fetch_auto_series_metadata(client: Client, chat_id: int | str, loading
 
         try:
             if m_tmdb:
-                from utils import get_tmdb_by_url
                 logger.info("[AUTO SERIES] TMDB REQUEST START")
-                info = await asyncio.wait_for(get_tmdb_by_url(text), timeout=15)
+                info = await asyncio.wait_for(get_tmdb_public_metadata(text), timeout=15)
                 logger.info(f"[AUTO SERIES] TMDB REQUEST DONE\ntitle={info.get('title') if info else None}\nyear={info.get('year') if info else None}")
             elif m_imdb:
                 imdb_id = m_imdb.group(1).lower()
                 logger.info("[AUTO SERIES] IMDb REQUEST START")
-                info = await get_imdb_metadata_direct(imdb_id)
+                info = await asyncio.wait_for(get_imdb_public_metadata(imdb_id), timeout=15)
                 if info and info.get("title"):
-                    logger.info(f"[AUTO SERIES] IMDb DIRECT METADATA COMPLETE\ntitle={info.get('title')}\nyear={info.get('year')}\nkind={info.get('kind')}")
+                    logger.info(f"[AUTO SERIES] IMDb PUBLIC METADATA COMPLETE\ntitle={info.get('title')}\nyear={info.get('year')}\nkind={info.get('kind')}")
                 else:
-                    logger.warning(f"[AUTO SERIES] IMDb DIRECT METADATA FAILED id={imdb_id}")
+                    logger.warning(f"[AUTO SERIES] IMDb PUBLIC METADATA FAILED id={imdb_id}")
         except asyncio.TimeoutError:
             logger.error(f"[AUTO SERIES] METADATA TIMEOUT query={text}")
             is_timeout = True
@@ -1461,7 +1463,7 @@ async def run_auto_movie_scan(client, chat_id, target_msg, session_id, movie_dat
         f"<b>{movie_data['title']}</b> ({movie_data['year']})"
         f"{rating_str}"
         f"{genre_str}\n\n"
-        f"🔍 <b>Scanning database for files...</b>"
+        f"🔍 <b>Scanning database for matching files...</b>"
     )
 
     try:
