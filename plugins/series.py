@@ -96,9 +96,13 @@ from utils import (
 
 import os
 logger = logging.getLogger(__name__)
-print("### VJ AUTO MOVIE RUNTIME BUILD = AM_DEBUG_20260825_V1 ###", flush=True)
+print("### VJ BOT MOVIE SERIES FIX V6 ACTIVE ###", flush=True)
+print("### SERIES PLUGIN LOADED ###", flush=True)
 print(f"### SERIES.PY PATH = {os.path.abspath(__file__)} ###", flush=True)
-logger.warning("### VJ AUTO MOVIE RUNTIME BUILD = AM_DEBUG_20260825_V1 ###")
+print("[HANDLER REGISTERED] wizard_text_handler", flush=True)
+print("[HANDLER REGISTERED] series_wizard_callback", flush=True)
+print("[HANDLER REGISTERED] auto_movie_callbacks", flush=True)
+logger.warning("### VJ BOT MOVIE SERIES FIX V6 ACTIVE ###")
 
 
 def _is_admin(user_id: int) -> bool:
@@ -1345,9 +1349,12 @@ async def fetch_auto_series_metadata(client: Client, chat_id: int | str, loading
         except Exception:
             pass
 
-        logger.info("[AUTO SERIES] STARTING SCAN")
+        logger.info("[AUTO SERIES] DB SCAN START")
         s_data["state"] = "SCANNING"
         scan_res = await scan_sdatabase_for_series(chat_id, s_title, season=None, series_id=series_id, client=client)
+        logger.info("[AUTO SERIES] DB SCAN COMPLETE")
+        logger.info(f"[AUTO SERIES] MATCH RESULT matched={scan_res.get('total_matched', 0)}")
+        logger.info("[AUTO SERIES] FILTER SAVE")
         new_files = scan_res.get("valid_new_files") or []
         for f in new_files:
             try:
@@ -1365,6 +1372,7 @@ async def fetch_auto_series_metadata(client: Client, chat_id: int | str, loading
             except Exception as fe:
                 logger.error(f"[AUTO SERIES FILE ADD ERROR] {fe}")
 
+        logger.info("[AUTO SERIES] FILTER VERIFY")
         logger.info(f"[AUTO SERIES COMPLETE] title={s_title} series_id={series_id} matched={scan_res.get('total_matched', 0)} new={len(new_files)}")
         clear_wizard_session(uid)
         temp.AUTO_SERIES.pop(uid, None)
@@ -1563,6 +1571,8 @@ async def run_auto_movie_scan(client, chat_id, target_msg, session_id, movie_dat
             return
 
         # Scan success
+        logger.info("[AUTO MOVIE] DB SCAN COMPLETE")
+        logger.info(f"[AUTO MOVIE] MATCH RESULT matched={res.get('total_matched', 0)}")
         movie_data["scan"] = res
         movie_data["grouped"] = _group_auto_movie_files(res)
         movie_data["state"] = "RESULT"
@@ -3031,10 +3041,12 @@ async def auto_movie_callbacks(client: Client, query: CallbackQuery):
         if not movie_data:
             return await query.answer("⚠️ Session expired. Please scan again.", show_alert=True)
 
-        from database.series_db import scan_movie_files_by_identity, create_super_movie, search_super_movies, get_super_movie
+        logger.info("[AUTO MOVIE] FILTER SAVE")
+        from database.series_db import scan_movie_batch_by_name_year, create_super_movie, search_super_movies, get_super_movie
 
         # Strict gate: Re-verify that actual matching files exist in DB
-        scan_check = await scan_movie_files_by_identity(
+        logger.info("[AUTO MOVIE] FILTER VERIFY")
+        scan_check = await scan_movie_batch_by_name_year(
             title=movie_data["title"],
             year=movie_data.get("year"),
             imdb_id=movie_data.get("imdb_id"),
