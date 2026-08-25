@@ -702,6 +702,83 @@ async def get_tmdb_by_url(url_or_path):
         logger.warning(f"Error fetching TMDB URL '{url_or_path}': {e}")
         return None
 
+
+async def get_imdb_metadata_direct(imdb_id: str):
+    """
+    Fast direct IMDb metadata resolver using IMDb Suggestion API.
+    Bypasses Cinemagoer and does not block the Pyrogram event loop.
+    """
+    imdb_id = str(imdb_id).strip().lower()
+    if not imdb_id.startswith("tt"):
+        imdb_id = f"tt{imdb_id}"
+
+    logger.info(f"[DIRECT IMDb] START id={imdb_id}")
+
+    url = f"https://v3.sg.media-imdb.com/suggestion/titles/t/{imdb_id}.json"
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    }
+    timeout = aiohttp.ClientTimeout(total=8, connect=4, sock_read=6)
+
+    try:
+        async with aiohttp.ClientSession(timeout=timeout, headers=headers) as session:
+            async with session.get(url) as resp:
+                logger.info(f"[DIRECT IMDb] HTTP status={resp.status}")
+                if resp.status != 200:
+                    logger.warning(f"[DIRECT IMDb] FAILED reason=HTTP_{resp.status} id={imdb_id}")
+                    return None
+                data = await resp.json(content_type=None)
+
+        items = data.get("d") or []
+        exact = None
+        for item in items:
+            if str(item.get("id", "")).lower() == imdb_id:
+                exact = item
+                break
+
+        if not exact:
+            logger.warning(f"[DIRECT IMDb] FAILED reason=NOT_FOUND id={imdb_id}")
+            return None
+
+        qid = str(exact.get("qid") or exact.get("q") or "").lower()
+        is_series = any(x in qid for x in ("tv", "series", "tvseries", "tv-mini-series"))
+        kind = "tv series" if is_series else "movie"
+
+        image = exact.get("i")
+        poster = None
+        if isinstance(image, dict):
+            poster = image.get("imageUrl") or image.get("url")
+
+        title = exact.get("l")
+        year = exact.get("y")
+
+        logger.info(
+            f"[DIRECT IMDb] FOUND\n"
+            f"title={title}\n"
+            f"year={year}\n"
+            f"kind={kind}"
+        )
+
+        return {
+            "title": title,
+            "year": year,
+            "kind": kind,
+            "imdb_id": exact.get("id", imdb_id),
+            "poster": poster,
+            "rating": "",
+            "genres": "",
+            "plot": "",
+            "seasons": None,
+        }
+
+    except asyncio.TimeoutError:
+        logger.error(f"[DIRECT IMDb] FAILED reason=TIMEOUT id={imdb_id}")
+        return None
+    except Exception as e:
+        logger.exception(f"[DIRECT IMDb] FAILED reason=ERROR id={imdb_id}: {e}")
+        return None
+
+
 async def get_poster(query, bulk=False, id=False, file=None):
     try:
         query_str = str(query).strip()
