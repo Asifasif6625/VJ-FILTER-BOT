@@ -14,6 +14,7 @@ import re
 import logging
 import asyncio
 import time
+import html
 from datetime import datetime, timedelta
 
 from pyrogram import Client, filters, enums
@@ -1024,6 +1025,22 @@ async def _safe_edit_message(message, text, reply_markup=None, parse_mode=enums.
     except Exception as e:
         logger.warning(f"[SAFE EDIT] Telegram edit failed: {e}")
         return False
+
+
+def _log_background_task_result(task):
+    try:
+        exc = task.exception()
+        if exc:
+            logger.error(
+                "[BACKGROUND TASK FAILED]",
+                exc_info=exc
+            )
+    except asyncio.CancelledError:
+        logger.info("[BACKGROUND TASK CANCELLED]")
+    except Exception as e:
+        logger.exception(
+            f"[BACKGROUND TASK RESULT CHECK FAILED] {e}"
+        )
 
 
 async def fetch_auto_movie_metadata(client: Client, chat_id: int | str, loading_msg: Message, session_id: str, text: str, uid: int):
@@ -2708,6 +2725,7 @@ async def wizard_text_handler(client: Client, message: Message):
                 AUTO_MOVIE_METADATA_TASKS.pop(session_id, None)
 
             task.add_done_callback(_done_movie_cb)
+            task.add_done_callback(_log_background_task_result)
 
             print("### AM_TASK_CREATED ###", flush=True)
             logger.info("[AUTO MOVIE] METADATA TASK CREATED")
@@ -2757,6 +2775,7 @@ async def wizard_text_handler(client: Client, message: Message):
             AUTO_SERIES_METADATA_TASKS.pop(session_id, None)
 
         task.add_done_callback(_done_series_cb)
+        task.add_done_callback(_log_background_task_result)
 
         print("### AS_TASK_CREATED ###", flush=True)
         logger.info("[AUTO SERIES] METADATA TASK CREATED")
