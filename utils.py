@@ -812,13 +812,14 @@ async def get_tmdb_public_metadata(url: str) -> dict | None:
     import html as _html
     import json as _json
 
-    m_tmdb = re.search(r'(?:https?://)?(?:www\.)?themoviedb\.org/(movie|tv)/(\d+)', str(url), re.IGNORECASE)
+    m_tmdb = re.search(r'(?:https?://)?(?:www\.)?themoviedb\.org/(movie|tv)/(\d+)(?:-([a-zA-Z0-9_-]+))?', str(url), re.IGNORECASE)
     if not m_tmdb:
         logger.warning(f"[PUBLIC TMDB] Invalid TMDB URL: {url}")
         return None
 
     media_type = m_tmdb.group(1).lower()
     tmdb_id = m_tmdb.group(2)
+    raw_slug = m_tmdb.group(3) or ""
     clean_url = f"https://www.themoviedb.org/{media_type}/{tmdb_id}"
     logger.info(f"[PUBLIC TMDB] START id={tmdb_id} type={media_type} url={clean_url}")
 
@@ -849,8 +850,8 @@ async def get_tmdb_public_metadata(url: str) -> dict | None:
         return None
 
     soup = BeautifulSoup(html_content, "html.parser") if BeautifulSoup else None
-    json_ld_obj = None
 
+    # 1. Parse and flatten all JSON-LD objects recursively
     json_ld_raw_list = []
     if soup:
         for script_tag in soup.find_all("script", type="application/ld+json"):
@@ -860,16 +861,52 @@ async def get_tmdb_public_metadata(url: str) -> dict | None:
         for m in re.finditer(r'<script[^>]*type=["\']application/ld\+json["\'][^>]*>(.*?)</script>', html_content, re.DOTALL | re.I):
             json_ld_raw_list.append(m.group(1))
 
+    candidates = []
+    def _flatten_json_ld(obj):
+        if isinstance(obj, dict):
+            if "@graph" in obj and isinstance(obj["@graph"], list):
+                for item in obj["@graph"]:
+                    _flatten_json_ld(item)
+            else:
+                candidates.append(obj)
+        elif isinstance(obj, list):
+            for item in obj:
+                _flatten_json_ld(item)
+
     for raw_json in json_ld_raw_list:
         try:
             parsed = _json.loads(raw_json)
-            if isinstance(parsed, dict) and "name" in parsed:
-                json_ld_obj = parsed
-                break
+            _flatten_json_ld(parsed)
         except Exception:
             continue
 
-    logger.info(f"[PUBLIC TMDB] JSON-LD FOUND={bool(json_ld_obj)}")
+    logger.info(f"[PUBLIC TMDB] JSON-LD OBJECTS={len(candidates)}")
+
+    selected_obj = None
+    REJECT_NAMES = {"the movie database", "tmdb", "themoviedb", "the movie database (tmdb)"}
+    REJECT_TYPES = {"website", "organization", "webpage", "webapplication"}
+
+    for cand in candidates:
+        if not isinstance(cand, dict):
+            continue
+        c_type = str(cand.get("@type", "")).strip()
+        c_name = str(cand.get("name", "")).strip()
+        logger.info(f"[PUBLIC TMDB] JSON-LD CANDIDATE type={c_type} name={c_name}")
+
+        if c_type.lower() in REJECT_TYPES:
+            continue
+        if c_name.lower() in REJECT_NAMES or c_name.lower().startswith("the movie database"):
+            continue
+
+        c_type_lower = c_type.lower()
+        if any(t in c_type_lower for t in ("movie", "tvseries", "tv_series", "tvepisode", "creativework", "videoobject")):
+            if c_name:
+                selected_obj = cand
+                break
+        elif "datePublished" in cand or "releasedEvent" in cand or "genre" in cand or "aggregateRating" in cand:
+            if c_name:
+                selected_obj = cand
+                break
 
     title = None
     year = None
@@ -879,43 +916,75 @@ async def get_tmdb_public_metadata(url: str) -> dict | None:
     genres = ""
     plot = ""
 
-    if json_ld_obj:
-        title = json_ld_obj.get("name")
-        date_pub = json_ld_obj.get("datePublished") or json_ld_obj.get("releasedEvent")
+    if selected_obj:
+        c_name = str(selected_obj.get("name", "")).strip()
+        if c_name and c_name.lower() not in REJECT_NAMES and not c_name.lower().startswith("the movie database"):
+            title = c_name
+            logger.info(f"[PUBLIC TMDB] SELECTED MOVIE OBJECT title={title}")
+
+        date_pub = selected_obj.get("datePublished") or selected_obj.get("releasedEvent")
         if date_pub:
             y_match = re.search(r"\b(19|20)\d{2}\b", str(date_pub))
             if y_match:
                 year = y_match.group(0)
 
-        img = json_ld_obj.get("image")
+        img = selected_obj.get("image")
         if isinstance(img, str):
             poster = img
         elif isinstance(img, dict):
-            poster = img.get("url")
+            poster = img.get("url") or img.get("contentUrl")
 
-        agg = json_ld_obj.get("aggregateRating")
+        agg = selected_obj.get("aggregateRating")
         if isinstance(agg, dict):
             rating = str(agg.get("ratingValue") or "").strip()
 
-        genre_val = json_ld_obj.get("genre")
+        genre_val = selected_obj.get("genre")
         if isinstance(genre_val, list):
             genres = ", ".join(str(g).strip() for g in genre_val if str(g).strip())
         elif isinstance(genre_val, str):
             genres = genre_val.strip()
 
-        plot = json_ld_obj.get("description") or ""
+        plot = selected_obj.get("description") or ""
 
-    # OpenGraph fallbacks
-    if not title:
+    # OpenGraph / Meta title fallback
+    if not title or title.lower() in REJECT_NAMES or title.lower().startswith("the movie database"):
+        title = None
         og_t_m = re.search(r'<meta[^>]*property=["\']og:title["\'][^>]*content=["\']([^"\']+)["\']', html_content, re.I) or re.search(r'<meta[^>]*content=["\']([^"\']+)["\'][^>]*property=["\']og:title["\']', html_content, re.I)
         if og_t_m:
             raw_t = _html.unescape(og_t_m.group(1).strip())
-            title = re.sub(r"\s*—\s*The Movie Database.*$", "", raw_t, flags=re.I).strip()
-            y_m = re.search(r"\(((?:19|20)\d{2})\)", raw_t)
+            cleaned_og_title = re.sub(r"\s*([—\-\|]\s*(?:The Movie Database|TMDB).*)$", "", raw_t, flags=re.I).strip()
+            y_m = re.search(r"\(((?:19|20)\d{2})\)", cleaned_og_title)
+            if y_m:
+                if not year:
+                    year = y_m.group(1)
+                cleaned_og_title = re.sub(r"\s*\(((?:19|20)\d{2})\)", "", cleaned_og_title).strip()
+            if cleaned_og_title and cleaned_og_title.lower() not in REJECT_NAMES and not cleaned_og_title.lower().startswith("the movie database"):
+                title = cleaned_og_title
+
+    # Page <title> tag fallback
+    if not title or title.lower() in REJECT_NAMES or title.lower().startswith("the movie database"):
+        page_t_m = re.search(r'<title[^>]*>([^<]+)</title>', html_content, re.I)
+        if page_t_m:
+            raw_page_t = _html.unescape(page_t_m.group(1).strip())
+            cleaned_page_title = re.sub(r"\s*([—\-\|]\s*(?:The Movie Database|TMDB).*)$", "", raw_page_t, flags=re.I).strip()
+            y_m = re.search(r"\(((?:19|20)\d{2})\)", cleaned_page_title)
+            if y_m:
+                if not year:
+                    year = y_m.group(1)
+                cleaned_page_title = re.sub(r"\s*\(((?:19|20)\d{2})\)", "", cleaned_page_title).strip()
+            if cleaned_page_title and cleaned_page_title.lower() not in REJECT_NAMES and not cleaned_page_title.lower().startswith("the movie database"):
+                title = cleaned_page_title
+
+    # URL slug fallback
+    if not title or title.lower() in REJECT_NAMES or title.lower().startswith("the movie database"):
+        if raw_slug:
+            slug_clean = re.sub(r"-\b((?:19|20)\d{2})\b", "", raw_slug)
+            y_m = re.search(r"\b((?:19|20)\d{2})\b", raw_slug)
             if y_m and not year:
                 year = y_m.group(1)
-                title = re.sub(r"\s*\(((?:19|20)\d{2})\)", "", title).strip()
+            title = slug_clean.replace("-", " ").strip().title()
 
+    # Year fallback from HTML
     if not year:
         rel_m = re.search(r'class=["\'][^"\']*release_date[^"\']*["\'][^>]*>([^<]+)', html_content, re.I)
         if rel_m:
@@ -945,8 +1014,9 @@ async def get_tmdb_public_metadata(url: str) -> dict | None:
             poster = "https:" + poster
         poster = re.sub(r'/w\d+(_and_h\d+[^/]*)?/', '/w500/', poster)
 
-    if not title:
-        logger.warning(f"[PUBLIC TMDB] FAILED reason=NO_TITLE id={tmdb_id}")
+    # Strict Validation
+    if not title or title.strip().lower() in REJECT_NAMES or title.strip().lower().startswith("the movie database"):
+        logger.warning(f"[PUBLIC TMDB] FAILED reason=INVALID_TITLE title={title} id={tmdb_id}")
         return None
 
     clean_year = str(year).strip() if year else None
@@ -964,7 +1034,7 @@ async def get_tmdb_public_metadata(url: str) -> dict | None:
         "year": clean_year,
         "kind": kind,
         "imdb_id": None,
-        "tmdb_id": tmdb_id,
+        "tmdb_id": str(tmdb_id),
         "poster": poster,
         "rating": rating,
         "genres": genres,
