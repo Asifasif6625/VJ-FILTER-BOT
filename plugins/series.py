@@ -4124,60 +4124,17 @@ async def auto_movie_callbacks(client: Client, query: CallbackQuery):
 # ─── USER SEARCH ROUTERS (Super Movie & Series Search) ───────────────────────
 # ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ 
 
-async def process_super_movie_search(client: Client, message: Message, query_text: str, reply_msg: Message = None) -> bool:
-    """
-    Checks if a query matches an existing Super Movie Filter.
-    If matched, renders the Super Movie Filter UI and returns True.
-    """
-    from database.series_db import search_super_movies, get_super_movie, normalize_movie_search_title
+async def render_super_movie_direct(client: Client, message: Message, movie: dict, reply_msg: Message = None) -> bool:
+    """Renders the language selection UI for a specific Super Movie."""
     from database.ia_filterdb import get_file_details
     from plugins.pm_filter import group_movie_files, build_movie_language_keyboard, BUTTON_OWNERS
 
-    q = str(query_text or "").strip()
-    if not q:
-        return False
-
-    matches = await search_super_movies(q)
-    logger.info(
-        f"[SUPER MOVIE SEARCH DEBUG]\n"
-        f"raw_query={query_text}\n"
-        f"clean_query={q}\n"
-        f"normalized_query={normalize_movie_search_title(q)}\n"
-        f"matched_count={len(matches) if matches else 0}"
-    )
-    if not matches:
-        return False
-
-    has_year = bool(re.search(r"\b(19\d\d|20\d\d)\b", q))
-    if len(matches) > 1 and not has_year and not reply_msg:
-        distinct_titles = {f"{m.get('title')}-{m.get('year')}" for m in matches}
-        if len(distinct_titles) > 1:
-            logger.info(
-                f"[SUPER MOVIE SAME TITLE]\n"
-                f"title={q}\n"
-                f"matches={len(matches)}"
-            )
-            return False
-
-    logger.info("[SEARCH ROUTE] type=movie_filter")
-    movie = matches[0]
     movie_id = str(movie["_id"])
     file_ids = movie.get("file_ids", [])
-
-    logger.info(
-        f"[SUPER MOVIE SEARCH MATCH]\n"
-        f"title={movie.get('title')}\n"
-        f"year={movie.get('year')}\n"
-        f"movie_id={movie_id}\n"
-        f"file_count={len(file_ids)}\n"
-        f"legacy_normalized={bool(not movie.get('normalized_name'))}"
-    )
-
     if not file_ids:
         logger.info(f"[SUPER MOVIE SEARCH] matched_filter_but_no_files title={movie.get('title')} id={movie_id}")
         return False
 
-    # Fetch file documents
     file_docs = []
     for fid in file_ids:
         fdoc = await get_file_details(fid)
@@ -4191,7 +4148,11 @@ async def process_super_movie_search(client: Client, message: Message, query_tex
     if not grouped:
         return False
 
-    key = f"{message.chat.id}-{message.id}"
+    chat_id = message.chat.id if message and message.chat else (reply_msg.chat.id if reply_msg else 0)
+    msg_id = message.id if message else (reply_msg.id if reply_msg else 0)
+    key = f"{chat_id}-{msg_id}"
+    user_id = message.from_user.id if (message and message.from_user) else (reply_msg.from_user.id if reply_msg and reply_msg.from_user else chat_id)
+
     temp.MOVIE_STATE[key] = {
         "movie_id": movie_id,
         "title": movie.get("title", ""),
@@ -4201,10 +4162,10 @@ async def process_super_movie_search(client: Client, message: Message, query_tex
         "poster": movie.get("poster", ""),
         "description": movie.get("description", ""),
         "grouped": grouped,
-        "chat_id": message.chat.id,
-        "user_id": message.from_user.id if message.from_user else message.chat.id
+        "chat_id": chat_id,
+        "user_id": user_id
     }
-    BUTTON_OWNERS[key] = message.from_user.id if message.from_user else message.chat.id
+    BUTTON_OWNERS[key] = user_id
 
     title = movie.get("title", "")
     year = str(movie.get("year", ""))
@@ -4253,7 +4214,7 @@ async def process_super_movie_search(client: Client, message: Message, query_tex
                 reply_markup=markup,
                 parse_mode=enums.ParseMode.HTML
             ) if message else client.send_photo(
-                chat_id=key.split("-")[0],
+                chat_id=chat_id,
                 photo=poster,
                 caption=caption_text,
                 reply_markup=markup,
@@ -4268,7 +4229,7 @@ async def process_super_movie_search(client: Client, message: Message, query_tex
         reply_markup=markup,
         parse_mode=enums.ParseMode.HTML
     ) if message else client.send_message(
-        chat_id=key.split("-")[0],
+        chat_id=chat_id,
         text=caption_text,
         reply_markup=markup,
         parse_mode=enums.ParseMode.HTML
@@ -4276,31 +4237,11 @@ async def process_super_movie_search(client: Client, message: Message, query_tex
     return True
 
 
-async def process_series_search(client: Client, message: Message, query_text: str, reply_msg: Message = None) -> bool:
-    """
-    Checks if a query matches an existing Series Filter.
-    If matched, renders the Series Filter UI and returns True.
-    """
-    from database.series_db import search_series, list_series_languages
+async def render_series_direct(client: Client, message: Message, series_doc: dict, reply_msg: Message = None) -> bool:
+    """Renders the language selection UI for a specific Series Filter."""
+    from database.series_db import list_series_languages
     from plugins.pm_filter import BUTTON_OWNERS
 
-    q = clean_series_title(query_text) if query_text else ""
-    if not q:
-        return False
-
-    matches = await search_series(q)
-    logger.info(f"[SERIES SEARCH] query={query_text!r} matches={len(matches) if matches else 0}")
-    if not matches:
-        return False
-
-    has_year = bool(re.search(r"\b(19\d\d|20\d\d)\b", q))
-    if len(matches) > 1 and not has_year and not reply_msg:
-        distinct_series = {f"{s.get('name')}-{s.get('year')}" for s in matches}
-        if len(distinct_series) > 1:
-            return False
-
-    logger.info("[SEARCH ROUTE] type=series_filter")
-    series_doc = matches[0]
     series_id = str(series_doc["_id"])
     name = series_doc.get("name", "")
     year = str(series_doc.get("year", ""))
@@ -4315,8 +4256,11 @@ async def process_series_search(client: Client, message: Message, query_text: st
     if not langs:
         langs = series_doc.get("languages", [])
 
-    key = f"{message.chat.id}-{message.id}" if message else f"{reply_msg.chat.id}-{reply_msg.id}"
-    BUTTON_OWNERS[key] = message.from_user.id if (message and message.from_user) else (reply_msg.from_user.id if reply_msg and reply_msg.from_user else 0)
+    chat_id = message.chat.id if message and message.chat else (reply_msg.chat.id if reply_msg else 0)
+    msg_id = message.id if message else (reply_msg.id if reply_msg else 0)
+    key = f"{chat_id}-{msg_id}"
+    user_id = message.from_user.id if (message and message.from_user) else (reply_msg.from_user.id if reply_msg and reply_msg.from_user else chat_id)
+    BUTTON_OWNERS[key] = user_id
 
     buttons = []
     preferred_order = ["Malayalam", "Tamil", "Hindi", "Telugu", "Kannada", "English", "Dual Audio", "Multi Audio"]
@@ -4367,7 +4311,7 @@ async def process_series_search(client: Client, message: Message, query_text: st
                 reply_markup=markup,
                 parse_mode=enums.ParseMode.HTML
             ) if message else client.send_photo(
-                chat_id=key.split("-")[0],
+                chat_id=chat_id,
                 photo=poster,
                 caption=caption_text,
                 reply_markup=markup,
@@ -4382,12 +4326,150 @@ async def process_series_search(client: Client, message: Message, query_text: st
         reply_markup=markup,
         parse_mode=enums.ParseMode.HTML
     ) if message else client.send_message(
-        chat_id=key.split("-")[0],
+        chat_id=chat_id,
         text=caption_text,
         reply_markup=markup,
         parse_mode=enums.ParseMode.HTML
     ))
     return True
+
+
+async def process_unified_filter_search(client: Client, message: Message, query_text: str, reply_msg: Message = None) -> bool:
+    """
+    Unified filter search across Super Movies and Series.
+    - If 1 filter matches: opens that filter directly.
+    - If multiple filters match (e.g. Aadu 2015, Aadu 2017, Aadu 3): presents unified suggestion list with buttons.
+    - If 0 match: returns False.
+    """
+    q = str(query_text or "").strip()
+    if not q:
+        return False
+
+    from database.series_db import search_super_movies, search_series, get_series_thumbnail, normalize_movie_search_title
+
+    clean_q = clean_series_title(q)
+    super_movies = await search_super_movies(q)
+    series_list = await search_series(clean_q)
+
+    # Filter out super movies with 0 files
+    valid_movies = [m for m in super_movies if m.get("file_ids")]
+    valid_series = series_list
+
+    total_matches = len(valid_movies) + len(valid_series)
+
+    logger.info(
+        f"[UNIFIED FILTER SEARCH]\n"
+        f"query={q}\n"
+        f"super_movies={len(valid_movies)}\n"
+        f"series={len(valid_series)}\n"
+        f"total={total_matches}"
+    )
+
+    if total_matches == 0:
+        return False
+
+    # Check if exact year was specified in query
+    has_year = bool(re.search(r"\b(19\d\d|20\d\d)\b", q))
+    if total_matches == 1 or (has_year and not reply_msg and total_matches > 0):
+        if valid_movies:
+            return await render_super_movie_direct(client, message, valid_movies[0], reply_msg)
+        elif valid_series:
+            return await render_series_direct(client, message, valid_series[0], reply_msg)
+
+    # total_matches > 1: Show Unified Suggestion List
+    rows = []
+    for m in valid_movies:
+        title = m.get("title", "")
+        year = str(m.get("year", "")).strip()
+        year_str = f" ({year})" if year and year != "N/A" else ""
+        btn_text = f"🎬 {title}{year_str}"
+        rows.append([InlineKeyboardButton(btn_text, callback_data=f"sug_mov#{str(m['_id'])}")])
+
+    for s in valid_series:
+        name = s.get("name", "")
+        year = str(s.get("year", "")).strip()
+        year_str = f" ({year})" if year and year != "N/A" else ""
+        btn_text = f"📺 {name}{year_str}"
+        rows.append([InlineKeyboardButton(btn_text, callback_data=f"sug_ser#{str(s['_id'])}")])
+
+    markup = InlineKeyboardMarkup(rows)
+    caption_text = "<b>Choose the series/movie you want to view</b>"
+
+    thumb = await get_series_thumbnail()
+
+    if reply_msg:
+        try:
+            if reply_msg.photo or reply_msg.caption:
+                await reply_msg.edit_caption(caption=caption_text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
+                return True
+            else:
+                await reply_msg.edit_text(text=caption_text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
+                return True
+        except Exception:
+            try:
+                await reply_msg.delete()
+            except Exception:
+                pass
+
+    if thumb:
+        try:
+            if message:
+                await message.reply_photo(photo=thumb, caption=caption_text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
+            else:
+                await client.send_photo(chat_id=message.chat.id, photo=thumb, caption=caption_text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
+            return True
+        except Exception as pe:
+            logger.warning(f"[UNIFIED SEARCH THUMB ERROR] {pe}")
+
+    if message:
+        await message.reply_text(text=caption_text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
+    else:
+        await client.send_message(chat_id=message.chat.id, text=caption_text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
+    return True
+
+
+@Client.on_callback_query(filters.regex(r"^sug_mov#"), group=-15)
+async def cb_sug_movie(client: Client, query: CallbackQuery):
+    try:
+        await query.answer()
+    except Exception:
+        pass
+    parts = query.data.split("#")
+    if len(parts) < 2:
+        return
+    movie_id = parts[1]
+    from database.series_db import get_super_movie
+    movie = await get_super_movie(movie_id)
+    if not movie:
+        return await query.answer("❌ Movie not found.", show_alert=True)
+    await render_super_movie_direct(client, query.message, movie, reply_msg=query.message)
+
+
+@Client.on_callback_query(filters.regex(r"^sug_ser#"), group=-15)
+async def cb_sug_series(client: Client, query: CallbackQuery):
+    try:
+        await query.answer()
+    except Exception:
+        pass
+    parts = query.data.split("#")
+    if len(parts) < 2:
+        return
+    series_id = parts[1]
+    from database.series_db import get_series
+    series_doc = await get_series(series_id)
+    if not series_doc:
+        return await query.answer("❌ Series not found.", show_alert=True)
+    await render_series_direct(client, query.message, series_doc, reply_msg=query.message)
+
+
+async def process_super_movie_search(client: Client, message: Message, query_text: str, reply_msg: Message = None) -> bool:
+    """Backward-compatible alias for process_unified_filter_search."""
+    return await process_unified_filter_search(client, message, query_text, reply_msg)
+
+
+async def process_series_search(client: Client, message: Message, query_text: str, reply_msg: Message = None) -> bool:
+    """Backward-compatible alias for process_unified_filter_search."""
+    return await process_unified_filter_search(client, message, query_text, reply_msg)
 
 
 # ─── SERIES FILTER NAVIGATION CALLBACKS ─────────────────────────────────────────
