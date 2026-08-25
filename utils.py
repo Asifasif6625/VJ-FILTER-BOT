@@ -304,8 +304,10 @@ def match_movie_identity(file_doc: dict, requested_title: str, requested_year: s
     file_year = extract_release_year(file_name, caption)
     req_year_str = str(requested_year).strip() if (requested_year and str(requested_year).strip() not in ["N/A", "None", "0", ""]) else None
 
-    # Strict Year validation check
-    if req_year_str and file_year:
+    # Strict Year validation: If a release year is specified, only accept files with the exact matching year
+    if req_year_str:
+        if not file_year:
+            return False, "YEAR_NOT_FOUND_IN_FILENAME"
         if file_year != req_year_str:
             return False, "YEAR_MISMATCH"
 
@@ -314,56 +316,46 @@ def match_movie_identity(file_doc: dict, requested_title: str, requested_year: s
     if not r_tokens:
         return False, "EMPTY_TITLE"
 
-    # Strategy A: Check title extracted before release year in filename
-    # E.g. for "I.Nobody.2026.1080p.mkv", before "2026" is "I.Nobody"
+    sequel_indicators = {"2", "3", "4", "5", "6", "7", "8", "9", "ii", "iii", "iv", "v", "vi", "part", "chapter", "reloaded", "returns"}
+    req_has_sequel = any(t in sequel_indicators for t in r_tokens)
+
+    def _check_tokens(f_tokens: list[str]) -> bool:
+        n_r = len(r_tokens)
+        for i in range(len(f_tokens) - n_r + 1):
+            if f_tokens[i:i+n_r] == r_tokens:
+                # If matched, verify it is not followed by an unrequested sequel indicator
+                if i + n_r < len(f_tokens):
+                    next_tok = f_tokens[i + n_r]
+                    if not req_has_sequel and next_tok in sequel_indicators:
+                        return False
+                return True
+        return False
+
     title_match = False
+
+    # Strategy A: Check title extracted before release year in filename
     if file_year and file_year in file_name:
         idx = file_name.find(file_year)
-        before_year = file_name[:idx]
-        norm_before_year = normalize_title_for_matching(before_year)
-        if norm_before_year.split() == r_tokens:
+        norm_before = normalize_title_for_matching(file_name[:idx])
+        if _check_tokens(norm_before.split()):
             title_match = True
 
     # Strategy B: Full normalized filename comparison
     if not title_match:
-        norm_file_title = normalize_title_for_matching(file_name)
-        f_tokens = norm_file_title.split()
-        if f_tokens == r_tokens:
+        norm_file = normalize_title_for_matching(file_name)
+        if _check_tokens(norm_file.split()):
             title_match = True
-        elif len(f_tokens) >= len(r_tokens) and f_tokens[:len(r_tokens)] == r_tokens:
-            trailing = f_tokens[len(r_tokens):]
-            sequel_indicators = {"2", "3", "4", "5", "6", "7", "8", "9", "ii", "iii", "iv", "v", "vi", "part", "chapter", "reloaded", "returns"}
-            if not any(t in sequel_indicators for t in trailing):
-                title_match = True
 
-    # Strategy C: Check caption if filename alone was ambiguous/incomplete
+    # Strategy C: Check caption
     if not title_match and caption:
         norm_cap = normalize_title_for_matching(caption)
-        cap_tokens = norm_cap.split()
-        if cap_tokens == r_tokens:
+        if _check_tokens(norm_cap.split()):
             title_match = True
-        elif len(cap_tokens) >= len(r_tokens) and cap_tokens[:len(r_tokens)] == r_tokens:
-            trailing = cap_tokens[len(r_tokens):]
-            sequel_indicators = {"2", "3", "4", "5", "6", "7", "8", "9", "ii", "iii", "iv", "v", "vi", "part", "chapter"}
-            if not any(t in sequel_indicators for t in trailing):
-                title_match = True
 
     if not title_match:
         return False, "TITLE_MISMATCH"
 
-    # Year Comparison completion
-    if req_year_str and file_year:
-        if file_year == req_year_str:
-            return True, "TITLE_AND_YEAR_MATCH"
-        else:
-            return False, "YEAR_MISMATCH"
-
-    if req_year_str and not file_year:
-        if known_conflicts and len(known_conflicts) > 1:
-            return False, "YEAR_NOT_FOUND_IN_FILENAME"
-        return True, "TITLE_MATCH_UNAMBIGUOUS"
-
-    return True, "TITLE_MATCH"
+    return True, "TITLE_AND_YEAR_MATCH" if (req_year_str and file_year) else "TITLE_MATCH"
 
 
 async def pub_is_subscribed(bot, query, channel):
