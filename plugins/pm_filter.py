@@ -777,6 +777,7 @@ async def advantage_spoll_choker(bot, query):
         movie = movies[(int(movie_))]
     except (IndexError, ValueError, TypeError):
         return await query.answer("⚠️ Search request expired. Please search again.", show_alert=True)
+    movie = re.sub(r"[🎬📺\(\)\[\]]", " ", movie)
     movie = re.sub(r"[:\-]", " ", movie)
     movie = re.sub(r"\s+", " ", movie).strip()
     await query.answer(script.TOP_ALRT_MSG)
@@ -3511,7 +3512,7 @@ async def advantage_spell_chok(client, name, msg, reply_msg, vj_search):
             t = sm.get("title")
             y = sm.get("year")
             if t:
-                combo = f"{t} {y}".strip() if y and y != "N/A" else t
+                combo = f"🎬 {t} ({y})" if y and y != "N/A" else f"🎬 {t}"
                 if combo not in movielist:
                     movielist.append(combo)
     except Exception as e:
@@ -3523,12 +3524,15 @@ async def advantage_spell_chok(client, name, msg, reply_msg, vj_search):
         ser_results = await search_series(mv_rqst)
         for s in ser_results:
             n = s.get("name")
-            if n and n not in movielist:
-                movielist.append(n)
+            y = s.get("year")
+            if n:
+                combo = f"📺 {n} ({y})" if y and y != "N/A" else f"📺 {n}"
+                if combo not in movielist:
+                    movielist.append(combo)
     except Exception as e:
         logger.warning(f"[SPELL CHECK] Series search error: {e}")
 
-    # 3. Search IMDb / Public metadata for suggestions
+    # 3. Search IMDb / Public metadata for suggestions (fallback)
     try:
         movies = await get_poster(mv_rqst, bulk=True)
         if movies:
@@ -3536,9 +3540,7 @@ async def advantage_spell_chok(client, name, msg, reply_msg, vj_search):
                 t = movie.get('title')
                 y = movie.get('year')
                 if t:
-                    if t not in movielist:
-                        movielist.append(t)
-                    combo = f"{t} {y}".strip() if y and y != "N/A" else t
+                    combo = f"{t} ({y})" if y and y != "N/A" else t
                     if combo not in movielist:
                         movielist.append(combo)
     except Exception as e:
