@@ -71,8 +71,12 @@ from database.series_db import (
     sync_movie_filter_for_files,
     sync_existing_movie_filter,
     scan_movie_files_by_identity,
-    scan_movie_batch_by_name_year,
 )
+try:
+    from database.series_db import scan_movie_batch_by_name_year
+except ImportError:
+    scan_movie_batch_by_name_year = scan_movie_files_by_identity
+
 from utils import (
     temp,
     get_poster,
