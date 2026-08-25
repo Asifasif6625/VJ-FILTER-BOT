@@ -965,61 +965,15 @@ async def search_super_movies(query: str) -> list[dict]:
     q_title_no_year = re.sub(r"\b(19\d{2}|20\d{2})\b", "", q_norm).strip()
     q_title_no_year = re.sub(r"\s+", " ", q_title_no_year).strip()
     target_query = q_title_no_year if q_title_no_year else q_norm
-
-    # STEP 1: Existing normalized_name exact search in MongoDB
-    docs = await super_movies_col.find({
-        "normalized_name": target_query,
-        "status": {"$ne": "deleted"}
-    }).to_list(length=50)
-
-    if not docs and target_query != q_norm:
-        docs = await super_movies_col.find({
-            "normalized_name": q_norm,
-            "status": {"$ne": "deleted"}
-        }).to_list(length=50)
-
-    if docs:
-        logger.info(
-            f"[SUPER MOVIE SEARCH NORMALIZED MATCH] query={raw_query!r} matches={len(docs)}"
-        )
-        if q_year:
-            year_matches = [d for d in docs if str(d.get("year", "")).strip() == q_year]
-            if year_matches:
-                return year_matches
-        return docs
-
-    # STEP 2: Backward compatibility for old filters (missing or stale normalized_name)
-    cursor = super_movies_col.find({"status": {"$ne": "deleted"}})
-    fallback_matches = []
-    candidates = []
-    async for doc in cursor:
-        candidates.append(doc)
-        title = doc.get("title") or doc.get("name") or ""
-        stored_normalized = doc.get("normalized_name", "")
-        title_normalized = normalize_movie_search_title(title)
-
-        if title_normalized in (target_query, q_norm):
-            fallback_matches.append(doc)
-            continue
-        if stored_normalized and stored_normalized in (target_query, q_norm):
-            fallback_matches.append(doc)
-            continue
-
-    if fallback_matches:
-        logger.info(
-            f"[SUPER MOVIE SEARCH LEGACY MATCH] query={raw_query!r} matches={len(fallback_matches)}"
-        )
-        if q_year:
-            year_matches = [d for d in fallback_matches if str(d.get("year", "")).strip() == q_year]
-            if year_matches:
-                return year_matches
-        return fallback_matches
-
-    # STEP 3: Token matching & fuzzy scoring for partial or multi-word queries
     q_tokens = [w for w in target_query.split() if w]
+
+    # Fetch all active candidates from MongoDB
+    cursor = super_movies_col.find({"status": {"$ne": "deleted"}})
+    candidates = [doc async for doc in cursor]
+
     scored_matches = []
     for cand in candidates:
-        c_title = cand.get("title", "")
+        c_title = cand.get("title") or cand.get("name") or ""
         c_norm = cand.get("normalized_name") or normalize_movie_search_title(c_title)
         c_year = str(cand.get("year", "")).strip()
         c_file_count = len(cand.get("file_ids") or [])
@@ -1029,16 +983,25 @@ async def search_super_movies(query: str) -> list[dict]:
             continue
 
         score = 0.0
+        # 1. Exact match
         if q_norm == c_norm or target_query == c_norm:
             score = 100.0
+        # 2. Token match
         elif q_tokens and c_tokens and q_tokens == c_tokens:
             score = 95.0
+        # 3. All query tokens in candidate (e.g. 'aadu' in 'aadu 2', 'aadu 3', 'aadu 2015')
         elif q_tokens and c_tokens and all(qt in c_tokens for qt in q_tokens):
-            score = 80.0 + (len(q_tokens) / len(c_tokens)) * 10.0
+            score = 85.0 + (len(q_tokens) / len(c_tokens)) * 10.0
+        # 4. Candidate title starts with query (e.g. 'aadu 2' starts with 'aadu')
+        elif c_norm.startswith(target_query) or c_norm.startswith(q_norm):
+            score = 80.0
+        # 5. All candidate tokens in query
         elif q_tokens and c_tokens and all(ct in q_tokens for ct in c_tokens):
             score = 75.0 + (len(c_tokens) / len(q_tokens)) * 10.0
-        elif c_norm.startswith(target_query) or target_query.startswith(c_norm):
+        # 6. Word containment (e.g. 'from' in 'my love from another star')
+        elif target_query in c_norm or q_norm in c_norm:
             score = 70.0
+        # 7. Most tokens match
         elif len(q_tokens) >= 2 and sum(1 for qt in q_tokens if qt in c_tokens) >= len(q_tokens) - 1:
             score = 65.0
 
