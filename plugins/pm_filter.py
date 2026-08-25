@@ -1105,7 +1105,11 @@ async def filter_episodes_cb_handler(client: Client, query: CallbackQuery):
 
 @Client.on_callback_query(filters.regex(r"^languages#"))
 async def languages_cb_handler(client: Client, query: CallbackQuery):
-    _, key = query.data.split("#")
+    parts = query.data.split("#")
+    if len(parts) >= 4:
+        from plugins.series import ser_lang_callback
+        return await ser_lang_callback(client, query)
+    key = parts[1] if len(parts) > 1 else ""
     is_owner, err_msg = is_button_owner(query, key)
     if not is_owner:
         return await query.answer(err_msg, show_alert=True)
@@ -3301,71 +3305,21 @@ async def auto_filter(client, name, msg, reply_msg=None, ai_search=True, spoll=F
 
             if not files:
                 logger.info(f"[SEARCH ROUTE] type=no_result query={search}")
-                # -- 4. No files in database -> Check IMDb for details & poster --
-                imdb = None
-                try:
-                    imdb = await get_poster(search)
-                except Exception as ie:
-                    logger.warning(f"[No-files IMDb fetch error for '{search}']: {ie}")
-                    imdb = None
+                # -- 4. Route to Spell Check / Suggestions --
+                if settings.get("spell_check", True):
+                    return await advantage_spell_chok(client, search if search else name, message, reply_msg, True)
 
+                # If spell check disabled, show not found / reason
                 no_db_btn = InlineKeyboardMarkup([[InlineKeyboardButton(chr(0x1F9A8) + " Reason", callback_data="not_in_db_reason")]])
-
-                if imdb and (imdb.get('poster') or imdb.get('title')):
-                    imdb_title = imdb.get('title') or search
-                    imdb_year = imdb.get('year') or "N/A"
-                    imdb_rating = imdb.get('rating') or "N/A"
-                    imdb_genres = imdb.get('genres') or "N/A"
-
-                    imdb_cap = (
-                        f"<b>🎬 ᴛɪᴛʟᴇ :</b> <code>{imdb_title}</code>\n"
-                        f"<b>📅 ʏᴇᴀʀ :</b> <code>{imdb_year}</code>\n"
-                        f"<b>⭐ ʀᴀᴛɪɴɢ :</b> <code>{imdb_rating}/10</code>\n"
-                        f"<b>🎭 ɢᴇɴʀᴇs :</b> <code>{imdb_genres}</code>\n\n"
-                        f"<b>⚠️ ᴛʜɪs ᴍᴏᴠɪᴇ ɪs ɴᴏᴛ ᴀᴠᴀɪʟᴀʙʟᴇ ɪɴ ᴏᴜʀ ᴅᴀᴛᴀʙᴀsᴇ!</b>\n\n"
-                        f"<i>🕐 This message will be deleted in 50 seconds.</i>"
-                    )
-
-                    poster_url = imdb.get('poster')
-                    msg_obj = None
-                    if poster_url:
-                        try:
-                            if reply_msg:
-                                try:
-                                    await reply_msg.delete()
-                                except Exception:
-                                    pass
-                            msg_obj = await message.reply_photo(
-                                photo=poster_url,
-                                caption=imdb_cap,
-                                reply_markup=no_db_btn,
-                                parse_mode=enums.ParseMode.HTML
-                            )
-                        except Exception:
-                            if reply_msg:
-                                msg_obj = await reply_msg.edit_text(imdb_cap, reply_markup=no_db_btn, parse_mode=enums.ParseMode.HTML)
-                            else:
-                                msg_obj = await message.reply_text(imdb_cap, reply_markup=no_db_btn, parse_mode=enums.ParseMode.HTML)
-                    else:
-                        if reply_msg:
-                            msg_obj = await reply_msg.edit_text(imdb_cap, reply_markup=no_db_btn, parse_mode=enums.ParseMode.HTML)
-                        else:
-                            msg_obj = await message.reply_text(imdb_cap, reply_markup=no_db_btn, parse_mode=enums.ParseMode.HTML)
+                msg_text = (
+                    "<b>sᴏʀʀʏ ɴᴏ ꜰɪʟᴇs ᴡᴇʀᴇ ꜰᴏᴜɴᴅ ꜰᴏʀ ʏᴏᴜʀ ʀᴇǫᴜᴇꜱᴛ😕\n\n"
+                    "ᴄʜᴇᴄᴋ ʏᴏᴜʀ sᴘᴇʟʟɪɴɢ ɪɴ ɢᴏᴏɢʟᴇ ᴀɴᴅ ᴛʀʏ ᴀɢᴀɪɴ 😃\n\n"
+                    "<i>🕐 This message will be deleted in 50 seconds.</i></b>"
+                )
+                if reply_msg:
+                    msg_obj = await reply_msg.edit_text(msg_text, reply_markup=no_db_btn)
                 else:
-                    msg_text = (
-                        "<b>sᴏʀʀʏ ɴᴏ ꜰɪʟᴇs ᴡᴇʀᴇ ꜰᴏᴜɴᴅ ꜰᴏʀ ʏᴏᴜʀ ʀᴇǫᴜᴇꜱᴛ😕\n\n"
-                        "ᴄʜᴇᴄᴋ ʏᴏᴜʀ sᴘᴇʟʟɪɴɢ ɪɴ ɢᴏᴏɢʟᴇ ᴀɴᴅ ᴛʀʏ ᴀɢᴀɪɴ 😃\n\n"
-                        "ᴍᴏᴠɪᴇ ʀᴇǫᴜᴇꜱᴛ ꜰᴏʀᴍᴀᴛ 👇\n\n"
-                        "ᴇxᴀᴍᴘʟᴇ : Uncharted or Uncharted 2022 or Uncharted En\n\n"
-                        "ꜱᴇʀɪᴇꜱ ʀᴇǫᴜᴇꜱᴛ ꜰᴏʀᴍᴀᴛ 👇\n\n"
-                        "ᴇxᴀᴍᴘʟᴇ : Loki S01 or Loki S01E04 or Lucifer S03E24\n\n"
-                        "🚯 ᴅᴏɴᴛ ᴜꜱᴇ ➠ ':(!,./)\n\n"
-                        "<i>🕐 This message will be deleted in 50 seconds.</i></b>"
-                    )
-                    if reply_msg:
-                        msg_obj = await reply_msg.edit_text(msg_text, reply_markup=no_db_btn)
-                    else:
-                        msg_obj = await message.reply_text(msg_text, reply_markup=no_db_btn)
+                    msg_obj = await message.reply_text(msg_text, reply_markup=no_db_btn)
 
                 await asyncio.sleep(50)
                 try:
@@ -3544,98 +3498,112 @@ async def advantage_spell_chok(client, name, msg, reply_msg, vj_search):
     mv_id = msg.id
     mv_rqst = name
     reqstr1 = msg.from_user.id if msg.from_user else 0
-    reqstr = await client.get_users(reqstr1)
+    reqstr = await client.get_users(reqstr1) if reqstr1 else None
     settings = await get_settings(msg.chat.id)
-    query = re.sub(
-        r"\b(pl(i|e)*?(s|z+|ease|se|ese|(e+)s(e)?)|((send|snd|giv(e)?|gib)(\sme)?)|movie(s)?|new|latest|br((o|u)h?)*|^h(e|a)?(l)*(o)*|mal(ayalam)?|t(h)?amil|file|that|find|und(o)*|kit(t(i|y)?)?o(w)?|thar(u)?(o)*w?|kittum(o)*|aya(k)*(um(o)*)?|full\smovie|any(one)|with\ssubtitle(s)?)",
-        "", msg.text, flags=re.IGNORECASE)  # plis contribute some common words
-    query = query.strip() + " movie"
+
+    movielist = []
+
+    # 1. Search Super Movies from database for suggestions
+    try:
+        from database.series_db import search_super_movies
+        sm_results = await search_super_movies(mv_rqst)
+        for sm in sm_results:
+            t = sm.get("title")
+            y = sm.get("year")
+            if t:
+                combo = f"{t} {y}".strip() if y and y != "N/A" else t
+                if combo not in movielist:
+                    movielist.append(combo)
+    except Exception as e:
+        logger.warning(f"[SPELL CHECK] Super movie search error: {e}")
+
+    # 2. Search Series from database for suggestions
+    try:
+        from database.series_db import search_series
+        ser_results = await search_series(mv_rqst)
+        for s in ser_results:
+            n = s.get("name")
+            if n and n not in movielist:
+                movielist.append(n)
+    except Exception as e:
+        logger.warning(f"[SPELL CHECK] Series search error: {e}")
+
+    # 3. Search IMDb / Public metadata for suggestions
     try:
         movies = await get_poster(mv_rqst, bulk=True)
+        if movies:
+            for movie in movies:
+                t = movie.get('title')
+                y = movie.get('year')
+                if t:
+                    if t not in movielist:
+                        movielist.append(t)
+                    combo = f"{t} {y}".strip() if y and y != "N/A" else t
+                    if combo not in movielist:
+                        movielist.append(combo)
     except Exception as e:
-        logger.exception(e)
+        logger.warning(f"[SPELL CHECK] IMDb suggestion error: {e}")
+
+    # Deduplicate while preserving order & cap to 8
+    unique_movies = []
+    for m in movielist:
+        if m and m not in unique_movies:
+            unique_movies.append(m)
+    movielist = unique_movies[:8]
+
+    if not movielist:
         reqst_gle = mv_rqst.replace(" ", "+")
         button = [[
             InlineKeyboardButton("Gᴏᴏɢʟᴇ", url=f"https://www.google.com/search?q={reqst_gle}"),
             InlineKeyboardButton(chr(0x1F9A8) + " Reason", callback_data="not_in_db_reason")
         ]]
-        if NO_RESULTS_MSG:
+        if NO_RESULTS_MSG and reqstr:
             await client.send_message(chat_id=LOG_CHANNEL, text=(script.NORSLTS.format(reqstr.id, reqstr.mention, mv_rqst)))
-        k = await reply_msg.edit_text(text=script.I_CUDNT.format(mv_rqst), reply_markup=InlineKeyboardMarkup(button))
+        if reply_msg:
+            k = await reply_msg.edit_text(text=script.I_CUDNT.format(mv_rqst), reply_markup=InlineKeyboardMarkup(button))
+        else:
+            k = await msg.reply_text(text=script.I_CUDNT.format(mv_rqst), reply_markup=InlineKeyboardMarkup(button))
         await asyncio.sleep(30)
-        await k.delete()
+        try:
+            await k.delete()
+        except Exception:
+            pass
         return
-    movielist = []
-    if not movies:
-        reqst_gle = mv_rqst.replace(" ", "+")
-        button = [[
-            InlineKeyboardButton("Gᴏᴏɢʟᴇ", url=f"https://www.google.com/search?q={reqst_gle}"),
-            InlineKeyboardButton(chr(0x1F9A8) + " Reason", callback_data="not_in_db_reason")
-        ]]
-        if NO_RESULTS_MSG:
-            await client.send_message(chat_id=LOG_CHANNEL, text=(script.NORSLTS.format(reqstr.id, reqstr.mention, mv_rqst)))
-        k = await reply_msg.edit_text(text=script.I_CUDNT.format(mv_rqst), reply_markup=InlineKeyboardMarkup(button))
-        await asyncio.sleep(30)
-        await k.delete()
-        return
-    movielist += [movie.get('title') for movie in movies]
-    movielist += [f"{movie.get('title')} {movie.get('year')}" for movie in movies]
+
     SPELL_CHECK[mv_id] = movielist
-    if AI_SPELL_CHECK == True and vj_search == True:
-        vj_search_new = False
-        vj_ai_msg = await reply_msg.edit_text("\u200b")
-        movienamelist = []
-        movienamelist += [movie.get('title') for movie in movies]
-        for techvj in movienamelist:
-            try:
-                mv_rqst = mv_rqst.capitalize()
-            except:
-                pass
-            if mv_rqst.startswith(techvj[0]):
-                await auto_filter(client, techvj, msg, reply_msg, vj_search_new)
-                break
-        reqst_gle = mv_rqst.replace(" ", "+")
-        button = [[
-            InlineKeyboardButton("Gᴏᴏɢʟᴇ", url=f"https://www.google.com/search?q={reqst_gle}"),
-            InlineKeyboardButton(chr(0x1F9A8) + " Reason", callback_data="not_in_db_reason")
-        ]]
-        if NO_RESULTS_MSG:
-            await client.send_message(chat_id=LOG_CHANNEL, text=(script.NORSLTS.format(reqstr.id, reqstr.mention, mv_rqst)))
-        k = await reply_msg.edit_text(text=script.I_CUDNT.format(mv_rqst), reply_markup=InlineKeyboardMarkup(button))
-        await asyncio.sleep(30)
-        await k.delete()
-        return
-    else:
-        btn = [
-            [
-                InlineKeyboardButton(
-                    text=movie_name.strip(),
-                    callback_data=f"spol#{reqstr1}#{k}",
-                )
-            ]
-            for k, movie_name in enumerate(movielist)
+
+    btn = [
+        [
+            InlineKeyboardButton(
+                text=movie_name.strip(),
+                callback_data=f"spol#{reqstr1}#{k}",
+            )
         ]
-        btn.append([
-            InlineKeyboardButton(chr(0x1F9A8) + " Reason", callback_data="not_in_db_reason"),
-            InlineKeyboardButton(text="Close", callback_data=f'spol#{reqstr1}#close_spellcheck')
-        ])
+        for k, movie_name in enumerate(movielist)
+    ]
+    btn.append([
+        InlineKeyboardButton(chr(0x1F9A8) + " Reason", callback_data="not_in_db_reason"),
+        InlineKeyboardButton(text="Close", callback_data=f'spol#{reqstr1}#close_spellcheck')
+    ])
+    if reply_msg:
         spell_check_del = await reply_msg.edit_text(
             text=script.CUDNT_FND.format(mv_rqst),
             reply_markup=InlineKeyboardMarkup(btn)
         )
-        if spell_check_del:
-            SPELL_CHECK[spell_check_del.id] = movielist
-        try:
-            if settings['auto_delete']:
-                await asyncio.sleep(600)
-                await spell_check_del.delete()
-        except KeyError:
-            grpid = await active_connection(str(msg.from_user.id))
-            await save_group_settings(grpid, 'auto_delete', True)
-            settings = await get_settings(msg.chat.id)
-            if settings['auto_delete']:
-                await asyncio.sleep(600)
-                await spell_check_del.delete()
+    else:
+        spell_check_del = await msg.reply_text(
+            text=script.CUDNT_FND.format(mv_rqst),
+            reply_markup=InlineKeyboardMarkup(btn)
+        )
+    if spell_check_del:
+        SPELL_CHECK[spell_check_del.id] = movielist
+
+    try:
+        if settings.get('auto_delete', True):
+            await asyncio.sleep(600)
+            await spell_check_del.delete()
+    except Exception:
+        pass
 
 async def manual_filters(client, message, text=False):
     settings = await get_settings(message.chat.id)
