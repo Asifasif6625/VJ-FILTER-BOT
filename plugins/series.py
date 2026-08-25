@@ -4129,7 +4129,7 @@ async def process_super_movie_search(client: Client, message: Message, query_tex
     Checks if a query matches an existing Super Movie Filter.
     If matched, renders the Super Movie Filter UI and returns True.
     """
-    from database.series_db import search_super_movies, get_super_movie
+    from database.series_db import search_super_movies, get_super_movie, normalize_movie_search_title
     from database.ia_filterdb import get_file_details
     from plugins.pm_filter import group_movie_files, build_movie_language_keyboard, BUTTON_OWNERS
 
@@ -4138,6 +4138,13 @@ async def process_super_movie_search(client: Client, message: Message, query_tex
         return False
 
     matches = await search_super_movies(q)
+    logger.info(
+        f"[SUPER MOVIE SEARCH DEBUG]\n"
+        f"raw_query={query_text}\n"
+        f"clean_query={q}\n"
+        f"normalized_query={normalize_movie_search_title(q)}\n"
+        f"matched_count={len(matches) if matches else 0}"
+    )
     if not matches:
         return False
 
@@ -4145,13 +4152,29 @@ async def process_super_movie_search(client: Client, message: Message, query_tex
     if len(matches) > 1 and not has_year and not reply_msg:
         distinct_titles = {f"{m.get('title')}-{m.get('year')}" for m in matches}
         if len(distinct_titles) > 1:
+            logger.info(
+                f"[SUPER MOVIE SAME TITLE]\n"
+                f"title={q}\n"
+                f"matches={len(matches)}"
+            )
             return False
 
     logger.info("[SEARCH ROUTE] type=movie_filter")
     movie = matches[0]
     movie_id = str(movie["_id"])
     file_ids = movie.get("file_ids", [])
+
+    logger.info(
+        f"[SUPER MOVIE SEARCH MATCH]\n"
+        f"title={movie.get('title')}\n"
+        f"year={movie.get('year')}\n"
+        f"movie_id={movie_id}\n"
+        f"file_count={len(file_ids)}\n"
+        f"legacy_normalized={bool(not movie.get('normalized_name'))}"
+    )
+
     if not file_ids:
+        logger.info(f"[SUPER MOVIE SEARCH] matched_filter_but_no_files title={movie.get('title')} id={movie_id}")
         return False
 
     # Fetch file documents
