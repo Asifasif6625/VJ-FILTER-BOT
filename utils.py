@@ -13,8 +13,10 @@ from Script import script
 from datetime import datetime, date
 from typing import List
 from database.users_chats_db import db
-from database.join_reqs import JoinReqs
-from bs4 import BeautifulSoup
+try:
+    from bs4 import BeautifulSoup
+except Exception:
+    BeautifulSoup = None
 from shortzy import Shortzy
 
 logger = logging.getLogger(__name__)
@@ -596,111 +598,403 @@ async def get_public_tmdb_poster(query, bulk=False, id=False, file=None):
         logger.warning(f"Public TMDB scraper error for '{query}': {e}")
         return None
 
-async def get_tmdb_by_url(url_or_path):
+async def get_imdb_public_metadata(url_or_id: str) -> dict | None:
     """
-    Directly resolves a TMDB URL (e.g. https://www.themoviedb.org/movie/863530 or https://www.themoviedb.org/tv/1396)
-    without any API key and returns structured movie/series metadata.
+    Public IMDb metadata scraper without API keys.
+    Extracts structured JSON-LD and OpenGraph metadata from public IMDb webpage.
     """
     import html as _html
+    import json as _json
+
+    m_imdb = re.search(r"(?:imdb\.com/title/)?(tt\d{5,12})", str(url_or_id), re.IGNORECASE)
+    if not m_imdb:
+        logger.warning(f"[PUBLIC IMDb] Invalid IMDb URL or ID: {url_or_id}")
+        return None
+
+    clean_tt = m_imdb.group(1).lower()
+    page_url = f"https://www.imdb.com/title/{clean_tt}/"
+    logger.info(f"[PUBLIC IMDb] START id={clean_tt} url={page_url}")
+
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/120.0.0.0 Safari/537.36"
+        ),
+        "Accept-Language": "en-US,en;q=0.9",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+    }
+    timeout = aiohttp.ClientTimeout(total=10, connect=4, sock_read=6)
+
+    html_content = ""
+    status = 0
+
     try:
-        m = re.search(r'(?:themoviedb\.org)?/(movie|tv)/(\d+)', str(url_or_path), re.I)
-        if not m:
-            return None
-        media_type = m.group(1).lower()  # 'movie' or 'tv'
-        tmdb_id = m.group(2)
-        
-        clean_url = f"https://www.themoviedb.org/{media_type}/{tmdb_id}"
-        page = await asyncio.to_thread(_fetch_url_sync, clean_url)
-        if not page:
-            return None
+        async with aiohttp.ClientSession(timeout=timeout, headers=headers) as session:
+            async with session.get(page_url) as resp:
+                status = resp.status
+                logger.info(f"[PUBLIC IMDb] HTTP status={status}")
+                if status == 200:
+                    html_content = await resp.text()
+    except asyncio.TimeoutError:
+        logger.error(f"[PUBLIC IMDb] FAILED reason=TIMEOUT id={clean_tt}")
+    except Exception as e:
+        logger.warning(f"[PUBLIC IMDb] HTML fetch failed: {e}")
 
-        # Title
-        title_match = re.search(r'<h2[^>]*>\s*(?:<a[^>]*>)?([^<]+)', page) or re.search(r'<meta property="og:title" content="([^"]+)"', page)
-        title = _html.unescape(title_match.group(1).strip()) if title_match else None
-        if title:
-            title = re.sub(r'\s*\(\d{4}\)\s*$', '', title).strip()
+    # Fallback to direct Suggestion API if HTML is blocked, empty, or challenges
+    if not html_content or status != 200:
+        logger.info(f"[PUBLIC IMDb] Falling back to Suggestion API id={clean_tt}")
+        direct_meta = await get_imdb_metadata_direct(clean_tt)
+        if direct_meta:
+            direct_meta["source"] = "imdb_public"
+            return direct_meta
+        return None
 
-        # Year
-        year = None
-        date_match = re.search(r'<span class="tag release_date">\s*\(([0-9]{4})\)\s*</span>', page) or re.search(r'<span class="release_date[^"]*">([^<]+)</span>', page)
-        if date_match:
-            rel_text = date_match.group(1).strip()
-            y_m = re.search(r'\b(19\d\d|20\d\d)\b', rel_text)
+    soup = BeautifulSoup(html_content, "html.parser") if BeautifulSoup else None
+    json_ld_obj = None
+
+    # 1. Parse JSON-LD scripts
+    json_ld_raw_list = []
+    if soup:
+        for script_tag in soup.find_all("script", type="application/ld+json"):
+            if script_tag.string:
+                json_ld_raw_list.append(script_tag.string)
+    else:
+        for m in re.finditer(r'<script[^>]*type=["\']application/ld\+json["\'][^>]*>(.*?)</script>', html_content, re.DOTALL | re.I):
+            json_ld_raw_list.append(m.group(1))
+
+    for raw_json in json_ld_raw_list:
+        try:
+            parsed = _json.loads(raw_json)
+            candidates = []
+            if isinstance(parsed, dict):
+                if "@graph" in parsed and isinstance(parsed["@graph"], list):
+                    candidates.extend(parsed["@graph"])
+                else:
+                    candidates.append(parsed)
+            elif isinstance(parsed, list):
+                candidates.extend(parsed)
+
+            for cand in candidates:
+                if not isinstance(cand, dict):
+                    continue
+                c_type = str(cand.get("@type", "")).lower()
+                if any(t in c_type for t in ("movie", "tvseries", "tvepisode", "creativework", "videoobject")):
+                    json_ld_obj = cand
+                    break
+                if "name" in cand and ("datePublished" in cand or "genre" in cand):
+                    json_ld_obj = cand
+                    break
+            if json_ld_obj:
+                break
+        except Exception:
+            continue
+
+    logger.info(f"[PUBLIC IMDb] JSON-LD FOUND={bool(json_ld_obj)}")
+
+    title = None
+    year = None
+    kind = "movie"
+    poster = None
+    rating = ""
+    genres = ""
+    plot = ""
+
+    if json_ld_obj:
+        title = json_ld_obj.get("name")
+        date_pub = json_ld_obj.get("datePublished")
+        if date_pub:
+            y_match = re.search(r"\b(19|20)\d{2}\b", str(date_pub))
+            if y_match:
+                year = y_match.group(0)
+
+        ld_type = str(json_ld_obj.get("@type", "")).lower()
+        if "tvseries" in ld_type or "tv_series" in ld_type:
+            kind = "tv series"
+        elif "tvepisode" in ld_type:
+            kind = "tv episode"
+        elif "movie" in ld_type:
+            kind = "movie"
+
+        img = json_ld_obj.get("image")
+        if isinstance(img, str):
+            poster = img
+        elif isinstance(img, dict):
+            poster = img.get("url") or img.get("contentUrl")
+
+        agg_rating = json_ld_obj.get("aggregateRating")
+        if isinstance(agg_rating, dict):
+            rating = str(agg_rating.get("ratingValue") or "").strip()
+
+        genre_val = json_ld_obj.get("genre")
+        if isinstance(genre_val, list):
+            genres = ", ".join(str(g).strip() for g in genre_val if str(g).strip())
+        elif isinstance(genre_val, str):
+            genres = genre_val.strip()
+
+        plot = json_ld_obj.get("description") or ""
+
+    # OpenGraph / Meta Tag fallbacks
+    if not title:
+        og_t_m = re.search(r'<meta[^>]*property=["\']og:title["\'][^>]*content=["\']([^"\']+)["\']', html_content, re.I) or re.search(r'<meta[^>]*content=["\']([^"\']+)["\'][^>]*property=["\']og:title["\']', html_content, re.I)
+        if og_t_m:
+            raw_og_title = _html.unescape(og_t_m.group(1).strip())
+            title = re.sub(r"\s*-\s*IMDb.*$", "", raw_og_title, flags=re.I).strip()
+
+    if not year:
+        page_t_m = re.search(r'<title[^>]*>([^<]+)</title>', html_content, re.I)
+        if page_t_m:
+            y_m = re.search(r"\(.*?((?:19|20)\d{2}).*?\)", page_t_m.group(1))
             if y_m:
                 year = y_m.group(1)
 
-        # Rating
-        rating = None
-        rate_match = re.search(r'data-percent="([0-9.]+)"', page)
-        if rate_match:
-            try:
-                rating = str(round(float(rate_match.group(1)) / 10.0, 1))
-            except:
-                pass
+    if not poster:
+        og_img_m = re.search(r'<meta[^>]*property=["\']og:image["\'][^>]*content=["\']([^"\']+)["\']', html_content, re.I) or re.search(r'<meta[^>]*content=["\']([^"\']+)["\'][^>]*property=["\']og:image["\']', html_content, re.I)
+        if og_img_m:
+            poster = og_img_m.group(1).strip()
 
-        # Genres
-        genres_match = re.search(r'<span class="genres">([^<]+(?:<a[^>]*>[^<]+</a>[^<]*)+)</span>', page)
-        genres = []
-        if genres_match:
-            genres = [_html.unescape(g.strip()) for g in re.findall(r'<a[^>]*>([^<]+)</a>', genres_match.group(1))]
+    if not plot:
+        og_desc_m = re.search(r'<meta[^>]*property=["\']og:description["\'][^>]*content=["\']([^"\']+)["\']', html_content, re.I) or re.search(r'<meta[^>]*content=["\']([^"\']+)["\'][^>]*property=["\']og:description["\']', html_content, re.I)
+        if og_desc_m:
+            plot = _html.unescape(og_desc_m.group(1).strip())
 
-        # Seasons for TV Series
-        seasons = None
-        if media_type == "tv":
-            season_match = re.search(r'(\d+)\s+Season', page, re.I)
-            if season_match:
-                seasons = int(season_match.group(1))
-            else:
-                seasons = 1
+    og_type_m = re.search(r'<meta[^>]*property=["\']og:type["\'][^>]*content=["\']([^"\']+)["\']', html_content, re.I)
+    if og_type_m:
+        if "tv_series" in og_type_m.group(1).lower() or "video.tv_show" in og_type_m.group(1).lower():
+            kind = "tv series"
 
-        # Poster
-        poster_match = re.search(r'<meta property="og:image" content="([^"]+)"', page) or re.search(r'class="poster[^"]*"[^>]+(?:src|data-src)="([^"]+)"', page)
-        poster = None
-        if poster_match:
-            raw_poster = poster_match.group(1)
-            poster = re.sub(r'/w\d+(_and_h\d+[^/]*)?/', '/w500/', raw_poster)
-            if poster.startswith('//'):
-                poster = 'https:' + poster
+    if poster and poster.startswith("//"):
+        poster = "https:" + poster
 
-        # Overview
-        overview_match = re.search(r'<div class="overview"[^>]*>\s*<p>([^<]+)</p>', page) or re.search(r'<meta property="og:description" content="([^"]+)"', page)
-        overview = _html.unescape(overview_match.group(1).strip()) if overview_match else ""
+    if not title or not year:
+        logger.info(f"[PUBLIC IMDb] Supplementary Suggestion API lookup id={clean_tt}")
+        sugg = await get_imdb_metadata_direct(clean_tt)
+        if sugg:
+            title = title or sugg.get("title")
+            year = year or str(sugg.get("year") or "")
+            kind = sugg.get("kind") or kind
+            poster = poster or sugg.get("poster")
 
-        kind = "tv series" if media_type == "tv" else "movie"
-
-        return {
-            'title': title,
-            'votes': None,
-            'aka': None,
-            'seasons': seasons,
-            'box_office': None,
-            'localized_title': title,
-            'kind': kind,
-            'imdb_id': None,
-            'tmdb_id': tmdb_id,
-            'cast': None,
-            'runtime': None,
-            'countries': None,
-            'certificates': None,
-            'languages': None,
-            'director': None,
-            'writer': None,
-            'producer': None,
-            'composer': None,
-            'cinematographer': None,
-            'music_team': None,
-            'distributors': None,
-            'release_date': str(year or "N/A"),
-            'year': year,
-            'genres': ", ".join(genres) if genres else "Drama",
-            'poster': poster,
-            'plot': overview,
-            'rating': rating or "7.5",
-            'url': clean_url
-        }
-    except Exception as e:
-        logger.warning(f"Error fetching TMDB URL '{url_or_path}': {e}")
+    if not title:
+        logger.warning(f"[PUBLIC IMDb] FAILED reason=NO_TITLE id={clean_tt}")
         return None
+
+    clean_year = str(year).strip() if year else None
+
+    logger.info(
+        f"[PUBLIC IMDb] COMPLETE\n"
+        f"title={title}\n"
+        f"year={clean_year}\n"
+        f"kind={kind}\n"
+        f"poster={bool(poster)}"
+    )
+
+    return {
+        "title": _html.unescape(title.strip()),
+        "year": clean_year,
+        "kind": kind,
+        "imdb_id": clean_tt,
+        "tmdb_id": None,
+        "poster": poster,
+        "rating": rating,
+        "genres": genres,
+        "plot": _html.unescape(plot.strip()) if plot else "",
+        "source": "imdb_public",
+    }
+
+
+async def get_tmdb_public_metadata(url: str) -> dict | None:
+    """
+    Public TMDB metadata scraper without API keys.
+    Extracts structured JSON-LD and OpenGraph metadata from public TMDB webpage.
+    """
+    import html as _html
+    import json as _json
+
+    m_tmdb = re.search(r'(?:https?://)?(?:www\.)?themoviedb\.org/(movie|tv)/(\d+)', str(url), re.IGNORECASE)
+    if not m_tmdb:
+        logger.warning(f"[PUBLIC TMDB] Invalid TMDB URL: {url}")
+        return None
+
+    media_type = m_tmdb.group(1).lower()
+    tmdb_id = m_tmdb.group(2)
+    clean_url = f"https://www.themoviedb.org/{media_type}/{tmdb_id}"
+    logger.info(f"[PUBLIC TMDB] START id={tmdb_id} type={media_type} url={clean_url}")
+
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/120.0.0.0 Safari/537.36"
+        ),
+        "Accept-Language": "en-US,en;q=0.9",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    }
+    timeout = aiohttp.ClientTimeout(total=10, connect=4, sock_read=6)
+
+    try:
+        async with aiohttp.ClientSession(timeout=timeout, headers=headers) as session:
+            async with session.get(clean_url) as resp:
+                logger.info(f"[PUBLIC TMDB] HTTP status={resp.status}")
+                if resp.status != 200:
+                    logger.warning(f"[PUBLIC TMDB] FAILED reason=HTTP_{resp.status} id={tmdb_id}")
+                    return None
+                html_content = await resp.text()
+    except asyncio.TimeoutError:
+        logger.error(f"[PUBLIC TMDB] FAILED reason=TIMEOUT id={tmdb_id}")
+        return None
+    except Exception as e:
+        logger.exception(f"[PUBLIC TMDB] FAILED reason=ERROR id={tmdb_id}: {e}")
+        return None
+
+    soup = BeautifulSoup(html_content, "html.parser") if BeautifulSoup else None
+    json_ld_obj = None
+
+    json_ld_raw_list = []
+    if soup:
+        for script_tag in soup.find_all("script", type="application/ld+json"):
+            if script_tag.string:
+                json_ld_raw_list.append(script_tag.string)
+    else:
+        for m in re.finditer(r'<script[^>]*type=["\']application/ld\+json["\'][^>]*>(.*?)</script>', html_content, re.DOTALL | re.I):
+            json_ld_raw_list.append(m.group(1))
+
+    for raw_json in json_ld_raw_list:
+        try:
+            parsed = _json.loads(raw_json)
+            if isinstance(parsed, dict) and "name" in parsed:
+                json_ld_obj = parsed
+                break
+        except Exception:
+            continue
+
+    logger.info(f"[PUBLIC TMDB] JSON-LD FOUND={bool(json_ld_obj)}")
+
+    title = None
+    year = None
+    kind = "tv series" if media_type == "tv" else "movie"
+    poster = None
+    rating = ""
+    genres = ""
+    plot = ""
+
+    if json_ld_obj:
+        title = json_ld_obj.get("name")
+        date_pub = json_ld_obj.get("datePublished") or json_ld_obj.get("releasedEvent")
+        if date_pub:
+            y_match = re.search(r"\b(19|20)\d{2}\b", str(date_pub))
+            if y_match:
+                year = y_match.group(0)
+
+        img = json_ld_obj.get("image")
+        if isinstance(img, str):
+            poster = img
+        elif isinstance(img, dict):
+            poster = img.get("url")
+
+        agg = json_ld_obj.get("aggregateRating")
+        if isinstance(agg, dict):
+            rating = str(agg.get("ratingValue") or "").strip()
+
+        genre_val = json_ld_obj.get("genre")
+        if isinstance(genre_val, list):
+            genres = ", ".join(str(g).strip() for g in genre_val if str(g).strip())
+        elif isinstance(genre_val, str):
+            genres = genre_val.strip()
+
+        plot = json_ld_obj.get("description") or ""
+
+    # OpenGraph fallbacks
+    if not title:
+        og_t_m = re.search(r'<meta[^>]*property=["\']og:title["\'][^>]*content=["\']([^"\']+)["\']', html_content, re.I) or re.search(r'<meta[^>]*content=["\']([^"\']+)["\'][^>]*property=["\']og:title["\']', html_content, re.I)
+        if og_t_m:
+            raw_t = _html.unescape(og_t_m.group(1).strip())
+            title = re.sub(r"\s*—\s*The Movie Database.*$", "", raw_t, flags=re.I).strip()
+            y_m = re.search(r"\(((?:19|20)\d{2})\)", raw_t)
+            if y_m and not year:
+                year = y_m.group(1)
+                title = re.sub(r"\s*\(((?:19|20)\d{2})\)", "", title).strip()
+
+    if not year:
+        rel_m = re.search(r'class=["\'][^"\']*release_date[^"\']*["\'][^>]*>([^<]+)', html_content, re.I)
+        if rel_m:
+            y_m = re.search(r"\b((?:19|20)\d{2})\b", rel_m.group(1))
+            if y_m:
+                year = y_m.group(1)
+
+    if not poster:
+        og_img_m = re.search(r'<meta[^>]*property=["\']og:image["\'][^>]*content=["\']([^"\']+)["\']', html_content, re.I) or re.search(r'<meta[^>]*content=["\']([^"\']+)["\'][^>]*property=["\']og:image["\']', html_content, re.I)
+        if og_img_m:
+            poster = og_img_m.group(1).strip()
+
+    if not plot:
+        og_desc_m = re.search(r'<meta[^>]*property=["\']og:description["\'][^>]*content=["\']([^"\']+)["\']', html_content, re.I) or re.search(r'<meta[^>]*content=["\']([^"\']+)["\'][^>]*property=["\']og:description["\']', html_content, re.I)
+        if og_desc_m:
+            plot = _html.unescape(og_desc_m.group(1).strip())
+
+    if not genres:
+        genres_m = re.search(r'<span[^>]*class=["\']genres["\'][^>]*>(.*?)</span>', html_content, re.DOTALL | re.I)
+        if genres_m:
+            genres_list = [_html.unescape(g.strip()) for g in re.findall(r'<a[^>]*>([^<]+)</a>', genres_m.group(1)) if g.strip()]
+            if genres_list:
+                genres = ", ".join(genres_list)
+
+    if poster:
+        if poster.startswith("//"):
+            poster = "https:" + poster
+        poster = re.sub(r'/w\d+(_and_h\d+[^/]*)?/', '/w500/', poster)
+
+    if not title:
+        logger.warning(f"[PUBLIC TMDB] FAILED reason=NO_TITLE id={tmdb_id}")
+        return None
+
+    clean_year = str(year).strip() if year else None
+
+    logger.info(
+        f"[PUBLIC TMDB] COMPLETE\n"
+        f"title={title}\n"
+        f"year={clean_year}\n"
+        f"kind={kind}\n"
+        f"poster={bool(poster)}"
+    )
+
+    return {
+        "title": _html.unescape(title.strip()),
+        "year": clean_year,
+        "kind": kind,
+        "imdb_id": None,
+        "tmdb_id": tmdb_id,
+        "poster": poster,
+        "rating": rating,
+        "genres": genres,
+        "plot": _html.unescape(plot.strip()) if plot else "",
+        "source": "tmdb_public",
+    }
+
+
+async def get_public_movie_metadata(text: str) -> dict | None:
+    """
+    Unified public metadata dispatcher for IMDb / TMDB URLs or IDs.
+    Does NOT require API keys. Returns standardized movie/series metadata.
+    """
+    text_str = str(text).strip()
+    m_tmdb = re.search(r'(?:https?://)?(?:www\.)?themoviedb\.org/(movie|tv)/(\d+)', text_str, re.IGNORECASE)
+    m_imdb = re.search(r"(?:imdb\.com/title/)?(tt\d{5,12})", text_str, re.IGNORECASE)
+
+    if m_tmdb:
+        return await get_tmdb_public_metadata(text_str)
+    elif m_imdb:
+        return await get_imdb_public_metadata(text_str)
+    else:
+        logger.warning(f"[PUBLIC METADATA] Unrecognized URL or ID query={text_str}")
+        return None
+
+
+async def get_tmdb_by_url(url_or_path):
+    """
+    Public TMDB metadata resolver for backward compatibility.
+    """
+    return await get_tmdb_public_metadata(url_or_path)
 
 
 async def get_imdb_metadata_direct(imdb_id: str):
@@ -761,14 +1055,16 @@ async def get_imdb_metadata_direct(imdb_id: str):
 
         return {
             "title": title,
-            "year": year,
+            "year": str(year) if year else None,
             "kind": kind,
             "imdb_id": exact.get("id", imdb_id),
+            "tmdb_id": None,
             "poster": poster,
             "rating": "",
             "genres": "",
             "plot": "",
             "seasons": None,
+            "source": "imdb_direct",
         }
 
     except asyncio.TimeoutError:
