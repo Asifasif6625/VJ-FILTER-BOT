@@ -990,6 +990,16 @@ def _build_auto_movie_file_keyboard(session_id, lang, qual, files, page=0, pre="
     return InlineKeyboardMarkup(buttons)
 
 
+AUTO_MOVIE_METADATA_TASKS = {}
+AUTO_SERIES_METADATA_TASKS = {}
+
+AUTO_MOVIE_SCAN_LOCKS = {}
+AUTO_MOVIE_SCAN_TASKS = {}
+AUTO_MOVIE_CANCEL_EVENTS = {}
+
+AUTO_MOVIE_METADATA_WATCHDOGS = {}
+AUTO_SERIES_METADATA_WATCHDOGS = {}
+
 
 async def fetch_auto_movie_metadata(client: Client, chat_id: int | str, loading_msg: Message, session_id: str, text: str, uid: int):
     """
@@ -997,6 +1007,7 @@ async def fetch_auto_movie_metadata(client: Client, chat_id: int | str, loading_
     Executes with hard deadline (15s), manages exact state transitions:
     WAIT_IMDB -> FETCHING_METADATA -> METADATA_COMPLETE -> SCANNING -> RESULT / ERROR / CANCELLED.
     """
+    print("### AM_FETCH_ENTERED ###", flush=True)
     try:
         movie_data = temp.AUTO_MOVIE.get(session_id) or temp.AUTO_MOVIE.get(uid) or {}
         movie_data.update({
@@ -1191,6 +1202,7 @@ async def fetch_auto_series_metadata(client: Client, chat_id: int | str, loading
     Executes with hard deadline (15s), manages exact state transitions:
     WAIT_IMDB -> FETCHING_METADATA -> METADATA_COMPLETE -> SCANNING -> RESULT / ERROR / CANCELLED.
     """
+    print("### AS_FETCH_ENTERED ###", flush=True)
     try:
         s_data = temp.AUTO_SERIES.get(session_id) or temp.AUTO_SERIES.get(uid) or {}
         s_data.update({
@@ -1402,10 +1414,6 @@ async def fetch_auto_series_metadata(client: Client, chat_id: int | str, loading
     finally:
         AUTO_SERIES_METADATA_TASKS.pop(session_id, None)
 
-AUTO_MOVIE_SCAN_LOCKS = {}
-AUTO_MOVIE_SCAN_TASKS = {}
-
-AUTO_MOVIE_METADATA_WATCHDOGS = {}
 
 async def _auto_movie_metadata_watchdog(client, chat_id, loading_msg, session_id):
     try:
@@ -2638,18 +2646,25 @@ async def wizard_text_handler(client: Client, message: Message):
             import uuid
             session_id = str(uuid.uuid4())[:8]
 
-            old_task = AUTO_MOVIE_METADATA_TASKS.pop(session_id, None)
-            if old_task and not old_task.done():
-                old_task.cancel()
-
             task = asyncio.create_task(
-                fetch_auto_movie_metadata(client, chat_id, loading_msg, session_id, text, uid)
+                fetch_auto_movie_metadata(
+                    client,
+                    chat_id,
+                    loading_msg,
+                    session_id,
+                    text,
+                    uid
+                )
             )
             AUTO_MOVIE_METADATA_TASKS[session_id] = task
 
             def _done_movie_cb(t):
                 AUTO_MOVIE_METADATA_TASKS.pop(session_id, None)
+
             task.add_done_callback(_done_movie_cb)
+
+            print("### AM_TASK_CREATED ###", flush=True)
+            logger.info("[AUTO MOVIE] METADATA TASK CREATED")
             return
 
     # ── Auto Series Add Handler ──────────────────────────────────────────────
@@ -2674,23 +2689,31 @@ async def wizard_text_handler(client: Client, message: Message):
             "Please wait...",
             parse_mode=enums.ParseMode.HTML
         )
+        print("### AS_STEP_01_PROCESSING_SENT ###", flush=True)
         logger.info("[AUTO SERIES] PROCESSING MESSAGE SENT")
 
         import uuid
         session_id = str(uuid.uuid4())[:8]
 
-        old_task = AUTO_SERIES_METADATA_TASKS.pop(session_id, None)
-        if old_task and not old_task.done():
-            old_task.cancel()
-
         task = asyncio.create_task(
-            fetch_auto_series_metadata(client, chat_id, loading_msg, session_id, text, uid)
+            fetch_auto_series_metadata(
+                client,
+                chat_id,
+                loading_msg,
+                session_id,
+                text,
+                uid
+            )
         )
         AUTO_SERIES_METADATA_TASKS[session_id] = task
 
         def _done_series_cb(t):
             AUTO_SERIES_METADATA_TASKS.pop(session_id, None)
+
         task.add_done_callback(_done_series_cb)
+
+        print("### AS_TASK_CREATED ###", flush=True)
+        logger.info("[AUTO SERIES] METADATA TASK CREATED")
         return
 
     # ── Manual Series Wizard Handler ─────────────────────────────────────────
