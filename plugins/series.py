@@ -4141,6 +4141,12 @@ async def process_super_movie_search(client: Client, message: Message, query_tex
     if not matches:
         return False
 
+    has_year = bool(re.search(r"\b(19\d\d|20\d\d)\b", q))
+    if len(matches) > 1 and not has_year and not reply_msg:
+        distinct_titles = {f"{m.get('title')}-{m.get('year')}" for m in matches}
+        if len(distinct_titles) > 1:
+            return False
+
     logger.info("[SEARCH ROUTE] type=movie_filter")
     movie = matches[0]
     movie_id = str(movie["_id"])
@@ -4263,6 +4269,12 @@ async def process_series_search(client: Client, message: Message, query_text: st
     logger.info(f"[SERIES SEARCH] query={query_text!r} matches={len(matches) if matches else 0}")
     if not matches:
         return False
+
+    has_year = bool(re.search(r"\b(19\d\d|20\d\d)\b", q))
+    if len(matches) > 1 and not has_year and not reply_msg:
+        distinct_series = {f"{s.get('name')}-{s.get('year')}" for s in matches}
+        if len(distinct_series) > 1:
+            return False
 
     logger.info("[SEARCH ROUTE] type=series_filter")
     series_doc = matches[0]
