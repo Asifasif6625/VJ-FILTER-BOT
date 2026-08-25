@@ -40,8 +40,8 @@ loop = asyncio.get_event_loop()
 
 async def start():
     print('\n')
-    print('### AUTO_MOVIE_SERIES_METADATA_FIX_V5 ACTIVE ###', flush=True)
-    logging.info('### AUTO_MOVIE_SERIES_METADATA_FIX_V5 ACTIVE ###')
+    print('### VJ BOT RUNTIME BUILD = AM_DEBUG_20260825_V1 ###', flush=True)
+    logging.warning('### VJ BOT RUNTIME BUILD = AM_DEBUG_20260825_V1 ###')
     print('Initalizing Your Bot')
     bot_info = await TechVJBot.get_me()
     await initialize_clients()
