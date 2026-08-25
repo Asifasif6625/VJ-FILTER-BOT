@@ -1072,24 +1072,19 @@ async def find_matching_super_movie(file_name: str, caption: str = "") -> dict |
     if not norm_title:
         return None
 
-    # Find candidates with matching normalized title
     cursor = super_movies_col.find({"status": {"$ne": "deleted"}})
     candidates = [doc async for doc in cursor]
 
-    known_years = set()
-    matching_cands = []
-    for cand in candidates:
-        cand_norm = cand.get("normalized_name") or normalize_title_for_matching(cand.get("title", ""))
-        if cand_norm == norm_title:
-            matching_cands.append(cand)
-            c_yr = str(cand.get("year", "")).strip()
-            if c_yr and c_yr not in ["N/A", "None", "0", ""]:
-                known_years.add(c_yr)
-
-    if not matching_cands:
+    if not candidates:
         return None
 
-    for cand in matching_cands:
+    known_years = set()
+    for cand in candidates:
+        c_yr = str(cand.get("year", "")).strip()
+        if c_yr and c_yr not in ["N/A", "None", "0", ""]:
+            known_years.add(c_yr)
+
+    for cand in candidates:
         c_title = cand.get("title", "")
         c_year = cand.get("year")
         c_imdb = cand.get("imdb_id")
