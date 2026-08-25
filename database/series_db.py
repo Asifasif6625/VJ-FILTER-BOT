@@ -1449,36 +1449,33 @@ async def get_movie_files_for_identity(title: str, year: str | int = None, imdb_
     return matched
 
 
-async def scan_movie_files_by_identity(
+async def scan_movie_batch_by_name_year(
     title: str,
     year: str | int = None,
     imdb_id: str = None,
     tmdb_id: str = None
 ) -> dict:
     """
-    Dedicated scanner to find ONLY files belonging strictly to an exact movie identity.
-    Searches candidates broadly (up to 500), enforces strict Title + Release Year / IMDb ID
-    validation on every candidate, and returns a structured scan report.
+    Dedicated batch scanner to find ONLY files belonging strictly to an exact movie name + release year.
+    Queries database candidates broadly, extracts release year, enforces strict Name + Year
+    matching, and returns structured batch scan results.
     """
     from utils import match_movie_identity, normalize_title_for_matching, extract_release_year
     from plugins.pm_filter import detect_file_languages
     from plugins.series import extract_quality_from_filename, get_movie_candidates
 
-    clean_t = clean_series_title(title)
+    logger.info(
+        f"[AUTO MOVIE BATCH] START\n"
+        f"title={title}\n"
+        f"year={year}"
+    )
+
     req_year_str = str(year).strip() if (year and str(year).strip() not in ["N/A", "None", "0", ""]) else None
 
-    logger.info(
-        f"[AUTO MOVIE METADATA]\n"
-        f"title={title}\n"
-        f"year={year}\n"
-        f"imdb_id={imdb_id}\n"
-        f"tmdb_id={tmdb_id}"
-    )
-    logger.info("[AUTO MOVIE FILE SCAN START]")
-
-    # 1. Retrieve candidates broadly from database using fast non-blocking background query
+    # Retrieve candidate files broadly
     candidate_docs = await get_movie_candidates(0, title=title, year=year, limit=500)
-    logger.info(f"[AUTO MOVIE CANDIDATES] count={len(candidate_docs)}")
+    scanned_count = len(candidate_docs)
+    logger.info(f"[AUTO MOVIE BATCH] SCANNED count={scanned_count}")
 
     matching_files = []
     year_mismatch_count = 0
@@ -1510,14 +1507,6 @@ async def scan_movie_files_by_identity(
         )
 
         if is_match:
-            logger.info(
-                f"[AUTO MOVIE MATCH]\n"
-                f"filename={fname}\n"
-                f"title_match=True\n"
-                f"year_match={bool(f_year == req_year_str) if req_year_str else True}\n"
-                f"identity_match={reason}"
-            )
-            # Enrich file doc with language and quality
             langs = detect_file_languages(fname, cap)
             l_val = langs[0] if langs else "English"
             q_val = extract_quality_from_filename(fname)
@@ -1528,11 +1517,6 @@ async def scan_movie_files_by_identity(
             fdoc_copy["title"] = title
             matching_files.append(fdoc_copy)
         else:
-            logger.info(
-                f"[AUTO MOVIE REJECT]\n"
-                f"filename={fname}\n"
-                f"reason={reason}"
-            )
             if reason == "YEAR_MISMATCH":
                 year_mismatch_count += 1
             elif reason == "TITLE_MISMATCH":
@@ -1544,35 +1528,52 @@ async def scan_movie_files_by_identity(
             else:
                 title_mismatch_count += 1
 
+    logger.info(f"[AUTO MOVIE BATCH] MATCHED count={len(matching_files)}")
+    logger.info(f"[AUTO MOVIE BATCH] REJECTED YEAR count={year_mismatch_count}")
+    logger.info(f"[AUTO MOVIE BATCH] REJECTED TITLE count={title_mismatch_count}")
+    logger.info("[AUTO MOVIE BATCH] COMPLETE")
+
     result = {
-        "requested_title": title,
-        "requested_year": str(year) if year else "",
-        "imdb_id": imdb_id,
-        "tmdb_id": tmdb_id,
-        "files_scanned": len(candidate_docs),
+        "title": title,
+        "year": req_year_str,
+        "files_scanned": scanned_count,
         "matching_files": matching_files,
-        "matched_count": len(matching_files),
-        "year_mismatch_count": year_mismatch_count,
-        "title_mismatch_count": title_mismatch_count,
-        "unknown_year_count": unknown_year_count,
+        "year_mismatch": year_mismatch_count,
+        "title_mismatch": title_mismatch_count,
+        "unknown_year": unknown_year_count,
         "series_count": series_count,
+        "matched_count": len(matching_files),
         "all_matching_files": matching_files,
         "valid_files": matching_files,
-        "total_scanned": len(candidate_docs),
+        "total_scanned": scanned_count,
         "total_matched": len(matching_files),
         "total_rejected_year": year_mismatch_count,
         "total_rejected_title": title_mismatch_count,
         "total_new": len(matching_files),
         "total_duplicates": 0
     }
-
-    logger.info(
-        f"[AUTO MOVIE SCAN RESULT]\n"
-        f"scanned={result['files_scanned']}\n"
-        f"matched={result['matched_count']}\n"
-        f"year_mismatch={result['year_mismatch_count']}\n"
-        f"title_mismatch={result['title_mismatch_count']}\n"
-        f"unknown_year={result['unknown_year_count']}"
-    )
     return result
+
+
+async def scan_movie_files_by_identity(
+    title: str,
+    year: str | int = None,
+    imdb_id: str = None,
+    tmdb_id: str = None
+) -> dict:
+    """Alias for scan_movie_batch_by_name_year for backward compatibility."""
+    return await scan_movie_batch_by_name_year(title, year, imdb_id=imdb_id, tmdb_id=tmdb_id)
+
+
+async def scan_series_batch_by_name(
+    title: str,
+    series_id: str = None
+) -> dict:
+    """
+    Dedicated batch scanner for series. Uses Series Name as primary identity,
+    scanning for languages, seasons, episodes, and qualities without requiring year matching.
+    """
+    from plugins.series import scan_sdatabase_for_series
+    return await scan_sdatabase_for_series(0, title=title, season=None, series_id=series_id)
+
 
