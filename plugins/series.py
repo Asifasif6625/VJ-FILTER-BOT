@@ -24,6 +24,7 @@ from pyrogram.types import (
     Message,
     CallbackQuery,
     ForceReply,
+    InputMediaPhoto,
 )
 from pyrogram.errors import (
     FloodWait,
@@ -4186,7 +4187,22 @@ async def render_super_movie_direct(client: Client, message: Message, movie: dic
 
     if reply_msg:
         try:
-            if reply_msg.photo or reply_msg.caption:
+            if poster and (reply_msg.photo or reply_msg.caption):
+                try:
+                    await reply_msg.edit_media(
+                        media=InputMediaPhoto(media=poster, caption=caption_text, parse_mode=enums.ParseMode.HTML),
+                        reply_markup=markup
+                    )
+                    return True
+                except Exception as me:
+                    logger.warning(f"[EDIT MEDIA FAILED] {me}, fallback to edit_caption")
+                    await reply_msg.edit_caption(
+                        caption=caption_text,
+                        reply_markup=markup,
+                        parse_mode=enums.ParseMode.HTML
+                    )
+                    return True
+            elif reply_msg.photo or reply_msg.caption:
                 await reply_msg.edit_caption(
                     caption=caption_text,
                     reply_markup=markup,
@@ -4271,8 +4287,7 @@ async def render_series_direct(client: Client, message: Message, series_doc: dic
             row.append(InlineKeyboardButton(to_series_font(l), callback_data=f"ser_lang#{series_id}#{l}#{key}"))
         buttons.append(row)
 
-    buttons.append([InlineKeyboardButton("❌ Close", callback_data=f"ser_close#{key}")])
-
+    # Removed Close button from Series Language selection
     caption_text = (
         f"📺 <b>{name}{year_str}</b>"
         f"{rating_str}"
@@ -4283,7 +4298,22 @@ async def render_series_direct(client: Client, message: Message, series_doc: dic
 
     if reply_msg:
         try:
-            if reply_msg.photo or reply_msg.caption:
+            if poster and (reply_msg.photo or reply_msg.caption):
+                try:
+                    await reply_msg.edit_media(
+                        media=InputMediaPhoto(media=poster, caption=caption_text, parse_mode=enums.ParseMode.HTML),
+                        reply_markup=markup
+                    )
+                    return True
+                except Exception as me:
+                    logger.warning(f"[EDIT MEDIA FAILED] {me}, fallback to edit_caption")
+                    await reply_msg.edit_caption(
+                        caption=caption_text,
+                        reply_markup=markup,
+                        parse_mode=enums.ParseMode.HTML
+                    )
+                    return True
+            elif reply_msg.photo or reply_msg.caption:
                 await reply_msg.edit_caption(
                     caption=caption_text,
                     reply_markup=markup,
@@ -4472,10 +4502,11 @@ async def process_series_search(client: Client, message: Message, query_text: st
     return await process_unified_filter_search(client, message, query_text, reply_msg)
 
 
-# ─── SERIES FILTER NAVIGATION CALLBACKS ─────────────────────────────────────────
+# ─── SERIES FILTER NAVIGATION CALLBACKS (Language -> Season (if multiple) -> Quality -> Delivery) ───
 
 @Client.on_callback_query(filters.regex(r"^ser_lang#"))
 async def ser_lang_callback(client: Client, query: CallbackQuery):
+    """Step 1: Language selected -> If multiple seasons, show Seasons; if single season, show Qualities."""
     parts = query.data.split("#")
     if len(parts) < 4:
         return await query.answer("Invalid request.", show_alert=True)
@@ -4486,18 +4517,10 @@ async def ser_lang_callback(client: Client, query: CallbackQuery):
     if not is_owner:
         return await query.answer(err_msg, show_alert=True)
 
-    from database.series_db import get_series, list_series_seasons
+    from database.series_db import get_series, list_series_seasons, list_season_qualities, sfiles_col, _sid_query, _num_query
     series = await get_series(series_id)
     if not series:
         return await query.answer("⚠️ Series not found in database.", show_alert=True)
-
-    seasons = await list_series_seasons(series_id, lang)
-    if not seasons:
-        seasons = series.get("seasons", [1])
-        if isinstance(seasons, int):
-            seasons = list(range(1, seasons + 1))
-        elif not isinstance(seasons, list):
-            seasons = [1]
 
     name = series.get("name", "Series")
     year = str(series.get("year", ""))
@@ -4507,29 +4530,71 @@ async def ser_lang_callback(client: Client, query: CallbackQuery):
     genre = series.get("genre", "")
     genre_str = f"\n🎭 <b>Genre:</b> {genre}" if genre and genre != "N/A" else ""
 
-    buttons = []
+    seasons = await list_series_seasons(series_id, lang)
+    if not seasons:
+        seasons = series.get("seasons", [1])
+        if isinstance(seasons, int):
+            seasons = list(range(1, seasons + 1))
+        elif not isinstance(seasons, list):
+            seasons = [1]
+
     seasons_sorted = sorted([int(s) for s in seasons if str(s).isdigit()])
     if not seasons_sorted:
         seasons_sorted = [1]
 
-    for i in range(0, len(seasons_sorted), 2):
-        row = []
-        for s in seasons_sorted[i:i+2]:
-            row.append(InlineKeyboardButton(f"📅 Season {s}", callback_data=f"ser_season#{series_id}#{lang}#{s}#{key}"))
-        buttons.append(row)
+    if len(seasons_sorted) > 1:
+        # Multiple seasons exist -> Show Season selection
+        buttons = []
+        for i in range(0, len(seasons_sorted), 2):
+            row = []
+            for s in seasons_sorted[i:i+2]:
+                row.append(InlineKeyboardButton(f"📅 Season {s}", callback_data=f"ser_season#{series_id}#{lang}#{s}#{key}"))
+            buttons.append(row)
 
-    buttons.append([
-        InlineKeyboardButton("⬅️ Language", callback_data=f"ser_back#{series_id}#langs#{lang}#{key}"),
-        InlineKeyboardButton("❌ Close", callback_data=f"ser_close#{key}")
-    ])
+        buttons.append([
+            InlineKeyboardButton("⬅️ Language", callback_data=f"ser_back#{series_id}#langs#{lang}#{key}")
+        ])
 
-    cap = (
-        f"📺 <b>{name}{year_str}</b>"
-        f"{rating_str}"
-        f"{genre_str}\n\n"
-        f"🌐 <b>Language:</b> {lang}\n\n"
-        f"📅 <b>Select Season:</b>"
-    )
+        cap = (
+            f"📺 <b>{name}{year_str}</b>"
+            f"{rating_str}"
+            f"{genre_str}\n\n"
+            f"🌐 <b>Language:</b> {lang}\n\n"
+            f"📅 <b>Select Season:</b>"
+        )
+    else:
+        # Single season -> Show Qualities directly
+        s = seasons_sorted[0]
+        qual_vals = await sfiles_col.distinct("quality", {
+            "series_id": _sid_query(series_id),
+            "language": lang,
+            "season": _num_query(s)
+        })
+        qualities = [q for q in qual_vals if q]
+        if not qualities:
+            qualities = await list_season_qualities(series_id, lang, s)
+        if not qualities:
+            qualities = series.get("qualities") or ["480p", "720p", "1080p"]
+
+        buttons = []
+        for i in range(0, len(qualities), 2):
+            row = []
+            for q in qualities[i:i+2]:
+                row.append(InlineKeyboardButton(f"⚡ {q}", callback_data=f"ser_qual#{series_id}#{lang}#{s}#{q}#{key}"))
+            buttons.append(row)
+
+        buttons.append([
+            InlineKeyboardButton("⬅️ Language", callback_data=f"ser_back#{series_id}#langs#{lang}#{key}")
+        ])
+
+        cap = (
+            f"📺 <b>{name}{year_str}</b>"
+            f"{rating_str}"
+            f"{genre_str}\n\n"
+            f"🌐 <b>Language:</b> {lang} | 📅 <b>Season {s}</b>\n\n"
+            f"🎞 <b>Select Quality:</b>"
+        )
+
     markup = InlineKeyboardMarkup(buttons)
     try:
         if query.message.photo or query.message.caption:
@@ -4545,6 +4610,7 @@ async def ser_lang_callback(client: Client, query: CallbackQuery):
 
 @Client.on_callback_query(filters.regex(r"^ser_season#"))
 async def ser_season_callback(client: Client, query: CallbackQuery):
+    """Step 2: Season selected -> Display Qualities."""
     parts = query.data.split("#")
     if len(parts) < 5:
         return await query.answer("Invalid request.", show_alert=True)
@@ -4565,114 +4631,32 @@ async def ser_season_callback(client: Client, query: CallbackQuery):
     year = str(series.get("year", ""))
     year_str = f" ({year})" if year and year != "N/A" else ""
 
-    # Fetch distinct episodes
-    ep_vals = await sfiles_col.distinct("episode", {
-        "series_id": _sid_query(series_id),
-        "language": lang,
-        "season": _num_query(season)
-    })
-    episodes = sorted([int(e) for e in ep_vals if (isinstance(e, int) or (isinstance(e, str) and str(e).isdigit())) and int(e) > 0])
-
-    buttons = []
-    if episodes:
-        for i in range(0, len(episodes), 4):
-            row = []
-            for ep in episodes[i:i+4]:
-                ep_text = f"🎬 Ep {ep:02d}" if ep < 100 else f"🎬 Ep {ep}"
-                row.append(InlineKeyboardButton(ep_text, callback_data=f"ser_ep#{series_id}#{lang}#{season}#{ep}#{key}"))
-            buttons.append(row)
-
-        buttons.append([
-            InlineKeyboardButton("⬅️ Season", callback_data=f"ser_lang#{series_id}#{lang}#{key}"),
-            InlineKeyboardButton("⬅️ Language", callback_data=f"ser_back#{series_id}#langs#{lang}#{key}")
-        ])
-        cap = (
-            f"📺 <b>{name}{year_str}</b>\n\n"
-            f"🌐 <b>Language:</b> {lang} | 📅 <b>Season {season}</b>\n\n"
-            f"🎬 <b>Select Episode:</b>"
-        )
-    else:
-        qualities = await list_season_qualities(series_id, lang, season)
-        if not qualities:
-            qualities = ["480p", "720p", "1080p"]
-        for i in range(0, len(qualities), 2):
-            row = []
-            for q in qualities[i:i+2]:
-                row.append(InlineKeyboardButton(f"⚡ {q}", callback_data=f"ser_qual#{series_id}#{lang}#{season}#0#{q}#{key}"))
-            buttons.append(row)
-        buttons.append([
-            InlineKeyboardButton("⬅️ Season", callback_data=f"ser_lang#{series_id}#{lang}#{key}"),
-            InlineKeyboardButton("⬅️ Language", callback_data=f"ser_back#{series_id}#langs#{lang}#{key}")
-        ])
-        cap = (
-            f"📺 <b>{name}{year_str}</b>\n\n"
-            f"🌐 <b>Language:</b> {lang} | 📅 <b>Season {season}</b>\n\n"
-            f"🎞 <b>Select Quality:</b>"
-        )
-
-    markup = InlineKeyboardMarkup(buttons)
-    try:
-        if query.message.photo or query.message.caption:
-            await query.message.edit_caption(caption=cap, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
-        else:
-            await query.message.edit_text(text=cap, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
-    except MessageNotModified:
-        pass
-    from utils import schedule_filter_message_delete
-    schedule_filter_message_delete(client, query.message.chat.id, query.message.id, 600)
-    await query.answer()
-
-
-@Client.on_callback_query(filters.regex(r"^ser_ep#"))
-async def ser_ep_callback(client: Client, query: CallbackQuery):
-    parts = query.data.split("#")
-    if len(parts) < 6:
-        return await query.answer("Invalid request.", show_alert=True)
-    _, series_id, lang, season_str, ep_str, key = parts[0], parts[1], parts[2], parts[3], parts[4], parts[5]
-    season = int(season_str) if season_str.isdigit() else 1
-    episode = int(ep_str) if ep_str.isdigit() else 1
-
-    from plugins.pm_filter import is_button_owner
-    is_owner, err_msg = is_button_owner(query, key)
-    if not is_owner:
-        return await query.answer(err_msg, show_alert=True)
-
-    from database.series_db import get_series, list_season_qualities, sfiles_col, _sid_query, _num_query
-    series = await get_series(series_id)
-    if not series:
-        return await query.answer("⚠️ Series not found in database.", show_alert=True)
-
-    name = series.get("name", "Series")
-    year = str(series.get("year", ""))
-    year_str = f" ({year})" if year and year != "N/A" else ""
-
     qual_vals = await sfiles_col.distinct("quality", {
         "series_id": _sid_query(series_id),
         "language": lang,
-        "season": _num_query(season),
-        "episode": _num_query(episode)
+        "season": _num_query(season)
     })
     qualities = [q for q in qual_vals if q]
     if not qualities:
         qualities = await list_season_qualities(series_id, lang, season)
     if not qualities:
-        qualities = ["480p", "720p", "1080p"]
+        qualities = series.get("qualities") or ["480p", "720p", "1080p"]
 
     buttons = []
     for i in range(0, len(qualities), 2):
         row = []
         for q in qualities[i:i+2]:
-            row.append(InlineKeyboardButton(f"⚡ {q}", callback_data=f"ser_qual#{series_id}#{lang}#{season}#{episode}#{q}#{key}"))
+            row.append(InlineKeyboardButton(f"⚡ {q}", callback_data=f"ser_qual#{series_id}#{lang}#{season}#{q}#{key}"))
         buttons.append(row)
 
     buttons.append([
-        InlineKeyboardButton("⬅️ Episode", callback_data=f"ser_season#{series_id}#{lang}#{season}#{key}"),
-        InlineKeyboardButton("⬅️ Season", callback_data=f"ser_lang#{series_id}#{lang}#{key}")
+        InlineKeyboardButton("⬅️ Season", callback_data=f"ser_lang#{series_id}#{lang}#{key}"),
+        InlineKeyboardButton("⬅️ Language", callback_data=f"ser_back#{series_id}#langs#{lang}#{key}")
     ])
 
     cap = (
         f"📺 <b>{name}{year_str}</b>\n\n"
-        f"🌐 <b>Language:</b> {lang} | 📅 <b>Season {season}</b> | 🎬 <b>Episode {episode}</b>\n\n"
+        f"🌐 <b>Language:</b> {lang} | 📅 <b>Season {season}</b>\n\n"
         f"🎞 <b>Select Quality:</b>"
     )
     markup = InlineKeyboardMarkup(buttons)
@@ -4690,12 +4674,12 @@ async def ser_ep_callback(client: Client, query: CallbackQuery):
 
 @Client.on_callback_query(filters.regex(r"^ser_qual#"))
 async def ser_qual_callback(client: Client, query: CallbackQuery):
+    """Step 3: Quality clicked -> Directly triggers delivery of all episode files for this Season & Quality."""
     parts = query.data.split("#")
-    if len(parts) < 7:
+    if len(parts) < 6:
         return await query.answer("Invalid request.", show_alert=True)
-    _, series_id, lang, season_str, ep_str, qual, key = parts[0], parts[1], parts[2], parts[3], parts[4], parts[5], parts[6]
+    _, series_id, lang, season_str, qual, key = parts[0], parts[1], parts[2], parts[3], parts[4], parts[5]
     season = int(season_str) if season_str.isdigit() else 1
-    episode = int(ep_str) if ep_str.isdigit() else 0
 
     from plugins.pm_filter import is_button_owner
     is_owner, err_msg = is_button_owner(query, key)
@@ -4708,30 +4692,24 @@ async def ser_qual_callback(client: Client, query: CallbackQuery):
         return await query.answer("⚠️ Series not found in database.", show_alert=True)
 
     title = series.get("name", "Series")
-    query_filter = {
+    files = await sfiles_col.find({
         "series_id": _sid_query(series_id),
         "language": lang,
         "season": _num_query(season),
         "quality": qual
-    }
-    if episode > 0:
-        query_filter["episode"] = _num_query(episode)
+    }).sort("episode", 1).to_list(length=300)
 
-    cursor = sfiles_col.find(query_filter)
-    files = [doc async for doc in cursor]
     if not files:
-        cursor = sfiles_col.find({
+        files = await sfiles_col.find({
             "series_id": _sid_query(series_id),
             "language": lang,
-            "season": _num_query(season),
-            "quality": qual
-        })
-        files = [doc async for doc in cursor]
+            "season": _num_query(season)
+        }).sort("episode", 1).to_list(length=300)
 
     if not files:
-        return await query.answer("⚠️ No files found for this quality.", show_alert=True)
+        return await query.answer("⚠️ No episode files found for this quality.", show_alert=True)
 
-    logger.info(f"[SERIES QUALITY DELIVERY]\ntitle={title}\nlang={lang}\nseason={season}\nep={episode}\nqual={qual}\nfiles={len(files)}")
+    logger.info(f"[SERIES QUALITY DELIVERY]\ntitle={title}\nlang={lang}\nseason={season}\nqual={qual}\nfiles={len(files)}")
 
     import uuid, time
     req_key = str(uuid.uuid4())[:8]
@@ -4740,19 +4718,13 @@ async def ser_qual_callback(client: Client, query: CallbackQuery):
         "user": query.from_user.id,
         "user_id": query.from_user.id,
         "type": "series",
-        "request_type": "series",
-        "source": "SERIES_FILTER",
-        "series_id": series_id,
-        "full_id": series_id,
         "series_title": title,
         "title": title,
         "language": lang,
         "season": season,
-        "episode": episode,
         "quality": qual,
         "files": files,
         "delivery_status": "pending",
-        "state": "PENDING",
         "created_at": time.time()
     }
     if not hasattr(temp, "SERIES_STATE"):
@@ -4775,7 +4747,7 @@ async def ser_qual_callback(client: Client, query: CallbackQuery):
     start_url = f"https://t.me/{bot_username}?start=all_{req_key}"
 
     if query.message.chat.type == enums.ChatType.PRIVATE:
-        await query.answer("🚀 Sending files...")
+        await query.answer(f"🚀 Sending all {len(files)} episodes...")
         await deliver_series_request(client, req_key, query.from_user.id, query=query)
         return
 
@@ -4783,9 +4755,8 @@ async def ser_qual_callback(client: Client, query: CallbackQuery):
         return await query.answer(url=start_url)
     except Exception as e:
         logger.warning(f"[SERIES QUALITY ROUTING] query.answer(url=start_url) failed: {e}. Replying with fallback button.")
-        ep_label = f" (S{season:02d}E{episode:02d})" if episode > 0 else f" (Season {season})"
         fb_msg = await query.message.reply_text(
-            f"📩 Open bot to get your requested <b>{title}</b>{ep_label} ({qual}) files:",
+            f"📩 Open bot to get <b>{title} Season {season}</b> ({qual}) files:",
             reply_markup=InlineKeyboardMarkup([
                 [InlineKeyboardButton("📂 Open Bot", url=start_url)]
             ])
@@ -4798,68 +4769,25 @@ async def ser_qual_callback(client: Client, query: CallbackQuery):
 
 @Client.on_callback_query(filters.regex(r"^ser_back#"))
 async def ser_back_callback(client: Client, query: CallbackQuery):
+    """Return to Language selection screen."""
     parts = query.data.split("#")
-    if len(parts) < 5:
+    if len(parts) < 4:
         return await query.answer("Invalid request.", show_alert=True)
-    _, series_id, target, lang, key = parts[0], parts[1], parts[2], parts[3], parts[4]
+    series_id = parts[1]
+    key = parts[-1]
 
     from plugins.pm_filter import is_button_owner
     is_owner, err_msg = is_button_owner(query, key)
     if not is_owner:
         return await query.answer(err_msg, show_alert=True)
 
-    from database.series_db import get_series, list_series_languages
+    from database.series_db import get_series
     series = await get_series(series_id)
     if not series:
         return await query.answer("⚠️ Series not found in database.", show_alert=True)
 
-    name = series.get("name", "")
-    year = str(series.get("year", ""))
-    year_str = f" ({year})" if year and year != "N/A" else ""
-    rating = str(series.get("rating", ""))
-    rating_str = f"\n⭐ <b>Rating:</b> {rating}/10" if rating else ""
-    genre = series.get("genre", "")
-    genre_str = f"\n🎭 <b>Genre:</b> {genre}" if genre and genre != "N/A" else ""
-
-    langs = await list_series_languages(series_id)
-    if not langs:
-        langs = series.get("languages", [])
-
-    buttons = []
-    preferred_order = ["Malayalam", "Tamil", "Hindi", "Telugu", "Kannada", "English", "Dual Audio", "Multi Audio"]
-    langs_sorted = sorted(langs, key=lambda x: (preferred_order.index(x) if x in preferred_order else 99, x))
-    for i in range(0, len(langs_sorted), 2):
-        row = []
-        for l in langs_sorted[i:i+2]:
-            row.append(InlineKeyboardButton(to_series_font(l), callback_data=f"ser_lang#{series_id}#{l}#{key}"))
-        buttons.append(row)
-
-    buttons.append([InlineKeyboardButton("❌ Close", callback_data=f"ser_close#{key}")])
-
-    caption_text = (
-        f"📺 <b>{name}{year_str}</b>"
-        f"{rating_str}"
-        f"{genre_str}\n\n"
-        f"🌐 <b>Select Language:</b>"
-    )
-    markup = InlineKeyboardMarkup(buttons)
-    try:
-        if query.message.photo or query.message.caption:
-            await query.message.edit_caption(caption=caption_text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
-        else:
-            await query.message.edit_text(text=caption_text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
-    except MessageNotModified:
-        pass
+    await render_series_direct(client, query.message, series, reply_msg=query.message)
     await query.answer()
-
-
-@Client.on_callback_query(filters.regex(r"^ser_close#"))
-async def ser_close_callback(client: Client, query: CallbackQuery):
-    try:
-        await query.message.delete()
-    except Exception:
-        pass
-    await query.answer("Closed.")
 
 
 async def deliver_series_request(client, req_key, user_id, query=None, timing=None):
