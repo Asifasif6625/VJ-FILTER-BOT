@@ -1542,7 +1542,7 @@ async def cb_handler(client: Client, query: CallbackQuery):
         return await query.answer(alert_text, show_alert=True)
     if query.data == "english_only_reason":
         return await query.answer("⚠️ Send movie name in English\nOther language not supports !", show_alert=True)
-    if query.data and query.data.startswith(("sr#", "sw#", "edser#", "vser#", "edmov#", "delmov#", "anomov#", "emovie_", "emov#", "series_", "movie_", "smovie_", "send_fsall#", "am_", "slink_", "sfile_", "ser_")):
+    if query.data and query.data.startswith(("sr#", "sw#", "edser#", "vser#", "edmov#", "delmov#", "anomov#", "emovie_", "emov#", "series_", "movie_", "smovie_", "send_fsall#", "am_", "slink_", "sfile_", "ser_", "sug_mov#", "sug_ser#")):
         query.continue_propagation()
         return
     if query.data == "close_data":
@@ -3276,23 +3276,14 @@ async def auto_filter(client, name, msg, reply_msg=None, ai_search=True, spoll=F
             search = re.sub(r"(?i)\b(pl(i|e)*?(s|z+|ease|se|ese|(e+)s(e)?)|((send|snd|giv(e)?|gib)(\sme)?)|movie(s)?|new|latest|bro|bruh|broh|helo|that|find|dubbed|link|venum|iruka|pannunga|pannungga|anuppunga|anupunga|anuppungga|anupungga|film|undo|kitti|kitty|tharu|kittumo|kittum|movie|any(one)|with\ssubtitle(s)?|upload|full|print|file)\b", " ", search)
             search = re.sub(r"\s+", " ", search).strip()
 
-            # -- 1. Check Super Movie Filter --
+            # -- 1. Check Unified Movie & Series Filter Search --
             try:
-                from plugins.series import process_super_movie_search
-                is_super_movie = await process_super_movie_search(client, message, search if search else name, reply_msg)
-                if is_super_movie:
+                from plugins.series import process_unified_filter_search
+                is_handled = await process_unified_filter_search(client, message, search if search else name, reply_msg)
+                if is_handled:
                     return
             except Exception as e:
-                logger.error(f"[SUPER MOVIE SEARCH ROUTING ERROR] {e}")
-
-            # -- 2. Check Series Filter BEFORE ia_filterdb movie search --
-            try:
-                from plugins.series import process_series_search
-                is_series = await process_series_search(client, message, search if search else name, reply_msg)
-                if is_series:
-                    return
-            except Exception as e:
-                logger.error(f"[SERIES SEARCH ROUTING ERROR] {e}")
+                logger.error(f"[UNIFIED FILTER SEARCH ROUTING ERROR] {e}")
 
             # -- 3. Normal Movie Filter (ia_filterdb) --
             page_limit = int(MAX_B_TN) if MAX_B_TN else 5
