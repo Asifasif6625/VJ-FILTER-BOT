@@ -32,30 +32,18 @@ from TechVJ.bot import TechVJBot
 from TechVJ.util.keepalive import ping_server
 from TechVJ.bot.clients import initialize_clients
 
-ppath = "plugins/*.py"
-files = glob.glob(ppath)
+print("### VJ BOT MOVIE SERIES FIX V6 ACTIVE ###", flush=True)
 TechVJBot.start()
 loop = asyncio.get_event_loop()
 
 
 async def start():
     print('\n')
-    print('### VJ BOT RUNTIME BUILD = AM_DEBUG_20260825_V1 ###', flush=True)
-    logging.warning('### VJ BOT RUNTIME BUILD = AM_DEBUG_20260825_V1 ###')
-    print('Initalizing Your Bot')
+    print('### VJ BOT MOVIE SERIES FIX V6 ACTIVE ###', flush=True)
+    logging.warning('### VJ BOT MOVIE SERIES FIX V6 ACTIVE ###')
+    print('Initializing Your Bot')
     bot_info = await TechVJBot.get_me()
     await initialize_clients()
-    for name in files:
-        with open(name) as a:
-            patt = Path(a.name)
-            plugin_name = patt.stem.replace(".py", "")
-            plugins_dir = Path(f"plugins/{plugin_name}.py")
-            import_path = "plugins.{}".format(plugin_name)
-            spec = importlib.util.spec_from_file_location(import_path, plugins_dir)
-            load = importlib.util.module_from_spec(spec)
-            spec.loader.exec_module(load)
-            sys.modules["plugins." + plugin_name] = load
-            print("Tech VJ Imported => " + plugin_name)
     if ON_HEROKU:
         asyncio.create_task(ping_server())
     b_users, b_chats = await db.get_banned()
