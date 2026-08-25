@@ -57,8 +57,10 @@ async def start():
     try:
         from plugins.series import start_cleanup_schedulers
         start_cleanup_schedulers(TechVJBot)
+        from database.series_db import backfill_super_movie_normalized_names
+        asyncio.create_task(backfill_super_movie_normalized_names())
     except Exception as e:
-        logging.warning(f"Failed to start cleanup schedulers: {e}")
+        logging.warning(f"Failed to start cleanup schedulers or migrations: {e}")
     logging.info(script.LOGO)
     tz = pytz.timezone('Asia/Kolkata')
     today = date.today()
