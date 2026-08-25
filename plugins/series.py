@@ -1074,7 +1074,13 @@ async def fetch_auto_movie_metadata(client: Client, chat_id: int | str, loading_
 
         print("### AM_STEP_04_METADATA_HANDLER ###", flush=True)
 
-        if not info or not info.get("title"):
+        cand_title = str(info.get("title", "")).strip() if info else ""
+        if (
+            not info
+            or not cand_title
+            or cand_title.lower() in ("the movie database", "tmdb", "themoviedb", "the movie database (tmdb)", "none", "imdb")
+            or cand_title.lower().startswith("the movie database")
+        ):
             movie_data["state"] = "ERROR"
             temp.AUTO_MOVIE[session_id] = movie_data
             if uid:
