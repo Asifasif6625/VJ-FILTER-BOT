@@ -85,9 +85,11 @@ from utils import (
     normalize_title_for_matching,
 )
 
+import os
 logger = logging.getLogger(__name__)
-print("### AUTO_MOVIE_SERIES_METADATA_FIX_V5 ACTIVE ###", flush=True)
-logger.info("### AUTO_MOVIE_SERIES_METADATA_FIX_V5 ACTIVE ###")
+print("### VJ AUTO MOVIE RUNTIME BUILD = AM_DEBUG_20260825_V1 ###", flush=True)
+print(f"### SERIES.PY PATH = {os.path.abspath(__file__)} ###", flush=True)
+logger.warning("### VJ AUTO MOVIE RUNTIME BUILD = AM_DEBUG_20260825_V1 ###")
 
 
 def _is_admin(user_id: int) -> bool:
@@ -1013,12 +1015,16 @@ async def fetch_auto_movie_metadata(client: Client, chat_id: int | str, loading_
             if m_tmdb:
                 from utils import get_tmdb_by_url
                 logger.info("[AUTO MOVIE] TMDB REQUEST START")
+                print("### AM_STEP_02_BEFORE_TMDB ###", flush=True)
                 info = await asyncio.wait_for(get_tmdb_by_url(text), timeout=15)
+                print("### AM_STEP_03_AFTER_TMDB ###", flush=True)
                 logger.info(f"[AUTO MOVIE] TMDB REQUEST DONE\ntitle={info.get('title') if info else None}\nyear={info.get('year') if info else None}")
             elif m_imdb:
                 imdb_id = m_imdb.group(1).lower()
                 logger.info("[AUTO MOVIE] IMDb REQUEST START")
+                print("### AM_STEP_02_BEFORE_IMDB ###", flush=True)
                 info = await asyncio.wait_for(get_poster(imdb_id, id=True), timeout=15)
+                print("### AM_STEP_03_AFTER_IMDB ###", flush=True)
                 logger.info(f"[AUTO MOVIE] IMDb REQUEST DONE\ntitle={info.get('title') if info else None}\nyear={info.get('year') if info else None}")
         except asyncio.TimeoutError:
             logger.error(f"[AUTO MOVIE] METADATA TIMEOUT query={text}")
@@ -1039,6 +1045,8 @@ async def fetch_auto_movie_metadata(client: Client, chat_id: int | str, loading_
             logger.exception(f"[AUTO MOVIE] METADATA ERROR query={text}: {e}")
             is_error = True
             info = None
+
+        print("### AM_STEP_04_METADATA_HANDLER ###", flush=True)
 
         if not info or not info.get("title"):
             movie_data["state"] = "ERROR"
@@ -1156,6 +1164,7 @@ async def fetch_auto_movie_metadata(client: Client, chat_id: int | str, loading_
             logger.warning(f"[AUTO MOVIE UI EDIT FAILED] {e}")
 
         logger.info("[AUTO MOVIE] STARTING SCAN")
+        print("### AM_STEP_05_START_SCAN ###", flush=True)
         await run_auto_movie_scan(client, chat_id, loading_msg, session_id, movie_data)
     finally:
         AUTO_MOVIE_METADATA_TASKS.pop(session_id, None)
@@ -2600,6 +2609,7 @@ async def wizard_text_handler(client: Client, message: Message):
                 ),
                 parse_mode=enums.ParseMode.HTML
             )
+            print("### AM_STEP_01_PROCESSING_SENT ###", flush=True)
             logger.info("[AUTO MOVIE] PROCESSING MESSAGE SENT")
 
             import uuid
