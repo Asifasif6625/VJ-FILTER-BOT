@@ -1293,6 +1293,95 @@ async def sync_movie_filter_for_files(file_docs, *, trigger="file_add"):
             )
 
 
+async def sync_series_filter_for_files(file_docs, *, trigger="file_add"):
+    """
+    Central helper to automatically synchronize incoming series files into matching Series Filter(s).
+    Extracts Series Name, Season, Episode, Language, Quality and inserts into sfiles_col and updates series_col.
+    """
+    if not file_docs:
+        return
+    if isinstance(file_docs, dict):
+        file_docs = [file_docs]
+
+    from plugins.pm_filter import detect_file_languages
+    from plugins.series import extract_quality_from_filename, _extract_episode_number, clean_series_title
+
+    for fdoc in file_docs:
+        try:
+            fid = fdoc.get("file_id")
+            if not fid:
+                continue
+            fname = fdoc.get("file_name", "")
+            caption = fdoc.get("caption", "") or ""
+            fsize = fdoc.get("file_size", 0)
+
+            clean_name = clean_series_title(fname)
+            m_season = re.search(r"\bS(?:eason)?[\s\.\-_]?(\d{1,2})\b", fname, re.IGNORECASE)
+            season = int(m_season.group(1)) if m_season else 1
+            episode = _extract_episode_number(fname) or 0
+
+            matches = await search_series(clean_name)
+            if not matches:
+                stripped = re.sub(r"\b(s\d{1,2}|e\d{1,4}|ep\d{1,4}|season\s*\d{1,2}|episode\s*\d{1,4}|2160p|1080p|720p|480p|360p|4k|mkv|mp4|avi)\b", " ", clean_name, flags=re.IGNORECASE)
+                stripped = re.sub(r"\s+", " ", stripped).strip()
+                if stripped:
+                    matches = await search_series(stripped)
+
+            if not matches:
+                continue
+
+            series_doc = matches[0]
+            series_id = str(series_doc["_id"])
+
+            langs = detect_file_languages(fname, caption)
+            qual = extract_quality_from_filename(fname)
+            lang = langs[0] if langs else "Multi"
+
+            existing = await sfiles_col.find_one({
+                "series_id": _sid_query(series_id),
+                "file_id": str(fid)
+            })
+            if existing:
+                continue
+
+            file_record = {
+                "series_id": series_id,
+                "language": lang,
+                "season": season,
+                "episode": episode,
+                "quality": qual,
+                "file_id": str(fid),
+                "file_name": fname,
+                "file_size": fsize,
+                "created_at": datetime.utcnow()
+            }
+            await sfiles_col.insert_one(file_record)
+            logger.info(
+                f"[AUTO SERIES FILTER SYNC]\n"
+                f"series_id={series_id}\n"
+                f"title={series_doc.get('name')}\n"
+                f"season={season}\n"
+                f"episode={episode}\n"
+                f"quality={qual}\n"
+                f"language={lang}\n"
+                f"file={fname}\n"
+                f"trigger={trigger}"
+            )
+
+            update_fields = {}
+            if lang and lang not in (series_doc.get("languages") or []):
+                update_fields.setdefault("$addToSet", {})["languages"] = lang
+            if season and season not in (series_doc.get("seasons") or []):
+                update_fields.setdefault("$addToSet", {})["seasons"] = season
+            if qual and qual != "Unknown" and qual not in (series_doc.get("qualities") or []):
+                update_fields.setdefault("$addToSet", {})["qualities"] = qual
+
+            if update_fields:
+                await series_col.update_one({"_id": ObjectId(series_id)}, update_fields)
+        except Exception as e:
+            logger.error(f"[AUTO SERIES FILTER SYNC ERROR] {e}", exc_info=True)
+
+
 async def sync_existing_movie_filter(movie_id: str) -> dict:
     """
     Admin helper to resync an existing Super Movie Filter by searching ia_filterdb
