@@ -2599,13 +2599,174 @@ async def announce_filter_created(client: Client, filter_type: str = "series", f
 
 
 # ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═  
-# ─── /ed_series —” EDIT WIZARD ────────────────────────────────────────────────
+# ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═  
+# ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═  
+# ─── /viewseries & /viewmovies —” FILTER MANAGERS ──────────────────────────────
 # ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═  
 
+async def send_filter_manager(query_or_message, ftype: str = "series", page: int = 0):
+    """
+    Renders the Series / Super Movie Filter Manager without any close button.
+    Supports tab switching and pagination.
+    """
+    from database.series_db import series_col, super_movies_col
+    from pyrogram.types import CallbackQuery
+
+    series_count = await series_col.count_documents({"status": {"$ne": "deleted"}})
+    movies_count = await super_movies_col.count_documents({"status": {"$ne": "deleted"}})
+
+    tab_row = [
+        InlineKeyboardButton(
+            f"📺 Series ({series_count})" if ftype == "series" else f"Series ({series_count})",
+            callback_data="vser#ser#0"
+        ),
+        InlineKeyboardButton(
+            f"🎬 Movies ({movies_count})" if ftype == "movies" else f"Movies ({movies_count})",
+            callback_data="vser#mov#0"
+        )
+    ]
+    rows = [tab_row]
+    page_size = 8
+
+    if ftype == "series":
+        cursor = series_col.find({"status": {"$ne": "deleted"}}).sort("created_at", -1).skip(page * page_size).limit(page_size)
+        items = [doc async for doc in cursor]
+        total_items = series_count
+
+        for s in items:
+            s_name = s.get("name", "Series")
+            s_id = str(s["_id"])
+            rows.append([
+                InlineKeyboardButton(
+                    f"📺 {s_name}",
+                    callback_data=f"edser#{s_id}"
+                )
+            ])
+
+        nav_row = []
+        if page > 0:
+            nav_row.append(InlineKeyboardButton("⬅️ Previous", callback_data=f"vser#ser#{page - 1}"))
+        if (page + 1) * page_size < total_items:
+            nav_row.append(InlineKeyboardButton("Next ➡️", callback_data=f"vser#ser#{page + 1}"))
+        if nav_row:
+            rows.append(nav_row)
+
+        header_text = (
+            "📺 <b>SERIES FILTER MANAGER</b>\n\n"
+            f"Total Series: <b>{series_count}</b> (Page {page + 1})\n"
+            "Select a series below to view/edit:"
+        )
+
+    else:
+        cursor = super_movies_col.find({"status": {"$ne": "deleted"}}).sort("created_at", -1).skip(page * page_size).limit(page_size)
+        items = [doc async for doc in cursor]
+        total_items = movies_count
+
+        for m in items:
+            m_title = m.get("title", "Movie")
+            m_year = m.get("year", "")
+            m_id = str(m["_id"])
+            label = f"🎬 {m_title} ({m_year})" if m_year and m_year != "N/A" else f"🎬 {m_title}"
+            rows.append([
+                InlineKeyboardButton(
+                    label,
+                    callback_data=f"emovie_select#{m_id}"
+                )
+            ])
+
+        nav_row = []
+        if page > 0:
+            nav_row.append(InlineKeyboardButton("⬅️ Previous", callback_data=f"vser#mov#{page - 1}"))
+        if (page + 1) * page_size < total_items:
+            nav_row.append(InlineKeyboardButton("Next ➡️", callback_data=f"vser#mov#{page + 1}"))
+        if nav_row:
+            rows.append(nav_row)
+
+        header_text = (
+            "🎬 <b>MOVIE FILTER MANAGER</b>\n\n"
+            f"Total Movies: <b>{movies_count}</b> (Page {page + 1})\n"
+            "Select a movie below to view/edit:"
+        )
+
+    markup = InlineKeyboardMarkup(rows)
+
+    if isinstance(query_or_message, CallbackQuery):
+        try:
+            await query_or_message.message.edit_text(header_text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
+        except Exception:
+            pass
+    else:
+        await query_or_message.reply_text(header_text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
+
+
+@Client.on_message(filters.command(["viewseries", "view_series", "serieslist"]), group=-1)
+async def cmd_view_series(client: Client, message: Message):
+    uid = message.from_user.id if message.from_user else (message.sender_chat.id if message.sender_chat else 0)
+    is_authorized = _is_admin(uid)
+    if not is_authorized and message.chat and message.chat.type in [enums.ChatType.GROUP, enums.ChatType.SUPERGROUP]:
+        try:
+            member = await message.chat.get_member(uid)
+            if member and member.status in [enums.ChatMemberStatus.ADMINISTRATOR, enums.ChatMemberStatus.OWNER]:
+                is_authorized = True
+        except Exception:
+            pass
+    if not is_authorized:
+        return await message.reply_text("❌ <b>You are not authorized to use this command.</b>", parse_mode=enums.ParseMode.HTML)
+
+    from database.series_db import series_col
+    count = await series_col.count_documents({"status": {"$ne": "deleted"}})
+    if count == 0:
+        logger.info("[VIEW FILTERS EMPTY]\ntype=series")
+    else:
+        logger.info(f"[VIEW SERIES]\nuser_id={uid}\ncount={count}")
+
+    await send_filter_manager(message, ftype="series", page=0)
+
+
+@Client.on_message(filters.command(["viewmovies", "view_movies", "movieslist", "movielist"]), group=-1)
+async def cmd_view_movies(client: Client, message: Message):
+    uid = message.from_user.id if message.from_user else (message.sender_chat.id if message.sender_chat else 0)
+    is_authorized = _is_admin(uid)
+    if not is_authorized and message.chat and message.chat.type in [enums.ChatType.GROUP, enums.ChatType.SUPERGROUP]:
+        try:
+            member = await message.chat.get_member(uid)
+            if member and member.status in [enums.ChatMemberStatus.ADMINISTRATOR, enums.ChatMemberStatus.OWNER]:
+                is_authorized = True
+        except Exception:
+            pass
+    if not is_authorized:
+        return await message.reply_text("❌ <b>You are not authorized to use this command.</b>", parse_mode=enums.ParseMode.HTML)
+
+    from database.series_db import super_movies_col
+    count = await super_movies_col.count_documents({"status": {"$ne": "deleted"}})
+    if count == 0:
+        logger.info("[VIEW FILTERS EMPTY]\ntype=movie")
+    else:
+        logger.info(f"[VIEW MOVIES]\nuser_id={uid}\ncount={count}")
+
+    await send_filter_manager(message, ftype="movies", page=0)
+
+
+@Client.on_callback_query(filters.regex(r"^vser#"))
+async def cb_vser(client: Client, query: CallbackQuery):
+    await query.answer()
+    parts = query.data.split("#")
+    if len(parts) >= 3:
+        ftype = "series" if parts[1] == "ser" else "movies"
+        try:
+            page = int(parts[2])
+        except ValueError:
+            page = 0
+        return await send_filter_manager(query, ftype=ftype, page=page)
 
 
 @Client.on_callback_query(filters.regex(r"^edser#"))
 async def cb_edser(client: Client, query: CallbackQuery):
+    try:
+        await query.answer("Opening Series...")
+    except Exception:
+        pass
+
     logger.info("[VIEW SERIES EDIT] callback=%s", query.data)
     is_admin = False
     if query.message and query.message.chat.type in [enums.ChatType.GROUP, enums.ChatType.SUPERGROUP]:
@@ -2618,7 +2779,8 @@ async def cb_edser(client: Client, query: CallbackQuery):
     
     uid = query.from_user.id
     from utils import temp
-    from database.series_db import get_series, delete_series, delete_series_filter, delete_announcement
+    from database.series_db import get_series, delete_series_filter, delete_announcement, series_col
+    from bson import ObjectId
 
     if query.data.startswith("edser#ano#"):
         series_id = query.data.split("#")[2]
@@ -2713,11 +2875,21 @@ async def cb_edser(client: Client, query: CallbackQuery):
         await query.answer("✅ Series Filter Deleted\n📁 Original files were preserved.", show_alert=True)
         return await send_filter_manager(query, ftype="series", page=0)
 
-    series_id = query.data.split("#")[1]
+    parts = query.data.split("#")
+    series_id = parts[-1].strip()
+    if not series_id:
+        return await query.answer("❌ Invalid Series ID.", show_alert=True)
+
     exact = await get_series(series_id)
+    if not exact and ObjectId.is_valid(series_id):
+        try:
+            exact = await series_col.find_one({"_id": ObjectId(series_id)})
+        except Exception:
+            pass
+
     if not exact:
-        return await query.answer("Series not found.", show_alert=True)
-        
+        return await query.answer("❌ Series not found. Please refresh /viewseries.", show_alert=True)
+
     temp.SERIES_WIZARD[uid] = {
         "mode": "edit",
         "state": S_DONE,
@@ -2735,16 +2907,165 @@ async def cb_edser(client: Client, query: CallbackQuery):
         "batch_data": None,
         "from_viewseries": True
     }
-    
+
     wiz = temp.SERIES_WIZARD[uid]
-    logger.info(f"[SERIES EDIT]\nuser_id={uid}\nseries_id={series_id}\naction=OPEN")
-    
+    logger.info(
+        f"[VIEW FILTER CLICK]\n"
+        f"type=series\n"
+        f"filter_id={series_id}\n"
+        f"user_id={uid}\n\n"
+        f"[VIEW FILTER OPEN]\n"
+        f"type=series\n"
+        f"filter_id={series_id}\n"
+        f"name={exact.get('name')}"
+    )
+
     await query.message.edit_text(
         _series_card(wiz) + "\n\n⚙️ <b>Edit Series Configuration</b>\nChoose an option to edit:",
         reply_markup=_config_menu_keyboard(wiz.get("series_id"), True),
         parse_mode=enums.ParseMode.HTML,
     )
-    await query.answer()
+
+
+@Client.on_callback_query(filters.regex(r"^(?:emovie_select|edmov|emov)#"))
+async def cb_movie_management(client: Client, query: CallbackQuery):
+    try:
+        await query.answer("Opening Movie...")
+    except Exception:
+        pass
+
+    uid = query.from_user.id
+    is_admin = False
+    if query.message and query.message.chat.type in [enums.ChatType.GROUP, enums.ChatType.SUPERGROUP]:
+        admin_list = await client.get_chat_members(query.message.chat.id, filter=enums.ChatMembersFilter.ADMINISTRATORS)
+        is_admin = any(admin.user.id == query.from_user.id for admin in admin_list if admin.user)
+    else:
+        is_admin = query.from_user.id in ADMINS
+    if not is_admin:
+        return await query.answer("❌ You are not authorized.", show_alert=True)
+
+    data = query.data
+    from database.series_db import super_movies_col, get_super_movie, sync_existing_movie_filter, delete_announcement
+    from bson import ObjectId
+
+    if data == "emov#back":
+        logger.info(f"[VIEW FILTER BACK]\ntype=movie\nuser_id={uid}")
+        return await send_filter_manager(query, ftype="movies", page=0)
+
+    if data.startswith("emov#ano#"):
+        movie_id = data.split("#")[2]
+        success = await announce_filter_created(client, filter_type="movie", filter_id=str(movie_id), force=True)
+        if success:
+            await query.answer("📢 Movie announcement sent successfully!", show_alert=True)
+        else:
+            await query.answer("❌ Failed to send announcement or channel not configured.", show_alert=True)
+        return
+
+    if data.startswith("emov#sync#"):
+        movie_id = data.split("#")[2]
+        await query.message.edit_text("🔄 <b>Synchronizing files for this movie from database...</b>", parse_mode=enums.ParseMode.HTML)
+        res = await sync_existing_movie_filter(movie_id)
+        if res.get("success"):
+            await query.answer(f"✅ Synced {res.get('new_files_added', 0)} new files!", show_alert=True)
+        else:
+            await query.answer("⚠️ No new files found to sync.", show_alert=True)
+        data = f"emovie_select#{movie_id}"
+
+    if data.startswith("emov#del#"):
+        movie_id = data.split("#")[2]
+        movie = await get_super_movie(movie_id)
+        if not movie:
+            return await query.answer("❌ Movie not found.", show_alert=True)
+        title = movie.get("title", "Movie")
+        year = movie.get("year", "")
+        confirm_markup = InlineKeyboardMarkup([
+            [InlineKeyboardButton("✅ Confirm Delete", callback_data=f"emov#del_confirm#{movie_id}")],
+            [InlineKeyboardButton("❌ Cancel", callback_data=f"emovie_select#{movie_id}")]
+        ])
+        return await query.message.edit_text(
+            f"⚠️ <b>Delete Movie Filter?</b>\n\n"
+            f"🎬 <b>{html.escape(title)} ({year})</b>\n\n"
+            f"This will remove the Super Movie Filter. Original files are preserved.",
+            reply_markup=confirm_markup,
+            parse_mode=enums.ParseMode.HTML
+        )
+
+    if data.startswith("emov#del_confirm#"):
+        movie_id = data.split("#")[2]
+        await super_movies_col.update_one(
+            {"_id": ObjectId(movie_id)},
+            {"$set": {"status": "deleted", "updated_at": datetime.utcnow()}}
+        )
+        try:
+            await delete_announcement(f"movie:{movie_id}")
+            await delete_announcement(str(movie_id))
+        except Exception:
+            pass
+        await query.answer("✅ Movie Filter Deleted", show_alert=True)
+        return await send_filter_manager(query, ftype="movies", page=0)
+
+    # View movie detail card
+    parts = data.split("#")
+    movie_id = parts[-1].strip()
+    movie = await get_super_movie(movie_id)
+    if not movie and ObjectId.is_valid(movie_id):
+        try:
+            movie = await super_movies_col.find_one({"_id": ObjectId(movie_id)})
+        except Exception:
+            pass
+
+    if not movie:
+        return await query.answer("❌ Movie not found. Please refresh /viewmovies.", show_alert=True)
+
+    title = movie.get("title", "Movie")
+    year = str(movie.get("year", ""))
+    year_str = f" ({year})" if year and year != "N/A" else ""
+    rating = str(movie.get("rating", ""))
+    rating_str = f"\n⭐ <b>Rating:</b> {rating}/10" if rating else ""
+    genre = movie.get("genre", "")
+    genre_str = f"\n🎭 <b>Genre:</b> {genre}" if genre and genre != "N/A" else ""
+    langs = movie.get("languages", [])
+    lang_str = ", ".join(langs) if langs else "Multi"
+    quals = movie.get("qualities", [])
+    qual_str = ", ".join(quals) if quals else "1080p, 720p, 480p"
+    tot_files = len(movie.get("file_ids") or [])
+
+    logger.info(
+        f"[VIEW FILTER CLICK]\n"
+        f"type=movie\n"
+        f"filter_id={movie_id}\n"
+        f"user_id={uid}\n\n"
+        f"[VIEW FILTER OPEN]\n"
+        f"type=movie\n"
+        f"filter_id={movie_id}\n"
+        f"name={title}"
+    )
+
+    card_text = (
+        f"🎬 <b>Movie Filter Configuration</b>\n\n"
+        f"🎬 <b>Title:</b> <code>{html.escape(title)}{year_str}</code>"
+        f"{rating_str}"
+        f"{genre_str}\n"
+        f"🌐 <b>Languages:</b> <code>{html.escape(lang_str)}</code>\n"
+        f"⚡ <b>Qualities:</b> <code>{html.escape(qual_str)}</code>\n"
+        f"📁 <b>Linked Files:</b> {tot_files}\n"
+        f"<i>ID: <code>{movie_id}</code></i>"
+    )
+
+    markup = InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("📁 Add Files / Resync", callback_data=f"emov#sync#{movie_id}"),
+            InlineKeyboardButton("📢 Announcement", callback_data=f"emov#ano#{movie_id}")
+        ],
+        [
+            InlineKeyboardButton("🗑 Delete Movie", callback_data=f"emov#del#{movie_id}")
+        ],
+        [
+            InlineKeyboardButton("⬅️ Back", callback_data="emov#back")
+        ]
+    ])
+
+    await query.message.edit_text(card_text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
 
 
 
@@ -3288,7 +3609,94 @@ async def series_wizard_callback(client: Client, query: CallbackQuery):
             parse_mode=enums.ParseMode.HTML
         )
 
+    elif data == "sw#vser_back":
+        logger.info(f"[VIEW SERIES BACK]\nuser_id={uid}")
+        temp.SERIES_WIZARD.pop(uid, None)
+        return await send_filter_manager(query, ftype="series", page=0)
+
+    elif data == "sw#save":
+        wiz = temp.SERIES_WIZARD.get(uid)
+        if wiz and wiz.get("series_id"):
+            from database.series_db import series_col
+            from bson import ObjectId
+            try:
+                await series_col.update_one(
+                    {"_id": ObjectId(wiz["series_id"])},
+                    {
+                        "$set": {
+                            "name": wiz.get("name"),
+                            "year": wiz.get("year", ""),
+                            "genre": wiz.get("genre", ""),
+                            "description": wiz.get("description", ""),
+                            "poster": wiz.get("poster", ""),
+                            "languages": wiz.get("languages", []),
+                            "seasons": wiz.get("seasons", []),
+                            "qualities": wiz.get("qualities", []),
+                            "updated_at": datetime.utcnow()
+                        }
+                    }
+                )
+            except Exception:
+                pass
+        if wiz and wiz.get("from_viewseries"):
+            temp.SERIES_WIZARD.pop(uid, None)
+            await query.answer("✅ Series saved successfully!", show_alert=True)
+            return await send_filter_manager(query, ftype="series", page=0)
+        else:
+            clear_wizard_session(uid)
+            temp.SERIES_WIZARD.pop(uid, None)
+            return await query.message.edit_text("✅ <b>Series configuration saved!</b>", parse_mode=enums.ParseMode.HTML)
+
+    elif data.startswith("sw#menu#batch"):
+        wiz = temp.SERIES_WIZARD.get(uid)
+        series_id = wiz.get("series_id") if wiz else None
+        if not series_id and "#" in data:
+            parts = data.split("#")
+            if len(parts) >= 4:
+                series_id = parts[3]
+        if not series_id:
+            return await query.answer("Series ID not found.", show_alert=True)
+
+        from database.series_db import scan_sdatabase_for_series, add_series_file, get_series
+        exact = await get_series(series_id)
+        s_name = exact.get("name", "Series") if exact else "Series"
+        await query.message.edit_text(f"🔄 <b>Scanning database for files matching '{s_name}'...</b>", parse_mode=enums.ParseMode.HTML)
+        scan_res = await scan_sdatabase_for_series(chat_id, s_name, season=None, series_id=series_id, client=client)
+        new_files = scan_res.get("valid_new_files") or []
+        for f in new_files:
+            try:
+                await add_series_file({
+                    "series_id": series_id,
+                    "language": f["language"],
+                    "season": f["season"],
+                    "episode": f["episode"],
+                    "quality": f["quality"],
+                    "chat_id": chat_id,
+                    "file_id": f.get("file_id"),
+                    "file_name": f.get("file_name"),
+                    "file_size": f.get("file_size", 0)
+                })
+            except Exception:
+                pass
+        await query.answer(f"✅ Synced {len(new_files)} files!", show_alert=True)
+        if wiz:
+            return await query.message.edit_text(
+                _series_card(wiz) + f"\n\n📁 <b>Synced {len(new_files)} new files.</b>\n⚙️ <b>Series Configuration:</b>",
+                reply_markup=_config_menu_keyboard(series_id, wiz.get("from_viewseries", True)),
+                parse_mode=enums.ParseMode.HTML
+            )
+        else:
+            return await send_filter_manager(query, ftype="series", page=0)
+
+    elif data.startswith("sw#menu#add_ep"):
+        return await query.answer("Use '📁 Add Files' to scan database or forward episode files to the channel.", show_alert=True)
+
     elif data in ("sw#cancel", "sw#auto_cancel", "sw#auto_movie_cancel"):
+        wiz = temp.SERIES_WIZARD.get(uid)
+        if wiz and wiz.get("from_viewseries"):
+            temp.SERIES_WIZARD.pop(uid, None)
+            return await send_filter_manager(query, ftype="series", page=0)
+
         for sess_id, t in list(AUTO_MOVIE_METADATA_TASKS.items()):
             m_data = getattr(temp, "AUTO_MOVIE", {}).get(sess_id, {})
             if m_data.get("user_id") == uid or m_data.get("admin_id") == uid:
@@ -3574,12 +3982,11 @@ async def process_super_movie_search(client: Client, message: Message, query_tex
     from database.ia_filterdb import get_file_details
     from plugins.pm_filter import group_movie_files, build_movie_language_keyboard, BUTTON_OWNERS
 
-    q = clean_series_title(query_text) if query_text else ""
+    q = str(query_text or "").strip()
     if not q:
         return False
 
     matches = await search_super_movies(q)
-    logger.info(f"[SUPER MOVIE SEARCH] query={query_text!r} matches={len(matches) if matches else 0}")
     if not matches:
         return False
 
