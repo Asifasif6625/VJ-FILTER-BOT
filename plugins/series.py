@@ -75,6 +75,7 @@ from database.series_db import (
 from utils import (
     temp,
     get_poster,
+    get_imdb_metadata_direct,
     set_wizard_session,
     get_wizard_session,
     clear_wizard_session,
@@ -1023,9 +1024,12 @@ async def fetch_auto_movie_metadata(client: Client, chat_id: int | str, loading_
                 imdb_id = m_imdb.group(1).lower()
                 logger.info("[AUTO MOVIE] IMDb REQUEST START")
                 print("### AM_STEP_02_BEFORE_IMDB ###", flush=True)
-                info = await asyncio.wait_for(get_poster(imdb_id, id=True), timeout=15)
+                info = await get_imdb_metadata_direct(imdb_id)
                 print("### AM_STEP_03_AFTER_IMDB ###", flush=True)
-                logger.info(f"[AUTO MOVIE] IMDb REQUEST DONE\ntitle={info.get('title') if info else None}\nyear={info.get('year') if info else None}")
+                if info and info.get("title"):
+                    logger.info(f"[AUTO MOVIE] IMDb DIRECT METADATA COMPLETE\ntitle={info.get('title')}\nyear={info.get('year')}\nkind={info.get('kind')}")
+                else:
+                    logger.warning(f"[AUTO MOVIE] IMDb DIRECT METADATA FAILED id={imdb_id}")
         except asyncio.TimeoutError:
             logger.error(f"[AUTO MOVIE] METADATA TIMEOUT query={text}")
             is_timeout = True
@@ -1209,8 +1213,11 @@ async def fetch_auto_series_metadata(client: Client, chat_id: int | str, loading
             elif m_imdb:
                 imdb_id = m_imdb.group(1).lower()
                 logger.info("[AUTO SERIES] IMDb REQUEST START")
-                info = await asyncio.wait_for(get_poster(imdb_id, id=True), timeout=15)
-                logger.info(f"[AUTO SERIES] IMDb REQUEST DONE\ntitle={info.get('title') if info else None}\nyear={info.get('year') if info else None}")
+                info = await get_imdb_metadata_direct(imdb_id)
+                if info and info.get("title"):
+                    logger.info(f"[AUTO SERIES] IMDb DIRECT METADATA COMPLETE\ntitle={info.get('title')}\nyear={info.get('year')}\nkind={info.get('kind')}")
+                else:
+                    logger.warning(f"[AUTO SERIES] IMDb DIRECT METADATA FAILED id={imdb_id}")
         except asyncio.TimeoutError:
             logger.error(f"[AUTO SERIES] METADATA TIMEOUT query={text}")
             is_timeout = True
