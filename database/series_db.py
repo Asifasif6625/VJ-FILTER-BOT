@@ -916,59 +916,92 @@ async def get_super_movie(movie_id: str) -> dict | None:
         return None
 
 
+def normalize_movie_search_title(text: str) -> str:
+    text = str(text or "").lower()
+    text = re.sub(r"[\._\-\+\[\]\(\)\{\}:;!?,/\\]+", " ", text)
+    text = re.sub(r"\s+", " ", text).strip()
+    return text
+
+
 async def search_super_movies(query: str) -> list[dict]:
-    q = query.strip()
-    if not q:
-        return []
-    q_norm = _normalize(q)
-    if not q_norm:
-        return []
-    q_tokens = [w for w in q_norm.split(" ") if w]
-    if not q_tokens:
+    raw_query = str(query or "").strip()
+    if not raw_query:
         return []
 
-    # 1. Exact match on normalized_name
-    doc = await super_movies_col.find_one({"normalized_name": q_norm, "status": {"$ne": "deleted"}})
-    if doc:
-        logger.info(
-            f"[SUPER MOVIE SEARCH]\n"
-            f"query={query}\n"
-            f"matched=True"
-        )
-        return [doc]
+    norm_query = normalize_movie_search_title(raw_query)
+    if not norm_query:
+        return []
 
-    # 2. Match without trailing year (e.g. "Idhayam Murali 2026" -> "idhayam murali")
-    q_no_year = re.sub(r"\b(19|20)\d{2}\b", "", q_norm).strip()
-    q_no_year = re.sub(r"\s+", " ", q_no_year).strip()
-    if q_no_year and q_no_year != q_norm:
-        doc = await super_movies_col.find_one({"normalized_name": q_no_year, "status": {"$ne": "deleted"}})
-        if doc:
-            logger.info(
-                f"[SUPER MOVIE SEARCH]\n"
-                f"query={query}\n"
-                f"matched=True"
-            )
-            return [doc]
+    # Optional year extraction from user query
+    q_year_match = re.search(r"\b(19\d{2}|20\d{2})\b", raw_query)
+    q_year = q_year_match.group(1) if q_year_match else None
 
-    # 3. Match candidate if query tokens contain all main words of normalized_name
-    cursor = super_movies_col.find({"status": {"$ne": "deleted"}}).limit(100)
-    candidates = [d async for d in cursor]
-    matched = []
+    q_title_no_year = re.sub(r"\b(19\d{2}|20\d{2})\b", "", norm_query).strip()
+    q_title_no_year = re.sub(r"\s+", " ", q_title_no_year).strip()
+    target_query = q_title_no_year if q_title_no_year else norm_query
+    q_tokens = [w for w in target_query.split() if w]
+
+    # Fetch active candidates from MongoDB
+    cursor = super_movies_col.find({"status": {"$ne": "deleted"}})
+    candidates = [doc async for doc in cursor]
+
+    scored_matches = []
     for cand in candidates:
-        cand_norm = cand.get("normalized_name", "")
-        cand_tokens = [w for w in cand_norm.split(" ") if w]
-        if not cand_tokens:
+        c_title = cand.get("title", "")
+        c_norm = cand.get("normalized_name") or normalize_movie_search_title(c_title)
+        c_year = str(cand.get("year", "")).strip()
+        c_file_count = len(cand.get("file_ids") or [])
+        c_tokens = [w for w in c_norm.split() if w]
+
+        if not c_norm:
             continue
-        if all(ct in q_tokens for ct in cand_tokens):
-            matched.append(cand)
-        elif all(qt in cand_tokens for qt in q_tokens) and len(q_tokens) == len(cand_tokens):
-            matched.append(cand)
+
+        score = 0.0
+        # 1. Exact normalized title match
+        if norm_query == c_norm or target_query == c_norm:
+            score = 100.0
+        elif q_tokens and c_tokens and q_tokens == c_tokens:
+            score = 95.0
+        elif q_tokens and c_tokens and all(qt in c_tokens for qt in q_tokens):
+            # All query words are in movie title (e.g. "parakkum pappan" in "Parakkum Pappan")
+            score = 80.0 + (len(q_tokens) / len(c_tokens)) * 10.0
+        elif q_tokens and c_tokens and all(ct in q_tokens for ct in c_tokens):
+            # All movie title words are in user query
+            score = 75.0 + (len(c_tokens) / len(q_tokens)) * 10.0
+        elif c_norm.startswith(target_query) or target_query.startswith(c_norm):
+            score = 70.0
+        elif len(q_tokens) >= 2 and sum(1 for qt in q_tokens if qt in c_tokens) >= len(q_tokens) - 1:
+            score = 65.0
+
+        if score >= 65.0:
+            if q_year:
+                if c_year == q_year:
+                    score += 20.0
+                elif c_year and c_year not in ("N/A", "None", "0", ""):
+                    score -= 30.0
+
+            scored_matches.append((score, c_file_count, cand))
+
+    scored_matches.sort(key=lambda x: (x[0], x[1]), reverse=True)
+    matched = [cand for score, f_count, cand in scored_matches if score >= 60.0]
 
     logger.info(
-        f"[SUPER MOVIE SEARCH]\n"
-        f"query={query}\n"
-        f"matched={bool(matched)}"
+        f"[SUPER MOVIE SEARCH DEBUG]\n"
+        f"raw_query={raw_query}\n"
+        f"normalized_query={norm_query}\n"
+        f"candidate_count={len(candidates)}\n"
+        f"matched_count={len(matched)}"
     )
+
+    for m in matched:
+        logger.info(
+            f"[SUPER MOVIE MATCH]\n"
+            f"title={m.get('title')}\n"
+            f"year={m.get('year')}\n"
+            f"movie_id={str(m.get('_id'))}\n"
+            f"file_count={len(m.get('file_ids') or [])}"
+        )
+
     return matched
 
 
