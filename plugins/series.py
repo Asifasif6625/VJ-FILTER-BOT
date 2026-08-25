@@ -1001,6 +1001,31 @@ AUTO_MOVIE_METADATA_WATCHDOGS = {}
 AUTO_SERIES_METADATA_WATCHDOGS = {}
 
 
+async def _safe_edit_message(message, text, reply_markup=None, parse_mode=enums.ParseMode.HTML, timeout=5):
+    """
+    Safely edit a message with a strict timeout to prevent indefinite hangs.
+    Returns True if edit succeeded, False otherwise. Never throws.
+    """
+    if not message:
+        return False
+    try:
+        await asyncio.wait_for(
+            message.edit_text(
+                text,
+                reply_markup=reply_markup,
+                parse_mode=parse_mode
+            ),
+            timeout=timeout
+        )
+        return True
+    except asyncio.TimeoutError:
+        logger.warning(f"[SAFE EDIT] Telegram edit timed out after {timeout}s")
+        return False
+    except Exception as e:
+        logger.warning(f"[SAFE EDIT] Telegram edit failed: {e}")
+        return False
+
+
 async def fetch_auto_movie_metadata(client: Client, chat_id: int | str, loading_msg: Message, session_id: str, text: str, uid: int):
     """
     Dedicated metadata task for Auto Movie Add.
@@ -1149,7 +1174,7 @@ async def fetch_auto_movie_metadata(client: Client, chat_id: int | str, loading_
         rating = str(info.get("rating") or "").strip()
         poster = info.get("poster") or ""
         description = info.get("plot") or ""
-        resolved_imdb_id = info.get("imdb_id") or imdb_id or "tmdb"
+        resolved_imdb_id = info.get("imdb_id") or imdb_id
         resolved_tmdb_id = info.get("tmdb_id")
 
         movie_data.update({
@@ -1190,10 +1215,14 @@ async def fetch_auto_movie_metadata(client: Client, chat_id: int | str, loading_
             f"🔍 <b>Scanning database for matching files...</b>"
         )
 
-        try:
-            await loading_msg.edit_text(movie_found_text, parse_mode=enums.ParseMode.HTML)
-        except Exception as e:
-            logger.warning(f"[AUTO MOVIE UI EDIT FAILED] {e}")
+        logger.info("[AUTO MOVIE UI] EDIT START")
+        edit_ok = await _safe_edit_message(
+            loading_msg,
+            movie_found_text,
+            parse_mode=enums.ParseMode.HTML,
+            timeout=5
+        )
+        logger.info(f"[AUTO MOVIE UI] EDIT DONE success={edit_ok}")
 
         logger.info("[AUTO MOVIE] STARTING SCAN")
         print("### AM_STEP_05_START_SCAN ###", flush=True)
@@ -1358,14 +1387,18 @@ async def fetch_auto_series_metadata(client: Client, chat_id: int | str, loading
                 "created_by": uid
             })
 
-        try:
-            await loading_msg.edit_text(
-                f"📺 <b>Series Found:</b> {html.escape(str(s_title))} ({s_year})\n\n"
-                f"🔍 <b>Scanning database for series episodes...</b>",
-                parse_mode=enums.ParseMode.HTML
-            )
-        except Exception:
-            pass
+        series_found_text = (
+            f"📺 <b>Series Found:</b> {html.escape(str(s_title))} ({s_year})\n\n"
+            f"🔍 <b>Scanning database for series episodes...</b>"
+        )
+        logger.info("[AUTO SERIES UI] EDIT START")
+        edit_ok = await _safe_edit_message(
+            loading_msg,
+            series_found_text,
+            parse_mode=enums.ParseMode.HTML,
+            timeout=5
+        )
+        logger.info(f"[AUTO SERIES UI] EDIT DONE success={edit_ok}")
 
         logger.info("[AUTO SERIES] DB SCAN START")
         s_data["state"] = "SCANNING"
@@ -1493,13 +1526,14 @@ async def run_auto_movie_scan(client, chat_id, target_msg, session_id, movie_dat
     )
 
     try:
-        try:
-            await target_msg.edit_text(loading_text, parse_mode=enums.ParseMode.HTML)
-        except Exception:
-            pass
+        await _safe_edit_message(target_msg, loading_text, parse_mode=enums.ParseMode.HTML, timeout=5)
 
         if cancel_event.is_set():
             raise asyncio.CancelledError()
+
+        logger.info(
+            f"[AUTO MOVIE SCAN] DB SCAN START title={movie_data.get('title')} year={movie_data.get('year')} imdb={movie_data.get('imdb_id')} tmdb={movie_data.get('tmdb_id')}"
+        )
 
         try:
             res = await asyncio.wait_for(
@@ -1519,10 +1553,7 @@ async def run_auto_movie_scan(client, chat_id, target_msg, session_id, movie_dat
             temp.AUTO_MOVIE[session_id] = movie_data
             if uid:
                 temp.AUTO_MOVIE[uid] = movie_data
-            try:
-                await target_msg.edit_text("❌ <b>Auto Movie Add cancelled.</b>", parse_mode=enums.ParseMode.HTML)
-            except Exception:
-                pass
+            await _safe_edit_message(target_msg, "❌ <b>Auto Movie Add cancelled.</b>", parse_mode=enums.ParseMode.HTML, timeout=5)
             return
         except asyncio.TimeoutError:
             logger.error(f"[AUTO MOVIE SCAN] TIMEOUT title={movie_data.get('title')} year={movie_data.get('year')}")
@@ -1540,10 +1571,12 @@ async def run_auto_movie_scan(client, chat_id, target_msg, session_id, movie_dat
                 [InlineKeyboardButton("📦 Batch Add Files", callback_data=f"am_batch:{session_id}")],
                 [InlineKeyboardButton("❌ Cancel", callback_data=f"am_cancel:{session_id}")]
             ])
-            try:
-                await target_msg.edit_text(timeout_txt, reply_markup=timeout_markup, parse_mode=enums.ParseMode.HTML)
-            except Exception:
-                await client.send_message(chat_id=chat_id, text=timeout_txt, reply_markup=timeout_markup, parse_mode=enums.ParseMode.HTML)
+            edit_ok = await _safe_edit_message(target_msg, timeout_txt, reply_markup=timeout_markup, parse_mode=enums.ParseMode.HTML, timeout=5)
+            if not edit_ok:
+                try:
+                    await client.send_message(chat_id=chat_id, text=timeout_txt, reply_markup=timeout_markup, parse_mode=enums.ParseMode.HTML)
+                except Exception:
+                    pass
             if callback_query:
                 return await callback_query.answer("Scan timed out.", show_alert=True)
             return
@@ -1564,10 +1597,12 @@ async def run_auto_movie_scan(client, chat_id, target_msg, session_id, movie_dat
                 [InlineKeyboardButton("📦 Batch Add Files", callback_data=f"am_batch:{session_id}")],
                 [InlineKeyboardButton("❌ Cancel", callback_data=f"am_cancel:{session_id}")]
             ])
-            try:
-                await target_msg.edit_text(err_txt, reply_markup=err_markup, parse_mode=enums.ParseMode.HTML)
-            except Exception:
-                await client.send_message(chat_id=chat_id, text=err_txt, reply_markup=err_markup, parse_mode=enums.ParseMode.HTML)
+            edit_ok = await _safe_edit_message(target_msg, err_txt, reply_markup=err_markup, parse_mode=enums.ParseMode.HTML, timeout=5)
+            if not edit_ok:
+                try:
+                    await client.send_message(chat_id=chat_id, text=err_txt, reply_markup=err_markup, parse_mode=enums.ParseMode.HTML)
+                except Exception:
+                    pass
             if callback_query:
                 return await callback_query.answer("Database scan error.", show_alert=True)
             return
@@ -1578,14 +1613,13 @@ async def run_auto_movie_scan(client, chat_id, target_msg, session_id, movie_dat
             temp.AUTO_MOVIE[session_id] = movie_data
             if uid:
                 temp.AUTO_MOVIE[uid] = movie_data
-            try:
-                await target_msg.edit_text("❌ <b>Auto Movie Add cancelled.</b>", parse_mode=enums.ParseMode.HTML)
-            except Exception:
-                pass
+            await _safe_edit_message(target_msg, "❌ <b>Auto Movie Add cancelled.</b>", parse_mode=enums.ParseMode.HTML, timeout=5)
             return
 
         # Scan success
-        logger.info("[AUTO MOVIE] DB SCAN COMPLETE")
+        logger.info(
+            f"[AUTO MOVIE SCAN] DB SCAN COMPLETE matched={res.get('total_matched', 0)}"
+        )
         logger.info(f"[AUTO MOVIE] MATCH RESULT matched={res.get('total_matched', 0)}")
         movie_data["scan"] = res
         movie_data["grouped"] = _group_auto_movie_files(res)
@@ -1597,10 +1631,16 @@ async def run_auto_movie_scan(client, chat_id, target_msg, session_id, movie_dat
 
         text_res = _build_auto_movie_lang_text(movie_data)
         markup = _build_auto_movie_lang_keyboard(session_id, movie_data)
-        try:
-            await target_msg.edit_text(text_res, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
-        except Exception:
-            await client.send_message(chat_id=chat_id, text=text_res, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
+        result_ok = await _safe_edit_message(target_msg, text_res, reply_markup=markup, parse_mode=enums.ParseMode.HTML, timeout=5)
+        if not result_ok:
+            logger.warning("[AUTO MOVIE] RESULT UI EDIT FAILED — sending fallback message")
+            try:
+                await asyncio.wait_for(
+                    client.send_message(chat_id=chat_id, text=text_res, reply_markup=markup, parse_mode=enums.ParseMode.HTML),
+                    timeout=5
+                )
+            except Exception as fe:
+                logger.error(f"[AUTO MOVIE] FALLBACK RESULT SEND FAILED: {fe}")
 
         if callback_query:
             return await callback_query.answer(f"Scan complete: {res['total_matched']} files matched.")
