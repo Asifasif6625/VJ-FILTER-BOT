@@ -35,39 +35,63 @@ SPELL_CHECK = {}
 def is_button_owner(query: CallbackQuery, key: str) -> tuple[bool, str | None]:
     """Check if the user clicking the button is the original requester."""
     click_user = query.from_user.id
-    stored_owner = BUTTON_OWNERS.get(key)
     chat_id = query.message.chat.id if (query.message and query.message.chat) else None
     message_id = query.message.id if query.message else None
 
-    # In PM chat, the user interacting with the bot is always the owner
-    if query.message and query.message.chat and query.message.chat.type == enums.ChatType.PRIVATE:
+    # 1. In PM chat, the user clicking in private is ALWAYS the owner
+    if (chat_id and chat_id > 0) or (query.message and query.message.chat and query.message.chat.type == enums.ChatType.PRIVATE):
         BUTTON_OWNERS[key] = click_user
         return True, None
 
-    # Ignore bot's own ID if accidentally stored as owner
     bot_id = getattr(temp, "ME", None)
+
+    # 2. Lookup in BUTTON_OWNERS by key
+    stored_owner = BUTTON_OWNERS.get(key)
     if stored_owner and bot_id and stored_owner == bot_id:
         stored_owner = None
 
-    # 1. If not found in BUTTON_OWNERS, check if key is "{chat_id}-{msg_id}"
-    if stored_owner is None and "-" in str(key):
-        try:
-            c_id_str, _ = str(key).split("-", 1)
-            c_id = int(c_id_str)
-            if c_id > 0:
-                stored_owner = c_id
-                BUTTON_OWNERS[key] = stored_owner
-        except Exception:
-            pass
+    # 3. Lookup in BUTTON_OWNERS by message_id
+    if not stored_owner and chat_id and message_id:
+        msg_key = f"{chat_id}-{message_id}"
+        stored_owner = BUTTON_OWNERS.get(msg_key)
+        if stored_owner and bot_id and stored_owner == bot_id:
+            stored_owner = None
 
-    # 2. Check reply_to_message if present
-    if stored_owner is None and query.message and query.message.reply_to_message and query.message.reply_to_message.from_user:
+    # 4. Lookup in MOVIE_STATE
+    if not stored_owner and hasattr(temp, "MOVIE_STATE"):
+        st = temp.MOVIE_STATE.get(key) or (temp.MOVIE_STATE.get(f"{chat_id}-{message_id}") if chat_id and message_id else None)
+        if isinstance(st, dict):
+            u = st.get("user_id") or st.get("user")
+            if u and (not bot_id or u != bot_id):
+                stored_owner = u
+                BUTTON_OWNERS[key] = stored_owner
+
+    # 5. Lookup in SERIES_STATE
+    if not stored_owner and hasattr(temp, "SERIES_STATE"):
+        st = temp.SERIES_STATE.get(key) or (temp.SERIES_STATE.get(f"{chat_id}-{message_id}") if chat_id and message_id else None)
+        if isinstance(st, dict):
+            u = st.get("user_id") or st.get("user")
+            if u and (not bot_id or u != bot_id):
+                stored_owner = u
+                BUTTON_OWNERS[key] = stored_owner
+
+    # 6. Lookup in GETALL
+    if not stored_owner and hasattr(temp, "GETALL"):
+        st = temp.GETALL.get(key)
+        if isinstance(st, dict):
+            u = st.get("user_id") or st.get("user")
+            if u and (not bot_id or u != bot_id):
+                stored_owner = u
+                BUTTON_OWNERS[key] = stored_owner
+
+    # 7. Check reply_to_message
+    if not stored_owner and query.message and query.message.reply_to_message and query.message.reply_to_message.from_user:
         rep_user = query.message.reply_to_message.from_user.id
         if rep_user and (not bot_id or rep_user != bot_id):
             stored_owner = rep_user
             BUTTON_OWNERS[key] = stored_owner
 
-    # 3. Validation
+    # 8. Validation
     if stored_owner is not None and stored_owner != 0:
         if click_user == stored_owner:
             logger.info(
@@ -92,35 +116,19 @@ def is_button_owner(query: CallbackQuery, key: str) -> tuple[bool, str | None]:
             )
             return False, "⚠️ This is not your button."
 
-    # 4. Fail-closed if context expired or missing
+    # 9. If state exists, auto-grant access to clicking user and register ownership
     has_state = (
         key in FRESH or 
         key in temp.GETALL or 
         (hasattr(temp, "MOVIE_STATE") and key in temp.MOVIE_STATE) or
         (hasattr(temp, "SERIES_STATE") and key in temp.SERIES_STATE)
     )
-    if not has_state:
-        logger.info(
-            f"[PM MOVIE OWNERSHIP]\n"
-            f"callback_user_id={click_user}\n"
-            f"stored_user_id=None\n"
-            f"request_key={key}\n"
-            f"chat_id={chat_id}\n"
-            f"message_id={message_id}\n"
-            f"result=EXPIRED"
-        )
-        return False, "⚠️ Search request expired. Please search again."
+    if has_state:
+        BUTTON_OWNERS[key] = click_user
+        logger.info(f"[PM MOVIE OWNERSHIP] user={click_user} key={key} AUTO_ASSIGNED")
+        return True, None
 
-    logger.info(
-        f"[PM MOVIE OWNERSHIP]\n"
-        f"callback_user_id={click_user}\n"
-        f"stored_user_id=None\n"
-        f"request_key={key}\n"
-        f"chat_id={chat_id}\n"
-        f"message_id={message_id}\n"
-        f"result=DENIED"
-    )
-    return False, "⚠️ This is not your button."
+    return False, "⚠️ Search request expired. Please search again."
 
 # ─── English-Only Language Guard ───────────────────────────────────────────
 EMOJI_PATTERN = re.compile(
@@ -1790,25 +1798,27 @@ async def cb_handler(client: Client, query: CallbackQuery):
             
     elif query.data.startswith("file"):
         clicked = query.from_user.id
-        typed = 0
-        if query.message:
-            if query.message.chat.type == enums.ChatType.PRIVATE:
-                typed = query.message.chat.id
-            elif query.message.reply_to_message and query.message.reply_to_message.from_user:
-                typed = query.message.reply_to_message.from_user.id
-            elif hasattr(query.message, "reply_to_message_id") and query.message.reply_to_message_id:
-                typed = BUTTON_OWNERS.get(f"{query.message.chat.id}-{query.message.reply_to_message_id}", 0)
-        
-        if not typed and query.message and query.message.chat.type == enums.ChatType.PRIVATE:
-            typed = query.message.chat.id
+        is_owner = False
+        if query.message and query.message.chat and (query.message.chat.type == enums.ChatType.PRIVATE or query.message.chat.id > 0):
+            is_owner = True
+        elif query.message and query.message.reply_to_message and query.message.reply_to_message.from_user:
+            typed = query.message.reply_to_message.from_user.id
+            is_owner = (clicked == typed)
+        elif hasattr(query.message, "reply_to_message_id") and query.message.reply_to_message_id:
+            typed = BUTTON_OWNERS.get(f"{query.message.chat.id}-{query.message.reply_to_message_id}", 0)
+            if typed:
+                is_owner = (clicked == typed)
+            else:
+                is_owner = True
+        else:
+            is_owner = True
 
-        is_owner = (clicked == typed) if typed != 0 else False
         import logging
         log = logging.getLogger(__name__)
         if is_owner:
-            log.info(f"[PM MOVIE OWNERSHIP]\ncallback_user_id={clicked}\nstored_user_id={typed}\nrequest_key={query.data}\nchat_id={query.message.chat.id if query.message else None}\nmessage_id={query.message.id if query.message else None}\nresult=ALLOWED")
+            log.info(f"[PM MOVIE OWNERSHIP]\ncallback_user_id={clicked}\nrequest_key={query.data}\nchat_id={query.message.chat.id if query.message else None}\nmessage_id={query.message.id if query.message else None}\nresult=ALLOWED")
         else:
-            log.info(f"[PM MOVIE OWNERSHIP]\ncallback_user_id={clicked}\nstored_user_id={typed}\nrequest_key={query.data}\nchat_id={query.message.chat.id if query.message else None}\nmessage_id={query.message.id if query.message else None}\nresult=DENIED")
+            log.info(f"[PM MOVIE OWNERSHIP]\ncallback_user_id={clicked}\nrequest_key={query.data}\nchat_id={query.message.chat.id if query.message else None}\nmessage_id={query.message.id if query.message else None}\nresult=DENIED")
 
         ident, file_id = query.data.split("#")
         files_ = await get_file_details(file_id)
