@@ -94,6 +94,9 @@ from utils import (
     match_movie_identity,
     extract_release_year,
     normalize_title_for_matching,
+    start_cleanup_schedulers,
+    safe_delete_message,
+    safe_delete_messages,
 )
 
 import os
@@ -3307,15 +3310,9 @@ async def wizard_text_handler(client: Client, message: Message):
 
             if not m_imdb and not m_tmdb:
                 prompt_msg_id = movie_data.get("prompt_msg_id") or movie_data.get("prompt_message_id")
-                try:
-                    await message.delete()
-                except Exception:
-                    pass
+                await safe_delete_message(client, chat_id, message.id)
                 if prompt_msg_id:
-                    try:
-                        await client.delete_messages(chat_id, prompt_msg_id)
-                    except Exception:
-                        pass
+                    await safe_delete_message(client, chat_id, prompt_msg_id)
                 pmsg = await client.send_message(
                     chat_id=chat_id,
                     text=(
@@ -3336,16 +3333,10 @@ async def wizard_text_handler(client: Client, message: Message):
                 return
 
             prompt_msg_id = movie_data.get("prompt_msg_id") or movie_data.get("prompt_message_id")
-            try:
-                await message.delete()
-            except Exception:
-                pass
+            await safe_delete_message(client, chat_id, message.id)
 
             if prompt_msg_id:
-                try:
-                    await client.delete_messages(chat_id, prompt_msg_id)
-                except Exception:
-                    pass
+                await safe_delete_message(client, chat_id, prompt_msg_id)
 
             logger.info(f"[AUTO MOVIE INPUT]\ntext={text}")
             loading_msg = await client.send_message(
