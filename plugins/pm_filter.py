@@ -3421,36 +3421,37 @@ async def auto_filter(client, name, msg, reply_msg=None, ai_search=True, spoll=F
         cap = f"<b>Tʜᴇ Rᴇꜱᴜʟᴛꜱ Fᴏʀ ☞ {search}\n\nRᴇǫᴜᴇsᴛᴇᴅ Bʏ ☞ {message.from_user.mention if (hasattr(message, 'from_user') and message.from_user) else 'User'}\n\nʀᴇsᴜʟᴛ sʜᴏᴡ ɪɴ ☞ {remaining_seconds} sᴇᴄᴏɴᴅs\n\nᴘᴏᴡᴇʀᴇᴅ ʙʏ ☞ : {message.chat.title if message.chat else ''} \n\n⚠️ ᴀꜰᴛᴇʀ 10 ᴍɪɴᴜᴛᴇꜱ ᴛʜɪꜱ ᴍᴇꜱꜱᴀɢᴇ ᴡɪʟʟ ʙᴇ ᴀᴜᴛᴏᴍᴀᴛɪᴄᴀʟʟʏ ᴅᴇʟᴇᴛᴇᴅ 🗑️\n\n</b>"
 
     reply_markup = InlineKeyboardMarkup(btn)
+    from utils import safe_delete_message
     if imdb and imdb.get('poster'):
         try:
             hehe = await message.reply_photo(photo=imdb.get('poster'), caption=cap, reply_markup=reply_markup)
             if reply_msg:
-                await reply_msg.delete()
+                await safe_delete_message(client, reply_msg.chat.id, reply_msg.id)
             try:
                 if settings['auto_delete']:
                     await asyncio.sleep(600)
-                    await hehe.delete()
-                    await message.delete()
+                    await safe_delete_message(client, hehe.chat.id, hehe.id)
+                    await safe_delete_message(client, message.chat.id, message.id)
             except KeyError:
                 await save_group_settings(message.chat.id, 'auto_delete', True)
                 await asyncio.sleep(600)
-                await hehe.delete()
-                await message.delete()
+                await safe_delete_message(client, hehe.chat.id, hehe.id)
+                await safe_delete_message(client, message.chat.id, message.id)
         except (MediaEmpty, PhotoInvalidDimensions, WebpageMediaEmpty):
             poster_alt = (imdb.get('poster') or '').replace('.jpg', "._V1_UX360.jpg") 
             hmm = await message.reply_photo(photo=poster_alt, caption=cap, reply_markup=reply_markup)
             if reply_msg:
-                await reply_msg.delete()
+                await safe_delete_message(client, reply_msg.chat.id, reply_msg.id)
             try:
                 if settings['auto_delete']:
                     await asyncio.sleep(600)
-                    await hmm.delete()
-                    await message.delete()
+                    await safe_delete_message(client, hmm.chat.id, hmm.id)
+                    await safe_delete_message(client, message.chat.id, message.id)
             except KeyError:
                 await save_group_settings(message.chat.id, 'auto_delete', True)
                 await asyncio.sleep(600)
-                await hmm.delete()
-                await message.delete()
+                await safe_delete_message(client, hmm.chat.id, hmm.id)
+                await safe_delete_message(client, message.chat.id, message.id)
         except Exception as e:
             logger.exception(e) 
             if reply_msg:
@@ -3460,13 +3461,15 @@ async def auto_filter(client, name, msg, reply_msg=None, ai_search=True, spoll=F
             try:
                 if settings['auto_delete']:
                     await asyncio.sleep(600)
-                    await fek.delete()
-                    await message.delete()
+                    if fek:
+                        await safe_delete_message(client, fek.chat.id, fek.id)
+                    await safe_delete_message(client, message.chat.id, message.id)
             except KeyError:
                 await save_group_settings(message.chat.id, 'auto_delete', True)
                 await asyncio.sleep(600)
-                await fek.delete()
-                await message.delete()
+                if fek:
+                    await safe_delete_message(client, fek.chat.id, fek.id)
+                await safe_delete_message(client, message.chat.id, message.id)
     else:
         if reply_msg:
             fuk = await reply_msg.edit_text(text=cap, reply_markup=reply_markup, disable_web_page_preview=True)
@@ -3476,13 +3479,15 @@ async def auto_filter(client, name, msg, reply_msg=None, ai_search=True, spoll=F
         try:
             if settings['auto_delete']:
                 await asyncio.sleep(600)
-                await fuk.delete()
-                await message.delete()
+                if fuk:
+                    await safe_delete_message(client, fuk.chat.id, fuk.id)
+                await safe_delete_message(client, message.chat.id, message.id)
         except KeyError:
             await save_group_settings(message.chat.id, 'auto_delete', True)
             await asyncio.sleep(600)
-            await fuk.delete()
-            await message.delete()
+            if fuk:
+                await safe_delete_message(client, fuk.chat.id, fuk.id)
+            await safe_delete_message(client, message.chat.id, message.id)
 
 async def advantage_spell_chok(client, name, msg, reply_msg, vj_search):
     mv_id = msg.id
