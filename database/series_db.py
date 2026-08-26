@@ -191,12 +191,19 @@ def _token_similarity(q_token: str, t_token: str) -> float:
     return SequenceMatcher(None, q_token, t_token).ratio()
 
 
+COMMON_STOPWORDS = {
+    "the", "more", "a", "an", "and", "or", "of", "in", "to", "for", "with",
+    "on", "at", "by", "from", "up", "about", "into", "over", "after", "is",
+    "are", "was", "were", "be", "been", "being", "have", "has", "had", "do",
+    "does", "did", "but", "if", "then", "else", "when", "where", "why", "how",
+    "all", "any", "both", "each", "few", "other", "some", "such", "no", "nor",
+    "not", "only", "own", "same", "so", "than", "too", "very", "can", "will",
+    "just", "should", "now", "it", "its", "this", "that", "these", "those"
+}
+
 def _score_series_candidate(q_norm: str, q_tokens: list[str], title_norm: str) -> tuple[bool, float]:
-    """
-    Evaluates whether title_norm matches q_tokens and calculates a relevance score (0.0 to 1.0).
-    Returns (is_match, score).
-    """
-    if not title_norm:
+    """Score candidate series title against user query."""
+    if not q_norm or not title_norm:
         return False, 0.0
         
     # Exact full match
@@ -213,29 +220,43 @@ def _score_series_candidate(q_norm: str, q_tokens: list[str], title_norm: str) -
     # ── Single Word Query ──
     if num_q == 1:
         q_tok = q_tokens[0]
-        # Exact title starts with query (e.g. 'dark' matching 'Dark' and 'Dark Matter')
-        if title_norm.startswith(q_tok):
+        if q_tok in COMMON_STOPWORDS:
+            if q_norm == title_norm:
+                return True, 1.0
+            return False, 0.0
+
+        # Exact title starts with query as distinct word (e.g. 'dark' matching 'Dark' and 'Dark Matter')
+        if title_norm == q_tok or title_norm.startswith(q_tok + " "):
             score = 0.85 + (0.15 * (len(q_tok) / len(title_norm)))
             return True, score
             
         best_token_sim = 0.0
         for t_tok in title_tokens:
+            if t_tok in COMMON_STOPWORDS:
+                continue
             sim = _token_similarity(q_tok, t_tok)
             if sim > best_token_sim:
                 best_token_sim = sim
                 
-        # Single word must have strong match with at least one title word
-        if best_token_sim >= 0.70:
+        # Single word must have strong match with at least one non-stopword title word
+        if best_token_sim >= 0.80 and len(q_tok) >= 3:
             score = best_token_sim * (0.80 + 0.20 * (1.0 / num_t))
             return True, score
             
         full_sim = SequenceMatcher(None, q_norm, title_norm).ratio()
-        if full_sim >= 0.75:
+        if full_sim >= 0.85 and len(q_tok) >= 4:
             return True, full_sim
             
         return False, 0.0
 
     # ── Multi-Word Query ──
+    # Check if query is entirely stopwords
+    meaningful_q = [qt for qt in q_tokens if qt not in COMMON_STOPWORDS]
+    if not meaningful_q:
+        if q_norm == title_norm:
+            return True, 1.0
+        return False, 0.0
+
     token_scores = []
     matched_title_indices = set()
     
@@ -249,16 +270,16 @@ def _score_series_candidate(q_norm: str, q_tokens: list[str], title_norm: str) -
                 best_idx = idx
                 
         token_scores.append(best_sim)
-        if best_sim >= 0.65 and best_idx != -1:
+        if best_sim >= 0.70 and best_idx != -1:
             matched_title_indices.add(best_idx)
             
     # For multi-word queries, all query tokens must match (or at least N-1 if query >= 4 words)
     min_required_matches = num_q if num_q <= 3 else (num_q - 1)
-    matched_count = sum(1 for s in token_scores if s >= 0.65)
+    matched_count = sum(1 for s in token_scores if s >= 0.70)
     
     if matched_count < min_required_matches:
         full_sim = SequenceMatcher(None, q_norm, title_norm).ratio()
-        if full_sim >= 0.80:
+        if full_sim >= 0.85:
             return True, full_sim
         return False, 0.0
         
@@ -967,6 +988,11 @@ async def search_super_movies(query: str) -> list[dict]:
     target_query = q_title_no_year if q_title_no_year else q_norm
     q_tokens = [w for w in target_query.split() if w]
 
+    if not q_tokens:
+        return []
+
+    is_single_stopword = len(q_tokens) == 1 and q_tokens[0] in COMMON_STOPWORDS
+
     # Fetch all active candidates from MongoDB
     cursor = super_movies_col.find({"status": {"$ne": "deleted"}})
     candidates = [doc async for doc in cursor]
@@ -983,29 +1009,41 @@ async def search_super_movies(query: str) -> list[dict]:
             continue
 
         score = 0.0
+
+        # Stopword guard: single generic word only matches exact title
+        if is_single_stopword:
+            if q_norm == c_norm or target_query == c_norm:
+                score = 100.0
+            else:
+                continue
+
         # 1. Exact match
-        if q_norm == c_norm or target_query == c_norm:
+        elif q_norm == c_norm or target_query == c_norm:
             score = 100.0
+
         # 2. Token match
         elif q_tokens and c_tokens and q_tokens == c_tokens:
             score = 95.0
-        # 3. All query tokens in candidate (e.g. 'aadu' in 'aadu 2', 'aadu 3', 'aadu 2015')
+
+        # 3. Candidate title starts with query word/phrase (e.g. 'aadu 2', 'aadu 3' when query is 'aadu')
+        elif c_norm.startswith(target_query + " ") or c_norm.startswith(q_norm + " "):
+            score = 88.0 + (len(target_query) / len(c_norm)) * 5.0
+
+        # 4. All query tokens in candidate tokens as distinct words (e.g. 'aadu' in ['aadu', '2'])
         elif q_tokens and c_tokens and all(qt in c_tokens for qt in q_tokens):
-            score = 85.0 + (len(q_tokens) / len(c_tokens)) * 10.0
-        # 4. Candidate title starts with query (e.g. 'aadu 2' starts with 'aadu')
-        elif c_norm.startswith(target_query) or c_norm.startswith(q_norm):
-            score = 80.0
-        # 5. All candidate tokens in query
+            score = 80.0 + (len(q_tokens) / len(c_tokens)) * 10.0
+
+        # 5. All candidate tokens in query (query has extra details like 'premalu full movie')
         elif q_tokens and c_tokens and all(ct in q_tokens for ct in c_tokens):
             score = 75.0 + (len(c_tokens) / len(q_tokens)) * 10.0
-        # 6. Word containment (e.g. 'from' in 'my love from another star')
-        elif target_query in c_norm or q_norm in c_norm:
-            score = 70.0
-        # 7. Most tokens match
-        elif len(q_tokens) >= 2 and sum(1 for qt in q_tokens if qt in c_tokens) >= len(q_tokens) - 1:
-            score = 65.0
 
-        if score >= 65.0:
+        # 6. Multi-word query (>= 3 words) where all non-stopword tokens match
+        elif len(q_tokens) >= 3:
+            meaningful_q = [qt for qt in q_tokens if qt not in COMMON_STOPWORDS]
+            if len(meaningful_q) >= 2 and sum(1 for qt in meaningful_q if qt in c_tokens) >= len(meaningful_q):
+                score = 70.0
+
+        if score >= 70.0:
             if q_year:
                 if c_year == q_year:
                     score += 20.0
@@ -1015,7 +1053,7 @@ async def search_super_movies(query: str) -> list[dict]:
             scored_matches.append((score, c_file_count, cand))
 
     scored_matches.sort(key=lambda x: (x[0], x[1]), reverse=True)
-    matched = [cand for score, f_count, cand in scored_matches if score >= 60.0]
+    matched = [cand for score, f_count, cand in scored_matches if score >= 70.0]
 
     logger.info(
         f"[SUPER MOVIE SEARCH DEBUG]\n"
