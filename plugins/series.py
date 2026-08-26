@@ -4194,6 +4194,7 @@ async def render_super_movie_direct(client: Client, message: Message, movie: dic
     )
     markup = build_movie_language_keyboard(key, grouped)
 
+    from utils import schedule_filter_message_delete
     if reply_msg:
         try:
             if poster and (reply_msg.photo or reply_msg.caption):
@@ -4202,6 +4203,7 @@ async def render_super_movie_direct(client: Client, message: Message, movie: dic
                         media=InputMediaPhoto(media=poster, caption=caption_text, parse_mode=enums.ParseMode.HTML),
                         reply_markup=markup
                     )
+                    schedule_filter_message_delete(client, reply_msg.chat.id, reply_msg.id, 600)
                     return True
                 except Exception as me:
                     logger.warning(f"[EDIT MEDIA FAILED] {me}, fallback to edit_caption")
@@ -4210,6 +4212,7 @@ async def render_super_movie_direct(client: Client, message: Message, movie: dic
                         reply_markup=markup,
                         parse_mode=enums.ParseMode.HTML
                     )
+                    schedule_filter_message_delete(client, reply_msg.chat.id, reply_msg.id, 600)
                     return True
             elif reply_msg.photo or reply_msg.caption:
                 await reply_msg.edit_caption(
@@ -4217,6 +4220,7 @@ async def render_super_movie_direct(client: Client, message: Message, movie: dic
                     reply_markup=markup,
                     parse_mode=enums.ParseMode.HTML
                 )
+                schedule_filter_message_delete(client, reply_msg.chat.id, reply_msg.id, 600)
                 return True
             else:
                 await reply_msg.edit_text(
@@ -4224,6 +4228,7 @@ async def render_super_movie_direct(client: Client, message: Message, movie: dic
                     reply_markup=markup,
                     parse_mode=enums.ParseMode.HTML
                 )
+                schedule_filter_message_delete(client, reply_msg.chat.id, reply_msg.id, 600)
                 return True
         except Exception:
             try:
@@ -4248,6 +4253,7 @@ async def render_super_movie_direct(client: Client, message: Message, movie: dic
             if sent_p:
                 BUTTON_OWNERS[f"{sent_p.chat.id}-{sent_p.id}"] = real_user_id
                 temp.MOVIE_STATE[f"{sent_p.chat.id}-{sent_p.id}"] = temp.MOVIE_STATE[key]
+                schedule_filter_message_delete(client, sent_p.chat.id, sent_p.id, 600)
             return True
         except Exception as pe:
             logger.warning(f"[SUPER MOVIE PHOTO ERROR] {pe}")
@@ -4265,6 +4271,7 @@ async def render_super_movie_direct(client: Client, message: Message, movie: dic
     if sent_t:
         BUTTON_OWNERS[f"{sent_t.chat.id}-{sent_t.id}"] = real_user_id
         temp.MOVIE_STATE[f"{sent_t.chat.id}-{sent_t.id}"] = temp.MOVIE_STATE[key]
+        schedule_filter_message_delete(client, sent_t.chat.id, sent_t.id, 600)
     return True
 
 
@@ -4272,6 +4279,7 @@ async def render_series_direct(client: Client, message: Message, series_doc: dic
     """Renders the language selection UI for a specific Series Filter."""
     from database.series_db import list_series_languages
     from plugins.pm_filter import BUTTON_OWNERS
+    from utils import schedule_filter_message_delete
 
     series_id = str(series_doc["_id"])
     name = series_doc.get("name", "")
@@ -4344,6 +4352,7 @@ async def render_series_direct(client: Client, message: Message, series_doc: dic
                         media=InputMediaPhoto(media=poster, caption=caption_text, parse_mode=enums.ParseMode.HTML),
                         reply_markup=markup
                     )
+                    schedule_filter_message_delete(client, reply_msg.chat.id, reply_msg.id, 600)
                     return True
                 except Exception as me:
                     logger.warning(f"[EDIT MEDIA FAILED] {me}, fallback to edit_caption")
@@ -4352,6 +4361,7 @@ async def render_series_direct(client: Client, message: Message, series_doc: dic
                         reply_markup=markup,
                         parse_mode=enums.ParseMode.HTML
                     )
+                    schedule_filter_message_delete(client, reply_msg.chat.id, reply_msg.id, 600)
                     return True
             elif reply_msg.photo or reply_msg.caption:
                 await reply_msg.edit_caption(
@@ -4359,6 +4369,7 @@ async def render_series_direct(client: Client, message: Message, series_doc: dic
                     reply_markup=markup,
                     parse_mode=enums.ParseMode.HTML
                 )
+                schedule_filter_message_delete(client, reply_msg.chat.id, reply_msg.id, 600)
                 return True
             else:
                 await reply_msg.edit_text(
@@ -4366,6 +4377,7 @@ async def render_series_direct(client: Client, message: Message, series_doc: dic
                     reply_markup=markup,
                     parse_mode=enums.ParseMode.HTML
                 )
+                schedule_filter_message_delete(client, reply_msg.chat.id, reply_msg.id, 600)
                 return True
         except Exception:
             try:
@@ -4390,6 +4402,7 @@ async def render_series_direct(client: Client, message: Message, series_doc: dic
             if sent_p:
                 BUTTON_OWNERS[f"{sent_p.chat.id}-{sent_p.id}"] = real_user_id
                 logger.info(f"[SERIES OWNER REGISTER] key={sent_p.chat.id}-{sent_p.id} owner={real_user_id}")
+                schedule_filter_message_delete(client, sent_p.chat.id, sent_p.id, 600)
             return True
         except Exception as pe:
             logger.warning(f"[SERIES PHOTO ERROR] {pe}")
@@ -4407,6 +4420,7 @@ async def render_series_direct(client: Client, message: Message, series_doc: dic
     if sent_t:
         BUTTON_OWNERS[f"{sent_t.chat.id}-{sent_t.id}"] = real_user_id
         logger.info(f"[SERIES OWNER REGISTER] key={sent_t.chat.id}-{sent_t.id} owner={real_user_id}")
+        schedule_filter_message_delete(client, sent_t.chat.id, sent_t.id, 600)
     return True
 
 
@@ -4422,6 +4436,7 @@ async def process_unified_filter_search(client: Client, message: Message, query_
         return False
 
     from database.series_db import search_super_movies, search_series, get_series_thumbnail, normalize_movie_search_title
+    from utils import schedule_filter_message_delete
 
     clean_q = clean_series_title(q)
     super_movies = await search_super_movies(q)
@@ -4477,9 +4492,11 @@ async def process_unified_filter_search(client: Client, message: Message, query_
         try:
             if reply_msg.photo or reply_msg.caption:
                 await reply_msg.edit_caption(caption=caption_text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
+                schedule_filter_message_delete(client, reply_msg.chat.id, reply_msg.id, 600)
                 return True
             else:
                 await reply_msg.edit_text(text=caption_text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
+                schedule_filter_message_delete(client, reply_msg.chat.id, reply_msg.id, 600)
                 return True
         except Exception:
             try:
@@ -4489,18 +4506,16 @@ async def process_unified_filter_search(client: Client, message: Message, query_
 
     if thumb:
         try:
-            if message:
-                await message.reply_photo(photo=thumb, caption=caption_text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
-            else:
-                await client.send_photo(chat_id=message.chat.id, photo=thumb, caption=caption_text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
+            sent_sug = await (message.reply_photo(photo=thumb, caption=caption_text, reply_markup=markup, parse_mode=enums.ParseMode.HTML) if message else client.send_photo(chat_id=message.chat.id, photo=thumb, caption=caption_text, reply_markup=markup, parse_mode=enums.ParseMode.HTML))
+            if sent_sug:
+                schedule_filter_message_delete(client, sent_sug.chat.id, sent_sug.id, 600)
             return True
         except Exception as pe:
             logger.warning(f"[UNIFIED SEARCH THUMB ERROR] {pe}")
 
-    if message:
-        await message.reply_text(text=caption_text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
-    else:
-        await client.send_message(chat_id=message.chat.id, text=caption_text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
+    sent_sug_t = await (message.reply_text(text=caption_text, reply_markup=markup, parse_mode=enums.ParseMode.HTML) if message else client.send_message(chat_id=message.chat.id, text=caption_text, reply_markup=markup, parse_mode=enums.ParseMode.HTML))
+    if sent_sug_t:
+        schedule_filter_message_delete(client, sent_sug_t.chat.id, sent_sug_t.id, 600)
     return True
 
 
