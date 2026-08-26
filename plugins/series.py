@@ -4121,7 +4121,7 @@ async def auto_movie_callbacks(client: Client, query: CallbackQuery):
 
 async def render_super_movie_direct(client: Client, message: Message, movie: dict, reply_msg: Message = None, user_id: int = None) -> bool:
     """Renders the language selection UI for a specific Super Movie Filter."""
-    from database.series_db import get_file_details
+    from database.ia_filterdb import get_file_details
     from plugins.pm_filter import group_movie_files, build_movie_language_keyboard, BUTTON_OWNERS
 
     movie_id = str(movie["_id"])
@@ -4146,7 +4146,20 @@ async def render_super_movie_direct(client: Client, message: Message, movie: dic
     chat_id = message.chat.id if message and message.chat else (reply_msg.chat.id if reply_msg else 0)
     msg_id = message.id if message else (reply_msg.id if reply_msg else 0)
     key = f"{chat_id}-{msg_id}"
-    user_id = message.from_user.id if (message and message.from_user) else (reply_msg.from_user.id if reply_msg and reply_msg.from_user else chat_id)
+
+    bot_id = getattr(temp, "ME", None)
+    real_user_id = user_id
+    if not real_user_id or (bot_id and real_user_id == bot_id):
+        if message and message.from_user and (not bot_id or message.from_user.id != bot_id):
+            real_user_id = message.from_user.id
+        elif message and message.reply_to_message and message.reply_to_message.from_user:
+            real_user_id = message.reply_to_message.from_user.id
+        elif reply_msg and reply_msg.reply_to_message and reply_msg.reply_to_message.from_user:
+            real_user_id = reply_msg.reply_to_message.from_user.id
+        elif reply_msg and reply_msg.from_user and (not bot_id or reply_msg.from_user.id != bot_id):
+            real_user_id = reply_msg.from_user.id
+        elif chat_id > 0:
+            real_user_id = chat_id
 
     temp.MOVIE_STATE[key] = {
         "movie_id": movie_id,
@@ -4158,9 +4171,14 @@ async def render_super_movie_direct(client: Client, message: Message, movie: dic
         "description": movie.get("description", ""),
         "grouped": grouped,
         "chat_id": chat_id,
-        "user_id": user_id
+        "user_id": real_user_id
     }
-    BUTTON_OWNERS[key] = user_id
+    BUTTON_OWNERS[key] = real_user_id
+    if reply_msg:
+        BUTTON_OWNERS[f"{reply_msg.chat.id}-{reply_msg.id}"] = real_user_id
+        temp.MOVIE_STATE[f"{reply_msg.chat.id}-{reply_msg.id}"] = temp.MOVIE_STATE[key]
+    if message:
+        BUTTON_OWNERS[f"{message.chat.id}-{message.id}"] = real_user_id
 
     title = movie.get("title", "")
     year = str(movie.get("year", ""))
@@ -4218,7 +4236,7 @@ async def render_super_movie_direct(client: Client, message: Message, movie: dic
 
     if poster:
         try:
-            await (message.reply_photo(
+            sent_p = await (message.reply_photo(
                 photo=poster,
                 caption=caption_text,
                 reply_markup=markup,
@@ -4230,11 +4248,14 @@ async def render_super_movie_direct(client: Client, message: Message, movie: dic
                 reply_markup=markup,
                 parse_mode=enums.ParseMode.HTML
             ))
+            if sent_p:
+                BUTTON_OWNERS[f"{sent_p.chat.id}-{sent_p.id}"] = real_user_id
+                temp.MOVIE_STATE[f"{sent_p.chat.id}-{sent_p.id}"] = temp.MOVIE_STATE[key]
             return True
         except Exception as pe:
             logger.warning(f"[SUPER MOVIE PHOTO ERROR] {pe}")
 
-    await (message.reply_text(
+    sent_t = await (message.reply_text(
         text=caption_text,
         reply_markup=markup,
         parse_mode=enums.ParseMode.HTML
@@ -4244,6 +4265,9 @@ async def render_super_movie_direct(client: Client, message: Message, movie: dic
         reply_markup=markup,
         parse_mode=enums.ParseMode.HTML
     ))
+    if sent_t:
+        BUTTON_OWNERS[f"{sent_t.chat.id}-{sent_t.id}"] = real_user_id
+        temp.MOVIE_STATE[f"{sent_t.chat.id}-{sent_t.id}"] = temp.MOVIE_STATE[key]
     return True
 
 
