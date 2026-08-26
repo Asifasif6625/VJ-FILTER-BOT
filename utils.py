@@ -2068,18 +2068,86 @@ async def get_seconds(time_string):
         return 0
 
 
-# ─── 10-Minute Centralized Auto Delete Helper ─────────────────────────────────
+# ─── Robust Safe Message Deletion & Cleanup System ───────────────────────────
+DELETE_IN_PROGRESS = set()
+_DELETE_SEMAPHORE = asyncio.Semaphore(5)
 _FILTER_DELETE_TASKS = {}
+
+async def safe_delete_message(client, chat_id: int, message_id: int, retries: int = 2) -> bool:
+    """
+    Safely deletes a message with duplicate prevention, concurrency limiting, 
+    and connection error handling to prevent Pyrogram hanging or crashing.
+    """
+    if not client or not chat_id or not message_id:
+        return False
+
+    delete_key = f"{chat_id}:{message_id}"
+    if delete_key in DELETE_IN_PROGRESS:
+        logger.info(f"[CLEANUP DELETE SKIPPED] chat={chat_id} message={message_id}")
+        return False
+
+    DELETE_IN_PROGRESS.add(delete_key)
+    try:
+        logger.info(f"[CLEANUP DELETE START] chat={chat_id} message={message_id}")
+        async with _DELETE_SEMAPHORE:
+            for attempt in range(max(1, retries)):
+                try:
+                    await asyncio.wait_for(
+                        client.delete_messages(chat_id, message_id),
+                        timeout=10.0
+                    )
+                    logger.info(f"[CLEANUP DELETE SUCCESS] chat={chat_id} message={message_id}")
+                    return True
+                except asyncio.CancelledError:
+                    raise
+                except asyncio.TimeoutError:
+                    logger.warning(f"[CLEANUP TELEGRAM CONNECTION ERROR] Timeout on chat={chat_id} message={message_id} attempt={attempt+1}/{retries}")
+                    if attempt < retries - 1:
+                        await asyncio.sleep(1)
+                except Exception as e:
+                    err_str = str(e).lower()
+                    if "connection lost" in err_str or "timeout" in err_str or "rpc" in err_str or "network" in err_str or "socket" in err_str:
+                        logger.warning(f"[CLEANUP TELEGRAM CONNECTION ERROR] chat={chat_id} message={message_id} error={e}")
+                    else:
+                        logger.warning(f"[CLEANUP DELETE FAILED] chat={chat_id} message={message_id} error={e}")
+                    
+                    if attempt < retries - 1:
+                        await asyncio.sleep(1)
+                    else:
+                        return False
+            return False
+    except asyncio.CancelledError:
+        pass
+    except Exception as e:
+        logger.warning(f"[CLEANUP DELETE FAILED] chat={chat_id} message={message_id} error={e}")
+        return False
+    finally:
+        DELETE_IN_PROGRESS.discard(delete_key)
+
+async def safe_delete_messages(client, chat_id: int, message_ids: list[int] | set[int], retries: int = 2) -> bool:
+    """Safely deletes multiple messages without throwing unhandled exceptions."""
+    if not client or not chat_id or not message_ids:
+        return False
+    all_ok = True
+    for msg_id in list(message_ids):
+        try:
+            res = await safe_delete_message(client, chat_id, msg_id, retries=retries)
+            if not res:
+                all_ok = False
+        except Exception as e:
+            logger.warning(f"[CLEANUP] delete skipped: {e}")
+            all_ok = False
+            continue
+    return all_ok
 
 async def delete_message_after(client, chat_id: int, message_id: int, delay: int = 600):
     try:
         await asyncio.sleep(delay)
-        await client.delete_messages(chat_id, message_id)
-        logger.info(f"[AUTO DELETE EXECUTED]\nchat_id={chat_id}\nmessage_id={message_id}")
+        await safe_delete_message(client, chat_id, message_id)
     except asyncio.CancelledError:
         pass
     except Exception as e:
-        logger.debug(f"[AUTO DELETE] chat={chat_id} message={message_id} error={e}")
+        logger.warning(f"[CLEANUP] Telegram delete failed: {e}")
     finally:
         _FILTER_DELETE_TASKS.pop((int(chat_id), int(message_id)), None)
 
@@ -2103,4 +2171,20 @@ def schedule_filter_message_delete(client, chat_id: int, message_id: int, delay:
     task = asyncio.create_task(delete_message_after(client, chat_id, message_id, delay))
     _FILTER_DELETE_TASKS[key] = task
     return task
+
+async def cleanup_expired_messages():
+    """Periodic cleanup worker for expired state entries."""
+    pass
+
+async def _cleanup_scheduler_loop():
+    while True:
+        try:
+            await cleanup_expired_messages()
+        except Exception as e:
+            logger.exception(f"[CLEANUP SCHEDULER ERROR] {e}")
+        await asyncio.sleep(60)
+
+def start_cleanup_schedulers(client=None):
+    """Starts background cleanup scheduler safely."""
+    return asyncio.create_task(_cleanup_scheduler_loop())
 
