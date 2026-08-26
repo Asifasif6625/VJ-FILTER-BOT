@@ -4121,7 +4121,7 @@ async def auto_movie_callbacks(client: Client, query: CallbackQuery):
 
 async def render_super_movie_direct(client: Client, message: Message, movie: dict, reply_msg: Message = None, user_id: int = None) -> bool:
     """Renders the language selection UI for a specific Super Movie Filter."""
-    from database.ia_filterdb import get_file_details
+    from database.ia_filterdb import get_bulk_file_details
     from plugins.pm_filter import group_movie_files, build_movie_language_keyboard, BUTTON_OWNERS
 
     movie_id = str(movie["_id"])
@@ -4130,11 +4130,8 @@ async def render_super_movie_direct(client: Client, message: Message, movie: dic
         logger.info(f"[SUPER MOVIE SEARCH] matched_filter_but_no_files title={movie.get('title')} id={movie_id}")
         return False
 
-    file_docs = []
-    for fid in file_ids:
-        fdoc = await get_file_details(fid)
-        if fdoc:
-            file_docs.append(fdoc)
+    file_map = await get_bulk_file_details(file_ids)
+    file_docs = [file_map[fid] for fid in file_ids if fid in file_map]
 
     if not file_docs:
         return False
@@ -4286,9 +4283,9 @@ async def render_series_direct(client: Client, message: Message, series_doc: dic
     genre_str = f"\n🎭 <b>Genre:</b> {genre}" if genre and genre != "N/A" else ""
     poster = series_doc.get("poster", "")
 
-    langs = await list_series_languages(series_id)
+    langs = series_doc.get("languages", [])
     if not langs:
-        langs = series_doc.get("languages", [])
+        langs = await list_series_languages(series_id)
 
     if reply_msg and reply_msg.chat:
         chat_id = reply_msg.chat.id
