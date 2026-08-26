@@ -4459,20 +4459,46 @@ async def process_unified_filter_search(client: Client, message: Message, query_
             return await render_series_direct(client, message, valid_series[0], reply_msg)
 
     # total_matches > 1: Show Unified Suggestion List
+    from plugins.pm_filter import BUTTON_OWNERS
+    if reply_msg and reply_msg.chat:
+        chat_id = reply_msg.chat.id
+        msg_id = reply_msg.id
+    elif message and message.chat:
+        chat_id = message.chat.id
+        msg_id = message.id
+    else:
+        chat_id = 0
+        msg_id = 0
+    key = f"{chat_id}-{msg_id}"
+
+    real_user_id = None
+    if message and message.from_user and not message.from_user.is_bot:
+        real_user_id = message.from_user.id
+    elif message and message.reply_to_message and message.reply_to_message.from_user:
+        real_user_id = message.reply_to_message.from_user.id
+    elif reply_msg and reply_msg.reply_to_message and reply_msg.reply_to_message.from_user:
+        real_user_id = reply_msg.reply_to_message.from_user.id
+    elif reply_msg and reply_msg.from_user and not reply_msg.from_user.is_bot:
+        real_user_id = reply_msg.from_user.id
+    elif chat_id > 0:
+        real_user_id = chat_id
+
+    BUTTON_OWNERS[key] = real_user_id
+
     rows = []
     for m in valid_movies:
         title = m.get("title", "")
         year = str(m.get("year", "")).strip()
         year_str = f" ({year})" if year and year != "N/A" else ""
         btn_text = f"🎬 {title}{year_str}"
-        rows.append([InlineKeyboardButton(btn_text, callback_data=f"sug_mov#{str(m['_id'])}")])
+        rows.append([InlineKeyboardButton(btn_text, callback_data=f"sug_mov#{str(m['_id'])}#{key}")])
 
     for s in valid_series:
         name = s.get("name", "")
         year = str(s.get("year", "")).strip()
         year_str = f" ({year})" if year and year != "N/A" else ""
         btn_text = f"📺 {name}{year_str}"
-        rows.append([InlineKeyboardButton(btn_text, callback_data=f"sug_ser#{str(s['_id'])}")])
+        rows.append([InlineKeyboardButton(btn_text, callback_data=f"sug_ser#{str(s['_id'])}#{key}")])
 
     markup = InlineKeyboardMarkup(rows)
     caption_text = "<b>Choose the series/movie you want to view</b>"
@@ -4484,10 +4510,12 @@ async def process_unified_filter_search(client: Client, message: Message, query_
             if reply_msg.photo or reply_msg.caption:
                 await reply_msg.edit_caption(caption=caption_text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
                 schedule_filter_message_delete(client, reply_msg.chat.id, reply_msg.id, 600)
+                BUTTON_OWNERS[f"{reply_msg.chat.id}-{reply_msg.id}"] = real_user_id
                 return True
             else:
                 await reply_msg.edit_text(text=caption_text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
                 schedule_filter_message_delete(client, reply_msg.chat.id, reply_msg.id, 600)
+                BUTTON_OWNERS[f"{reply_msg.chat.id}-{reply_msg.id}"] = real_user_id
                 return True
         except Exception:
             try:
@@ -4500,6 +4528,7 @@ async def process_unified_filter_search(client: Client, message: Message, query_
             sent_sug = await (message.reply_photo(photo=thumb, caption=caption_text, reply_markup=markup, parse_mode=enums.ParseMode.HTML) if message else client.send_photo(chat_id=message.chat.id, photo=thumb, caption=caption_text, reply_markup=markup, parse_mode=enums.ParseMode.HTML))
             if sent_sug:
                 schedule_filter_message_delete(client, sent_sug.chat.id, sent_sug.id, 600)
+                BUTTON_OWNERS[f"{sent_sug.chat.id}-{sent_sug.id}"] = real_user_id
             return True
         except Exception as pe:
             logger.warning(f"[UNIFIED SEARCH THUMB ERROR] {pe}")
@@ -4507,19 +4536,26 @@ async def process_unified_filter_search(client: Client, message: Message, query_
     sent_sug_t = await (message.reply_text(text=caption_text, reply_markup=markup, parse_mode=enums.ParseMode.HTML) if message else client.send_message(chat_id=message.chat.id, text=caption_text, reply_markup=markup, parse_mode=enums.ParseMode.HTML))
     if sent_sug_t:
         schedule_filter_message_delete(client, sent_sug_t.chat.id, sent_sug_t.id, 600)
+        BUTTON_OWNERS[f"{sent_sug_t.chat.id}-{sent_sug_t.id}"] = real_user_id
     return True
 
 
 @Client.on_callback_query(filters.regex(r"^sug_mov#"), group=-15)
 async def cb_sug_movie(client: Client, query: CallbackQuery):
-    try:
-        await query.answer()
-    except Exception:
-        pass
     parts = query.data.split("#")
     if len(parts) < 2:
         return
     movie_id = parts[1]
+    key = parts[2] if len(parts) > 2 else f"{query.message.chat.id}-{query.message.id}"
+    from plugins.pm_filter import is_button_owner
+    is_owner, err_msg = is_button_owner(query, key)
+    if not is_owner:
+        return await query.answer(err_msg or "this is not your button 😊", show_alert=True)
+
+    try:
+        await query.answer()
+    except Exception:
+        pass
     from database.series_db import get_super_movie
     movie = await get_super_movie(movie_id)
     if not movie:
@@ -4529,14 +4565,20 @@ async def cb_sug_movie(client: Client, query: CallbackQuery):
 
 @Client.on_callback_query(filters.regex(r"^sug_ser#"), group=-15)
 async def cb_sug_series(client: Client, query: CallbackQuery):
-    try:
-        await query.answer()
-    except Exception:
-        pass
     parts = query.data.split("#")
     if len(parts) < 2:
         return
     series_id = parts[1]
+    key = parts[2] if len(parts) > 2 else f"{query.message.chat.id}-{query.message.id}"
+    from plugins.pm_filter import is_button_owner
+    is_owner, err_msg = is_button_owner(query, key)
+    if not is_owner:
+        return await query.answer(err_msg or "this is not your button 😊", show_alert=True)
+
+    try:
+        await query.answer()
+    except Exception:
+        pass
     from database.series_db import get_series
     series_doc = await get_series(series_id)
     if not series_doc:

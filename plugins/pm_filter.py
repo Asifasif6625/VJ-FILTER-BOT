@@ -99,7 +99,7 @@ def is_button_owner(query: CallbackQuery, key: str) -> tuple[bool, str | None]:
         if is_allowed:
             return True, None
         else:
-            return False, "⚠️ This is not your button."
+            return False, "this is not your button 😊"
 
     # 7. Fail-closed
     logger.info(
@@ -110,7 +110,7 @@ def is_button_owner(query: CallbackQuery, key: str) -> tuple[bool, str | None]:
         f"chat_id={chat_id} "
         f"result=DENIED"
     )
-    return False, "⚠️ This is not your button."
+    return False, "this is not your button 😊"
 
 # ─── English-Only Language Guard ───────────────────────────────────────────
 EMOJI_PATTERN = re.compile(
@@ -666,8 +666,9 @@ async def movie_close_callback(client: Client, query: CallbackQuery):
 async def next_page(bot, query):
     ident, req, key, offset = query.data.split("_")
     curr_time = datetime.now(pytz.timezone('Asia/Kolkata')).time()
-    if int(req) not in [query.from_user.id, 0]:
-        return await query.answer(script.ALRT_TXT.format(query.from_user.first_name), show_alert=True)
+    is_owner, _ = is_button_owner(query, key)
+    if int(req) not in [query.from_user.id, 0] and not is_owner:
+        return await query.answer("this is not your button 😊", show_alert=True)
     try:
         offset = int(offset)
     except:
@@ -1780,27 +1781,28 @@ async def cb_handler(client: Client, query: CallbackQuery):
             
     elif query.data.startswith("file"):
         clicked = query.from_user.id
+        chat_id = query.message.chat.id if query.message else None
+        msg_id = query.message.id if query.message else None
+        is_private = (chat_id and chat_id > 0) or (query.message and query.message.chat and query.message.chat.type == enums.ChatType.PRIVATE)
+        
         is_owner = False
-        if query.message and query.message.chat and (query.message.chat.type == enums.ChatType.PRIVATE or query.message.chat.id > 0):
+        if is_private:
             is_owner = True
-        elif query.message and query.message.reply_to_message and query.message.reply_to_message.from_user:
-            typed = query.message.reply_to_message.from_user.id
-            is_owner = (clicked == typed)
-        elif hasattr(query.message, "reply_to_message_id") and query.message.reply_to_message_id:
-            typed = BUTTON_OWNERS.get(f"{query.message.chat.id}-{query.message.reply_to_message_id}", 0)
-            if typed:
-                is_owner = (clicked == typed)
-            else:
-                is_owner = True
         else:
-            is_owner = True
+            key = f"{chat_id}-{msg_id}"
+            is_owner, _ = is_button_owner(query, key)
+            if not is_owner and query.message and query.message.reply_to_message and query.message.reply_to_message.from_user:
+                is_owner = (clicked == query.message.reply_to_message.from_user.id)
+                if is_owner:
+                    BUTTON_OWNERS[key] = clicked
 
         import logging
         log = logging.getLogger(__name__)
         if is_owner:
-            log.info(f"[PM MOVIE OWNERSHIP]\ncallback_user_id={clicked}\nrequest_key={query.data}\nchat_id={query.message.chat.id if query.message else None}\nmessage_id={query.message.id if query.message else None}\nresult=ALLOWED")
+            log.info(f"[PM MOVIE OWNERSHIP]\ncallback_user_id={clicked}\nrequest_key={query.data}\nchat_id={chat_id}\nmessage_id={msg_id}\nresult=ALLOWED")
         else:
-            log.info(f"[PM MOVIE OWNERSHIP]\ncallback_user_id={clicked}\nrequest_key={query.data}\nchat_id={query.message.chat.id if query.message else None}\nmessage_id={query.message.id if query.message else None}\nresult=DENIED")
+            log.info(f"[PM MOVIE OWNERSHIP]\ncallback_user_id={clicked}\nrequest_key={query.data}\nchat_id={chat_id}\nmessage_id={msg_id}\nresult=DENIED")
+            return await query.answer("this is not your button 😊", show_alert=True)
 
         ident, file_id = query.data.split("#")
         files_ = await get_file_details(file_id)
@@ -1866,7 +1868,7 @@ async def cb_handler(client: Client, query: CallbackQuery):
                         await query.answer(url=f"https://telegram.me/{temp.U_NAME}?start={cmd}")
                         return
             else:
-                await query.answer("⚠️ This is not your button.", show_alert=True)
+                await query.answer("this is not your button 😊", show_alert=True)
         except UserIsBlocked:
             await query.answer('Uɴʙʟᴏᴄᴋ ᴛʜᴇ ʙᴏᴛ ᴍᴀʜɴ !', show_alert=True)
         except PeerIdInvalid:
