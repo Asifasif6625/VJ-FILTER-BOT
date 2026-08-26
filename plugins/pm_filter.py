@@ -37,98 +37,80 @@ def is_button_owner(query: CallbackQuery, key: str) -> tuple[bool, str | None]:
     click_user = query.from_user.id
     chat_id = query.message.chat.id if (query.message and query.message.chat) else None
     message_id = query.message.id if query.message else None
-
-    # 1. In PM chat, the user clicking in private is ALWAYS the owner
-    if (chat_id and chat_id > 0) or (query.message and query.message.chat and query.message.chat.type == enums.ChatType.PRIVATE):
-        BUTTON_OWNERS[key] = click_user
-        return True, None
-
     bot_id = getattr(temp, "ME", None)
 
-    # 2. Lookup in BUTTON_OWNERS by key
+    # 1. Lookup in BUTTON_OWNERS by exact key
     stored_owner = BUTTON_OWNERS.get(key)
     if stored_owner and bot_id and stored_owner == bot_id:
         stored_owner = None
 
-    # 3. Lookup in BUTTON_OWNERS by message_id
+    # 2. Lookup in BUTTON_OWNERS by current message key
     if not stored_owner and chat_id and message_id:
         msg_key = f"{chat_id}-{message_id}"
         stored_owner = BUTTON_OWNERS.get(msg_key)
         if stored_owner and bot_id and stored_owner == bot_id:
             stored_owner = None
 
-    # 4. Lookup in MOVIE_STATE
-    if not stored_owner and hasattr(temp, "MOVIE_STATE"):
-        st = temp.MOVIE_STATE.get(key) or (temp.MOVIE_STATE.get(f"{chat_id}-{message_id}") if chat_id and message_id else None)
-        if isinstance(st, dict):
-            u = st.get("user_id") or st.get("user")
-            if u and (not bot_id or u != bot_id):
-                stored_owner = u
-                BUTTON_OWNERS[key] = stored_owner
-
-    # 5. Lookup in SERIES_STATE
+    # 3. Lookup in state caches (without overwriting other user)
     if not stored_owner and hasattr(temp, "SERIES_STATE"):
         st = temp.SERIES_STATE.get(key) or (temp.SERIES_STATE.get(f"{chat_id}-{message_id}") if chat_id and message_id else None)
         if isinstance(st, dict):
             u = st.get("user_id") or st.get("user")
             if u and (not bot_id or u != bot_id):
                 stored_owner = u
-                BUTTON_OWNERS[key] = stored_owner
 
-    # 6. Lookup in GETALL
+    if not stored_owner and hasattr(temp, "MOVIE_STATE"):
+        st = temp.MOVIE_STATE.get(key) or (temp.MOVIE_STATE.get(f"{chat_id}-{message_id}") if chat_id and message_id else None)
+        if isinstance(st, dict):
+            u = st.get("user_id") or st.get("user")
+            if u and (not bot_id or u != bot_id):
+                stored_owner = u
+
     if not stored_owner and hasattr(temp, "GETALL"):
         st = temp.GETALL.get(key)
         if isinstance(st, dict):
             u = st.get("user_id") or st.get("user")
             if u and (not bot_id or u != bot_id):
                 stored_owner = u
-                BUTTON_OWNERS[key] = stored_owner
 
-    # 7. Check reply_to_message
+    # 4. Check reply_to_message if present
     if not stored_owner and query.message and query.message.reply_to_message and query.message.reply_to_message.from_user:
         rep_user = query.message.reply_to_message.from_user.id
         if rep_user and (not bot_id or rep_user != bot_id):
             stored_owner = rep_user
-            BUTTON_OWNERS[key] = stored_owner
 
-    # 8. Validation
+    # 5. In Private Chat, allow the current user ONLY when there is no conflicting stored owner
+    is_private = (chat_id and chat_id > 0) or (query.message and query.message.chat and query.message.chat.type == enums.ChatType.PRIVATE)
+    if is_private and stored_owner is None:
+        stored_owner = click_user
+        BUTTON_OWNERS[key] = stored_owner
+
+    # 6. Evaluation
     if stored_owner is not None and stored_owner != 0:
-        if click_user == stored_owner:
-            logger.info(
-                f"[PM MOVIE OWNERSHIP]\n"
-                f"callback_user_id={click_user}\n"
-                f"stored_user_id={stored_owner}\n"
-                f"request_key={key}\n"
-                f"chat_id={chat_id}\n"
-                f"message_id={message_id}\n"
-                f"result=ALLOWED"
-            )
+        is_allowed = (click_user == stored_owner)
+        logger.info(
+            f"[SERIES OWNER CHECK] "
+            f"key={key} "
+            f"click_user={click_user} "
+            f"stored_owner={stored_owner} "
+            f"chat_id={chat_id} "
+            f"result={'ALLOWED' if is_allowed else 'DENIED'}"
+        )
+        if is_allowed:
             return True, None
         else:
-            logger.info(
-                f"[PM MOVIE OWNERSHIP]\n"
-                f"callback_user_id={click_user}\n"
-                f"stored_user_id={stored_owner}\n"
-                f"request_key={key}\n"
-                f"chat_id={chat_id}\n"
-                f"message_id={message_id}\n"
-                f"result=DENIED"
-            )
             return False, "⚠️ This is not your button."
 
-    # 9. If state exists, auto-grant access to clicking user and register ownership
-    has_state = (
-        key in FRESH or 
-        key in temp.GETALL or 
-        (hasattr(temp, "MOVIE_STATE") and key in temp.MOVIE_STATE) or
-        (hasattr(temp, "SERIES_STATE") and key in temp.SERIES_STATE)
+    # 7. Fail-closed
+    logger.info(
+        f"[SERIES OWNER CHECK] "
+        f"key={key} "
+        f"click_user={click_user} "
+        f"stored_owner=None "
+        f"chat_id={chat_id} "
+        f"result=DENIED"
     )
-    if has_state:
-        BUTTON_OWNERS[key] = click_user
-        logger.info(f"[PM MOVIE OWNERSHIP] user={click_user} key={key} AUTO_ASSIGNED")
-        return True, None
-
-    return False, "⚠️ Search request expired. Please search again."
+    return False, "⚠️ This is not your button."
 
 # ─── English-Only Language Guard ───────────────────────────────────────────
 EMOJI_PATTERN = re.compile(
@@ -1546,6 +1528,9 @@ async def filter_qualities_cb_handler(client: Client, query: CallbackQuery):
                 
 @Client.on_callback_query()
 async def cb_handler(client: Client, query: CallbackQuery):
+    if query.data and query.data.startswith(("sr#", "sw#", "edser#", "vser#", "edmov#", "delmov#", "anomov#", "emovie_", "emov#", "series_", "movie_", "smovie_", "send_fsall#", "am_", "slink_", "sfile_", "ser_", "sug_mov#", "sug_ser#")):
+        query.continue_propagation()
+        return
     if query.data == "not_in_db_reason":
         alert_text = (
             "➸ നിങ്ങൾ സെർച്ച് ചെയ്ത മൂവി Database ൽ കാണില്ല.\n\n"
@@ -1556,9 +1541,6 @@ async def cb_handler(client: Client, query: CallbackQuery):
         return await query.answer(alert_text, show_alert=True)
     if query.data == "english_only_reason":
         return await query.answer("⚠️ Send movie name in English\nOther language not supports !", show_alert=True)
-    if query.data and query.data.startswith(("sr#", "sw#", "edser#", "vser#", "edmov#", "delmov#", "anomov#", "emovie_", "emov#", "series_", "movie_", "smovie_", "send_fsall#", "am_", "slink_", "sfile_", "ser_", "sug_mov#", "sug_ser#")):
-        query.continue_propagation()
-        return
     if query.data == "close_data":
         await query.message.delete()
     elif query.data == "get_trail":

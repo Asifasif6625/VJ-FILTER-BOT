@@ -4290,8 +4290,15 @@ async def render_series_direct(client: Client, message: Message, series_doc: dic
     if not langs:
         langs = series_doc.get("languages", [])
 
-    chat_id = message.chat.id if message and message.chat else (reply_msg.chat.id if reply_msg else 0)
-    msg_id = message.id if message else (reply_msg.id if reply_msg else 0)
+    if reply_msg and reply_msg.chat:
+        chat_id = reply_msg.chat.id
+        msg_id = reply_msg.id
+    elif message and message.chat:
+        chat_id = message.chat.id
+        msg_id = message.id
+    else:
+        chat_id = 0
+        msg_id = 0
     key = f"{chat_id}-{msg_id}"
 
     real_user_id = user_id
@@ -4308,6 +4315,11 @@ async def render_series_direct(client: Client, message: Message, series_doc: dic
             real_user_id = chat_id
 
     BUTTON_OWNERS[key] = real_user_id
+    if message and message.chat and message.id:
+        BUTTON_OWNERS[f"{message.chat.id}-{message.id}"] = real_user_id
+    if reply_msg and reply_msg.chat and reply_msg.id:
+        BUTTON_OWNERS[f"{reply_msg.chat.id}-{reply_msg.id}"] = real_user_id
+    logger.info(f"[SERIES OWNER REGISTER] key={key} owner={real_user_id}")
 
     buttons = []
     preferred_order = ["Malayalam", "Tamil", "Hindi", "Telugu", "Kannada", "English", "Dual Audio", "Multi Audio"]
@@ -4380,6 +4392,7 @@ async def render_series_direct(client: Client, message: Message, series_doc: dic
             ))
             if sent_p:
                 BUTTON_OWNERS[f"{sent_p.chat.id}-{sent_p.id}"] = real_user_id
+                logger.info(f"[SERIES OWNER REGISTER] key={sent_p.chat.id}-{sent_p.id} owner={real_user_id}")
             return True
         except Exception as pe:
             logger.warning(f"[SERIES PHOTO ERROR] {pe}")
@@ -4396,6 +4409,7 @@ async def render_series_direct(client: Client, message: Message, series_doc: dic
     ))
     if sent_t:
         BUTTON_OWNERS[f"{sent_t.chat.id}-{sent_t.id}"] = real_user_id
+        logger.info(f"[SERIES OWNER REGISTER] key={sent_t.chat.id}-{sent_t.id} owner={real_user_id}")
     return True
 
 
@@ -4583,16 +4597,20 @@ async def process_movie_deeplink(client: Client, message: Message, movie_key: st
 
 # ─── SERIES FILTER NAVIGATION CALLBACKS (Language -> Season (if multiple) -> Quality -> Delivery) ───
 
-@Client.on_callback_query(filters.regex(r"^ser_lang#"))
+@Client.on_callback_query(filters.regex(r"^ser_lang#"), group=-20)
 async def ser_lang_callback(client: Client, query: CallbackQuery):
     """Step 1: Language selected -> If multiple seasons, show Seasons; if single season, show Qualities."""
+    logger.info(f"[SERIES CALLBACK RECEIVED] data={query.data!r} user={query.from_user.id}")
     parts = query.data.split("#")
-    if len(parts) < 4:
-        return await query.answer("Invalid request.", show_alert=True)
-    _, series_id, lang, key = parts[0], parts[1], parts[2], parts[3]
+    if len(parts) != 4:
+        return await query.answer("⚠️ Invalid Series button.", show_alert=True)
+    _, series_id, lang, key = parts
     
+    logger.info(f"[SERIES CALLBACK PARSED] action=language series_id={series_id} language={lang} season=None quality=None key={key}")
+
     from plugins.pm_filter import is_button_owner
     is_owner, err_msg = is_button_owner(query, key)
+    logger.info(f"[SERIES CALLBACK OWNER] key={key} user={query.from_user.id} allowed={is_owner}")
     if not is_owner:
         return await query.answer(err_msg, show_alert=True)
 
@@ -4674,6 +4692,7 @@ async def ser_lang_callback(client: Client, query: CallbackQuery):
             f"🎞 <b>Select Quality:</b>"
         )
 
+    logger.info(f"[SERIES CALLBACK RENDER] action=language buttons={len(buttons)}")
     markup = InlineKeyboardMarkup(buttons)
     try:
         if query.message.photo or query.message.caption:
@@ -4687,17 +4706,21 @@ async def ser_lang_callback(client: Client, query: CallbackQuery):
     await query.answer()
 
 
-@Client.on_callback_query(filters.regex(r"^ser_season#"))
+@Client.on_callback_query(filters.regex(r"^ser_season#"), group=-20)
 async def ser_season_callback(client: Client, query: CallbackQuery):
     """Step 2: Season selected -> Display Qualities."""
+    logger.info(f"[SERIES CALLBACK RECEIVED] data={query.data!r} user={query.from_user.id}")
     parts = query.data.split("#")
-    if len(parts) < 5:
-        return await query.answer("Invalid request.", show_alert=True)
-    _, series_id, lang, season_str, key = parts[0], parts[1], parts[2], parts[3], parts[4]
+    if len(parts) != 5:
+        return await query.answer("⚠️ Invalid Series button.", show_alert=True)
+    _, series_id, lang, season_str, key = parts
     season = int(season_str) if season_str.isdigit() else 1
+
+    logger.info(f"[SERIES CALLBACK PARSED] action=season series_id={series_id} language={lang} season={season} quality=None key={key}")
 
     from plugins.pm_filter import is_button_owner
     is_owner, err_msg = is_button_owner(query, key)
+    logger.info(f"[SERIES CALLBACK OWNER] key={key} user={query.from_user.id} allowed={is_owner}")
     if not is_owner:
         return await query.answer(err_msg, show_alert=True)
 
@@ -4738,6 +4761,7 @@ async def ser_season_callback(client: Client, query: CallbackQuery):
         f"🌐 <b>Language:</b> {lang} | 📅 <b>Season {season}</b>\n\n"
         f"🎞 <b>Select Quality:</b>"
     )
+    logger.info(f"[SERIES CALLBACK RENDER] action=season buttons={len(buttons)}")
     markup = InlineKeyboardMarkup(buttons)
     try:
         if query.message.photo or query.message.caption:
@@ -4751,17 +4775,21 @@ async def ser_season_callback(client: Client, query: CallbackQuery):
     await query.answer()
 
 
-@Client.on_callback_query(filters.regex(r"^ser_qual#"))
+@Client.on_callback_query(filters.regex(r"^ser_qual#"), group=-20)
 async def ser_qual_callback(client: Client, query: CallbackQuery):
     """Step 3: Quality clicked -> Directly triggers delivery of all episode files for this Season & Quality."""
+    logger.info(f"[SERIES CALLBACK RECEIVED] data={query.data!r} user={query.from_user.id}")
     parts = query.data.split("#")
-    if len(parts) < 6:
-        return await query.answer("Invalid request.", show_alert=True)
-    _, series_id, lang, season_str, qual, key = parts[0], parts[1], parts[2], parts[3], parts[4], parts[5]
+    if len(parts) != 6:
+        return await query.answer("⚠️ Invalid Series button.", show_alert=True)
+    _, series_id, lang, season_str, qual, key = parts
     season = int(season_str) if season_str.isdigit() else 1
+
+    logger.info(f"[SERIES CALLBACK PARSED] action=quality series_id={series_id} language={lang} season={season} quality={qual} key={key}")
 
     from plugins.pm_filter import is_button_owner
     is_owner, err_msg = is_button_owner(query, key)
+    logger.info(f"[SERIES CALLBACK OWNER] key={key} user={query.from_user.id} allowed={is_owner}")
     if not is_owner:
         return await query.answer(err_msg, show_alert=True)
 
@@ -4777,13 +4805,6 @@ async def ser_qual_callback(client: Client, query: CallbackQuery):
         "season": _num_query(season),
         "quality": qual
     }).sort("episode", 1).to_list(length=300)
-
-    if not files:
-        files = await sfiles_col.find({
-            "series_id": _sid_query(series_id),
-            "language": lang,
-            "season": _num_query(season)
-        }).sort("episode", 1).to_list(length=300)
 
     if not files:
         return await query.answer("⚠️ No episode files found for this quality.", show_alert=True)
@@ -4846,17 +4867,21 @@ async def ser_qual_callback(client: Client, query: CallbackQuery):
         return
 
 
-@Client.on_callback_query(filters.regex(r"^ser_back#"))
+@Client.on_callback_query(filters.regex(r"^ser_back#"), group=-20)
 async def ser_back_callback(client: Client, query: CallbackQuery):
     """Return to Language selection screen."""
+    logger.info(f"[SERIES CALLBACK RECEIVED] data={query.data!r} user={query.from_user.id}")
     parts = query.data.split("#")
     if len(parts) < 4:
-        return await query.answer("Invalid request.", show_alert=True)
+        return await query.answer("⚠️ Invalid Series button.", show_alert=True)
     series_id = parts[1]
     key = parts[-1]
 
+    logger.info(f"[SERIES CALLBACK PARSED] action=back series_id={series_id} language=None season=None quality=None key={key}")
+
     from plugins.pm_filter import is_button_owner
     is_owner, err_msg = is_button_owner(query, key)
+    logger.info(f"[SERIES CALLBACK OWNER] key={key} user={query.from_user.id} allowed={is_owner}")
     if not is_owner:
         return await query.answer(err_msg, show_alert=True)
 
@@ -4865,7 +4890,8 @@ async def ser_back_callback(client: Client, query: CallbackQuery):
     if not series:
         return await query.answer("⚠️ Series not found in database.", show_alert=True)
 
-    await render_series_direct(client, query.message, series, reply_msg=query.message)
+    logger.info(f"[SERIES CALLBACK RENDER] action=back")
+    await render_series_direct(client, query.message, series, reply_msg=query.message, user_id=query.from_user.id)
     await query.answer()
 
 
