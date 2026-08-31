@@ -5400,6 +5400,7 @@ async def ser_back_callback(client: Client, query: CallbackQuery):
 async def deliver_series_request(client, req_key, user_id, query=None, timing=None):
     from utils import get_size, temp, schedule_filter_message_delete
     from database.series_db import get_temp_request
+    from plugins.series import _extract_episode_number
     import logging
 
     log = logging.getLogger(__name__)
@@ -5426,17 +5427,42 @@ async def deliver_series_request(client, req_key, user_id, query=None, timing=No
     ep = req.get("episode")
     qual = req.get("quality")
 
-    from plugins.commands import send_movie_files_to_user
-    ep_str = f" S{season:02d}E{ep:02d}" if (season and ep and int(ep) > 0) else (f" Season {season}" if season else "")
-    full_title = f"{title}{ep_str}"
-    await send_movie_files_to_user(
+    # Helper for sorting files strictly by numerical episode order
+    def _ep_sort_key(f):
+        e = f.get("episode")
+        if isinstance(e, int) and e > 0:
+            return (e, f.get("file_name", ""))
+        try:
+            if e is not None and str(e).strip().lstrip("-").isdigit() and int(str(e).strip()) > 0:
+                return (int(str(e).strip()), f.get("file_name", ""))
+        except Exception:
+            pass
+        fn = f.get("file_name", "")
+        extracted = _extract_episode_number(fn)
+        if extracted is not None and extracted > 0:
+            return (extracted, fn)
+        return (99999, fn)
+
+    sorted_files = sorted(files, key=_ep_sort_key)
+
+    # Ensure series markers and context on all file documents
+    for f in sorted_files:
+        f["is_series"] = True
+        if not f.get("language"):
+            f["language"] = lang
+        if not f.get("quality"):
+            f["quality"] = qual
+        if not f.get("season"):
+            f["season"] = season
+        if not f.get("series_title"):
+            f["series_title"] = title
+
+    from plugins.commands import send_series_files_to_user
+    await send_series_files_to_user(
         client=client,
         user_id=user_id,
-        files=files,
-        query=query,
-        movie_title=full_title,
-        language=lang,
-        quality=qual
+        files=sorted_files,
+        query=query
     )
 
 
