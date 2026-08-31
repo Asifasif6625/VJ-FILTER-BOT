@@ -32,18 +32,18 @@ SPELL_CHECK = {}
 async def not_in_db_reason_alert(bot, query):
     """Show a popup alert when user clicks the Reason button for movie not in db."""
     alert_text = (
-        "➸ നിങ്ങൾ സെർച്ച് ചെയ്ത മൂവി Database ൽ കാണില്ല.\n"
-        "➸ സ്പെല്ലിംഗ് ഒന്നും കൂടെ ഗൂഗിളിൽ ചെക്ക് ചെയ്ത് അയക്കുക.\n"
-        "➸ മൂവിൻ്റെ കൂടെ റിലീസ് year കൂടെ ചേർത്ത് അയക്കുക. (Lift 2021)\n"
-        "➸ Theatre print കിട്ടില്ല. 🙂 200/- അകത്ത് അല്ലേ ഉള്ളൂ പോയി കാണുക."
+        "➸ മൂവി Database ൽ കാണില്ല.\n"
+        "➸ സ്പെല്ലിംഗ് Google ൽ ചെക്ക് ചെയ്ത് അയക്കുക.\n"
+        "➸ മൂവിൻ്റെ കൂടെ റിലീസ് year ചേർക്കുക (Lift 2021).\n"
+        "➸ Theatre print കിട്ടില്ല 🙂 പോയി കാണുക."
     )
     try:
         await query.answer(
-            alert_text,
+            alert_text[:200],
             show_alert=True
         )
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning(f"[NOT IN DB REASON ERROR] {e}")
     query.stop_propagation()
 
 @Client.on_message(filters.group & filters.text & filters.incoming)
@@ -715,12 +715,12 @@ async def filter_qualities_cb_handler(client: Client, query: CallbackQuery):
 async def cb_handler(client: Client, query: CallbackQuery):
     if query.data == "not_in_db_reason":
         alert_text = (
-            "➸ നിങ്ങൾ സെർച്ച് ചെയ്ത മൂവി Database ൽ കാണില്ല.\n\n"
-            "➸ സ്പെല്ലിംഗ് ഒന്നും കൂടെ ഗൂഗിളിൽ ചെക്ക് ചെയ്ത് അയക്കുക.\n\n"
-            "➸ മൂവിൻ്റെ കൂടെ റിലീസ് year കൂടെ ചേർത്ത് അയക്കുക. (Lift 2021)\n\n"
-            "➸ Theatre print കിട്ടില്ല. 🙂 200/- അകത്ത് അല്ലേ ഉള്ളൂ പോയി കാണുക."
+            "➸ മൂവി Database ൽ കാണില്ല.\n"
+            "➸ സ്പെല്ലിംഗ് Google ൽ ചെക്ക് ചെയ്ത് അയക്കുക.\n"
+            "➸ മൂവിൻ്റെ കൂടെ റിലീസ് year ചേർക്കുക (Lift 2021).\n"
+            "➸ Theatre print കിട്ടില്ല 🙂 പോയി കാണുക."
         )
-        return await query.answer(alert_text, show_alert=True)
+        return await query.answer(alert_text[:200], show_alert=True)
     me = await client.get_me()
     settings = await db.get_bot(me.id)
     if query.data == "close_data":
