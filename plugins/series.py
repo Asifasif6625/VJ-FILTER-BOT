@@ -5087,9 +5087,11 @@ async def ser_lang_callback(client: Client, query: CallbackQuery):
     """Step 1: Language selected -> If multiple seasons, show Seasons; if single season, show Qualities."""
     logger.info(f"[SERIES CALLBACK RECEIVED] data={query.data!r} user={query.from_user.id}")
     parts = query.data.split("#")
-    if len(parts) != 4:
+    if len(parts) < 4:
         return await query.answer("⚠️ Invalid Series button.", show_alert=True)
-    _, series_id, lang, key = parts
+    series_id = parts[1]
+    lang = parts[2]
+    key = parts[3]
     
     logger.info(f"[SERIES CALLBACK PARSED] action=language series_id={series_id} language={lang} season=None quality=None key={key}")
 
@@ -5099,8 +5101,10 @@ async def ser_lang_callback(client: Client, query: CallbackQuery):
     if not is_owner:
         return await query.answer(err_msg, show_alert=True)
 
-    from database.series_db import get_series, list_series_seasons, list_season_qualities, sfiles_col, _sid_query, _num_query
+    from database.series_db import get_series, get_series_by_key, list_series_seasons, list_season_qualities, sfiles_col, _sid_query, _num_query
     series = await get_series(series_id)
+    if not series:
+        series = await get_series_by_key(series_id)
     if not series:
         return await query.answer("⚠️ Series not found in database.", show_alert=True)
 
@@ -5209,8 +5213,10 @@ async def ser_season_callback(client: Client, query: CallbackQuery):
     if not is_owner:
         return await query.answer(err_msg, show_alert=True)
 
-    from database.series_db import get_series, list_season_qualities, sfiles_col, _sid_query, _num_query
+    from database.series_db import get_series, get_series_by_key, list_season_qualities, sfiles_col, _sid_query, _num_query
     series = await get_series(series_id)
+    if not series:
+        series = await get_series_by_key(series_id)
     if not series:
         return await query.answer("⚠️ Series not found in database.", show_alert=True)
 
@@ -5278,8 +5284,10 @@ async def ser_qual_callback(client: Client, query: CallbackQuery):
     if not is_owner:
         return await query.answer(err_msg, show_alert=True)
 
-    from database.series_db import get_series, sfiles_col, _sid_query, _num_query, save_temp_request
+    from database.series_db import get_series, get_series_by_key, sfiles_col, _sid_query, _num_query, save_temp_request
     series = await get_series(series_id)
+    if not series:
+        series = await get_series_by_key(series_id)
     if not series:
         return await query.answer("⚠️ Series not found in database.", show_alert=True)
 
@@ -5370,8 +5378,12 @@ async def ser_back_callback(client: Client, query: CallbackQuery):
     if not is_owner:
         return await query.answer(err_msg, show_alert=True)
 
-    from database.series_db import get_series
+    from database.series_db import get_series, get_series_by_key
     series = await get_series(series_id)
+    if not series:
+        series = await get_series_by_key(series_id)
+    if not series:
+        return await query.answer("⚠️ Series not found in database.", show_alert=True)
     if not series:
         return await query.answer("⚠️ Series not found in database.", show_alert=True)
 

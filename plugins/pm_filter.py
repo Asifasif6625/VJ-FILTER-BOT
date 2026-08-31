@@ -39,6 +39,12 @@ def is_button_owner(query: CallbackQuery, key: str) -> tuple[bool, str | None]:
     message_id = query.message.id if query.message else None
     bot_id = getattr(temp, "ME", None)
 
+    # In PM (private chat), the user clicking is ALWAYS the owner of their PM session
+    if query.message and query.message.chat and query.message.chat.type == enums.ChatType.PRIVATE:
+        return True, None
+    if chat_id and chat_id > 0:
+        return True, None
+
     # 1. Lookup in BUTTON_OWNERS by exact key
     stored_owner = BUTTON_OWNERS.get(key)
     if stored_owner and bot_id and stored_owner == bot_id:
@@ -51,7 +57,7 @@ def is_button_owner(query: CallbackQuery, key: str) -> tuple[bool, str | None]:
         if stored_owner and bot_id and stored_owner == bot_id:
             stored_owner = None
 
-    # 3. Lookup in state caches (without overwriting other user)
+    # 3. Lookup in state caches
     if not stored_owner and hasattr(temp, "SERIES_STATE"):
         st = temp.SERIES_STATE.get(key) or (temp.SERIES_STATE.get(f"{chat_id}-{message_id}") if chat_id and message_id else None)
         if isinstance(st, dict):
@@ -79,14 +85,15 @@ def is_button_owner(query: CallbackQuery, key: str) -> tuple[bool, str | None]:
         if rep_user and (not bot_id or rep_user != bot_id):
             stored_owner = rep_user
 
-    # 5. In Private Chat, allow the current user ONLY when there is no conflicting stored owner
-    is_private = (chat_id and chat_id > 0) or (query.message and query.message.chat and query.message.chat.type == enums.ChatType.PRIVATE)
-    if is_private and stored_owner is None:
-        stored_owner = click_user
-        BUTTON_OWNERS[key] = stored_owner
+    # 5. Check caption/text in query.message for user mention
+    if not stored_owner and query.message:
+        cap = query.message.caption or query.message.text or ""
+        m_req = re.search(r"tg://user\?id=(\d+)", cap)
+        if m_req:
+            stored_owner = int(m_req.group(1))
 
     # 6. Evaluation
-    if stored_owner is not None and stored_owner != 0:
+    if stored_owner:
         is_allowed = (click_user == stored_owner)
         logger.info(
             f"[SERIES OWNER CHECK] "
@@ -97,20 +104,14 @@ def is_button_owner(query: CallbackQuery, key: str) -> tuple[bool, str | None]:
             f"result={'ALLOWED' if is_allowed else 'DENIED'}"
         )
         if is_allowed:
+            BUTTON_OWNERS[key] = stored_owner
             return True, None
         else:
             return False, "this is not your button 😊"
 
-    # 7. Fail-closed
-    logger.info(
-        f"[SERIES OWNER CHECK] "
-        f"key={key} "
-        f"click_user={click_user} "
-        f"stored_owner=None "
-        f"chat_id={chat_id} "
-        f"result=DENIED"
-    )
-    return False, "this is not your button 😊"
+    # Fallback: if no owner record exists in memory, allow the clicking user and register them
+    BUTTON_OWNERS[key] = click_user
+    return True, None
 
 # ─── English-Only Language Guard ───────────────────────────────────────────
 EMOJI_PATTERN = re.compile(
