@@ -4763,7 +4763,7 @@ async def render_series_direct(client: Client, message: Message, series_doc: dic
     for i in range(0, len(langs_sorted), 2):
         row = []
         for l in langs_sorted[i:i+2]:
-            row.append(InlineKeyboardButton(to_series_font(l), callback_data=f"ser_lang#{series_id}#{l}#{key}"))
+            row.append(InlineKeyboardButton(to_series_font(l), callback_data=f"ser_lang#{series_id}#{l}"))
         buttons.append(row)
 
     # Removed Close button from Series Language selection
@@ -5087,11 +5087,11 @@ async def ser_lang_callback(client: Client, query: CallbackQuery):
     """Step 1: Language selected -> If multiple seasons, show Seasons; if single season, show Qualities."""
     logger.info(f"[SERIES CALLBACK RECEIVED] data={query.data!r} user={query.from_user.id}")
     parts = query.data.split("#")
-    if len(parts) < 4:
+    if len(parts) < 3:
         return await query.answer("⚠️ Invalid Series button.", show_alert=True)
     series_id = parts[1]
     lang = parts[2]
-    key = parts[3]
+    key = parts[3] if len(parts) > 3 else f"{query.message.chat.id}-{query.message.id}"
     
     logger.info(f"[SERIES CALLBACK PARSED] action=language series_id={series_id} language={lang} season=None quality=None key={key}")
 
@@ -5134,11 +5134,11 @@ async def ser_lang_callback(client: Client, query: CallbackQuery):
         for i in range(0, len(seasons_sorted), 2):
             row = []
             for s in seasons_sorted[i:i+2]:
-                row.append(InlineKeyboardButton(f"📅 Season {s}", callback_data=f"ser_season#{series_id}#{lang}#{s}#{key}"))
+                row.append(InlineKeyboardButton(f"📅 Season {s}", callback_data=f"ser_season#{series_id}#{lang}#{s}"))
             buttons.append(row)
 
         buttons.append([
-            InlineKeyboardButton("⬅️ Language", callback_data=f"ser_back#{series_id}#langs#{lang}#{key}")
+            InlineKeyboardButton("⬅️ Language", callback_data=f"ser_back#{series_id}#{lang}")
         ])
 
         cap = (
@@ -5166,11 +5166,11 @@ async def ser_lang_callback(client: Client, query: CallbackQuery):
         for i in range(0, len(qualities), 2):
             row = []
             for q in qualities[i:i+2]:
-                row.append(InlineKeyboardButton(f"⚡ {q}", callback_data=f"ser_qual#{series_id}#{lang}#{s}#{q}#{key}"))
+                row.append(InlineKeyboardButton(f"⚡ {q}", callback_data=f"ser_qual#{series_id}#{lang}#{s}#{q}"))
             buttons.append(row)
 
         buttons.append([
-            InlineKeyboardButton("⬅️ Language", callback_data=f"ser_back#{series_id}#langs#{lang}#{key}")
+            InlineKeyboardButton("⬅️ Language", callback_data=f"ser_back#{series_id}#{lang}")
         ])
 
         cap = (
@@ -5200,9 +5200,12 @@ async def ser_season_callback(client: Client, query: CallbackQuery):
     """Step 2: Season selected -> Display Qualities."""
     logger.info(f"[SERIES CALLBACK RECEIVED] data={query.data!r} user={query.from_user.id}")
     parts = query.data.split("#")
-    if len(parts) != 5:
+    if len(parts) < 4:
         return await query.answer("⚠️ Invalid Series button.", show_alert=True)
-    _, series_id, lang, season_str, key = parts
+    series_id = parts[1]
+    lang = parts[2]
+    season_str = parts[3]
+    key = parts[4] if len(parts) > 4 else f"{query.message.chat.id}-{query.message.id}"
     season = int(season_str) if season_str.isdigit() else 1
 
     logger.info(f"[SERIES CALLBACK PARSED] action=season series_id={series_id} language={lang} season={season} quality=None key={key}")
@@ -5239,12 +5242,12 @@ async def ser_season_callback(client: Client, query: CallbackQuery):
     for i in range(0, len(qualities), 2):
         row = []
         for q in qualities[i:i+2]:
-            row.append(InlineKeyboardButton(f"⚡ {q}", callback_data=f"ser_qual#{series_id}#{lang}#{season}#{q}#{key}"))
+            row.append(InlineKeyboardButton(f"⚡ {q}", callback_data=f"ser_qual#{series_id}#{lang}#{season}#{q}"))
         buttons.append(row)
 
     buttons.append([
-        InlineKeyboardButton("⬅️ Season", callback_data=f"ser_lang#{series_id}#{lang}#{key}"),
-        InlineKeyboardButton("⬅️ Language", callback_data=f"ser_back#{series_id}#langs#{lang}#{key}")
+        InlineKeyboardButton("⬅️ Season", callback_data=f"ser_lang#{series_id}#{lang}"),
+        InlineKeyboardButton("⬅️ Language", callback_data=f"ser_back#{series_id}#{lang}")
     ])
 
     cap = (
@@ -5271,9 +5274,13 @@ async def ser_qual_callback(client: Client, query: CallbackQuery):
     """Step 3: Quality clicked -> Directly triggers delivery of all episode files for this Season & Quality."""
     logger.info(f"[SERIES CALLBACK RECEIVED] data={query.data!r} user={query.from_user.id}")
     parts = query.data.split("#")
-    if len(parts) != 6:
+    if len(parts) < 5:
         return await query.answer("⚠️ Invalid Series button.", show_alert=True)
-    _, series_id, lang, season_str, qual, key = parts
+    series_id = parts[1]
+    lang = parts[2]
+    season_str = parts[3]
+    qual = parts[4]
+    key = parts[5] if len(parts) > 5 else f"{query.message.chat.id}-{query.message.id}"
     season = int(season_str) if season_str.isdigit() else 1
 
     logger.info(f"[SERIES CALLBACK PARSED] action=quality series_id={series_id} language={lang} season={season} quality={qual} key={key}")
@@ -5365,10 +5372,10 @@ async def ser_back_callback(client: Client, query: CallbackQuery):
     """Return to Language selection screen."""
     logger.info(f"[SERIES CALLBACK RECEIVED] data={query.data!r} user={query.from_user.id}")
     parts = query.data.split("#")
-    if len(parts) < 4:
+    if len(parts) < 2:
         return await query.answer("⚠️ Invalid Series button.", show_alert=True)
     series_id = parts[1]
-    key = parts[-1]
+    key = parts[3] if len(parts) > 3 else (parts[2] if (len(parts) > 2 and "-" in parts[2]) else f"{query.message.chat.id}-{query.message.id}")
 
     logger.info(f"[SERIES CALLBACK PARSED] action=back series_id={series_id} language=None season=None quality=None key={key}")
 
@@ -5382,8 +5389,6 @@ async def ser_back_callback(client: Client, query: CallbackQuery):
     series = await get_series(series_id)
     if not series:
         series = await get_series_by_key(series_id)
-    if not series:
-        return await query.answer("⚠️ Series not found in database.", show_alert=True)
     if not series:
         return await query.answer("⚠️ Series not found in database.", show_alert=True)
 
