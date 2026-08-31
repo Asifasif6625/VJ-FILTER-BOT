@@ -311,9 +311,14 @@ async def search_series(query: str) -> list[dict]:
     if not q_tokens:
         return []
 
+    # Clean query by removing season / episode / year tokens for base title matching
+    clean_raw = re.sub(r"\b(?:s\d+|season\s*\d+|ep?\d+|episode\s*\d+|\d{4})\b", "", q, flags=re.IGNORECASE).strip()
+    clean_norm = _normalize(clean_raw)
+    clean_tokens = [w for w in clean_norm.split(" ") if w] if clean_norm else q_tokens
+
     # 1. Retrieve candidates from MongoDB efficiently using regex
     token_patterns = []
-    for tok in q_tokens:
+    for tok in set(q_tokens + clean_tokens):
         if len(tok) <= 2:
             token_patterns.append(re.escape(tok))
         elif len(tok) <= 4:
@@ -321,7 +326,7 @@ async def search_series(query: str) -> list[dict]:
         else:
             token_patterns.append(re.escape(tok[:max(3, len(tok)-2)]))
             
-    combined_pattern = "|".join(token_patterns)
+    combined_pattern = "|".join(token_patterns) if token_patterns else re.escape(q_norm)
     try:
         mongo_regex = re.compile(combined_pattern, re.IGNORECASE)
     except Exception:
@@ -351,6 +356,11 @@ async def search_series(query: str) -> list[dict]:
     for doc in candidates:
         title_norm = doc.get("normalized_name", "")
         is_match, score = _score_series_candidate(q_norm, q_tokens, title_norm)
+        if not is_match and clean_norm and clean_norm != q_norm:
+            is_match_clean, score_clean = _score_series_candidate(clean_norm, clean_tokens, title_norm)
+            if is_match_clean and score_clean > score:
+                is_match, score = is_match_clean, score_clean
+
         if is_match and score > 0.0:
             scored_results.append((score, doc))
 
