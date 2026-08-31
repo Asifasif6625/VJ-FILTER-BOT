@@ -1254,9 +1254,9 @@ async def fetch_auto_movie_metadata(client: Client, chat_id: int | str, loading_
 
 async def fetch_auto_series_metadata(client: Client, chat_id: int | str, loading_msg: Message, session_id: str, text: str, uid: int):
     """
-    Dedicated metadata and filter builder task for Auto Series Add.
-    Executes with structured logging, timeout protection, and guaranteed error recovery:
-    WAIT_IMDB -> FETCHING_METADATA -> METADATA_COMPLETE -> SCANNING -> GROUPING -> FILTER_SAVE -> RESULT.
+    Auto Series Add metadata task.
+    State machine:
+    WAIT_IMDB -> FETCHING_METADATA -> METADATA_COMPLETE -> WAIT_SEASON -> (Season-by-Season via as_season#) -> as_finish# -> COMPLETED
     """
     print("### AS_FETCH_ENTERED ###", flush=True)
     logger.info(f"[AS_FETCH_ENTERED] session_id={session_id} user_id={uid} text={text}")
@@ -1265,6 +1265,7 @@ async def fetch_auto_series_metadata(client: Client, chat_id: int | str, loading
         s_data.update({
             "session_id": session_id,
             "user_id": uid,
+            "chat_id": chat_id,
             "state": "FETCHING_METADATA",
             "metadata_complete": False,
             "title": None,
@@ -1277,8 +1278,8 @@ async def fetch_auto_series_metadata(client: Client, chat_id: int | str, loading
         m_imdb = re.search(r"(?:imdb\.com/title/)?(tt\d{5,12})", text, re.I)
         m_tmdb = re.search(r'(?:https?://)?(?:www\.)?themoviedb\.org/(movie|tv)/(\d+)', text, re.I)
 
-        print("### AS_METADATA_START ###", flush=True)
-        logger.info(f"[AS_METADATA_START] text={text}")
+        print("### AS_METADATA_REQUEST ###", flush=True)
+        logger.info(f"[AS_METADATA_REQUEST] text={text}")
 
         info = None
         if m_tmdb:
@@ -1319,167 +1320,64 @@ async def fetch_auto_series_metadata(client: Client, chat_id: int | str, loading
         s_rating = str(info.get("rating") or "").strip()
         s_poster = info.get("poster") or ""
         s_plot = info.get("plot") or ""
+        total_seasons = int(info.get("seasons") or 1)
+        if total_seasons < 1:
+            total_seasons = 1
+
+        from database.series_db import get_series_by_name
+        existing = await get_series_by_name(_normalize(s_title))
+        series_id = str(existing["_id"]) if existing else None
 
         s_data.update({
             "session_id": session_id,
             "user_id": uid,
+            "chat_id": chat_id,
             "title": s_title,
             "year": s_year,
             "genre": s_genre,
             "rating": s_rating,
             "poster": s_poster,
             "description": s_plot,
+            "total_seasons": total_seasons,
+            "available_seasons": list(range(1, total_seasons + 1)),
+            "processed_seasons": [],
+            "series_id": series_id,
             "metadata_complete": True,
-            "state": "METADATA_COMPLETE",
+            "state": "WAIT_SEASON",
         })
         temp.AUTO_SERIES[session_id] = s_data
         temp.AUTO_SERIES[uid] = s_data
-        set_wizard_session(uid, workflow="AUTO_SERIES", state="METADATA_COMPLETE", data=s_data, chat_id=chat_id)
+        set_wizard_session(uid, workflow="AUTO_SERIES", state="WAIT_SEASON", data=s_data, chat_id=chat_id)
 
         print("### AS_METADATA_COMPLETE ###", flush=True)
-        logger.info(f"[AS_METADATA_COMPLETE] title={s_title} year={s_year} rating={s_rating}")
+        logger.info(f"[AS_METADATA_COMPLETE] title={s_title} year={s_year} rating={s_rating} seasons={total_seasons}")
 
-        # Edit loading UI to show series found & scanning
-        series_found_text = (
-            f"📺 <b>Series Found:</b> {html.escape(str(s_title))} ({s_year})\n\n"
-            f"🔍 <b>Scanning database for series episodes...</b>"
+        # Render Season Selection UI (interactive season-by-season processing)
+        rows = []
+        season_row = []
+        for s_num in s_data["available_seasons"]:
+            season_row.append(InlineKeyboardButton(f"📅 Season {s_num}", callback_data=f"as_season#{session_id}#{s_num}"))
+            if len(season_row) == 2:
+                rows.append(season_row)
+                season_row = []
+        if season_row:
+            rows.append(season_row)
+        rows.append([InlineKeyboardButton("🏁 Finish", callback_data=f"as_finish#{session_id}")])
+
+        season_markup = InlineKeyboardMarkup(rows)
+        series_info_text = (
+            f"📺 <b>{html.escape(s_title)}</b> ({s_year})\n"
+            f"⭐ Rating: {html.escape(s_rating)}/10 | 🎭 {html.escape(s_genre)}\n\n"
+            f"👇 <b>Select a Season to process:</b>"
         )
-        await _safe_edit_message(loading_msg, series_found_text, parse_mode=enums.ParseMode.HTML, timeout=5)
-
-        # ── Database Candidate Scan ──────────────────────────────────────────
-        print("### AS_FILE_SCAN_START ###", flush=True)
-        logger.info(f"[AS_FILE_SCAN_START] title={s_title}")
-        s_data["state"] = "SCANNING"
-
-        from database.series_db import get_series_by_name, create_series, add_series_file, series_col
-        from bson import ObjectId
-
-        existing = await get_series_by_name(_normalize(s_title))
-        series_id = str(existing["_id"]) if existing else None
-
-        scan_res = await asyncio.wait_for(
-            scan_sdatabase_for_series(chat_id, s_title, season=None, series_id=series_id, client=client),
-            timeout=40
-        )
-        print("### AS_FILE_SCAN_COMPLETE ###", flush=True)
-        logger.info(f"[AS_FILE_SCAN_COMPLETE] scanned={scan_res.get('total_scanned', 0)} matched={scan_res.get('total_matched', 0)}")
-
-        # ── Grouping ────────────────────────────────────────────────────────
-        print("### AS_GROUPING_START ###", flush=True)
-        logger.info(f"[AS_GROUPING_START] matched={scan_res.get('total_matched', 0)}")
-        organized_by_season = scan_res.get("organized_by_season") or {}
-        seasons_found = sorted([int(s) for s in organized_by_season.keys() if str(s).isdigit()]) if organized_by_season else ([1] if not info.get("seasons") else list(range(1, int(info["seasons"]) + 1)))
-        if not seasons_found:
-            seasons_found = [1]
-
-        all_langs = set()
-        all_quals = set()
-        for s_num, l_dict in organized_by_season.items():
-            for l_name, q_dict in l_dict.items():
-                all_langs.add(l_name)
-                for q_name in q_dict.keys():
-                    all_quals.add(q_name)
-
-        languages_list = sorted(list(all_langs)) if all_langs else ["Malayalam", "Tamil", "Hindi", "English"]
-        qualities_list = sorted(list(all_quals)) if all_quals else ["480p", "720p", "1080p"]
-
-        print("### AS_GROUPING_COMPLETE ###", flush=True)
-        logger.info(f"[AS_GROUPING_COMPLETE] seasons={seasons_found} languages={languages_list} qualities={qualities_list}")
-
-        # ── Save / Update Filter ─────────────────────────────────────────────
-        print("### AS_FILTER_SAVE_START ###", flush=True)
-        logger.info(f"[AS_FILTER_SAVE_START] series_id={series_id}")
-
-        if existing:
-            series_id = str(existing["_id"])
-            await series_col.update_one(
-                {"_id": ObjectId(series_id)},
-                {
-                    "$addToSet": {
-                        "languages": {"$each": languages_list},
-                        "seasons": {"$each": seasons_found},
-                        "qualities": {"$each": qualities_list}
-                    },
-                    "$set": {
-                        "poster": s_poster or existing.get("poster", ""),
-                        "rating": s_rating or existing.get("rating", ""),
-                        "genre": s_genre or existing.get("genre", ""),
-                        "updated_at": datetime.utcnow()
-                    }
-                }
-            )
-        else:
-            series_id = await create_series({
-                "name": s_title,
-                "year": s_year,
-                "genre": s_genre,
-                "rating": s_rating,
-                "poster": s_poster,
-                "description": s_plot,
-                "languages": languages_list,
-                "seasons": seasons_found,
-                "qualities": qualities_list,
-                "created_by": uid
-            })
-
-        new_files = scan_res.get("valid_new_files") or []
-        for f in new_files:
-            try:
-                await add_series_file({
-                    "series_id": series_id,
-                    "language": f["language"],
-                    "season": f["season"],
-                    "episode": f["episode"],
-                    "quality": f["quality"],
-                    "chat_id": chat_id,
-                    "file_id": f.get("file_id"),
-                    "file_name": f.get("file_name"),
-                    "file_size": f.get("file_size", 0)
-                })
-            except Exception as fe:
-                logger.error(f"[AUTO SERIES FILE ADD ERROR] {fe}")
-
-        print("### AS_FILTER_SAVE_COMPLETE ###", flush=True)
-        logger.info(f"[AS_FILTER_SAVE_COMPLETE] series_id={series_id} new_files={len(new_files)}")
-
-        print("### AS_WORKFLOW_COMPLETE ###", flush=True)
-        logger.info(f"[AS_WORKFLOW_COMPLETE] title={s_title} series_id={series_id} matched={scan_res.get('total_matched', 0)} new={len(new_files)}")
-
-        clear_wizard_session(uid)
-        try:
-            await announce_filter_created(client, filter_type="series", filter_id=str(series_id))
-        except Exception as ae:
-            logger.warning(f"[AUTO SERIES ANNOUNCEMENT ERROR] {ae}")
-        temp.AUTO_SERIES.pop(uid, None)
-
-        s_data["state"] = "RESULT"
-        card_text = (
-            f"📺 <b>Auto Series Configured</b>\n\n"
-            f"<b>{html.escape(str(s_title))}</b> ({s_year})\n"
-            f"⭐ Rating: {html.escape(str(s_rating))}/10\n"
-            f"🎭 Genre: {html.escape(str(s_genre))}\n\n"
-            f"📁 <b>Files Scanned:</b> {scan_res.get('total_scanned', 0)}\n"
-            f"✅ <b>Matching Episodes:</b> {scan_res.get('total_matched', 0)}\n"
-            f"🆕 <b>New Files Added:</b> {len(new_files)}\n"
-            f"⚠️ <b>Duplicates Skipped:</b> {scan_res.get('duplicates_skipped', 0)}\n\n"
-            "Series is ready and searchable by users."
-        )
-        markup = InlineKeyboardMarkup([
-            [InlineKeyboardButton("➕ Add More Episodes", callback_data=f"sw#sfiles:{series_id}")],
-            [InlineKeyboardButton("🖼 Change Poster", callback_data=f"sw#sthumb:{series_id}")],
-            [InlineKeyboardButton("🗑 Delete Series", callback_data=f"sw#sdel:{series_id}")],
-            [InlineKeyboardButton("« Back to Menu", callback_data="sw#menu")]
-        ])
-        try:
-            await loading_msg.edit_text(card_text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
-        except Exception:
-            await client.send_message(chat_id, card_text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
+        await _safe_edit_message(loading_msg, series_info_text, reply_markup=season_markup, parse_mode=enums.ParseMode.HTML, timeout=5)
 
     except asyncio.TimeoutError:
-        logger.error(f"[AUTO SERIES] TIMEOUT query={text}")
+        print("### AS_ERROR ###", flush=True)
+        logger.error(f"[AS_ERROR] TIMEOUT query={text}")
         clear_wizard_session(uid)
         temp.AUTO_SERIES.pop(uid, None)
-        err_text = "❌ <b>Series processing timed out. Please try again.</b>"
+        err_text = "❌ <b>Unable to fetch series data. Please try again.</b>"
         retry_markup = InlineKeyboardMarkup([
             [
                 InlineKeyboardButton("🔄 Retry", callback_data="sw#start_auto"),
@@ -1502,10 +1400,11 @@ async def fetch_auto_series_metadata(client: Client, chat_id: int | str, loading
         except Exception:
             pass
     except Exception as e:
-        logger.exception(f"[AUTO SERIES] WORKFLOW ERROR query={text}: {e}")
+        print("### AS_ERROR ###", flush=True)
+        logger.exception(f"[AS_ERROR] WORKFLOW ERROR query={text}: {e}")
         clear_wizard_session(uid)
         temp.AUTO_SERIES.pop(uid, None)
-        err_text = f"❌ <b>Series processing failed:</b> {html.escape(str(e))}\n\nPlease try again."
+        err_text = f"❌ <b>Unable to fetch series data. Please try again.</b>\n\nError: {html.escape(str(e))}"
         retry_markup = InlineKeyboardMarkup([
             [
                 InlineKeyboardButton("🔄 Retry", callback_data="sw#start_auto"),
@@ -1521,6 +1420,206 @@ async def fetch_auto_series_metadata(client: Client, chat_id: int | str, loading
                 pass
     finally:
         AUTO_SERIES_METADATA_TASKS.pop(session_id, None)
+
+
+@Client.on_callback_query(filters.regex(r"^as_season#"), group=-15)
+async def as_season_callback(client: Client, query: CallbackQuery):
+    parts = query.data.split("#")
+    if len(parts) < 3:
+        return await query.answer("Invalid season request.", show_alert=True)
+    session_id = parts[1]
+    season_num = int(parts[2]) if parts[2].isdigit() else 1
+
+    s_data = temp.AUTO_SERIES.get(session_id)
+    if not s_data:
+        return await query.answer("Session expired. Please restart /series.", show_alert=True)
+
+    uid = query.from_user.id
+    chat_id = query.message.chat.id
+    s_title = s_data.get("title", "Series")
+
+    print("### AS_SEASON_SELECTED ###", flush=True)
+    logger.info(f"[AS_SEASON_SELECTED] season={season_num} title={s_title}")
+
+    await query.answer(f"🔍 Scanning Season {season_num}...")
+    try:
+        await query.message.edit_text(
+            f"🔍 <b>Scanning database for Season {season_num} of {html.escape(s_title)}...</b>",
+            parse_mode=enums.ParseMode.HTML
+        )
+    except Exception:
+        pass
+
+    print("### AS_FILE_SCAN_START ###", flush=True)
+    logger.info(f"[AS_FILE_SCAN_START] season={season_num} title={s_title}")
+
+    from database.series_db import scan_sdatabase_for_series, create_series, add_series_file, series_col
+    from bson import ObjectId
+
+    scan_res = await scan_sdatabase_for_series(chat_id, s_title, season=season_num, series_id=s_data.get("series_id"), client=client)
+
+    print("### AS_FILE_SCAN_COMPLETE ###", flush=True)
+    logger.info(f"[AS_FILE_SCAN_COMPLETE] season={season_num} matched={scan_res.get('total_matched', 0)}")
+
+    new_files = scan_res.get("valid_new_files") or []
+    tot_matched = scan_res.get("total_matched", 0)
+
+    if tot_matched == 0:
+        print("### AS_ERROR ###", flush=True)
+        logger.warning(f"[AS_ERROR] no_files season={season_num}")
+        if season_num not in s_data.setdefault("processed_seasons", []):
+            s_data["processed_seasons"].append(season_num)
+
+        # Build keyboard for remaining seasons + Finish
+        rows = []
+        season_row = []
+        for s in s_data.get("available_seasons", [1]):
+            if s not in s_data.get("processed_seasons", []):
+                season_row.append(InlineKeyboardButton(f"📅 Season {s}", callback_data=f"as_season#{session_id}#{s}"))
+                if len(season_row) == 2:
+                    rows.append(season_row)
+                    season_row = []
+        if season_row:
+            rows.append(season_row)
+        rows.append([InlineKeyboardButton("🏁 Finish", callback_data=f"as_finish#{session_id}")])
+
+        return await query.message.edit_text(
+            f"❌ <b>No matching files found for Season {season_num}.</b>\n\n"
+            "Please select another season to process or click <b>Finish</b>:",
+            reply_markup=InlineKeyboardMarkup(rows),
+            parse_mode=enums.ParseMode.HTML
+        )
+
+    # Files found -> Save Season {season_num}
+    print("### AS_SAVE_START ###", flush=True)
+    logger.info(f"[AS_SAVE_START] season={season_num} files={len(new_files)}")
+
+    detected_langs = set()
+    detected_quals = set()
+    for f in (scan_res.get("all_matching_files") or new_files):
+        if f.get("language"):
+            detected_langs.add(f["language"])
+        if f.get("quality"):
+            detected_quals.add(f["quality"])
+
+    languages_list = sorted(list(detected_langs)) if detected_langs else ["Malayalam", "Tamil", "Hindi", "English"]
+    qualities_list = sorted(list(detected_quals)) if detected_quals else ["480p", "720p", "1080p"]
+
+    series_id = s_data.get("series_id")
+    if series_id:
+        await series_col.update_one(
+            {"_id": ObjectId(series_id)},
+            {
+                "$addToSet": {
+                    "languages": {"$each": languages_list},
+                    "seasons": season_num,
+                    "qualities": {"$each": qualities_list}
+                },
+                "$set": {"updated_at": datetime.utcnow()}
+            }
+        )
+    else:
+        series_id = await create_series({
+            "name": s_title,
+            "year": s_data.get("year", "N/A"),
+            "genre": s_data.get("genre", "Drama"),
+            "rating": s_data.get("rating", ""),
+            "poster": s_data.get("poster", ""),
+            "description": s_data.get("description", ""),
+            "languages": languages_list,
+            "seasons": [season_num],
+            "qualities": qualities_list,
+            "created_by": uid
+        })
+        s_data["series_id"] = str(series_id)
+
+    for f in new_files:
+        try:
+            await add_series_file({
+                "series_id": str(series_id),
+                "language": f["language"],
+                "season": f["season"],
+                "episode": f["episode"],
+                "quality": f["quality"],
+                "chat_id": chat_id,
+                "file_id": f.get("file_id"),
+                "file_name": f.get("file_name"),
+                "file_size": f.get("file_size", 0)
+            })
+        except Exception as fe:
+            logger.error(f"[AUTO SERIES FILE ADD ERROR] {fe}")
+
+    if season_num not in s_data.setdefault("processed_seasons", []):
+        s_data["processed_seasons"].append(season_num)
+
+    print("### AS_SAVE_COMPLETE ###", flush=True)
+    logger.info(f"[AS_SAVE_COMPLETE] season={season_num} series_id={series_id}")
+
+    print("### AS_NEXT_SEASON ###", flush=True)
+    logger.info(f"[AS_NEXT_SEASON] season={season_num}")
+
+    # Build keyboard for remaining seasons + Finish
+    rows = []
+    season_row = []
+    for s in s_data.get("available_seasons", [1]):
+        if s not in s_data.get("processed_seasons", []):
+            season_row.append(InlineKeyboardButton(f"📅 Season {s}", callback_data=f"as_season#{session_id}#{s}"))
+            if len(season_row) == 2:
+                rows.append(season_row)
+                season_row = []
+    if season_row:
+        rows.append(season_row)
+    rows.append([InlineKeyboardButton("🏁 Finish", callback_data=f"as_finish#{session_id}")])
+
+    return await query.message.edit_text(
+        f"✅ <b>Season {season_num} saved successfully.</b>\n\n"
+        f"📁 <b>Episodes Linked:</b> {len(new_files)}\n"
+        f"🌐 <b>Languages:</b> {', '.join(languages_list)}\n"
+        f"⚡ <b>Qualities:</b> {', '.join(qualities_list)}\n\n"
+        "Select next season to process or Finish:",
+        reply_markup=InlineKeyboardMarkup(rows),
+        parse_mode=enums.ParseMode.HTML
+    )
+
+
+@Client.on_callback_query(filters.regex(r"^as_finish#"), group=-15)
+async def as_finish_callback(client: Client, query: CallbackQuery):
+    session_id = query.data.split("#")[1]
+    s_data = temp.AUTO_SERIES.get(session_id)
+    if not s_data:
+        return await query.answer("Session expired.", show_alert=True)
+
+    uid = query.from_user.id
+    series_id = s_data.get("series_id")
+
+    print("### AS_COMPLETED ###", flush=True)
+    logger.info(f"[AS_COMPLETED] series_id={series_id}")
+
+    clear_wizard_session(uid)
+    temp.AUTO_SERIES.pop(session_id, None)
+    temp.AUTO_SERIES.pop(uid, None)
+
+    if series_id:
+        try:
+            await announce_filter_created(client, filter_type="series", filter_id=str(series_id))
+        except Exception:
+            pass
+
+    card_text = (
+        f"📺 <b>Auto Series Configured Successfully!</b>\n\n"
+        f"<b>{html.escape(str(s_data['title']))}</b> ({s_data.get('year', '')})\n"
+        f"⭐ Rating: {html.escape(str(s_data.get('rating', '')))}/10\n"
+        f"🎭 Genre: {html.escape(str(s_data.get('genre', '')))}\n\n"
+        f"✅ <b>Processed Seasons:</b> {', '.join(f'Season {s}' for s in s_data.get('processed_seasons', [])) or 'Completed'}\n\n"
+        "Series is ready and searchable by users."
+    )
+    markup = InlineKeyboardMarkup([
+        [InlineKeyboardButton("➕ Add More Episodes", callback_data=f"sw#sfiles:{series_id}")],
+        [InlineKeyboardButton("🖼 Change Poster", callback_data=f"sw#sthumb:{series_id}")],
+        [InlineKeyboardButton("🗑 Delete Series", callback_data=f"sw#sdel:{series_id}")],
+        [InlineKeyboardButton("« Back to Menu", callback_data="sw#menu")]
+    ])
+    return await query.message.edit_text(card_text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
 
 
 async def _auto_movie_metadata_watchdog(client, chat_id, loading_msg, session_id):
@@ -3477,18 +3576,33 @@ async def wizard_text_handler(client: Client, message: Message):
 
         if cur_state == S_NAME:
             wiz["name"] = text.strip()
-            wiz["state"] = S_SEASONS
-            set_wizard_session(uid, workflow="SERIES_WIZARD", state=S_SEASONS, data=wiz, chat_id=chat_id)
-            _log_wizard_step(uid, "SERIES_WIZARD", S_NAME, S_SEASONS)
-            season_markup = _season_keyboard(10, [], show_skip=True)
+            wiz["state"] = S_YEAR
+            set_wizard_session(uid, workflow="SERIES_WIZARD", state=S_YEAR, data=wiz, chat_id=chat_id)
+            _log_wizard_step(uid, "SERIES_WIZARD", S_NAME, S_YEAR)
             return await message.reply_text(
-                f"📺 Series Name: <b>{html.escape(text.strip())}</b>\n\n"
-                "📅 <b>Select or Enter Season:</b>\n"
-                "Click a season below or send season number (e.g. <code>1</code>, <code>2</code>) or /skip for All Seasons:",
-                reply_markup=season_markup,
+                f"📺 Series Name: <b>{html.escape(wiz['name'])}</b>\n\n"
+                "📅 Please send the <b>Release Year</b> (e.g. <code>2021</code>):",
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="sw#cancel")]]),
                 parse_mode=enums.ParseMode.HTML
             )
-        elif cur_state == S_SEASONS:
+        elif cur_state == S_YEAR:
+            wiz["year"] = text.strip()
+            wiz["state"] = S_DONE
+            set_wizard_session(uid, workflow="SERIES_WIZARD", state=S_DONE, data=wiz, chat_id=chat_id)
+            _log_wizard_step(uid, "SERIES_WIZARD", S_YEAR, S_DONE)
+            config_markup = InlineKeyboardMarkup([
+                [InlineKeyboardButton("📅 Scan / Select Season", callback_data="sw#season_scan_prompt")],
+                [InlineKeyboardButton("🌐 Languages", callback_data="sw#edit#langs"), InlineKeyboardButton("⚡ Qualities", callback_data="sw#edit#quals")],
+                [InlineKeyboardButton("🖼 Poster", callback_data="sw#edit#poster")],
+                [InlineKeyboardButton("💾 Save Series Filter", callback_data="sw#save_manual")],
+                [InlineKeyboardButton("❌ Cancel", callback_data="sw#cancel")]
+            ])
+            return await message.reply_text(
+                _series_card(wiz) + "\n\n⚙️ <b>Series Configuration</b>\nName and Year configured. You can customize optional settings or click <b>Save Series Filter</b> directly:",
+                reply_markup=config_markup,
+                parse_mode=enums.ParseMode.HTML
+            )
+        elif cur_state in ("WAIT_SCAN_SEASON", S_SEASONS):
             s_input = text.strip().lower()
             season_val = None
             if s_input not in ("/skip", "all", "all seasons", "0"):
@@ -3497,8 +3611,8 @@ async def wizard_text_handler(client: Client, message: Message):
                     season_val = int(m_s.group(0))
 
             wiz["target_season"] = season_val
-            wiz["state"] = "SCANNING_MANUAL"
-            set_wizard_session(uid, workflow="SERIES_WIZARD", state="SCANNING_MANUAL", data=wiz, chat_id=chat_id)
+            wiz["state"] = S_DONE
+            set_wizard_session(uid, workflow="SERIES_WIZARD", state=S_DONE, data=wiz, chat_id=chat_id)
 
             load_msg = await message.reply_text(
                 f"🔍 <b>Searching files for '{html.escape(wiz['name'])}'...</b>",
@@ -3516,9 +3630,10 @@ async def wizard_text_handler(client: Client, message: Message):
             if tot_matched == 0:
                 return await load_msg.edit_text(
                     f"❌ <b>No matching files found for '{html.escape(wiz['name'])}'.</b>\n\n"
-                    "Please ensure episode files exist in your database with Series Name and Season/Episode (e.g. <code>S01E01</code>).",
+                    "You can still save the Series filter or scan another season.",
                     reply_markup=InlineKeyboardMarkup([
-                        [InlineKeyboardButton("🔄 Try Another Name", callback_data="sw#start_manual")],
+                        [InlineKeyboardButton("💾 Save Series Filter Anyway", callback_data="sw#save_manual")],
+                        [InlineKeyboardButton("📅 Scan Another Season", callback_data="sw#season_scan_prompt")],
                         [InlineKeyboardButton("❌ Cancel", callback_data="sw#cancel")]
                     ]),
                     parse_mode=enums.ParseMode.HTML
@@ -3532,7 +3647,7 @@ async def wizard_text_handler(client: Client, message: Message):
 
             res_text = (
                 f"📊 <b>Manual Series Scan Result</b>\n\n"
-                f"📺 <b>Series:</b> <code>{html.escape(wiz['name'])}</code>\n"
+                f"📺 <b>Series:</b> <code>{html.escape(wiz['name'])}</code> ({wiz.get('year', 'N/A')})\n"
                 f"📅 <b>Seasons:</b> {seasons_disp}\n"
                 f"🌐 <b>Languages:</b> {', '.join(langs) or 'English'}\n"
                 f"⚡ <b>Qualities:</b> {', '.join(quals) or '720p'}\n"
@@ -4043,12 +4158,28 @@ async def series_wizard_callback(client: Client, query: CallbackQuery):
                 langs.append(val)
             return await query.message.edit_reply_markup(reply_markup=_lang_keyboard(langs, show_custom=(wiz.get("mode") != "edit")))
 
+    elif data == "sw#season_scan_prompt":
+        wiz = temp.SERIES_WIZARD.get(uid)
+        if not wiz:
+            return await query.answer("Session expired.", show_alert=True)
+        wiz["state"] = "WAIT_SCAN_SEASON"
+        set_wizard_session(uid, workflow="SERIES_WIZARD", state="WAIT_SCAN_SEASON", data=wiz, chat_id=chat_id)
+        season_markup = _season_keyboard(10, [], show_skip=True)
+        return await query.message.edit_text(
+            f"📺 Series: <b>{html.escape(wiz.get('name', 'Series'))}</b>\n\n"
+            "📅 <b>Select or Enter Season to Scan:</b>\n"
+            "Click a season below or send season number (e.g. <code>1</code>, <code>2</code>) or /skip for All Seasons:",
+            reply_markup=season_markup,
+            parse_mode=enums.ParseMode.HTML
+        )
+
     elif data == "sw#save_manual":
         wiz = temp.SERIES_WIZARD.get(uid)
         if not wiz:
             return await query.answer("Session expired.", show_alert=True)
 
         s_title = wiz.get("name", "Series")
+        s_year = wiz.get("year", "N/A")
         scan_res = wiz.get("scan_res") or {}
         valid_files = scan_res.get("valid_new_files") or scan_res.get("all_matching_files") or []
 
@@ -4057,7 +4188,7 @@ async def series_wizard_callback(client: Client, query: CallbackQuery):
 
         existing = await get_series_by_name(_normalize(s_title))
         org_seasons = scan_res.get("organized_by_season") or {}
-        seasons_found = sorted([int(s) for s in org_seasons.keys() if str(s).isdigit()]) if org_seasons else ([wiz.get("target_season") or 1])
+        seasons_found = sorted([int(s) for s in org_seasons.keys() if str(s).isdigit()]) if org_seasons else (wiz.get("seasons") or [wiz.get("target_season") or 1])
 
         all_langs = set()
         all_quals = set()
@@ -4067,8 +4198,8 @@ async def series_wizard_callback(client: Client, query: CallbackQuery):
             if f.get("quality"):
                 all_quals.add(f["quality"])
 
-        languages_list = sorted(list(all_langs)) if all_langs else ["Malayalam", "Tamil", "Hindi", "English"]
-        qualities_list = sorted(list(all_quals)) if all_quals else ["480p", "720p", "1080p"]
+        languages_list = sorted(list(all_langs)) if all_langs else (wiz.get("languages") or ["Malayalam", "Tamil", "Hindi", "English"])
+        qualities_list = sorted(list(all_quals)) if all_quals else (wiz.get("qualities") or ["480p", "720p", "1080p"])
 
         if existing:
             series_id = str(existing["_id"])
@@ -4080,17 +4211,24 @@ async def series_wizard_callback(client: Client, query: CallbackQuery):
                         "seasons": {"$each": seasons_found},
                         "qualities": {"$each": qualities_list}
                     },
-                    "$set": {"updated_at": datetime.utcnow()}
+                    "$set": {
+                        "year": s_year if s_year != "N/A" else existing.get("year", "N/A"),
+                        "poster": wiz.get("poster") or existing.get("poster", ""),
+                        "rating": wiz.get("rating") or existing.get("rating", ""),
+                        "genre": wiz.get("genre") or existing.get("genre", "Drama"),
+                        "description": wiz.get("description") or existing.get("description", ""),
+                        "updated_at": datetime.utcnow()
+                    }
                 }
             )
         else:
             series_id = await create_series({
                 "name": s_title,
-                "year": "N/A",
-                "genre": "N/A",
-                "rating": "",
-                "poster": "",
-                "description": "",
+                "year": s_year,
+                "genre": wiz.get("genre", "Drama"),
+                "rating": wiz.get("rating", ""),
+                "poster": wiz.get("poster", ""),
+                "description": wiz.get("description", ""),
                 "languages": languages_list,
                 "seasons": seasons_found,
                 "qualities": qualities_list,
@@ -4100,7 +4238,7 @@ async def series_wizard_callback(client: Client, query: CallbackQuery):
         for f in valid_files:
             try:
                 await add_series_file({
-                    "series_id": series_id,
+                    "series_id": str(series_id),
                     "language": f["language"],
                     "season": f["season"],
                     "episode": f["episode"],
@@ -4120,13 +4258,21 @@ async def series_wizard_callback(client: Client, query: CallbackQuery):
         except Exception:
             pass
 
-        return await query.message.edit_text(
-            f"✅ <b>Series Filter Saved Successfully!</b>\n\n"
-            f"📺 <b>{html.escape(s_title)}</b>\n"
-            f"📁 <b>Episodes Linked:</b> {len(valid_files)}\n"
-            f"<i>ID: <code>{series_id}</code></i>",
-            parse_mode=enums.ParseMode.HTML
+        card_text = (
+            f"📺 <b>Manual Series Filter Saved!</b>\n\n"
+            f"<b>{html.escape(str(s_title))}</b> ({s_year})\n"
+            f"📁 <b>Matching Episodes Linked:</b> {len(valid_files)}\n"
+            f"🌐 <b>Languages:</b> {', '.join(languages_list)}\n"
+            f"⚡ <b>Qualities:</b> {', '.join(qualities_list)}\n\n"
+            "Series is ready and searchable by users."
         )
+        markup = InlineKeyboardMarkup([
+            [InlineKeyboardButton("➕ Add More Episodes", callback_data=f"sw#sfiles:{series_id}")],
+            [InlineKeyboardButton("🖼 Change Poster", callback_data=f"sw#sthumb:{series_id}")],
+            [InlineKeyboardButton("🗑 Delete Series", callback_data=f"sw#sdel:{series_id}")],
+            [InlineKeyboardButton("« Back to Menu", callback_data="sw#menu")]
+        ])
+        return await query.message.edit_text(card_text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
 
     elif data.startswith("sw#season#"):
         val = data.split("#")[2]
