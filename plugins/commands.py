@@ -1800,11 +1800,10 @@ async def send_batch_files(
                     return None
         return None
 
-    if len(prepared_items) == 1:
-        await _send_item(0, prepared_items[0])
-    else:
-        tasks = [_send_item(i, item) for i, item in enumerate(prepared_items)]
-        await asyncio.gather(*tasks, return_exceptions=True)
+    for i, item in enumerate(prepared_items):
+        await _send_item(i, item)
+        if len(prepared_items) > 1:
+            await asyncio.sleep(0.35)
 
     sent_messages = [m for m in sent_results if m is not None]
     failed_count = total_files - len(sent_messages)
@@ -1841,30 +1840,33 @@ async def send_series_files_to_user(client, user_id, files, query=None):
     def _get_episode_num(f):
         ep = f.get("episode")
         if isinstance(ep, int) and ep > 0:
-            return ep
+            return (ep, f.get("file_name", ""))
         try:
-            if ep is not None and str(ep).isdigit() and int(ep) > 0:
-                return int(ep)
+            if ep is not None and str(ep).strip().lstrip("-").isdigit() and int(str(ep).strip()) > 0:
+                return (int(str(ep).strip()), f.get("file_name", ""))
         except Exception:
             pass
 
         ep_idx = f.get("episode_index")
         if isinstance(ep_idx, int) and ep_idx > 0:
-            return ep_idx
+            return (ep_idx, f.get("file_name", ""))
         try:
-            if ep_idx is not None and str(ep_idx).isdigit() and int(ep_idx) > 0:
-                return int(ep_idx)
+            if ep_idx is not None and str(ep_idx).strip().lstrip("-").isdigit() and int(str(ep_idx).strip()) > 0:
+                return (int(str(ep_idx).strip()), f.get("file_name", ""))
         except Exception:
             pass
 
-        from plugins.series import _extract_episode_number
-        fname = f.get("file_name", "")
-        extracted = _extract_episode_number(fname)
-        if extracted is not None and extracted > 0:
-            return extracted
-        return 99999
+        try:
+            from plugins.series import _extract_episode_number
+            fname = f.get("file_name", "")
+            extracted = _extract_episode_number(fname)
+            if extracted is not None and extracted > 0:
+                return (extracted, fname)
+        except Exception:
+            pass
+        return (99999, f.get("file_name", ""))
 
-    # 1. Sort files numerically by episode number
+    # 1. Sort files strictly numerically by episode number (1, 2, 3... 10)
     sorted_files = sorted(files, key=_get_episode_num)
 
     # 2. Deduplicate exact duplicate records (same file_id)
