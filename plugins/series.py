@@ -2745,66 +2745,48 @@ async def send_announcement_media(
     reply_markup: InlineKeyboardMarkup = None
 ):
     """
-    Sends announcement message with support for text, photo, video, document, animation.
+    Sends announcement. If media/poster is provided, sends the media first,
+    followed immediately by the text message with the bright blue styled inline button.
     """
-    if not media:
-        return await client.send_message(
-            chat_id=chat_id,
-            text=caption,
-            reply_markup=reply_markup,
-            parse_mode=enums.ParseMode.HTML
-        )
+    if media:
+        m_str = str(media).lower()
 
-    m_str = str(media).lower()
+        if m_str.endswith((".mp4", ".mkv", ".mov", ".webm")):
+            try:
+                await client.send_video(
+                    chat_id=chat_id,
+                    video=media
+                )
+            except Exception as e:
+                logger.warning(f"[ANNOUNCEMENT VIDEO FAILED] {e} - falling back")
 
-    if m_str.endswith((".mp4", ".mkv", ".mov", ".webm")):
-        try:
-            return await client.send_video(
-                chat_id=chat_id,
-                video=media,
-                caption=caption,
-                reply_markup=reply_markup,
-                parse_mode=enums.ParseMode.HTML
-            )
-        except Exception as e:
-            logger.warning(f"[ANNOUNCEMENT VIDEO FAILED] {e} - falling back")
+        elif m_str.endswith(".gif"):
+            try:
+                await client.send_animation(
+                    chat_id=chat_id,
+                    animation=media
+                )
+            except Exception as e:
+                logger.warning(f"[ANNOUNCEMENT ANIMATION FAILED] {e} - falling back")
 
-    if m_str.endswith(".gif"):
-        try:
-            return await client.send_animation(
-                chat_id=chat_id,
-                animation=media,
-                caption=caption,
-                reply_markup=reply_markup,
-                parse_mode=enums.ParseMode.HTML
-            )
-        except Exception as e:
-            logger.warning(f"[ANNOUNCEMENT ANIMATION FAILED] {e} - falling back")
+        else:
+            # Try photo first
+            try:
+                await client.send_photo(
+                    chat_id=chat_id,
+                    photo=media
+                )
+            except Exception as pe:
+                logger.warning(f"[ANNOUNCEMENT PHOTO FAILED] {pe} - trying document")
+                try:
+                    await client.send_document(
+                        chat_id=chat_id,
+                        document=media
+                    )
+                except Exception as de:
+                    logger.warning(f"[ANNOUNCEMENT DOCUMENT FAILED] {de}")
 
-    # Try photo first
-    try:
-        return await client.send_photo(
-            chat_id=chat_id,
-            photo=media,
-            caption=caption,
-            reply_markup=reply_markup,
-            parse_mode=enums.ParseMode.HTML
-        )
-    except Exception as pe:
-        logger.warning(f"[ANNOUNCEMENT PHOTO FAILED] {pe} - falling back")
-        # Try document
-        try:
-            return await client.send_document(
-                chat_id=chat_id,
-                document=media,
-                caption=caption,
-                reply_markup=reply_markup,
-                parse_mode=enums.ParseMode.HTML
-            )
-        except Exception as de:
-            logger.warning(f"[ANNOUNCEMENT DOCUMENT FAILED] {de} - falling back to text")
-
-    # Fallback to text message
+    # Send text message with the bright blue styled inline button
     return await client.send_message(
         chat_id=chat_id,
         text=caption,
