@@ -2646,26 +2646,37 @@ async def cmd_sync_series(client: Client, message: Message):
 def create_announcement_download_button(
     text: str = None,
     url: str = None,
-    style: str = None
+    style: str = "primary"
 ) -> InlineKeyboardButton:
     """
-    Creates an InlineKeyboardButton for the announcement with style support
-    if supported by the installed Pyrogram/Pyrofork version, falling back gracefully.
+    Creates an InlineKeyboardButton for the announcement with style support.
+    Explicitly logs debug details and applies style="primary" directly.
     """
     import info
     btn_text = text or getattr(info, "ANNOUNCEMENT_DOWNLOAD_BUTTON_TEXT", "👉  D O W N L O A D  📥  ↗")
     btn_style = style or getattr(info, "ANNOUNCEMENT_DOWNLOAD_BUTTON_STYLE", "primary")
-    valid_styles = ("primary", "success", "danger")
 
-    st = str(btn_style).strip().lower() if btn_style else "primary"
-    if st in valid_styles:
+    logger.info(f"[ANNOUNCEMENT STYLE DEBUG] requested_style={btn_style}")
+
+    # Create button with style parameter
+    try:
+        btn = InlineKeyboardButton(text=btn_text, url=url, style=btn_style)
+        logger.info(f"[ANNOUNCEMENT STYLE DEBUG] button_class={type(btn).__name__} button_style={getattr(btn, 'style', None)} button_url={url}")
+    except TypeError as te:
+        logger.warning(f"[ANNOUNCEMENT STYLE DEBUG] InlineKeyboardButton does not accept style keyword directly: {te}")
+        btn = InlineKeyboardButton(text=btn_text, url=url)
         try:
-            return InlineKeyboardButton(text=btn_text, url=url, style=st)
-        except TypeError:
-            pass
+            setattr(btn, "style", btn_style)
         except Exception:
             pass
-    return InlineKeyboardButton(text=btn_text, url=url)
+        logger.info(f"[ANNOUNCEMENT STYLE DEBUG] button_class={type(btn).__name__} button_style={getattr(btn, 'style', None)} button_url={url}")
+    except Exception as e:
+        logger.warning(f"[ANNOUNCEMENT STYLE DEBUG] Button creation error: {e}")
+        btn = InlineKeyboardButton(text=btn_text, url=url)
+
+    serialized_style = getattr(btn, "style", btn_style)
+    logger.info(f"[ANNOUNCEMENT STYLE DEBUG] serialized_style={serialized_style}")
+    return btn
 
 
 def build_announcement_download_keyboard(
@@ -2827,6 +2838,7 @@ async def announce_filter_created(client: Client, filter_type: str = "series", f
         super_movies_col
     )
     from bson import ObjectId
+    import info
 
     if not filter_id:
         return False
@@ -2846,6 +2858,8 @@ async def announce_filter_created(client: Client, filter_type: str = "series", f
         bot_username = str(bot_username).lstrip("@")
     else:
         bot_username = "Bot"
+
+    btn_style = getattr(info, "ANNOUNCEMENT_DOWNLOAD_BUTTON_STYLE", "primary")
 
     try:
         if filter_type == "series":
@@ -2880,6 +2894,14 @@ async def announce_filter_created(client: Client, filter_type: str = "series", f
                 season_str = "Season 1"
 
             download_url = f"https://t.me/{bot_username}?start=series_{filter_id}" if filter_id else None
+            logger.info(
+                f"[ANNOUNCEMENT PATH]\n"
+                f"function=announce_filter_created\n"
+                f"filter_type={filter_type}\n"
+                f"filter_id={filter_id}\n"
+                f"download_url={download_url}\n"
+                f"button_style={btn_style}"
+            )
             markup = build_announcement_download_keyboard(
                 download_url=download_url,
                 existing_markup=None,
@@ -2923,6 +2945,14 @@ async def announce_filter_created(client: Client, filter_type: str = "series", f
             qual_str = ", ".join(qualities) if qualities else "1080p, 720p, 480p"
 
             download_url = f"https://t.me/{bot_username}?start=movie_{filter_id}" if filter_id else None
+            logger.info(
+                f"[ANNOUNCEMENT PATH]\n"
+                f"function=announce_filter_created\n"
+                f"filter_type={filter_type}\n"
+                f"filter_id={filter_id}\n"
+                f"download_url={download_url}\n"
+                f"button_style={btn_style}"
+            )
             markup = build_announcement_download_keyboard(
                 download_url=download_url,
                 existing_markup=None,
@@ -2960,7 +2990,13 @@ async def announce_filter_created(client: Client, filter_type: str = "series", f
                 message_id=sent_msg.id,
                 filter_type=filter_type
             )
-            logger.info(f"[ANNOUNCEMENT SENT SUCCESS] type={filter_type} filter_id={filter_id} msg_id={sent_msg.id}")
+            logger.info(
+                f"[ANNOUNCEMENT SENT]\n"
+                f"message_id={sent_msg.id}\n"
+                f"style={btn_style}\n"
+                f"filter_type={filter_type}\n"
+                f"download_url={download_url}"
+            )
             return True
         return False
     except Exception as e:
