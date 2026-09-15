@@ -2653,7 +2653,7 @@ def create_announcement_download_button(
     Explicitly logs debug details and applies style="primary" directly.
     """
     import info
-    btn_text = text or getattr(info, "ANNOUNCEMENT_DOWNLOAD_BUTTON_TEXT", "👉  D O W N L O A D  📥  ↗")
+    btn_text = text or getattr(info, "ANNOUNCEMENT_DOWNLOAD_BUTTON_TEXT", "👉  C L I C K  H E R E  😈")
     btn_style = style or getattr(info, "ANNOUNCEMENT_DOWNLOAD_BUTTON_STYLE", "primary")
 
     logger.info(f"[ANNOUNCEMENT STYLE DEBUG] requested_style={btn_style}")
@@ -2697,7 +2697,7 @@ def build_announcement_download_keyboard(
     """
     import info
     enabled = getattr(info, "ANNOUNCEMENT_DOWNLOAD_BUTTON_ENABLED", True)
-    btn_text = getattr(info, "ANNOUNCEMENT_DOWNLOAD_BUTTON_TEXT", "👉  D O W N L O A D  📥  ↗")
+    btn_text = getattr(info, "ANNOUNCEMENT_DOWNLOAD_BUTTON_TEXT", "👉  C L I C K  H E R E  😈")
     btn_style = getattr(info, "ANNOUNCEMENT_DOWNLOAD_BUTTON_STYLE", "primary")
 
     logger.info(f"[ANNOUNCEMENT BUTTON] enabled={enabled}")
@@ -2731,7 +2731,7 @@ def build_announcement_download_keyboard(
             btn_txt = getattr(btn, "text", "")
             btn_u = getattr(btn, "url", "")
             if (btn_u and ("start=series_" in btn_u or "start=movie_" in btn_u or "start=all_" in btn_u or "start=files_" in btn_u)) or \
-               ("download" in btn_txt.lower() or "d o w n l o a d" in btn_txt.lower()):
+               ("download" in btn_txt.lower() or "click here" in btn_txt.lower() or "c l i c k" in btn_txt.lower()):
                 found_idx = r_idx
                 break
         if found_idx != -1:
@@ -2838,14 +2838,20 @@ async def apply_telegram_bot_api_reply_markup(
     import info
     bot_tok = getattr(info, "BOT_TOKEN", "") or os.environ.get("BOT_TOKEN", "")
 
-    if not bot_tok:
-        logger.warning("[ANNOUNCEMENT STYLE API] BOT_TOKEN not configured in info.py / environ")
-        return {"ok": False, "error": "BOT_TOKEN missing"}
-
-    btn_text = button_text or getattr(info, "ANNOUNCEMENT_DOWNLOAD_BUTTON_TEXT", "👉  D O W N L O A D  📥  ↗")
+    btn_text = button_text or getattr(info, "ANNOUNCEMENT_DOWNLOAD_BUTTON_TEXT", "👉  C L I C K  H E R E  😈")
     btn_style = style or getattr(info, "ANNOUNCEMENT_DOWNLOAD_BUTTON_STYLE", "primary")
 
-    # Build raw inline keyboard structure
+    if not bot_tok:
+        logger.error(f"[ANNOUNCEMENT BUTTON API DEBUG] BOT_TOKEN missing in info.py / environ. chat_id={chat_id} message_id={message_id}")
+        return {"ok": False, "description": "BOT_TOKEN missing"}
+
+    # Build exact single row with button
+    download_btn_dict = {
+        "text": btn_text,
+        "url": download_url,
+        "style": btn_style
+    }
+
     raw_keyboard = []
     if existing_markup:
         if isinstance(existing_markup, InlineKeyboardMarkup):
@@ -2874,20 +2880,13 @@ async def apply_telegram_bot_api_reply_markup(
                         raw_row.append(b_dict)
                 raw_keyboard.append(raw_row)
 
-    # Check if download button already exists in raw rows
-    download_btn_dict = {
-        "text": btn_text,
-        "url": download_url,
-        "style": btn_style
-    }
-
     found_idx = -1
     for r_idx, row in enumerate(raw_keyboard):
         for b_dict in row:
             u = b_dict.get("url", "")
             t = b_dict.get("text", "")
             if (u and ("start=series_" in u or "start=movie_" in u or "start=all_" in u or "start=files_" in u)) or \
-               ("download" in t.lower() or "d o w n l o a d" in t.lower()):
+               ("download" in t.lower() or "click here" in t.lower() or "c l i c k" in t.lower()):
                 found_idx = r_idx
                 break
         if found_idx != -1:
@@ -2913,19 +2912,42 @@ async def apply_telegram_bot_api_reply_markup(
             async with session.post(api_url, json=payload, timeout=aiohttp.ClientTimeout(total=10)) as resp:
                 status = resp.status
                 res_json = await resp.json()
+                telegram_ok = res_json.get("ok", False)
+                telegram_desc = res_json.get("description", "Success" if telegram_ok else "Unknown error")
+
                 logger.info(
-                    f"[ANNOUNCEMENT STYLE API]\n"
+                    f"[ANNOUNCEMENT BUTTON API DEBUG]\n"
                     f"chat_id={chat_id}\n"
                     f"message_id={message_id}\n"
-                    f"style={btn_style}\n"
+                    f"button_text={btn_text}\n"
+                    f"button_style={btn_style}\n"
                     f"download_url={download_url}\n"
-                    f"api_status={status}\n"
-                    f"api_response={res_json}"
+                    f"payload={payload}\n"
+                    f"http_status={status}\n"
+                    f"telegram_ok={telegram_ok}\n"
+                    f"telegram_description={telegram_desc}"
                 )
+
+                if telegram_ok:
+                    logger.info(f"[ANNOUNCEMENT BUTTON STYLE SUCCESS] style={btn_style} message_id={message_id}")
+                else:
+                    logger.warning(f"[ANNOUNCEMENT BUTTON API ERROR] status={status} description={telegram_desc}")
+
                 return res_json
     except Exception as e:
-        logger.error(f"[ANNOUNCEMENT STYLE API ERROR] chat_id={chat_id} msg_id={message_id} error={e}")
-        return {"ok": False, "error": str(e)}
+        logger.error(
+            f"[ANNOUNCEMENT BUTTON API DEBUG]\n"
+            f"chat_id={chat_id}\n"
+            f"message_id={message_id}\n"
+            f"button_text={btn_text}\n"
+            f"button_style={btn_style}\n"
+            f"download_url={download_url}\n"
+            f"payload={payload}\n"
+            f"http_status=Exception\n"
+            f"telegram_ok=False\n"
+            f"telegram_description={e}"
+        )
+        return {"ok": False, "description": str(e)}
 
 
 async def announce_filter_created(client: Client, filter_type: str = "series", filter_id: str = None, force: bool = False) -> bool:
@@ -3079,29 +3101,44 @@ async def announce_filter_created(client: Client, filter_type: str = "series", f
         else:
             return False
 
-        # Send to channel
+        # Send to channel (send without markup first, then immediately apply styled markup via Telegram API)
         cid_int = int(channel_id) if str(channel_id).lstrip("-").isdigit() else str(channel_id)
         sent_msg = await send_announcement_media(
             client=client,
             chat_id=cid_int,
             media=poster,
             caption=caption,
-            reply_markup=markup
+            reply_markup=None
         )
 
         if sent_msg:
             # Apply Telegram Bot API reply_markup with style="primary" via editMessageReplyMarkup
             if download_url:
+                api_success = False
+                btn_text = getattr(info, "ANNOUNCEMENT_DOWNLOAD_BUTTON_TEXT", "👉  C L I C K  H E R E  😈")
                 try:
-                    await apply_telegram_bot_api_reply_markup(
+                    res = await apply_telegram_bot_api_reply_markup(
                         chat_id=cid_int,
                         message_id=sent_msg.id,
                         download_url=download_url,
                         existing_markup=None,
-                        style=btn_style
+                        style=btn_style,
+                        button_text=btn_text
                     )
+                    api_success = res.get("ok", False)
                 except Exception as api_err:
                     logger.warning(f"[ANNOUNCEMENT STYLE API FAILED] {api_err}")
+
+                # If Bot API call was not successful (e.g. missing BOT_TOKEN or network issue), attach Pyrogram markup
+                if not api_success:
+                    try:
+                        await client.edit_message_reply_markup(
+                            chat_id=cid_int,
+                            message_id=sent_msg.id,
+                            reply_markup=markup
+                        )
+                    except Exception as pe:
+                        logger.warning(f"[FALLBACK PYROGRAM MARKUP FAILED] {pe}")
 
             await save_announcement(
                 filter_id=str(filter_id),
