@@ -71,7 +71,9 @@ ANNOUNCEMENT_CHANNEL = int(announcement_channel) if announcement_channel and id_
 
 # Announcement Download Button Settings
 ANNOUNCEMENT_DOWNLOAD_BUTTON_ENABLED = str(environ.get('ANNOUNCEMENT_DOWNLOAD_BUTTON_ENABLED', 'True')).strip().lower() in ('true', '1', 'yes')
-ANNOUNCEMENT_DOWNLOAD_BUTTON_TEXT = environ.get('ANNOUNCEMENT_DOWNLOAD_BUTTON_TEXT', '👉  C L I C K  H E R E  😈')
+ANNOUNCEMENT_DOWNLOAD_BUTTON_TEXT = environ.get('ANNOUNCEMENT_DOWNLOAD_BUTTON_TEXT', 'ԃσɯɳʅσαԃ ɱσʋιҽ')
+ANNOUNCEMENT_MOVIE_BUTTON_TEXT = environ.get('ANNOUNCEMENT_MOVIE_BUTTON_TEXT', environ.get('ANNOUNCEMENT_DOWNLOAD_BUTTON_TEXT', 'ԃσɯɳʅσαԃ ɱσʋιҽ'))
+ANNOUNCEMENT_SERIES_BUTTON_TEXT = environ.get('ANNOUNCEMENT_SERIES_BUTTON_TEXT', environ.get('ANNOUNCEMENT_DOWNLOAD_BUTTON_TEXT', 'ԃσɯɳʅσαԃ ɱσʋιҽ'))
 ANNOUNCEMENT_DOWNLOAD_BUTTON_STYLE = environ.get('ANNOUNCEMENT_DOWNLOAD_BUTTON_STYLE', 'primary')
 
 # If True, shows IMDB poster when no files are found. If False, shows normal text.
