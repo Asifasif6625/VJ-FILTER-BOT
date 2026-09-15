@@ -69,6 +69,11 @@ SDATABASE_CHANNEL = int(sdatabase_channel) if sdatabase_channel and id_pattern.s
 announcement_channel = environ.get('ANNOUNCEMENT_CHANNEL', environ.get('ANO_CHANNEL', ''))
 ANNOUNCEMENT_CHANNEL = int(announcement_channel) if announcement_channel and id_pattern.search(announcement_channel) else (announcement_channel or None)
 
+# Announcement Download Button Settings
+ANNOUNCEMENT_DOWNLOAD_BUTTON_ENABLED = str(environ.get('ANNOUNCEMENT_DOWNLOAD_BUTTON_ENABLED', 'True')).strip().lower() in ('true', '1', 'yes')
+ANNOUNCEMENT_DOWNLOAD_BUTTON_TEXT = environ.get('ANNOUNCEMENT_DOWNLOAD_BUTTON_TEXT', '👉  D O W N L O A D  📥  ↗')
+ANNOUNCEMENT_DOWNLOAD_BUTTON_STYLE = environ.get('ANNOUNCEMENT_DOWNLOAD_BUTTON_STYLE', 'primary')
+
 # If True, shows IMDB poster when no files are found. If False, shows normal text.
 NOFILEREQ = bool(environ.get('NOFILEREQ', True))
 
