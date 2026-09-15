@@ -215,6 +215,17 @@ _normalize = normalize_search_text
 normalize_movie_search_title = normalize_search_text
 
 
+def is_filter_coming_soon(filter_doc: dict) -> bool:
+    """Check if a Movie or Series filter document is marked as Coming Soon."""
+    if not filter_doc or not isinstance(filter_doc, dict):
+        return False
+    if filter_doc.get("coming_soon") is True or filter_doc.get("is_coming_soon") is True:
+        return True
+    if str(filter_doc.get("status", "")).lower() == "coming_soon":
+        return True
+    return False
+
+
 def _token_similarity(q_token: str, t_token: str) -> float:
     """Calculates similarity between a query token and a title token."""
     if q_token == t_token:
