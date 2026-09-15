@@ -2822,6 +2822,112 @@ async def send_announcement_media(
     return sent_msg
 
 
+async def apply_telegram_bot_api_reply_markup(
+    chat_id: int | str,
+    message_id: int,
+    download_url: str,
+    existing_markup: InlineKeyboardMarkup | list = None,
+    style: str = "primary",
+    button_text: str = None
+) -> dict:
+    """
+    Applies the styled inline download button directly via Telegram Bot API HTTP endpoint (editMessageReplyMarkup)
+    to ensure the native Telegram button style (e.g. style="primary") is accepted and rendered by Telegram.
+    """
+    import aiohttp
+    import info
+    bot_tok = getattr(info, "BOT_TOKEN", "") or os.environ.get("BOT_TOKEN", "")
+
+    if not bot_tok:
+        logger.warning("[ANNOUNCEMENT STYLE API] BOT_TOKEN not configured in info.py / environ")
+        return {"ok": False, "error": "BOT_TOKEN missing"}
+
+    btn_text = button_text or getattr(info, "ANNOUNCEMENT_DOWNLOAD_BUTTON_TEXT", "👉  D O W N L O A D  📥  ↗")
+    btn_style = style or getattr(info, "ANNOUNCEMENT_DOWNLOAD_BUTTON_STYLE", "primary")
+
+    # Build raw inline keyboard structure
+    raw_keyboard = []
+    if existing_markup:
+        if isinstance(existing_markup, InlineKeyboardMarkup):
+            for row in (existing_markup.inline_keyboard or []):
+                raw_row = []
+                for b in row:
+                    b_dict = {"text": getattr(b, "text", "")}
+                    if getattr(b, "url", None):
+                        b_dict["url"] = b.url
+                    elif getattr(b, "callback_data", None):
+                        b_dict["callback_data"] = b.callback_data.decode("utf-8") if isinstance(b.callback_data, bytes) else str(b.callback_data)
+                    raw_row.append(b_dict)
+                raw_keyboard.append(raw_row)
+        elif isinstance(existing_markup, list):
+            for row in existing_markup:
+                raw_row = []
+                for b in (row if isinstance(row, list) else [row]):
+                    if isinstance(b, dict):
+                        raw_row.append(b)
+                    else:
+                        b_dict = {"text": getattr(b, "text", "")}
+                        if getattr(b, "url", None):
+                            b_dict["url"] = b.url
+                        elif getattr(b, "callback_data", None):
+                            b_dict["callback_data"] = b.callback_data.decode("utf-8") if isinstance(b.callback_data, bytes) else str(b.callback_data)
+                        raw_row.append(b_dict)
+                raw_keyboard.append(raw_row)
+
+    # Check if download button already exists in raw rows
+    download_btn_dict = {
+        "text": btn_text,
+        "url": download_url,
+        "style": btn_style
+    }
+
+    found_idx = -1
+    for r_idx, row in enumerate(raw_keyboard):
+        for b_dict in row:
+            u = b_dict.get("url", "")
+            t = b_dict.get("text", "")
+            if (u and ("start=series_" in u or "start=movie_" in u or "start=all_" in u or "start=files_" in u)) or \
+               ("download" in t.lower() or "d o w n l o a d" in t.lower()):
+                found_idx = r_idx
+                break
+        if found_idx != -1:
+            break
+
+    if found_idx != -1:
+        raw_keyboard[found_idx] = [download_btn_dict]
+    else:
+        raw_keyboard.append([download_btn_dict])
+
+    payload = {
+        "chat_id": int(chat_id) if str(chat_id).lstrip("-").isdigit() else str(chat_id),
+        "message_id": int(message_id),
+        "reply_markup": {
+            "inline_keyboard": raw_keyboard
+        }
+    }
+
+    api_url = f"https://api.telegram.org/bot{bot_tok}/editMessageReplyMarkup"
+
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(api_url, json=payload, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                status = resp.status
+                res_json = await resp.json()
+                logger.info(
+                    f"[ANNOUNCEMENT STYLE API]\n"
+                    f"chat_id={chat_id}\n"
+                    f"message_id={message_id}\n"
+                    f"style={btn_style}\n"
+                    f"download_url={download_url}\n"
+                    f"api_status={status}\n"
+                    f"api_response={res_json}"
+                )
+                return res_json
+    except Exception as e:
+        logger.error(f"[ANNOUNCEMENT STYLE API ERROR] chat_id={chat_id} msg_id={message_id} error={e}")
+        return {"ok": False, "error": str(e)}
+
+
 async def announce_filter_created(client: Client, filter_type: str = "series", filter_id: str = None, force: bool = False) -> bool:
     """
     Sends an announcement message/photo to the configured announcement channel.
@@ -2984,6 +3090,19 @@ async def announce_filter_created(client: Client, filter_type: str = "series", f
         )
 
         if sent_msg:
+            # Apply Telegram Bot API reply_markup with style="primary" via editMessageReplyMarkup
+            if download_url:
+                try:
+                    await apply_telegram_bot_api_reply_markup(
+                        chat_id=cid_int,
+                        message_id=sent_msg.id,
+                        download_url=download_url,
+                        existing_markup=None,
+                        style=btn_style
+                    )
+                except Exception as api_err:
+                    logger.warning(f"[ANNOUNCEMENT STYLE API FAILED] {api_err}")
+
             await save_announcement(
                 filter_id=str(filter_id),
                 channel_id=cid_int,
