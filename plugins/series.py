@@ -2683,7 +2683,8 @@ def build_announcement_download_keyboard(
     download_url: str = None,
     existing_markup: InlineKeyboardMarkup | list = None,
     content_id: str = None,
-    filter_type: str = "filter"
+    filter_type: str = "filter",
+    button_text: str = None
 ) -> InlineKeyboardMarkup | None:
     """
     Builds a single full-width Download button or safely appends it to an existing keyboard.
@@ -2697,7 +2698,7 @@ def build_announcement_download_keyboard(
     """
     import info
     enabled = getattr(info, "ANNOUNCEMENT_DOWNLOAD_BUTTON_ENABLED", True)
-    btn_text = getattr(info, "ANNOUNCEMENT_DOWNLOAD_BUTTON_TEXT", "ԃσɯɳʅσαԃ ɱσʋιҽ")
+    btn_text = button_text or getattr(info, "ANNOUNCEMENT_DOWNLOAD_BUTTON_TEXT", "ԃσɯɳʅσαԃ ɱσʋιҽ")
     btn_style = getattr(info, "ANNOUNCEMENT_DOWNLOAD_BUTTON_STYLE", "primary")
 
     logger.info(f"[ANNOUNCEMENT BUTTON] enabled={enabled}")
@@ -2820,6 +2821,131 @@ async def send_announcement_media(
         )
 
     return sent_msg
+
+
+async def send_styled_announcement_via_bot_api(
+    chat_id: int | str,
+    media: str | None,
+    caption: str,
+    download_url: str,
+    button_text: str = None,
+    style: str = "primary",
+    client: Client = None,
+    bot_token: str = None
+) -> dict | None:
+    """
+    Directly posts the announcement via Telegram Bot API HTTP endpoint (sendPhoto / sendVideo / sendAnimation / sendMessage)
+    with reply_markup containing {"style": "primary"}. This ensures the message is created WITH the primary blue button
+    immediately in a single atomic request without needing post-edits.
+    """
+    import aiohttp
+    import info
+
+    bot_tok = (
+        bot_token
+        or getattr(client, "bot_token", None)
+        or getattr(client, "_bot_token", None)
+        or getattr(info, "BOT_TOKEN", "")
+        or os.environ.get("BOT_TOKEN", "")
+        or getattr(temp, "BOT_TOKEN", "")
+    )
+
+    if not bot_tok:
+        logger.error(f"[TELEGRAM BUTTON STYLE API] BOT_TOKEN missing for direct send. chat_id={chat_id}")
+        return None
+
+    btn_text = button_text or getattr(info, "ANNOUNCEMENT_DOWNLOAD_BUTTON_TEXT", "ԃσɯɳʅσαԃ ɱσʋιҽ")
+    btn_style = style or getattr(info, "ANNOUNCEMENT_DOWNLOAD_BUTTON_STYLE", "primary")
+
+    reply_markup = {
+        "inline_keyboard": [
+            [
+                {
+                    "text": btn_text,
+                    "url": download_url,
+                    "style": btn_style
+                }
+            ]
+        ]
+    } if download_url else None
+
+    logger.info(
+        f"[ANNOUNCEMENT FINAL BUTTON]\n"
+        f"text={btn_text}\n"
+        f"url={download_url}\n"
+        f"style={btn_style}"
+    )
+
+    cid = int(chat_id) if str(chat_id).lstrip("-").isdigit() else str(chat_id)
+
+    # Determine method and payload
+    m_str = str(media or "").strip().lower()
+    if media and (m_str.startswith("http://") or m_str.startswith("https://") or (len(str(media)) > 20 and not m_str.startswith(("/", "\\")))):
+        if m_str.endswith((".mp4", ".mkv", ".mov", ".webm")):
+            method = "sendVideo"
+            payload = {
+                "chat_id": cid,
+                "video": str(media),
+                "caption": caption,
+                "parse_mode": "HTML"
+            }
+        elif m_str.endswith(".gif"):
+            method = "sendAnimation"
+            payload = {
+                "chat_id": cid,
+                "animation": str(media),
+                "caption": caption,
+                "parse_mode": "HTML"
+            }
+        else:
+            method = "sendPhoto"
+            payload = {
+                "chat_id": cid,
+                "photo": str(media),
+                "caption": caption,
+                "parse_mode": "HTML"
+            }
+    else:
+        method = "sendMessage"
+        payload = {
+            "chat_id": cid,
+            "text": caption,
+            "parse_mode": "HTML"
+        }
+
+    if reply_markup:
+        payload["reply_markup"] = reply_markup
+
+    api_url = f"https://api.telegram.org/bot{bot_tok}/{method}"
+
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(api_url, json=payload, timeout=aiohttp.ClientTimeout(total=15)) as resp:
+                status = resp.status
+                res_json = await resp.json()
+                telegram_ok = res_json.get("ok", False)
+                telegram_desc = res_json.get("description", "Success" if telegram_ok else "Unknown error")
+
+                logger.info(
+                    f"[TELEGRAM BUTTON STYLE API]\n"
+                    f"method={method}\n"
+                    f"chat_id={cid}\n"
+                    f"status={status}\n"
+                    f"ok={telegram_ok}\n"
+                    f"description={telegram_desc}\n"
+                    f"style={btn_style}\n"
+                    f"payload={payload}"
+                )
+
+                if telegram_ok:
+                    logger.info(f"[ANNOUNCEMENT BUTTON STYLE SUCCESS] method={method} style={btn_style} msg_id={res_json.get('result', {}).get('message_id')}")
+                    return res_json
+                else:
+                    logger.warning(f"[TELEGRAM BUTTON STYLE API REJECTED] method={method} status={status} description={telegram_desc}")
+                    return None
+    except Exception as e:
+        logger.error(f"[TELEGRAM BUTTON STYLE API ERROR] method={method} error={e}")
+        return None
 
 
 async def apply_telegram_bot_api_reply_markup(
@@ -2997,6 +3123,7 @@ async def announce_filter_created(client: Client, filter_type: str = "series", f
         bot_username = "Bot"
 
     btn_style = getattr(info, "ANNOUNCEMENT_DOWNLOAD_BUTTON_STYLE", "primary")
+    btn_text = getattr(info, "ANNOUNCEMENT_DOWNLOAD_BUTTON_TEXT", "ԃσɯɳʅσαԃ ɱσʋιҽ")
 
     try:
         if filter_type == "series":
@@ -3043,7 +3170,8 @@ async def announce_filter_created(client: Client, filter_type: str = "series", f
                 download_url=download_url,
                 existing_markup=None,
                 content_id=str(filter_id),
-                filter_type="series"
+                filter_type="series",
+                button_text=btn_text
             )
 
             caption = (
@@ -3094,7 +3222,8 @@ async def announce_filter_created(client: Client, filter_type: str = "series", f
                 download_url=download_url,
                 existing_markup=None,
                 content_id=str(filter_id),
-                filter_type="movie"
+                filter_type="movie",
+                button_text=btn_text
             )
 
             caption = (
@@ -3110,8 +3239,40 @@ async def announce_filter_created(client: Client, filter_type: str = "series", f
         else:
             return False
 
-        # Send to channel (send without markup first, then immediately apply styled markup via Telegram API)
         cid_int = int(channel_id) if str(channel_id).lstrip("-").isdigit() else str(channel_id)
+
+        # 1. First attempt: Direct Send via Telegram Bot API HTTP with primary styled button in initial message
+        direct_send_res = None
+        if download_url:
+            direct_send_res = await send_styled_announcement_via_bot_api(
+                chat_id=cid_int,
+                media=poster,
+                caption=caption,
+                download_url=download_url,
+                button_text=btn_text,
+                style=btn_style,
+                client=client
+            )
+
+        if direct_send_res and direct_send_res.get("ok"):
+            msg_id = direct_send_res.get("result", {}).get("message_id")
+            if msg_id:
+                await save_announcement(
+                    filter_id=str(filter_id),
+                    channel_id=cid_int,
+                    message_id=msg_id,
+                    filter_type=filter_type
+                )
+                logger.info(
+                    f"[ANNOUNCEMENT SENT DIRECT HTTP]\n"
+                    f"message_id={msg_id}\n"
+                    f"style={btn_style}\n"
+                    f"filter_type={filter_type}\n"
+                    f"download_url={download_url}"
+                )
+                return True
+
+        # 2. Fallback attempt: Send via Pyrogram MTProto then apply style via Bot API HTTP editMessageReplyMarkup
         sent_msg = await send_announcement_media(
             client=client,
             chat_id=cid_int,
@@ -3121,10 +3282,8 @@ async def announce_filter_created(client: Client, filter_type: str = "series", f
         )
 
         if sent_msg:
-            # Apply Telegram Bot API reply_markup with style="primary" via editMessageReplyMarkup
             if download_url:
                 api_success = False
-                btn_text = getattr(info, "ANNOUNCEMENT_DOWNLOAD_BUTTON_TEXT", "ԃσɯɳʅσαԃ ɱσʋιҽ")
                 try:
                     res = await apply_telegram_bot_api_reply_markup(
                         chat_id=cid_int,
@@ -3139,7 +3298,7 @@ async def announce_filter_created(client: Client, filter_type: str = "series", f
                 except Exception as api_err:
                     logger.warning(f"[ANNOUNCEMENT STYLE API FAILED] {api_err}")
 
-                # If Bot API call was not successful (e.g. missing BOT_TOKEN or network issue), attach Pyrogram markup
+                # If Bot API call was not successful, attach Pyrogram markup
                 if not api_success:
                     try:
                         await client.edit_message_reply_markup(
