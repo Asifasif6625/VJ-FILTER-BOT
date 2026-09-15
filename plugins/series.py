@@ -2653,7 +2653,7 @@ def create_announcement_download_button(
     Explicitly logs debug details and applies style="primary" directly.
     """
     import info
-    btn_text = text or getattr(info, "ANNOUNCEMENT_DOWNLOAD_BUTTON_TEXT", "👉  C L I C K  H E R E  😈")
+    btn_text = text or getattr(info, "ANNOUNCEMENT_DOWNLOAD_BUTTON_TEXT", "ԃσɯɳʅσαԃ ɱσʋιҽ")
     btn_style = style or getattr(info, "ANNOUNCEMENT_DOWNLOAD_BUTTON_STYLE", "primary")
 
     logger.info(f"[ANNOUNCEMENT STYLE DEBUG] requested_style={btn_style}")
@@ -2697,7 +2697,7 @@ def build_announcement_download_keyboard(
     """
     import info
     enabled = getattr(info, "ANNOUNCEMENT_DOWNLOAD_BUTTON_ENABLED", True)
-    btn_text = getattr(info, "ANNOUNCEMENT_DOWNLOAD_BUTTON_TEXT", "👉  C L I C K  H E R E  😈")
+    btn_text = getattr(info, "ANNOUNCEMENT_DOWNLOAD_BUTTON_TEXT", "ԃσɯɳʅσαԃ ɱσʋιҽ")
     btn_style = getattr(info, "ANNOUNCEMENT_DOWNLOAD_BUTTON_STYLE", "primary")
 
     logger.info(f"[ANNOUNCEMENT BUTTON] enabled={enabled}")
@@ -2731,7 +2731,7 @@ def build_announcement_download_keyboard(
             btn_txt = getattr(btn, "text", "")
             btn_u = getattr(btn, "url", "")
             if (btn_u and ("start=series_" in btn_u or "start=movie_" in btn_u or "start=all_" in btn_u or "start=files_" in btn_u)) or \
-               ("download" in btn_txt.lower() or "click here" in btn_txt.lower() or "c l i c k" in btn_txt.lower()):
+               ("download" in btn_txt.lower() or "click here" in btn_txt.lower() or "c l i c k" in btn_txt.lower() or "ԃσɯɳʅσαԃ" in btn_txt):
                 found_idx = r_idx
                 break
         if found_idx != -1:
@@ -2828,7 +2828,9 @@ async def apply_telegram_bot_api_reply_markup(
     download_url: str,
     existing_markup: InlineKeyboardMarkup | list = None,
     style: str = "primary",
-    button_text: str = None
+    button_text: str = None,
+    bot_token: str = None,
+    client: Client = None
 ) -> dict:
     """
     Applies the styled inline download button directly via Telegram Bot API HTTP endpoint (editMessageReplyMarkup)
@@ -2836,13 +2838,20 @@ async def apply_telegram_bot_api_reply_markup(
     """
     import aiohttp
     import info
-    bot_tok = getattr(info, "BOT_TOKEN", "") or os.environ.get("BOT_TOKEN", "")
+    bot_tok = (
+        bot_token
+        or getattr(client, "bot_token", None)
+        or getattr(client, "_bot_token", None)
+        or getattr(info, "BOT_TOKEN", "")
+        or os.environ.get("BOT_TOKEN", "")
+        or getattr(temp, "BOT_TOKEN", "")
+    )
 
-    btn_text = button_text or getattr(info, "ANNOUNCEMENT_DOWNLOAD_BUTTON_TEXT", "👉  C L I C K  H E R E  😈")
+    btn_text = button_text or getattr(info, "ANNOUNCEMENT_DOWNLOAD_BUTTON_TEXT", "ԃσɯɳʅσαԃ ɱσʋιҽ")
     btn_style = style or getattr(info, "ANNOUNCEMENT_DOWNLOAD_BUTTON_STYLE", "primary")
 
     if not bot_tok:
-        logger.error(f"[ANNOUNCEMENT BUTTON API DEBUG] BOT_TOKEN missing in info.py / environ. chat_id={chat_id} message_id={message_id}")
+        logger.error(f"[ANNOUNCEMENT BUTTON API DEBUG] BOT_TOKEN missing. chat_id={chat_id} message_id={message_id}")
         return {"ok": False, "description": "BOT_TOKEN missing"}
 
     # Build exact single row with button
@@ -2886,7 +2895,7 @@ async def apply_telegram_bot_api_reply_markup(
             u = b_dict.get("url", "")
             t = b_dict.get("text", "")
             if (u and ("start=series_" in u or "start=movie_" in u or "start=all_" in u or "start=files_" in u)) or \
-               ("download" in t.lower() or "click here" in t.lower() or "c l i c k" in t.lower()):
+               ("download" in t.lower() or "click here" in t.lower() or "c l i c k" in t.lower() or "ԃσɯɳʅσαԃ" in t):
                 found_idx = r_idx
                 break
         if found_idx != -1:
@@ -3115,7 +3124,7 @@ async def announce_filter_created(client: Client, filter_type: str = "series", f
             # Apply Telegram Bot API reply_markup with style="primary" via editMessageReplyMarkup
             if download_url:
                 api_success = False
-                btn_text = getattr(info, "ANNOUNCEMENT_DOWNLOAD_BUTTON_TEXT", "👉  C L I C K  H E R E  😈")
+                btn_text = getattr(info, "ANNOUNCEMENT_DOWNLOAD_BUTTON_TEXT", "ԃσɯɳʅσαԃ ɱσʋιҽ")
                 try:
                     res = await apply_telegram_bot_api_reply_markup(
                         chat_id=cid_int,
@@ -3123,7 +3132,8 @@ async def announce_filter_created(client: Client, filter_type: str = "series", f
                         download_url=download_url,
                         existing_markup=None,
                         style=btn_style,
-                        button_text=btn_text
+                        button_text=btn_text,
+                        client=client
                     )
                     api_success = res.get("ok", False)
                 except Exception as api_err:
