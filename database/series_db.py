@@ -4,6 +4,7 @@
 
 import re
 import logging
+import unicodedata
 from datetime import datetime
 from difflib import SequenceMatcher
 from bson import ObjectId
@@ -102,12 +103,16 @@ async def create_series(data: dict) -> str:
     """
     Insert a new series document with a cleaned canonical title.
     data keys: name, year, genre, description, poster,
-                languages, seasons, qualities, created_by, coming_soon, status
+                languages, seasons, qualities, created_by, coming_soon, status, aliases
     Returns the new _id string.
     """
     clean_name = clean_series_title(data.get("name", ""))
     is_cs = bool(data.get("coming_soon", False) or data.get("status") == "coming_soon")
     status = "coming_soon" if is_cs else "active"
+
+    gen_aliases = generate_smart_aliases(clean_name)
+    user_aliases = [normalize_search_text(a) for a in data.get("aliases", []) if a]
+    search_aliases = list(dict.fromkeys(user_aliases + gen_aliases))
 
     doc = {
         "name": clean_name,
@@ -122,6 +127,9 @@ async def create_series(data: dict) -> str:
         "seasons": data.get("seasons", []),
         "qualities": data.get("qualities", []),
         "season_modes": data.get("season_modes", {}),
+        "aliases": user_aliases,
+        "generated_aliases": gen_aliases,
+        "search_aliases": search_aliases,
         "created_by": data.get("created_by"),
         "announcement_sent": False,
         "coming_soon": is_cs,
@@ -179,6 +187,34 @@ async def get_series_by_key(series_key: str) -> dict | None:
     return None
 
 
+def normalize_search_text(text: str) -> str:
+    """
+    Standardizes search text:
+    - NFKD Unicode normalization (stripping accents/diacritics)
+    - Lowercase
+    - Replaces apostrophes, hyphens, and non-alphanumeric punctuation with spaces
+    - Collapses multiple whitespace to single space
+    - Preserves letters and digits
+    """
+    if not text:
+        return ""
+    text_str = str(text)
+    text_nfkd = unicodedata.normalize("NFKD", text_str)
+    text_clean = "".join(c for c in text_nfkd if not unicodedata.combining(c))
+    
+    # Remove apostrophes (e.g. Spider-Man's -> spidermans or spider mans)
+    text_clean = re.sub(r"[''`’‘]", "", text_clean)
+    # Replace hyphens, underscores, dots, and symbols with spaces
+    text_clean = re.sub(r"[-–—_./\\+\[\]\(\)\{\}:;!?,#&]+", " ", text_clean)
+    # Strip any remaining non-alphanumeric (keep unicode word characters and digits)
+    text_clean = re.sub(r"[^\w\s]", " ", text_clean)
+    # Collapse multiple spaces and lowercase
+    return re.sub(r"\s+", " ", text_clean).strip().lower()
+
+_normalize = normalize_search_text
+normalize_movie_search_title = normalize_search_text
+
+
 def _token_similarity(q_token: str, t_token: str) -> float:
     """Calculates similarity between a query token and a title token."""
     if q_token == t_token:
@@ -207,204 +243,231 @@ COMMON_STOPWORDS = {
     "just", "should", "now", "it", "its", "this", "that", "these", "those"
 }
 
-def _score_series_candidate(q_norm: str, q_tokens: list[str], title_norm: str) -> tuple[bool, float]:
-    """Score candidate series title against user query."""
-    if not q_norm or not title_norm:
-        return False, 0.0
-        
-    # Exact full match
-    if q_norm == title_norm:
-        return True, 1.0
-        
-    title_tokens = [t for t in title_norm.split(" ") if t]
-    if not title_tokens:
-        return False, 0.0
-        
-    num_q = len(q_tokens)
-    num_t = len(title_tokens)
-    
-    # ── Single Word Query ──
-    if num_q == 1:
-        q_tok = q_tokens[0]
-        if q_tok in COMMON_STOPWORDS:
-            if q_norm == title_norm:
-                return True, 1.0
-            return False, 0.0
 
-        # Exact title starts with query as distinct word (e.g. 'dark' matching 'Dark' and 'Dark Matter')
-        if title_norm == q_tok or title_norm.startswith(q_tok + " "):
-            score = 0.85 + (0.15 * (len(q_tok) / len(title_norm)))
-            return True, score
+def generate_smart_aliases(title: str) -> list[str]:
+    """
+    Generates smart search aliases and initialisms from title.
+    E.g.
+    'Bethlehem Kudumba Unit' -> ['bku']
+    'The Great Indian Kitchen' -> ['gik', 'tgik', 'great indian kitchen']
+    'Spider-Man: No Way Home' -> ['smnwh']
+    Filters out bad/ambiguous aliases (pure numbers, single characters, common short words).
+    """
+    if not title:
+        return []
+    
+    norm = normalize_search_text(title)
+    if not norm:
+        return []
+        
+    words = [w for w in norm.split() if w]
+    aliases = set()
+    
+    # 1. Multi-word initialism (>= 2 words)
+    if len(words) >= 2:
+        full_init = "".join(w[0] for w in words if w)
+        if len(full_init) >= 2 and not full_init.isdigit():
+            aliases.add(full_init)
             
-        best_token_sim = 0.0
-        for t_tok in title_tokens:
-            if t_tok in COMMON_STOPWORDS:
-                continue
-            sim = _token_similarity(q_tok, t_tok)
-            if sim > best_token_sim:
-                best_token_sim = sim
+        # Initialism without stopwords (e.g. "The Great Indian Kitchen" -> "gik")
+        non_stop_words = [w for w in words if w not in COMMON_STOPWORDS]
+        if len(non_stop_words) >= 2 and len(non_stop_words) < len(words):
+            non_stop_init = "".join(w[0] for w in non_stop_words if w)
+            if len(non_stop_init) >= 2 and not non_stop_init.isdigit():
+                aliases.add(non_stop_init)
+            aliases.add(" ".join(non_stop_words))
+            
+    return sorted(list(aliases))
+
+
+def compute_smart_search_score(query: str, target_title: str, aliases: list[str] = None, target_year: str = None, query_year: str = None) -> tuple[bool, float, str]:
+    """
+    Computes a smart confidence match score (0-100) between query and target title + aliases.
+    Returns (is_match, score, match_type).
+    Confidence scoring model:
+      - Exact normalized match: 100.0
+      - Exact alias match: 98.0
+      - Token permutation / strong token match: 90.0 - 95.0
+      - Fuzzy / typo match: 80.0 - 92.0
+      - Year bonus: +15.0 for exact year match, -35.0 penalty for conflicting year.
+    Threshold for match: >= 75.0
+    """
+    if not query or not target_title:
+        return False, 0.0, "none"
+        
+    q_norm = normalize_search_text(query)
+    t_norm = normalize_search_text(target_title)
+    if not q_norm or not t_norm:
+        return False, 0.0, "none"
+
+    # Year detection
+    extracted_q_year = query_year
+    if not extracted_q_year:
+        q_year_m = re.search(r"\b(19\d{2}|20\d{2})\b", query)
+        extracted_q_year = q_year_m.group(1) if q_year_m else None
+
+    extracted_t_year = target_year
+    if not extracted_t_year:
+        t_year_m = re.search(r"\b(19\d{2}|20\d{2})\b", target_title)
+        extracted_t_year = t_year_m.group(1) if t_year_m else None
+
+    # Strip year from comparison strings
+    q_base = re.sub(r"\b(19\d{2}|20\d{2})\b", "", q_norm).strip()
+    q_base = re.sub(r"\s+", " ", q_base) if q_base else q_norm
+    
+    t_base = re.sub(r"\b(19\d{2}|20\d{2})\b", "", t_norm).strip()
+    t_base = re.sub(r"\s+", " ", t_base) if t_base else t_norm
+
+    score = 0.0
+    match_type = "none"
+
+    # 1. Exact Match
+    if q_norm == t_norm or q_base == t_base:
+        score = 100.0
+        match_type = "exact"
+
+    # 2. Alias / Initialism Match
+    if score < 98.0:
+        all_aliases = set(aliases or []) | set(generate_smart_aliases(target_title))
+        norm_aliases = {normalize_search_text(a) for a in all_aliases if a}
+        if q_norm in norm_aliases or q_base in norm_aliases:
+            score = 98.0
+            match_type = "alias"
+
+    # 3. Token-aware & Permutation Match
+    q_words = [w for w in q_base.split() if w]
+    t_words = [w for w in t_base.split() if w]
+
+    if score < 95.0 and q_words and t_words:
+        # Check single stopword guard
+        if len(q_words) == 1 and q_words[0] in COMMON_STOPWORDS:
+            if q_words[0] == t_norm or q_words[0] == t_base:
+                score = 100.0
+                match_type = "exact"
+        else:
+            # Token permutation (same words, different order: e.g. Kudumba Bethlehem Unit)
+            if sorted(q_words) == sorted(t_words):
+                score = 95.0
+                match_type = "token_permutation"
+            # All query words present exactly in target
+            elif len(q_words) >= 2 and all(qw in t_words for qw in q_words):
+                score = 88.0 + (len(q_words) / len(t_words)) * 6.0
+                match_type = "token_subset"
+            else:
+                # Token-level fuzzy matching
+                token_sims = []
+                for qw in q_words:
+                    best_sim = 0.0
+                    for tw in t_words:
+                        sim = _token_similarity(qw, tw)
+                        if sim > best_sim:
+                            best_sim = sim
+                    token_sims.append(best_sim)
                 
-        # Single word must have strong match with at least one non-stopword title word
-        if best_token_sim >= 0.80 and len(q_tok) >= 3:
-            score = best_token_sim * (0.80 + 0.20 * (1.0 / num_t))
-            return True, score
-            
-        full_sim = SequenceMatcher(None, q_norm, title_norm).ratio()
-        if full_sim >= 0.85 and len(q_tok) >= 4:
-            return True, full_sim
-            
-        return False, 0.0
+                min_token_threshold = 0.80 if len(q_words) <= 2 else 0.75
+                if token_sims and all(ts >= min_token_threshold for ts in token_sims):
+                    avg_sim = sum(token_sims) / len(token_sims)
+                    if len(q_words) == len(t_words):
+                        score = 88.0 + 10.0 * max(0.0, (avg_sim - 0.75) / 0.25)
+                    else:
+                        coverage = len(q_words) / len(t_words)
+                        score = 80.0 + (12.0 * coverage * avg_sim)
+                    match_type = "fuzzy"
+                elif token_sims and len(q_words) >= 3 and sum(1 for ts in token_sims if ts >= 0.80) >= (len(q_words) - 1):
+                    avg_sim = sum(token_sims) / len(token_sims)
+                    coverage = len(q_words) / len(t_words)
+                    score = 78.0 + (10.0 * coverage * avg_sim)
+                    match_type = "fuzzy"
 
-    # ── Multi-Word Query ──
-    # Check if query is entirely stopwords
-    meaningful_q = [qt for qt in q_tokens if qt not in COMMON_STOPWORDS]
-    if not meaningful_q:
-        if q_norm == title_norm:
-            return True, 1.0
-        return False, 0.0
+    # 4. Global string similarity fallback
+    if score < 85.0 and len(q_base) >= 4 and len(t_base) >= 4:
+        global_sim = SequenceMatcher(None, q_base, t_base).ratio()
+        if global_sim >= 0.82:
+            computed_score = 78.0 + 17.0 * max(0.0, (global_sim - 0.82) / 0.18)
+            if computed_score > score:
+                score = computed_score
+                match_type = "fuzzy"
 
-    token_scores = []
-    matched_title_indices = set()
-    
-    for q_tok in q_tokens:
-        best_sim = 0.0
-        best_idx = -1
-        for idx, t_tok in enumerate(title_tokens):
-            sim = _token_similarity(q_tok, t_tok)
-            if sim > best_sim:
-                best_sim = sim
-                best_idx = idx
-                
-        token_scores.append(best_sim)
-        if best_sim >= 0.70 and best_idx != -1:
-            matched_title_indices.add(best_idx)
-            
-    # For multi-word queries, all query tokens must match (or at least N-1 if query >= 4 words)
-    min_required_matches = num_q if num_q <= 3 else (num_q - 1)
-    matched_count = sum(1 for s in token_scores if s >= 0.70)
-    
-    if matched_count < min_required_matches:
-        full_sim = SequenceMatcher(None, q_norm, title_norm).ratio()
-        if full_sim >= 0.85:
-            return True, full_sim
-        return False, 0.0
-        
-    avg_token_score = sum(token_scores) / num_q
-    
-    # Check if words matched in the same relative order
-    ordered_matches = sorted(list(matched_title_indices))
-    order_bonus = 0.05 if list(matched_title_indices) == ordered_matches else 0.0
-    
-    title_coverage = min(1.0, len(matched_title_indices) / num_t)
-    
-    score = (avg_token_score * 0.70) + (title_coverage * 0.25) + order_bonus
-    score = min(0.99, score)
-    
-    return True, score
+    # 5. Year Disambiguation
+    if score >= 70.0 and extracted_q_year:
+        if extracted_t_year == extracted_q_year:
+            score = min(100.0, score + 15.0)
+        elif extracted_t_year and extracted_t_year not in ("N/A", "None", "", "0") and extracted_t_year != extracted_q_year:
+            score = max(0.0, score - 35.0)
+
+    if score >= 75.0:
+        return True, min(100.0, score), match_type
+    return False, score, "rejected"
 
 
 async def search_series(query: str) -> list[dict]:
-    """Multi-word & partial-word fuzzy search across series names, scored and deduplicated."""
-    q = query.strip()
-    if not q:
+    """Smart fuzzy search across series names, scored and deduplicated."""
+    raw_query = str(query or "").strip()
+    if not raw_query:
         return []
-    
-    q_norm = _normalize(q)
+
+    q_norm = normalize_search_text(raw_query)
     if not q_norm:
         return []
-        
-    q_tokens = [w for w in q_norm.split(" ") if w]
-    if not q_tokens:
-        return []
 
-    # Clean query by removing season / episode / year tokens for base title matching
-    clean_raw = re.sub(r"\b(?:s\d+|season\s*\d+|ep?\d+|episode\s*\d+|\d{4})\b", "", q, flags=re.IGNORECASE).strip()
-    clean_norm = _normalize(clean_raw)
-    clean_tokens = [w for w in clean_norm.split(" ") if w] if clean_norm else q_tokens
+    clean_raw = re.sub(r"\b(?:s\d+|season\s*\d+|ep?\d+|episode\s*\d+|\d{4})\b", "", raw_query, flags=re.IGNORECASE).strip()
 
-    # 1. Retrieve candidates from MongoDB efficiently using regex
-    token_patterns = []
-    for tok in set(q_tokens + clean_tokens):
-        if len(tok) <= 2:
-            token_patterns.append(re.escape(tok))
-        elif len(tok) <= 4:
-            token_patterns.append(re.escape(tok[:3]))
-        else:
-            token_patterns.append(re.escape(tok[:max(3, len(tok)-2)]))
-            
-    combined_pattern = "|".join(token_patterns) if token_patterns else re.escape(q_norm)
-    try:
-        mongo_regex = re.compile(combined_pattern, re.IGNORECASE)
-    except Exception:
-        mongo_regex = re.compile(re.escape(q_norm), re.IGNORECASE)
-
-    cursor = series_col.find(
-        {"normalized_name": mongo_regex, "status": {"$ne": "deleted"}}
-    ).limit(60)
-
+    # Retrieve all active series from MongoDB
+    cursor = series_col.find({"status": {"$ne": "deleted"}})
     candidates = [doc async for doc in cursor]
-    
-    # Fallback to active series scan if regex yielded no candidates
-    if not candidates:
-        cursor = series_col.find({"status": {"$ne": "deleted"}}).limit(60)
-        candidates = [doc async for doc in cursor]
 
     if not candidates:
-        logger.info(
-            f"[SERIES SEARCH ROUTING]\n"
-            f"query={query}\n"
-            f"matched=False"
-        )
+        logger.info(f"[SMART SEARCH] type=series query={raw_query!r} matched=False reason=no_candidates")
         return []
 
-    # 2. Score candidates using fuzzy & multi-word matching
     scored_results = []
     for doc in candidates:
-        title_norm = doc.get("normalized_name", "")
-        is_match, score = _score_series_candidate(q_norm, q_tokens, title_norm)
-        if not is_match and clean_norm and clean_norm != q_norm:
-            is_match_clean, score_clean = _score_series_candidate(clean_norm, clean_tokens, title_norm)
-            if is_match_clean and score_clean > score:
-                is_match, score = is_match_clean, score_clean
+        c_name = doc.get("name") or doc.get("title") or ""
+        c_year = str(doc.get("year", "")).strip()
+        c_aliases = doc.get("aliases") or []
+        c_gen_aliases = doc.get("generated_aliases") or []
+        all_c_aliases = list(set(c_aliases + c_gen_aliases + generate_smart_aliases(c_name)))
 
-        if is_match and score > 0.0:
+        is_match, score, match_type = compute_smart_search_score(
+            query=raw_query,
+            target_title=c_name,
+            aliases=all_c_aliases,
+            target_year=c_year,
+            query_year=None
+        )
+
+        if not is_match and clean_raw and clean_raw != raw_query:
+            is_match_clean, score_clean, match_type_clean = compute_smart_search_score(
+                query=clean_raw,
+                target_title=c_name,
+                aliases=all_c_aliases,
+                target_year=c_year,
+                query_year=None
+            )
+            if is_match_clean and score_clean > score:
+                is_match, score, match_type = is_match_clean, score_clean, match_type_clean
+
+        if is_match and score >= 75.0:
+            logger.info(
+                f"[SMART SEARCH] type=series query={raw_query!r} candidate={c_name!r} match_type={match_type} confidence={score:.1f}"
+            )
             scored_results.append((score, doc))
 
-    if not scored_results:
-        logger.info(
-            f"[SERIES SEARCH ROUTING]\n"
-            f"query={query}\n"
-            f"matched=False"
-        )
-        return []
+    scored_results.sort(key=lambda x: -x[0])
 
-    # 3. Sort by score descending, then length difference, then name
-    scored_results.sort(key=lambda x: (-x[0], abs(len(x[1].get("normalized_name", "")) - len(q_norm)), x[1].get("name", "")))
-
-    # 4. Deduplicate by (title + year) — NOT just title alone.
-    #    Series with the same name but different years must remain separate.
     seen = set()
     dedup = []
     for score, doc in scored_results:
-        name_lower = doc.get("name", "").strip().lower()
-        year       = str(doc.get("year", "")).strip()
-        imdb_id    = str(doc.get("imdb_id", "")).strip()
-        # Primary key: imdb_id when present; otherwise (name, year)
-        if imdb_id:
-            dedup_key = imdb_id
-        else:
-            dedup_key = f"{name_lower}||{year}"
+        name_lower = normalize_search_text(doc.get("name", ""))
+        year = str(doc.get("year", "")).strip()
+        imdb_id = str(doc.get("imdb_id", "")).strip()
+        dedup_key = imdb_id if imdb_id else f"{name_lower}||{year}"
         if dedup_key not in seen:
             seen.add(dedup_key)
             dedup.append(doc)
             if len(dedup) == 10:
                 break
 
-    logger.info(
-        f"[SERIES SEARCH ROUTING]\n"
-        f"query={query}\n"
-        f"matched={bool(dedup)}"
-    )
     return dedup
 
 
@@ -921,6 +984,10 @@ async def create_super_movie(data: dict) -> str:
     is_cs = bool(data.get("coming_soon", False) or data.get("status") == "coming_soon")
     status = "coming_soon" if is_cs else "active"
 
+    gen_aliases = generate_smart_aliases(clean_name)
+    user_aliases = [normalize_search_text(a) for a in data.get("aliases", []) if a]
+    search_aliases = list(dict.fromkeys(user_aliases + gen_aliases))
+
     doc = {
         "title": clean_name,
         "normalized_name": _normalize(clean_name),
@@ -932,6 +999,9 @@ async def create_super_movie(data: dict) -> str:
         "languages": data.get("languages", []),
         "qualities": data.get("qualities", []),
         "file_ids": unique_file_ids,
+        "aliases": user_aliases,
+        "generated_aliases": gen_aliases,
+        "search_aliases": search_aliases,
         "created_by": data.get("created_by"),
         "coming_soon": is_cs,
         "created_at": datetime.utcnow(),
@@ -949,6 +1019,8 @@ async def create_super_movie(data: dict) -> str:
         merged_file_ids = list(dict.fromkeys((existing.get("file_ids") or []) + unique_file_ids))
         merged_langs = list(dict.fromkeys((existing.get("languages") or []) + (doc.get("languages") or [])))
         merged_quals = list(dict.fromkeys((existing.get("qualities") or []) + (doc.get("qualities") or [])))
+        merged_user_aliases = list(dict.fromkeys((existing.get("aliases") or []) + user_aliases))
+        merged_gen_aliases = list(dict.fromkeys(generate_smart_aliases(doc["title"] or existing.get("title"))))
         
         was_cs = is_filter_coming_soon(existing)
         new_status = "active" if merged_file_ids else (doc.get("status") or existing.get("status", "active"))
@@ -972,6 +1044,9 @@ async def create_super_movie(data: dict) -> str:
             "languages": merged_langs,
             "qualities": merged_quals,
             "file_ids": merged_file_ids,
+            "aliases": merged_user_aliases,
+            "generated_aliases": merged_gen_aliases,
+            "search_aliases": list(dict.fromkeys(merged_user_aliases + merged_gen_aliases)),
             "coming_soon": new_cs,
             "status": new_status,
             "updated_at": datetime.utcnow(),
@@ -989,15 +1064,6 @@ async def get_super_movie(movie_id: str) -> dict | None:
         return None
 
 
-def normalize_movie_search_title(text: str) -> str:
-    text = str(text or "").lower()
-    text = re.sub(r"[\._\-\+\[\]\(\)\{\}:;!?,/\\]+", " ", text)
-    text = re.sub(r"\s+", " ", text).strip()
-    return text
-
-_normalize = normalize_movie_search_title
-
-
 async def backfill_super_movie_normalized_names() -> int:
     """
     Backfill and normalize stored normalized_name across all existing Super Movie filters.
@@ -1009,7 +1075,7 @@ async def backfill_super_movie_normalized_names() -> int:
         title = doc.get("title") or doc.get("name") or ""
         if not title:
             continue
-        normalized = normalize_movie_search_title(title)
+        normalized = normalize_search_text(title)
         if not normalized:
             continue
         if doc.get("normalized_name") != normalized:
@@ -1023,11 +1089,12 @@ async def backfill_super_movie_normalized_names() -> int:
 
 
 async def search_super_movies(query: str) -> list[dict]:
+    """Smart fuzzy and alias search across Super Movie records."""
     raw_query = str(query or "").strip()
     if not raw_query:
         return []
 
-    q_norm = normalize_movie_search_title(raw_query)
+    q_norm = normalize_search_text(raw_query)
     if not q_norm:
         return []
 
@@ -1035,86 +1102,39 @@ async def search_super_movies(query: str) -> list[dict]:
     q_year_match = re.search(r"\b(19\d{2}|20\d{2})\b", raw_query)
     q_year = q_year_match.group(1) if q_year_match else None
 
-    q_title_no_year = re.sub(r"\b(19\d{2}|20\d{2})\b", "", q_norm).strip()
-    q_title_no_year = re.sub(r"\s+", " ", q_title_no_year).strip()
-    target_query = q_title_no_year if q_title_no_year else q_norm
-    q_tokens = [w for w in target_query.split() if w]
-
-    if not q_tokens:
-        return []
-
-    is_single_stopword = len(q_tokens) == 1 and q_tokens[0] in COMMON_STOPWORDS
-
     # Fetch all active candidates from MongoDB
     cursor = super_movies_col.find({"status": {"$ne": "deleted"}})
     candidates = [doc async for doc in cursor]
 
+    if not candidates:
+        logger.info(f"[SMART SEARCH] type=movie query={raw_query!r} matched=False reason=no_candidates")
+        return []
+
     scored_matches = []
     for cand in candidates:
         c_title = cand.get("title") or cand.get("name") or ""
-        c_norm = cand.get("normalized_name") or normalize_movie_search_title(c_title)
         c_year = str(cand.get("year", "")).strip()
         c_file_count = len(cand.get("file_ids") or [])
-        c_tokens = [w for w in c_norm.split() if w]
+        c_aliases = cand.get("aliases") or []
+        c_gen_aliases = cand.get("generated_aliases") or []
+        all_c_aliases = list(set(c_aliases + c_gen_aliases + generate_smart_aliases(c_title)))
 
-        if not c_norm:
-            continue
+        is_match, score, match_type = compute_smart_search_score(
+            query=raw_query,
+            target_title=c_title,
+            aliases=all_c_aliases,
+            target_year=c_year,
+            query_year=q_year
+        )
 
-        score = 0.0
-
-        # Stopword guard: single generic word only matches exact title
-        if is_single_stopword:
-            if q_norm == c_norm or target_query == c_norm:
-                score = 100.0
-            else:
-                continue
-
-        # 1. Exact match
-        elif q_norm == c_norm or target_query == c_norm:
-            score = 100.0
-
-        # 2. Token match
-        elif q_tokens and c_tokens and q_tokens == c_tokens:
-            score = 95.0
-
-        # 3. Candidate title starts with query word/phrase (e.g. 'aadu 2', 'aadu 3' when query is 'aadu')
-        elif c_norm.startswith(target_query + " ") or c_norm.startswith(q_norm + " "):
-            score = 88.0 + (len(target_query) / len(c_norm)) * 5.0
-
-        # 4. All query tokens in candidate tokens as distinct words (e.g. 'aadu' in ['aadu', '2'])
-        elif q_tokens and c_tokens and all(qt in c_tokens for qt in q_tokens):
-            score = 80.0 + (len(q_tokens) / len(c_tokens)) * 10.0
-
-        # 5. All candidate tokens in query (query has extra details like 'premalu full movie')
-        elif q_tokens and c_tokens and all(ct in q_tokens for ct in c_tokens):
-            score = 75.0 + (len(c_tokens) / len(q_tokens)) * 10.0
-
-        # 6. Multi-word query (>= 3 words) where all non-stopword tokens match
-        elif len(q_tokens) >= 3:
-            meaningful_q = [qt for qt in q_tokens if qt not in COMMON_STOPWORDS]
-            if len(meaningful_q) >= 2 and sum(1 for qt in meaningful_q if qt in c_tokens) >= len(meaningful_q):
-                score = 70.0
-
-        if score >= 70.0:
-            if q_year:
-                if c_year == q_year:
-                    score += 20.0
-                elif c_year and c_year not in ("N/A", "None", "0", ""):
-                    score -= 30.0
-
+        if is_match and score >= 75.0:
+            logger.info(
+                f"[SMART SEARCH] type=movie query={raw_query!r} candidate={c_title!r} match_type={match_type} confidence={score:.1f}"
+            )
             scored_matches.append((score, c_file_count, cand))
 
     scored_matches.sort(key=lambda x: (x[0], x[1]), reverse=True)
-    matched = [cand for score, f_count, cand in scored_matches if score >= 70.0]
-
-    logger.info(
-        f"[SUPER MOVIE SEARCH DEBUG]\n"
-        f"raw_query={raw_query}\n"
-        f"normalized_query={q_norm}\n"
-        f"candidate_count={len(candidates)}\n"
-        f"matched_count={len(matched)}"
-    )
-
+    matched = [cand for score, f_count, cand in scored_matches]
     return matched
 
 
