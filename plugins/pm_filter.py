@@ -3512,7 +3512,7 @@ async def advantage_spell_chok(client, name, msg, reply_msg, vj_search):
     saved_movies = await search_super_movies(mv_rqst)
     saved_series = await search_series(mv_rqst)
 
-    valid_movies = [m for m in saved_movies if m.get("file_ids")]
+    valid_movies = [m for m in saved_movies if m.get("file_ids") or m.get("coming_soon") or m.get("status") == "coming_soon"]
     valid_series = saved_series
 
     if valid_movies or valid_series:

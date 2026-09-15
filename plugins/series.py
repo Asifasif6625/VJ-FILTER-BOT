@@ -73,6 +73,7 @@ from database.series_db import (
     sync_movie_filter_for_files,
     sync_existing_movie_filter,
     scan_movie_files_by_identity,
+    is_filter_coming_soon,
 )
 try:
     from database.series_db import scan_movie_batch_by_name_year
@@ -916,6 +917,7 @@ def _build_auto_movie_lang_keyboard(session_id, movie_data):
         save_label = f"💾 Save Super Movie ({tot_new} New)" if tot_new > 0 else "💾 Save Super Movie Filter"
         buttons.append([InlineKeyboardButton(save_label, callback_data=f"am_save:{session_id}")])
 
+    buttons.append([InlineKeyboardButton("⏳ Coming Soon", callback_data=f"am_cs:{session_id}")])
     buttons.append([InlineKeyboardButton("🔍 Scan Database for Files", callback_data=f"am_scan:{session_id}")])
     buttons.append([InlineKeyboardButton("📦 Batch Add Files", callback_data=f"am_batch:{session_id}")])
     buttons.append([InlineKeyboardButton("❌ Cancel", callback_data=f"am_cancel:{session_id}")])
@@ -1373,9 +1375,10 @@ async def fetch_auto_series_metadata(client: Client, chat_id: int | str, loading
             if len(season_row) == 2:
                 rows.append(season_row)
                 season_row = []
-        if season_row:
-            rows.append(season_row)
-        rows.append([InlineKeyboardButton("🏁 Finish", callback_data=f"as_finish#{session_id}")])
+        rows.append([
+            InlineKeyboardButton("🏁 Finish", callback_data=f"as_finish#{session_id}"),
+            InlineKeyboardButton("⏳ Coming Soon", callback_data=f"as_cs#{session_id}")
+        ])
 
         season_markup = InlineKeyboardMarkup(rows)
         series_info_text = (
@@ -1484,9 +1487,10 @@ async def as_season_callback(client: Client, query: CallbackQuery):
                 if len(season_row) == 2:
                     rows.append(season_row)
                     season_row = []
-        if season_row:
-            rows.append(season_row)
-        rows.append([InlineKeyboardButton("🏁 Finish", callback_data=f"as_finish#{session_id}")])
+        rows.append([
+            InlineKeyboardButton("🏁 Finish", callback_data=f"as_finish#{session_id}"),
+            InlineKeyboardButton("⏳ Coming Soon", callback_data=f"as_cs#{session_id}")
+        ])
 
         return await query.message.edit_text(
             f"❌ <b>No matching files found for Season {season_num}.</b>\n\n"
@@ -1623,7 +1627,10 @@ async def as_save_season_callback(client: Client, query: CallbackQuery):
                 season_row = []
     if season_row:
         rows.append(season_row)
-    rows.append([InlineKeyboardButton("🏁 Finish", callback_data=f"as_finish#{session_id}")])
+    rows.append([
+        InlineKeyboardButton("🏁 Finish", callback_data=f"as_finish#{session_id}"),
+        InlineKeyboardButton("⏳ Coming Soon", callback_data=f"as_cs#{session_id}")
+    ])
 
     return await query.message.edit_text(
         f"✅ <b>Season {season_num} saved successfully.</b>\n\n"
@@ -1653,7 +1660,10 @@ async def as_back_seasons_callback(client: Client, query: CallbackQuery):
                 season_row = []
     if season_row:
         rows.append(season_row)
-    rows.append([InlineKeyboardButton("🏁 Finish", callback_data=f"as_finish#{session_id}")])
+    rows.append([
+        InlineKeyboardButton("🏁 Finish", callback_data=f"as_finish#{session_id}"),
+        InlineKeyboardButton("⏳ Coming Soon", callback_data=f"as_cs#{session_id}")
+    ])
 
     series_info_text = (
         f"🎬 <b>{html.escape(s_data.get('title', 'Series'))}</b>\n\n"
@@ -1692,6 +1702,87 @@ async def as_finish_callback(client: Client, query: CallbackQuery):
         "All processed seasons are now indexed and available in the series filter.",
         parse_mode=enums.ParseMode.HTML
     )
+
+
+@Client.on_callback_query(filters.regex(r"^as_cs#"), group=-15)
+async def as_cs_callback(client: Client, query: CallbackQuery):
+    session_id = query.data.split("#")[1]
+    s_data = temp.AUTO_SERIES.get(session_id) or temp.AUTO_SERIES.get(query.from_user.id)
+    if not s_data:
+        return await query.answer("Session expired.", show_alert=True)
+
+    uid = query.from_user.id
+    s_title = s_data.get("title", "Series")
+    s_year = s_data.get("year", "N/A")
+    series_id = s_data.get("series_id")
+
+    from database.series_db import get_series_by_name, create_series, series_col
+    from bson import ObjectId
+
+    if series_id:
+        await series_col.update_one(
+            {"_id": ObjectId(series_id)},
+            {
+                "$set": {
+                    "status": "coming_soon",
+                    "coming_soon": True,
+                    "updated_at": datetime.utcnow()
+                }
+            }
+        )
+    else:
+        existing = await get_series_by_name(_normalize(s_title))
+        if existing:
+            series_id = str(existing["_id"])
+            await series_col.update_one(
+                {"_id": ObjectId(series_id)},
+                {
+                    "$set": {
+                        "name": s_title,
+                        "year": s_year if s_year != "N/A" else existing.get("year", "N/A"),
+                        "poster": s_data.get("poster") or existing.get("poster", ""),
+                        "rating": s_data.get("rating") or existing.get("rating", ""),
+                        "genre": s_data.get("genre") or existing.get("genre", "Drama"),
+                        "description": s_data.get("description") or existing.get("description", ""),
+                        "status": "coming_soon",
+                        "coming_soon": True,
+                        "updated_at": datetime.utcnow()
+                    }
+                }
+            )
+        else:
+            series_id = await create_series({
+                "name": s_title,
+                "year": s_year,
+                "genre": s_data.get("genre", "Drama"),
+                "rating": s_data.get("rating", ""),
+                "poster": s_data.get("poster", ""),
+                "description": s_data.get("description", ""),
+                "languages": [],
+                "seasons": s_data.get("available_seasons", [1]),
+                "qualities": [],
+                "created_by": uid,
+                "status": "coming_soon",
+                "coming_soon": True
+            })
+
+    logger.info(f"[AUTO SERIES COMING SOON FILTER CREATE] series_id={series_id} name={s_title}")
+
+    clear_wizard_session(uid)
+    temp.AUTO_SERIES.pop(session_id, None)
+    temp.AUTO_SERIES.pop(uid, None)
+
+    card_text = (
+        f"⏳ <b>Coming Soon Series Filter Saved!</b>\n\n"
+        f"📺 <b>{html.escape(str(s_title))}</b> ({s_year})\n\n"
+        f"<i>This series filter is saved as <b>Coming Soon</b>. It will show metadata & poster with 'Coming soon!' button, and will automatically activate once files are added.</i>\n\n"
+        f"<i>Series Filter ID: <code>{series_id}</code></i>"
+    )
+    markup = InlineKeyboardMarkup([
+        [InlineKeyboardButton("📁 Add Files / Resync", callback_data=f"sw#sfiles:{series_id}")],
+        [InlineKeyboardButton("« Back to Menu", callback_data="sw#menu")]
+    ])
+    return await query.message.edit_text(card_text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
 
 
 async def _auto_movie_metadata_watchdog(client, chat_id, loading_msg, session_id):
@@ -2297,6 +2388,7 @@ def _config_menu_keyboard(series_id: str = None, from_viewseries: bool = False) 
     
     save_row = [
         InlineKeyboardButton("🟢 Save", callback_data="sw#save"),
+        InlineKeyboardButton("⏳ Coming Soon", callback_data="sw#cs_manual"),
         InlineKeyboardButton("🔴 Cancel", callback_data="sw#cancel")
     ]
     if from_viewseries:
@@ -5319,6 +5411,73 @@ async def series_wizard_callback(client: Client, query: CallbackQuery):
         ])
         return await query.message.edit_text(card_text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
 
+    elif data == "sw#cs_manual":
+        wiz = temp.SERIES_WIZARD.get(uid)
+        if not wiz:
+            return await query.answer("Session expired.", show_alert=True)
+
+        s_title = wiz.get("name", "Series")
+        s_year = wiz.get("year", "N/A")
+
+        from database.series_db import get_series_by_name, create_series, series_col
+        from bson import ObjectId
+
+        existing = await get_series_by_name(_normalize(s_title))
+        languages_list = wiz.get("languages") or []
+        qualities_list = wiz.get("qualities") or []
+        seasons_found = wiz.get("seasons") or ([wiz.get("target_season")] if wiz.get("target_season") else [1])
+
+        if existing:
+            series_id = str(existing["_id"])
+            await series_col.update_one(
+                {"_id": ObjectId(series_id)},
+                {
+                    "$set": {
+                        "name": s_title,
+                        "year": s_year if s_year != "N/A" else existing.get("year", "N/A"),
+                        "poster": wiz.get("poster") or existing.get("poster", ""),
+                        "rating": wiz.get("rating") or existing.get("rating", ""),
+                        "genre": wiz.get("genre") or existing.get("genre", "Drama"),
+                        "description": wiz.get("description") or existing.get("description", ""),
+                        "status": "coming_soon",
+                        "coming_soon": True,
+                        "updated_at": datetime.utcnow()
+                    }
+                }
+            )
+        else:
+            series_id = await create_series({
+                "name": s_title,
+                "year": s_year,
+                "genre": wiz.get("genre", "Drama"),
+                "rating": wiz.get("rating", ""),
+                "poster": wiz.get("poster", ""),
+                "description": wiz.get("description", ""),
+                "languages": languages_list,
+                "seasons": seasons_found,
+                "qualities": qualities_list,
+                "created_by": uid,
+                "status": "coming_soon",
+                "coming_soon": True
+            })
+
+        logger.info(f"[MANUAL SERIES COMING SOON FILTER CREATE] series_id={series_id} name={s_title}")
+
+        clear_wizard_session(uid)
+        temp.SERIES_WIZARD.pop(uid, None)
+
+        card_text = (
+            f"⏳ <b>Coming Soon Series Filter Saved!</b>\n\n"
+            f"📺 <b>{html.escape(str(s_title))}</b> ({s_year})\n\n"
+            f"<i>This series filter is saved as <b>Coming Soon</b>. It will show metadata & poster with 'Coming soon!' button, and will automatically activate once files are added.</i>\n\n"
+            f"<i>Series Filter ID: <code>{series_id}</code></i>"
+        )
+        markup = InlineKeyboardMarkup([
+            [InlineKeyboardButton("📁 Add Files / Resync", callback_data=f"sw#sfiles:{series_id}")],
+            [InlineKeyboardButton("« Back to Menu", callback_data="sw#menu")]
+        ])
+        return await query.message.edit_text(card_text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
+
     elif data.startswith("sw#season#"):
         val = data.split("#")[2]
         if wiz.get("mode") == "edit":
@@ -5375,6 +5534,7 @@ async def series_wizard_callback(client: Client, query: CallbackQuery):
                     f"❌ <b>No matching files found for '{html.escape(wiz['name'])}'.</b>\n\n"
                     "Please ensure episode files exist in your database with Series Name and Season/Episode (e.g. <code>S01E01</code>).",
                     reply_markup=InlineKeyboardMarkup([
+                        [InlineKeyboardButton("⏳ Coming Soon", callback_data="sw#cs_manual")],
                         [InlineKeyboardButton("🔄 Try Another Name", callback_data="sw#start_manual")],
                         [InlineKeyboardButton("❌ Cancel", callback_data="sw#cancel")]
                     ]),
@@ -5400,6 +5560,7 @@ async def series_wizard_callback(client: Client, query: CallbackQuery):
 
             save_markup = InlineKeyboardMarkup([
                 [InlineKeyboardButton(f"💾 Save Series Filter ({tot_matched} Files)", callback_data="sw#save_manual")],
+                [InlineKeyboardButton("⏳ Coming Soon", callback_data="sw#cs_manual")],
                 [InlineKeyboardButton("❌ Cancel", callback_data="sw#cancel")]
             ])
             return await query.message.edit_text(res_text, reply_markup=save_markup, parse_mode=enums.ParseMode.HTML)
@@ -5546,6 +5707,58 @@ async def auto_movie_callbacks(client: Client, query: CallbackQuery):
             f"✅ <b>Super Movie Filter Saved Successfully!</b>\n\n"
             f"🎬 <b>{title_esc} ({year_esc})</b>\n\n"
             f"📁 <b>Linked Files:</b> {tot_files}\n"
+            f"<i>Super Movie Filter ID: <code>{movie_id}</code></i>",
+            parse_mode=enums.ParseMode.HTML
+        )
+
+    elif data.startswith("am_cs:"):
+        session_id = data.split(":")[1]
+        movie_data = temp.AUTO_MOVIE.get(session_id) or temp.AUTO_MOVIE.get(uid)
+        if not movie_data:
+            return await query.answer("⚠️ Session expired. Please scan again.", show_alert=True)
+
+        logger.info("[AUTO MOVIE COMING SOON] FILTER SAVE")
+        from database.series_db import create_super_movie, search_super_movies
+
+        movie_id = await create_super_movie({
+            "title": movie_data["title"],
+            "year": movie_data.get("year", "N/A"),
+            "genre": movie_data.get("genre", "N/A"),
+            "rating": movie_data.get("rating", ""),
+            "poster": movie_data.get("poster", ""),
+            "description": movie_data.get("description", ""),
+            "languages": list(movie_data.get("grouped", {}).keys()),
+            "qualities": list({q for l in movie_data.get("grouped", {}).values() for q in l.keys()}),
+            "file_ids": [],
+            "imdb_id": movie_data.get("imdb_id"),
+            "tmdb_id": movie_data.get("tmdb_id"),
+            "created_by": uid,
+            "status": "coming_soon",
+            "coming_soon": True
+        })
+
+        logger.info(
+            f"[AUTO MOVIE COMING SOON FILTER CREATE]\n"
+            f"movie_id={movie_id}\n"
+            f"coming_soon=True"
+        )
+        verify_check = await search_super_movies(movie_data["title"])
+        if verify_check:
+            logger.info(f"[AUTO MOVIE COMING SOON FILTER VERIFY] result=SUCCESS movie_id={movie_id}")
+        else:
+            logger.error(f"[AUTO MOVIE COMING SOON FILTER VERIFY] result=FAILED movie_id={movie_id}")
+
+        clear_wizard_session(uid)
+        temp.AUTO_MOVIE.pop(uid, None)
+        temp.AUTO_MOVIE.pop(session_id, None)
+
+        title_esc = html.escape(str(movie_data.get('title', '')))
+        year_esc = html.escape(str(movie_data.get('year', '')))
+
+        return await query.message.edit_text(
+            f"⏳ <b>Coming Soon Movie Filter Saved!</b>\n\n"
+            f"🎬 <b>{title_esc} ({year_esc})</b>\n\n"
+            f"<i>This filter is saved as <b>Coming Soon</b>. It will show metadata & poster with 'Coming soon!' button, and will automatically activate once files are added.</i>\n\n"
             f"<i>Super Movie Filter ID: <code>{movie_id}</code></i>",
             parse_mode=enums.ParseMode.HTML
         )
@@ -5727,26 +5940,68 @@ async def auto_movie_callbacks(client: Client, query: CallbackQuery):
 # ─── USER SEARCH ROUTERS (Super Movie & Series Search) ───────────────────────
 # ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═  
 
+def build_coming_soon_keyboard(filter_type: str, filter_id: str, key: str) -> InlineKeyboardMarkup:
+    """
+    Builds the single full-width Coming Soon callback button for movie/series filters.
+    Button text: [ 𝘾𝙤𝙢𝙞𝙣𝙜 𝙨𝙤𝙤𝙣! ]
+    Callback: cs#{filter_type}#{filter_id}#{key}
+    """
+    return InlineKeyboardMarkup([[
+        InlineKeyboardButton("𝘾𝙤𝙢𝙞𝙣𝙜 𝙨𝙤𝙤𝙣!", callback_data=f"cs#{filter_type}#{filter_id}#{key}")
+    ]])
+
+
+@Client.on_callback_query(filters.regex(r"^cs#"), group=-15)
+async def coming_soon_callback(client: Client, query: CallbackQuery):
+    """
+    Handles user clicks on Coming Soon buttons:
+    - Verifies ownership / access
+    - If files were added in the background, transitions/renders the normal filter UI
+    - Otherwise shows Telegram alert: "File only get after OTT release"
+    """
+    parts = query.data.split("#")
+    filter_type = parts[1] if len(parts) > 1 else ""
+    filter_id = parts[2] if len(parts) > 2 else ""
+    key = parts[3] if len(parts) > 3 else f"{query.message.chat.id}-{query.message.id}"
+
+    from plugins.pm_filter import is_button_owner
+    is_owner, err_msg = is_button_owner(query, key)
+    if not is_owner:
+        return await query.answer(err_msg or "this is not your button 😊", show_alert=True)
+
+    uid = query.from_user.id
+    logger.info(f"[COMING SOON ALERT] type={filter_type} filter_id={filter_id} user_id={uid}")
+
+    # Check if files have been added since
+    if filter_type == "movie":
+        from database.series_db import get_super_movie, is_filter_coming_soon
+        movie = await get_super_movie(filter_id)
+        if movie and not is_filter_coming_soon(movie) and movie.get("file_ids"):
+            logger.info(f"[COMING SOON REFRESH] movie {filter_id} now has files, rendering normal UI")
+            await query.answer("Files are now available! Loading...", show_alert=False)
+            return await render_super_movie_direct(client, query.message, movie, reply_msg=query.message, user_id=uid)
+    elif filter_type == "series":
+        from database.series_db import get_series, list_series_languages, is_filter_coming_soon
+        series = await get_series(filter_id)
+        if series and not is_filter_coming_soon(series):
+            langs = await list_series_languages(filter_id)
+            if langs:
+                logger.info(f"[COMING SOON REFRESH] series {filter_id} now has files, rendering normal UI")
+                await query.answer("Episodes are now available! Loading...", show_alert=False)
+                return await render_series_direct(client, query.message, series, reply_msg=query.message, user_id=uid)
+
+    return await query.answer("File only get after OTT release", show_alert=True)
+
+
 async def render_super_movie_direct(client: Client, message: Message, movie: dict, reply_msg: Message = None, user_id: int = None) -> bool:
     """Renders the language selection UI for a specific Super Movie Filter."""
     from database.ia_filterdb import get_bulk_file_details
+    from database.series_db import is_filter_coming_soon
     from plugins.pm_filter import group_movie_files, build_movie_language_keyboard, BUTTON_OWNERS
+    from utils import schedule_filter_message_delete
 
     movie_id = str(movie["_id"])
     file_ids = movie.get("file_ids", [])
-    if not file_ids:
-        logger.info(f"[SUPER MOVIE SEARCH] matched_filter_but_no_files title={movie.get('title')} id={movie_id}")
-        return False
-
-    file_map = await get_bulk_file_details(file_ids)
-    file_docs = [file_map[fid] for fid in file_ids if fid in file_map]
-
-    if not file_docs:
-        return False
-
-    grouped = group_movie_files(file_docs)
-    if not grouped:
-        return False
 
     chat_id = message.chat.id if message and message.chat else (reply_msg.chat.id if reply_msg else 0)
     msg_id = message.id if message else (reply_msg.id if reply_msg else 0)
@@ -5766,22 +6021,9 @@ async def render_super_movie_direct(client: Client, message: Message, movie: dic
         elif chat_id > 0:
             real_user_id = chat_id
 
-    temp.MOVIE_STATE[key] = {
-        "movie_id": movie_id,
-        "title": movie.get("title", ""),
-        "year": str(movie.get("year", "")),
-        "rating": str(movie.get("rating", "")),
-        "genre": movie.get("genre", ""),
-        "poster": movie.get("poster", ""),
-        "description": movie.get("description", ""),
-        "grouped": grouped,
-        "chat_id": chat_id,
-        "user_id": real_user_id
-    }
     BUTTON_OWNERS[key] = real_user_id
     if reply_msg:
         BUTTON_OWNERS[f"{reply_msg.chat.id}-{reply_msg.id}"] = real_user_id
-        temp.MOVIE_STATE[f"{reply_msg.chat.id}-{reply_msg.id}"] = temp.MOVIE_STATE[key]
     if message:
         BUTTON_OWNERS[f"{message.chat.id}-{message.id}"] = real_user_id
 
@@ -5794,6 +6036,123 @@ async def render_super_movie_direct(client: Client, message: Message, movie: dic
     genre_str = f"\n🎭 <b>Genre:</b> {genre}" if genre and genre != "N/A" else ""
     poster = movie.get("poster", "")
 
+    # Coming Soon Check
+    if is_filter_coming_soon(movie) or (movie.get("coming_soon") and not file_ids):
+        logger.info(f"[COMING SOON SEARCH] rendering super movie coming soon UI title={title} id={movie_id}")
+        caption_text = (
+            f"🎬 <b>{title}{year_str}</b>"
+            f"{rating_str}"
+            f"{genre_str}\n\n"
+            f"⏳ <b>Coming Soon!</b>"
+        )
+        markup = build_coming_soon_keyboard("movie", movie_id, key)
+
+        if reply_msg:
+            try:
+                if poster and (reply_msg.photo or reply_msg.caption):
+                    try:
+                        await reply_msg.edit_media(
+                            media=InputMediaPhoto(media=poster, caption=caption_text, parse_mode=enums.ParseMode.HTML),
+                            reply_markup=markup
+                        )
+                        schedule_filter_message_delete(client, reply_msg.chat.id, reply_msg.id, 600)
+                        return True
+                    except Exception as me:
+                        logger.warning(f"[EDIT MEDIA FAILED] {me}, fallback to edit_caption")
+                        await reply_msg.edit_caption(
+                            caption=caption_text,
+                            reply_markup=markup,
+                            parse_mode=enums.ParseMode.HTML
+                        )
+                        schedule_filter_message_delete(client, reply_msg.chat.id, reply_msg.id, 600)
+                        return True
+                elif reply_msg.photo or reply_msg.caption:
+                    await reply_msg.edit_caption(
+                        caption=caption_text,
+                        reply_markup=markup,
+                        parse_mode=enums.ParseMode.HTML
+                    )
+                    schedule_filter_message_delete(client, reply_msg.chat.id, reply_msg.id, 600)
+                    return True
+                else:
+                    await reply_msg.edit_text(
+                        text=caption_text,
+                        reply_markup=markup,
+                        parse_mode=enums.ParseMode.HTML
+                    )
+                    schedule_filter_message_delete(client, reply_msg.chat.id, reply_msg.id, 600)
+                    return True
+            except Exception:
+                try:
+                    await reply_msg.delete()
+                except Exception:
+                    pass
+
+        if poster:
+            try:
+                sent_p = await (message.reply_photo(
+                    photo=poster,
+                    caption=caption_text,
+                    reply_markup=markup,
+                    parse_mode=enums.ParseMode.HTML
+                ) if message else client.send_photo(
+                    chat_id=chat_id,
+                    photo=poster,
+                    caption=caption_text,
+                    reply_markup=markup,
+                    parse_mode=enums.ParseMode.HTML
+                ))
+                if sent_p:
+                    BUTTON_OWNERS[f"{sent_p.chat.id}-{sent_p.id}"] = real_user_id
+                    schedule_filter_message_delete(client, sent_p.chat.id, sent_p.id, 600)
+                return True
+            except Exception as pe:
+                logger.warning(f"[SUPER MOVIE PHOTO ERROR] {pe}")
+
+        sent_t = await (message.reply_text(
+            text=caption_text,
+            reply_markup=markup,
+            parse_mode=enums.ParseMode.HTML
+        ) if message else client.send_message(
+            chat_id=chat_id,
+            text=caption_text,
+            reply_markup=markup,
+            parse_mode=enums.ParseMode.HTML
+        ))
+        if sent_t:
+            BUTTON_OWNERS[f"{sent_t.chat.id}-{sent_t.id}"] = real_user_id
+            schedule_filter_message_delete(client, sent_t.chat.id, sent_t.id, 600)
+        return True
+
+    if not file_ids:
+        logger.info(f"[SUPER MOVIE SEARCH] matched_filter_but_no_files title={movie.get('title')} id={movie_id}")
+        return False
+
+    file_map = await get_bulk_file_details(file_ids)
+    file_docs = [file_map[fid] for fid in file_ids if fid in file_map]
+
+    if not file_docs:
+        return False
+
+    grouped = group_movie_files(file_docs)
+    if not grouped:
+        return False
+
+    temp.MOVIE_STATE[key] = {
+        "movie_id": movie_id,
+        "title": movie.get("title", ""),
+        "year": str(movie.get("year", "")),
+        "rating": str(movie.get("rating", "")),
+        "genre": movie.get("genre", ""),
+        "poster": movie.get("poster", ""),
+        "description": movie.get("description", ""),
+        "grouped": grouped,
+        "chat_id": chat_id,
+        "user_id": real_user_id
+    }
+    if reply_msg:
+        temp.MOVIE_STATE[f"{reply_msg.chat.id}-{reply_msg.id}"] = temp.MOVIE_STATE[key]
+
     caption_text = (
         f"🎬 <b>{title}{year_str}</b>"
         f"{rating_str}"
@@ -5802,7 +6161,6 @@ async def render_super_movie_direct(client: Client, message: Message, movie: dic
     )
     markup = build_movie_language_keyboard(key, grouped)
 
-    from utils import schedule_filter_message_delete
     if reply_msg:
         try:
             if poster and (reply_msg.photo or reply_msg.caption):
@@ -5885,7 +6243,7 @@ async def render_super_movie_direct(client: Client, message: Message, movie: dic
 
 async def render_series_direct(client: Client, message: Message, series_doc: dict, reply_msg: Message = None, user_id: int = None) -> bool:
     """Renders the language selection UI for a specific Series Filter."""
-    from database.series_db import list_series_languages
+    from database.series_db import list_series_languages, is_filter_coming_soon
     from plugins.pm_filter import BUTTON_OWNERS
     from utils import schedule_filter_message_delete
 
@@ -5933,6 +6291,96 @@ async def render_series_direct(client: Client, message: Message, series_doc: dic
     if reply_msg and reply_msg.chat and reply_msg.id:
         BUTTON_OWNERS[f"{reply_msg.chat.id}-{reply_msg.id}"] = real_user_id
     logger.info(f"[SERIES OWNER REGISTER] key={key} owner={real_user_id}")
+
+    # Coming Soon Check
+    if is_filter_coming_soon(series_doc) or (series_doc.get("coming_soon") and not langs):
+        logger.info(f"[COMING SOON SEARCH] rendering series coming soon UI name={name} id={series_id}")
+        caption_text = (
+            f"📺 <b>{name}{year_str}</b>"
+            f"{rating_str}"
+            f"{genre_str}\n\n"
+            f"⏳ <b>Coming Soon!</b>"
+        )
+        markup = build_coming_soon_keyboard("series", series_id, key)
+
+        if reply_msg:
+            try:
+                if poster and (reply_msg.photo or reply_msg.caption):
+                    try:
+                        await reply_msg.edit_media(
+                            media=InputMediaPhoto(media=poster, caption=caption_text, parse_mode=enums.ParseMode.HTML),
+                            reply_markup=markup
+                        )
+                        schedule_filter_message_delete(client, reply_msg.chat.id, reply_msg.id, 600)
+                        return True
+                    except Exception as me:
+                        logger.warning(f"[EDIT MEDIA FAILED] {me}, fallback to edit_caption")
+                        await reply_msg.edit_caption(
+                            caption=caption_text,
+                            reply_markup=markup,
+                            parse_mode=enums.ParseMode.HTML
+                        )
+                        schedule_filter_message_delete(client, reply_msg.chat.id, reply_msg.id, 600)
+                        return True
+                elif reply_msg.photo or reply_msg.caption:
+                    await reply_msg.edit_caption(
+                        caption=caption_text,
+                        reply_markup=markup,
+                        parse_mode=enums.ParseMode.HTML
+                    )
+                    schedule_filter_message_delete(client, reply_msg.chat.id, reply_msg.id, 600)
+                    return True
+                else:
+                    await reply_msg.edit_text(
+                        text=caption_text,
+                        reply_markup=markup,
+                        parse_mode=enums.ParseMode.HTML
+                    )
+                    schedule_filter_message_delete(client, reply_msg.chat.id, reply_msg.id, 600)
+                    return True
+            except Exception:
+                try:
+                    await reply_msg.delete()
+                except Exception:
+                    pass
+
+        if poster:
+            try:
+                sent_p = await (message.reply_photo(
+                    photo=poster,
+                    caption=caption_text,
+                    reply_markup=markup,
+                    parse_mode=enums.ParseMode.HTML
+                ) if message else client.send_photo(
+                    chat_id=chat_id,
+                    photo=poster,
+                    caption=caption_text,
+                    reply_markup=markup,
+                    parse_mode=enums.ParseMode.HTML
+                ))
+                if sent_p:
+                    BUTTON_OWNERS[f"{sent_p.chat.id}-{sent_p.id}"] = real_user_id
+                    logger.info(f"[SERIES OWNER REGISTER] key={sent_p.chat.id}-{sent_p.id} owner={real_user_id}")
+                    schedule_filter_message_delete(client, sent_p.chat.id, sent_p.id, 600)
+                return True
+            except Exception as pe:
+                logger.warning(f"[SERIES PHOTO ERROR] {pe}")
+
+        sent_t = await (message.reply_text(
+            text=caption_text,
+            reply_markup=markup,
+            parse_mode=enums.ParseMode.HTML
+        ) if message else client.send_message(
+            chat_id=chat_id,
+            text=caption_text,
+            reply_markup=markup,
+            parse_mode=enums.ParseMode.HTML
+        ))
+        if sent_t:
+            BUTTON_OWNERS[f"{sent_t.chat.id}-{sent_t.id}"] = real_user_id
+            logger.info(f"[SERIES OWNER REGISTER] key={sent_t.chat.id}-{sent_t.id} owner={real_user_id}")
+            schedule_filter_message_delete(client, sent_t.chat.id, sent_t.id, 600)
+        return True
 
     buttons = []
     preferred_order = ["Malayalam", "Tamil", "Hindi", "Telugu", "Kannada", "English", "Dual Audio", "Multi Audio"]
@@ -6050,8 +6498,8 @@ async def process_unified_filter_search(client: Client, message: Message, query_
     super_movies = await search_super_movies(q)
     series_list = await search_series(clean_q)
 
-    # Filter out super movies with 0 files
-    valid_movies = [m for m in super_movies if m.get("file_ids")]
+    # Filter out super movies with 0 files (unless marked Coming Soon)
+    valid_movies = [m for m in super_movies if m.get("file_ids") or m.get("coming_soon") or m.get("status") == "coming_soon"]
     valid_series = series_list
 
     total_matches = len(valid_movies) + len(valid_series)
