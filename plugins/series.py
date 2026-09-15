@@ -2643,6 +2643,176 @@ async def cmd_sync_series(client: Client, message: Message):
     )
 
 
+def create_announcement_download_button(
+    text: str = None,
+    url: str = None,
+    style: str = None
+) -> InlineKeyboardButton:
+    """
+    Creates an InlineKeyboardButton for the announcement with style support
+    if supported by the installed Pyrogram/Pyrofork version, falling back gracefully.
+    """
+    import info
+    btn_text = text or getattr(info, "ANNOUNCEMENT_DOWNLOAD_BUTTON_TEXT", "👉  D O W N L O A D  📥  ↗")
+    btn_style = style or getattr(info, "ANNOUNCEMENT_DOWNLOAD_BUTTON_STYLE", "primary")
+    valid_styles = ("primary", "success", "danger")
+
+    st = str(btn_style).strip().lower() if btn_style else "primary"
+    if st in valid_styles:
+        try:
+            return InlineKeyboardButton(text=btn_text, url=url, style=st)
+        except TypeError:
+            pass
+        except Exception:
+            pass
+    return InlineKeyboardButton(text=btn_text, url=url)
+
+
+def build_announcement_download_keyboard(
+    download_url: str = None,
+    existing_markup: InlineKeyboardMarkup | list = None,
+    content_id: str = None,
+    filter_type: str = "filter"
+) -> InlineKeyboardMarkup | None:
+    """
+    Builds a single full-width Download button or safely appends it to an existing keyboard.
+    Ensures:
+    - Only 1 button in the download row
+    - Full row width
+    - No duplicate download buttons
+    - Preserves existing buttons
+    - Respects ANNOUNCEMENT_DOWNLOAD_BUTTON_ENABLED
+    - Handles missing URLs safely
+    """
+    import info
+    enabled = getattr(info, "ANNOUNCEMENT_DOWNLOAD_BUTTON_ENABLED", True)
+    btn_text = getattr(info, "ANNOUNCEMENT_DOWNLOAD_BUTTON_TEXT", "👉  D O W N L O A D  📥  ↗")
+    btn_style = getattr(info, "ANNOUNCEMENT_DOWNLOAD_BUTTON_STYLE", "primary")
+
+    logger.info(f"[ANNOUNCEMENT BUTTON] enabled={enabled}")
+
+    rows = []
+    if existing_markup:
+        if isinstance(existing_markup, InlineKeyboardMarkup):
+            if existing_markup.inline_keyboard:
+                rows = [list(row) for row in existing_markup.inline_keyboard]
+        elif isinstance(existing_markup, list):
+            rows = [list(row) if isinstance(row, list) else [row] for row in existing_markup]
+
+    if not enabled:
+        return InlineKeyboardMarkup(rows) if rows else None
+
+    if not download_url:
+        logger.warning(f"[ANNOUNCEMENT] Download URL unavailable for content_id={content_id or 'unknown'}")
+        return InlineKeyboardMarkup(rows) if rows else None
+
+    download_key = download_url.split("start=")[-1] if "start=" in download_url else "generated"
+    logger.info(f"[ANNOUNCEMENT BUTTON] content_id={content_id or 'unknown'}")
+    logger.info(f"[ANNOUNCEMENT BUTTON] download_key={download_key}")
+    logger.info(f"[ANNOUNCEMENT BUTTON] url={download_url}")
+
+    download_btn = create_announcement_download_button(text=btn_text, url=download_url, style=btn_style)
+
+    # Check if download button already exists in existing rows
+    found_idx = -1
+    for r_idx, row in enumerate(rows):
+        for b_idx, btn in enumerate(row):
+            btn_txt = getattr(btn, "text", "")
+            btn_u = getattr(btn, "url", "")
+            if (btn_u and ("start=series_" in btn_u or "start=movie_" in btn_u or "start=all_" in btn_u or "start=files_" in btn_u)) or \
+               ("download" in btn_txt.lower() or "d o w n l o a d" in btn_txt.lower()):
+                found_idx = r_idx
+                break
+        if found_idx != -1:
+            break
+
+    if found_idx != -1:
+        # Update existing download row to single full-width button
+        rows[found_idx] = [download_btn]
+    else:
+        # Append as a separate final full-width row
+        rows.append([download_btn])
+
+    logger.info(f"[ANNOUNCEMENT BUTTON] attached=True")
+    return InlineKeyboardMarkup(rows)
+
+
+async def send_announcement_media(
+    client: Client,
+    chat_id: int | str,
+    media,
+    caption: str,
+    reply_markup: InlineKeyboardMarkup = None
+):
+    """
+    Sends announcement message with support for text, photo, video, document, animation.
+    """
+    if not media:
+        return await client.send_message(
+            chat_id=chat_id,
+            text=caption,
+            reply_markup=reply_markup,
+            parse_mode=enums.ParseMode.HTML
+        )
+
+    m_str = str(media).lower()
+
+    if m_str.endswith((".mp4", ".mkv", ".mov", ".webm")):
+        try:
+            return await client.send_video(
+                chat_id=chat_id,
+                video=media,
+                caption=caption,
+                reply_markup=reply_markup,
+                parse_mode=enums.ParseMode.HTML
+            )
+        except Exception as e:
+            logger.warning(f"[ANNOUNCEMENT VIDEO FAILED] {e} - falling back")
+
+    if m_str.endswith(".gif"):
+        try:
+            return await client.send_animation(
+                chat_id=chat_id,
+                animation=media,
+                caption=caption,
+                reply_markup=reply_markup,
+                parse_mode=enums.ParseMode.HTML
+            )
+        except Exception as e:
+            logger.warning(f"[ANNOUNCEMENT ANIMATION FAILED] {e} - falling back")
+
+    # Try photo first
+    try:
+        return await client.send_photo(
+            chat_id=chat_id,
+            photo=media,
+            caption=caption,
+            reply_markup=reply_markup,
+            parse_mode=enums.ParseMode.HTML
+        )
+    except Exception as pe:
+        logger.warning(f"[ANNOUNCEMENT PHOTO FAILED] {pe} - falling back")
+        # Try document
+        try:
+            return await client.send_document(
+                chat_id=chat_id,
+                document=media,
+                caption=caption,
+                reply_markup=reply_markup,
+                parse_mode=enums.ParseMode.HTML
+            )
+        except Exception as de:
+            logger.warning(f"[ANNOUNCEMENT DOCUMENT FAILED] {de} - falling back to text")
+
+    # Fallback to text message
+    return await client.send_message(
+        chat_id=chat_id,
+        text=caption,
+        reply_markup=reply_markup,
+        parse_mode=enums.ParseMode.HTML
+    )
+
+
 async def announce_filter_created(client: Client, filter_type: str = "series", filter_id: str = None, force: bool = False) -> bool:
     """
     Sends an announcement message/photo to the configured announcement channel.
@@ -2711,12 +2881,13 @@ async def announce_filter_created(client: Client, filter_type: str = "series", f
             else:
                 season_str = "Season 1"
 
-            buttons = [
-                [
-                    InlineKeyboardButton("⬇️ Download", url=f"https://t.me/{bot_username}?start=series_{filter_id}")
-                ]
-            ]
-            markup = InlineKeyboardMarkup(buttons)
+            download_url = f"https://t.me/{bot_username}?start=series_{filter_id}" if filter_id else None
+            markup = build_announcement_download_keyboard(
+                download_url=download_url,
+                existing_markup=None,
+                content_id=str(filter_id),
+                filter_type="series"
+            )
 
             caption = (
                 f"📢 <b>NEW SERIES ADDED!</b> 🎬\n\n"
@@ -2753,12 +2924,13 @@ async def announce_filter_created(client: Client, filter_type: str = "series", f
             qualities = movie.get("qualities", [])
             qual_str = ", ".join(qualities) if qualities else "1080p, 720p, 480p"
 
-            buttons = [
-                [
-                    InlineKeyboardButton("⬇️ Download", url=f"https://t.me/{bot_username}?start=movie_{filter_id}")
-                ]
-            ]
-            markup = InlineKeyboardMarkup(buttons)
+            download_url = f"https://t.me/{bot_username}?start=movie_{filter_id}" if filter_id else None
+            markup = build_announcement_download_keyboard(
+                download_url=download_url,
+                existing_markup=None,
+                content_id=str(filter_id),
+                filter_type="movie"
+            )
 
             caption = (
                 f"📢 <b>NEW MOVIE ADDED!</b> 🎬\n\n"
@@ -2774,28 +2946,14 @@ async def announce_filter_created(client: Client, filter_type: str = "series", f
             return False
 
         # Send to channel
-        sent_msg = None
         cid_int = int(channel_id) if str(channel_id).lstrip("-").isdigit() else str(channel_id)
-
-        if poster:
-            try:
-                sent_msg = await client.send_photo(
-                    chat_id=cid_int,
-                    photo=poster,
-                    caption=caption,
-                    reply_markup=markup,
-                    parse_mode=enums.ParseMode.HTML
-                )
-            except Exception as pe:
-                logger.warning(f"[ANNOUNCEMENT PHOTO FAILED] {pe} - falling back to text")
-
-        if not sent_msg:
-            sent_msg = await client.send_message(
-                chat_id=cid_int,
-                text=caption,
-                reply_markup=markup,
-                parse_mode=enums.ParseMode.HTML
-            )
+        sent_msg = await send_announcement_media(
+            client=client,
+            chat_id=cid_int,
+            media=poster,
+            caption=caption,
+            reply_markup=markup
+        )
 
         if sent_msg:
             await save_announcement(
