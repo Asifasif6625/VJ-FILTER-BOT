@@ -102,10 +102,13 @@ async def create_series(data: dict) -> str:
     """
     Insert a new series document with a cleaned canonical title.
     data keys: name, year, genre, description, poster,
-                languages, seasons, qualities, created_by
+                languages, seasons, qualities, created_by, coming_soon, status
     Returns the new _id string.
     """
     clean_name = clean_series_title(data.get("name", ""))
+    is_cs = bool(data.get("coming_soon", False) or data.get("status") == "coming_soon")
+    status = "coming_soon" if is_cs else "active"
+
     doc = {
         "name": clean_name,
         "normalized_name": _normalize(clean_name),
@@ -121,9 +124,10 @@ async def create_series(data: dict) -> str:
         "season_modes": data.get("season_modes", {}),
         "created_by": data.get("created_by"),
         "announcement_sent": False,
+        "coming_soon": is_cs,
         "created_at": datetime.utcnow(),
         "updated_at": datetime.utcnow(),
-        "status": "active",
+        "status": status,
     }
     result = await series_col.insert_one(doc)
     return str(result.inserted_id)
@@ -139,29 +143,31 @@ async def get_series(series_id: str) -> dict | None:
 
 async def get_series_by_name(normalized_name: str) -> dict | None:
     """Exact-match on normalized_name."""
-    return await series_col.find_one({"normalized_name": normalized_name, "status": "active"})
+    return await series_col.find_one({"normalized_name": normalized_name, "status": {"$ne": "deleted"}})
 
 
 async def get_series_by_key(series_key: str) -> dict | None:
     """
-    Fetch a series by its URL-safe series_key, normalized_name, or string _id.
+    Lookup a series document by key or ID.
+    Supports exact series_key, normalized_name, and ObjectId lookups.
     """
-    if not series_key:
+    key = str(series_key or "").strip()
+    if not key:
         return None
-    key = str(series_key).strip().lower()
-    # 1. Direct series_key match
-    doc = await series_col.find_one({"series_key": key, "status": "active"})
+    # 1. Match series_key directly
+    doc = await series_col.find_one({"series_key": key, "status": {"$ne": "deleted"}})
     if doc:
         return doc
-    # 2. Check normalized name with spaces
-    norm_name = key.replace("_", " ")
-    doc = await series_col.find_one({"normalized_name": norm_name, "status": "active"})
-    if doc:
-        return doc
-    # 3. Check ObjectId match if valid hex string
+    # 2. Match normalized_name
+    norm_name = _normalize(key)
+    if norm_name:
+        doc = await series_col.find_one({"normalized_name": norm_name, "status": {"$ne": "deleted"}})
+        if doc:
+            return doc
+    # 3. Match ObjectId if valid
     if len(key) == 24:
         try:
-            doc = await series_col.find_one({"_id": ObjectId(key), "status": "active"})
+            doc = await series_col.find_one({"_id": ObjectId(key), "status": {"$ne": "deleted"}})
             if doc:
                 return doc
         except Exception:
@@ -700,6 +706,24 @@ async def add_series_file(data: dict) -> tuple[bool, str]:
     }
     try:
         await sfiles_col.insert_one(doc)
+        # Check if series was Coming Soon and auto-activate it
+        try:
+            sid_str = str(data["series_id"]).strip()
+            if len(sid_str) == 24:
+                s_doc = await series_col.find_one({"_id": ObjectId(sid_str)})
+                if is_filter_coming_soon(s_doc):
+                    await series_col.update_one(
+                        {"_id": ObjectId(sid_str)},
+                        {"$set": {"coming_soon": False, "status": "active", "updated_at": datetime.utcnow()}}
+                    )
+                    logger.info(
+                        f"[COMING SOON ACTIVATED]\n"
+                        f"type=series\n"
+                        f"filter_id={sid_str}\n"
+                        f"status=active"
+                    )
+        except Exception as act_err:
+            logger.warning(f"[COMING SOON AUTO-ACTIVATE ERROR] {act_err}")
         return True, "inserted"
     except DuplicateKeyError:
         return False, "duplicate"
@@ -894,6 +918,9 @@ async def create_super_movie(data: dict) -> str:
     # Deduplicate file_ids preserving order
     unique_file_ids = list(dict.fromkeys(file_ids))
     
+    is_cs = bool(data.get("coming_soon", False) or data.get("status") == "coming_soon")
+    status = "coming_soon" if is_cs else "active"
+
     doc = {
         "title": clean_name,
         "normalized_name": _normalize(clean_name),
@@ -906,9 +933,10 @@ async def create_super_movie(data: dict) -> str:
         "qualities": data.get("qualities", []),
         "file_ids": unique_file_ids,
         "created_by": data.get("created_by"),
+        "coming_soon": is_cs,
         "created_at": datetime.utcnow(),
         "updated_at": datetime.utcnow(),
-        "status": "active",
+        "status": status,
     }
     existing = None
     if doc.get("imdb_id"):
@@ -921,6 +949,19 @@ async def create_super_movie(data: dict) -> str:
         merged_file_ids = list(dict.fromkeys((existing.get("file_ids") or []) + unique_file_ids))
         merged_langs = list(dict.fromkeys((existing.get("languages") or []) + (doc.get("languages") or [])))
         merged_quals = list(dict.fromkeys((existing.get("qualities") or []) + (doc.get("qualities") or [])))
+        
+        was_cs = is_filter_coming_soon(existing)
+        new_status = "active" if merged_file_ids else (doc.get("status") or existing.get("status", "active"))
+        new_cs = False if merged_file_ids else (is_cs if "coming_soon" in data else existing.get("coming_soon", False))
+        
+        if was_cs and merged_file_ids:
+            logger.info(
+                f"[COMING SOON ACTIVATED]\n"
+                f"type=movie\n"
+                f"filter_id={existing['_id']}\n"
+                f"status=active"
+            )
+
         update_fields = {
             "title": doc["title"] or existing.get("title"),
             "year": doc["year"] if doc["year"] != "N/A" else existing.get("year", "N/A"),
@@ -931,8 +972,9 @@ async def create_super_movie(data: dict) -> str:
             "languages": merged_langs,
             "qualities": merged_quals,
             "file_ids": merged_file_ids,
+            "coming_soon": new_cs,
+            "status": new_status,
             "updated_at": datetime.utcnow(),
-            "status": "active",
         }
         await super_movies_col.update_one({"_id": existing["_id"]}, {"$set": update_fields})
         return str(existing["_id"])
@@ -1233,16 +1275,20 @@ async def resync_super_movie_filter(movie_id: str) -> dict | None:
             logger.info(f"[RESYNC MOVIE REJECT]\nmovie_id={mid}\ntitle={title}\nyear={year}\nfile_name={fdoc.get('file_name')}\nreason={reason}")
 
     # Update database
+    set_dict = {
+        "file_ids": valid_fids,
+        "languages": list(new_langs) if new_langs else (movie.get("languages") or []),
+        "qualities": list(new_quals) if new_quals else (movie.get("qualities") or []),
+        "updated_at": datetime.utcnow()
+    }
+    if valid_fids and (movie.get("coming_soon") or movie.get("status") == "coming_soon"):
+        set_dict["status"] = "active"
+        set_dict["coming_soon"] = False
+        logger.info(f"[COMING SOON ACTIVATED] super movie {title} activated with {len(valid_fids)} files via resync")
+
     await super_movies_col.update_one(
         {"_id": ObjectId(mid)},
-        {
-            "$set": {
-                "file_ids": valid_fids,
-                "languages": list(new_langs) if new_langs else (movie.get("languages") or []),
-                "qualities": list(new_quals) if new_quals else (movie.get("qualities") or []),
-                "updated_at": datetime.utcnow()
-            }
-        }
+        {"$set": set_dict}
     )
 
     stats = {
@@ -1341,6 +1387,10 @@ async def sync_movie_filter_for_files(file_docs, *, trigger="file_add"):
             }
             if new_fids:
                 update_op["$addToSet"] = {"file_ids": {"$each": new_fids}}
+                if movie.get("coming_soon") or movie.get("status") == "coming_soon":
+                    update_op["$set"]["status"] = "active"
+                    update_op["$set"]["coming_soon"] = False
+                    logger.info(f"[COMING SOON ACTIVATED] super movie {title} activated with {len(new_fids)} new files via sync")
             
             merged_langs = list(dict.fromkeys((movie.get("languages") or []) + new_langs))
             merged_quals = list(dict.fromkeys((movie.get("qualities") or []) + new_quals))
