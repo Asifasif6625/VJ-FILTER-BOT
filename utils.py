@@ -1543,14 +1543,21 @@ async def search_gagala(text):
     usr_agent = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) '
         'Chrome/61.0.3163.100 Safari/537.36'
-        }
+    }
     text = text.replace(" ", '+')
     url = f'https://www.google.com/search?q={text}'
-    response = requests.get(url, headers=usr_agent)
-    response.raise_for_status()
-    soup = BeautifulSoup(response.text, 'html.parser')
-    titles = soup.find_all( 'h3' )
-    return [title.getText() for title in titles]
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, headers=usr_agent, timeout=aiohttp.ClientTimeout(total=6)) as response:
+                if response.status == 200:
+                    text_content = await response.text()
+                    if BeautifulSoup:
+                        soup = BeautifulSoup(text_content, 'html.parser')
+                        titles = soup.find_all('h3')
+                        return [title.getText() for title in titles]
+    except Exception as e:
+        logger.warning(f"[SEARCH GAGALA ERROR] {e}")
+    return []
 
 async def get_settings(group_id):
     settings = await db.get_settings(group_id)
@@ -2187,4 +2194,238 @@ async def _cleanup_scheduler_loop():
 def start_cleanup_schedulers(client=None):
     """Starts background cleanup scheduler safely."""
     return asyncio.create_task(_cleanup_scheduler_loop())
+
+
+# ─── Resilient Telegram Message Senders with Exponential Backoff ─────────────
+
+_TRANSIENT_EXCEPTIONS = (
+    OSError,
+    ConnectionError,
+    TimeoutError,
+    asyncio.TimeoutError,
+)
+
+async def safe_reply_text(message, text: str, max_retries: int = 3, **kwargs):
+    """
+    Safely reply to a message with conservative exponential backoff on transient network/connection drops.
+    Catches OSError: Connection lost and prevents handler failure.
+    """
+    if not message:
+        return None
+    for attempt in range(1, max_retries + 1):
+        try:
+            return await message.reply_text(text, **kwargs)
+        except _TRANSIENT_EXCEPTIONS as e:
+            logger.warning(
+                f"[TELEGRAM SEND RETRY]\n"
+                f"error={e}\n"
+                f"type=reply_text\n"
+                f"attempt={attempt}/{max_retries}"
+            )
+            if attempt < max_retries:
+                await asyncio.sleep(attempt * 1.0)
+            else:
+                logger.error(
+                    f"[AUTO FILTER SEND ERROR]\n"
+                    f"error={e}\n"
+                    f"status=failed_after_retries\n"
+                    f"action=reply_text"
+                )
+                return None
+        except Exception as e:
+            err_msg = str(e).lower()
+            if "connection lost" in err_msg or "network" in err_msg or "timeout" in err_msg:
+                logger.warning(f"[TELEGRAM SEND CONNECTION ERROR] attempt={attempt}/{max_retries} error={e}")
+                if attempt < max_retries:
+                    await asyncio.sleep(attempt * 1.0)
+                    continue
+            logger.warning(f"[TELEGRAM REPLY TEXT ERROR] {e}")
+            return None
+
+
+async def safe_reply_photo(message, photo, max_retries: int = 3, **kwargs):
+    """
+    Safely reply with photo with conservative exponential backoff on transient network/connection drops.
+    """
+    if not message:
+        return None
+    for attempt in range(1, max_retries + 1):
+        try:
+            return await message.reply_photo(photo=photo, **kwargs)
+        except _TRANSIENT_EXCEPTIONS as e:
+            logger.warning(
+                f"[TELEGRAM SEND RETRY]\n"
+                f"error={e}\n"
+                f"type=reply_photo\n"
+                f"attempt={attempt}/{max_retries}"
+            )
+            if attempt < max_retries:
+                await asyncio.sleep(attempt * 1.0)
+            else:
+                logger.error(
+                    f"[AUTO FILTER SEND ERROR]\n"
+                    f"error={e}\n"
+                    f"status=failed_after_retries\n"
+                    f"action=reply_photo"
+                )
+                return None
+        except Exception as e:
+            err_msg = str(e).lower()
+            if "connection lost" in err_msg or "network" in err_msg or "timeout" in err_msg:
+                logger.warning(f"[TELEGRAM SEND CONNECTION ERROR] attempt={attempt}/{max_retries} error={e}")
+                if attempt < max_retries:
+                    await asyncio.sleep(attempt * 1.0)
+                    continue
+            # Non-transient errors (e.g. MediaEmpty) re-raised for caller fallback
+            raise e
+
+
+async def safe_send_message(client, chat_id, text: str, max_retries: int = 3, **kwargs):
+    """
+    Safely send message with conservative exponential backoff on transient network/connection drops.
+    """
+    if not client or not chat_id:
+        return None
+    for attempt in range(1, max_retries + 1):
+        try:
+            return await client.send_message(chat_id, text, **kwargs)
+        except _TRANSIENT_EXCEPTIONS as e:
+            logger.warning(
+                f"[TELEGRAM SEND RETRY]\n"
+                f"error={e}\n"
+                f"type=send_message\n"
+                f"attempt={attempt}/{max_retries}"
+            )
+            if attempt < max_retries:
+                await asyncio.sleep(attempt * 1.0)
+            else:
+                logger.error(
+                    f"[AUTO FILTER SEND ERROR]\n"
+                    f"error={e}\n"
+                    f"status=failed_after_retries\n"
+                    f"action=send_message"
+                )
+                return None
+        except Exception as e:
+            err_msg = str(e).lower()
+            if "connection lost" in err_msg or "network" in err_msg or "timeout" in err_msg:
+                logger.warning(f"[TELEGRAM SEND CONNECTION ERROR] attempt={attempt}/{max_retries} error={e}")
+                if attempt < max_retries:
+                    await asyncio.sleep(attempt * 1.0)
+                    continue
+            logger.warning(f"[TELEGRAM SEND MESSAGE ERROR] {e}")
+            return None
+
+
+async def safe_edit_text(message_or_query, text: str, max_retries: int = 3, **kwargs):
+    """
+    Safely edit text message with conservative exponential backoff.
+    """
+    if not message_or_query:
+        return None
+    for attempt in range(1, max_retries + 1):
+        try:
+            return await message_or_query.edit_text(text, **kwargs)
+        except _TRANSIENT_EXCEPTIONS as e:
+            logger.warning(f"[TELEGRAM EDIT RETRY] error={e} attempt={attempt}/{max_retries}")
+            if attempt < max_retries:
+                await asyncio.sleep(attempt * 1.0)
+            else:
+                logger.error(f"[AUTO FILTER SEND ERROR] error={e} status=failed_after_retries action=edit_text")
+                return None
+        except Exception as e:
+            err_msg = str(e).lower()
+            if "message is not modified" in err_msg:
+                return message_or_query
+            if "connection lost" in err_msg or "network" in err_msg or "timeout" in err_msg:
+                if attempt < max_retries:
+                    await asyncio.sleep(attempt * 1.0)
+                    continue
+            logger.warning(f"[TELEGRAM EDIT TEXT ERROR] {e}")
+            return None
+
+
+# ─── Telegram Connection Watchdog ─────────────────────────────────────────────
+_WATCHDOG_TASK = None
+
+async def _telegram_watchdog_loop(client, check_interval: int = 30):
+    """
+    Single-instance connection health watchdog.
+    Monitors Telegram connectivity and triggers safe reconnection upon connection loss.
+    """
+    logger.info("[TELEGRAM WATCHDOG] Connection health monitor active.")
+    consecutive_fails = 0
+
+    while True:
+        try:
+            await asyncio.sleep(check_interval)
+
+            is_connected = getattr(client, "is_connected", True)
+            if not is_connected:
+                consecutive_fails += 1
+                logger.warning(
+                    f"[TELEGRAM CONNECTION]\n"
+                    f"status=DISCONNECTED\n"
+                    f"reason=is_connected is False\n"
+                    f"attempt={consecutive_fails}"
+                )
+                logger.info(
+                    f"[TELEGRAM CONNECTION]\n"
+                    f"action=RECONNECT\n"
+                    f"attempt={consecutive_fails}"
+                )
+                try:
+                    if hasattr(client, "connect"):
+                        await client.connect()
+                    consecutive_fails = 0
+                    logger.info(
+                        f"[TELEGRAM CONNECTION]\n"
+                        f"action=RECONNECTED"
+                    )
+                except Exception as rec_err:
+                    logger.warning(f"[TELEGRAM RECONNECT FAILED] {rec_err}")
+            else:
+                # Test connectivity with a fast timeout
+                try:
+                    await asyncio.wait_for(client.get_me(), timeout=6.0)
+                    consecutive_fails = 0
+                except (asyncio.TimeoutError, OSError, Exception) as ping_err:
+                    err_s = str(ping_err).lower()
+                    if "connection lost" in err_s or isinstance(ping_err, (OSError, asyncio.TimeoutError)):
+                        consecutive_fails += 1
+                        logger.warning(
+                            f"[TELEGRAM CONNECTION]\n"
+                            f"status=DISCONNECTED\n"
+                            f"reason={ping_err}"
+                        )
+                        logger.info(
+                            f"[TELEGRAM CONNECTION]\n"
+                            f"action=RECONNECT\n"
+                            f"attempt={consecutive_fails}"
+                        )
+                        try:
+                            if hasattr(client, "reconnect"):
+                                await client.reconnect()
+                            elif hasattr(client, "connect"):
+                                await client.connect()
+                            consecutive_fails = 0
+                            logger.info(
+                                f"[TELEGRAM CONNECTION]\n"
+                                f"action=RECONNECTED"
+                            )
+                        except Exception as r_err:
+                            logger.warning(f"[TELEGRAM RECONNECT ATTEMPT FAILED] {r_err}")
+        except asyncio.CancelledError:
+            break
+        except Exception as e:
+            logger.warning(f"[TELEGRAM WATCHDOG ERROR] {e}")
+
+
+def start_telegram_watchdog(client, check_interval: int = 30):
+    """Guarantees a single watchdog instance is started."""
+    global _WATCHDOG_TASK
+    if _WATCHDOG_TASK is not None and not _WATCHDOG_TASK.done():
+        return _WATCHDOG_TASK
+    _WATCHDOG_TASK = asyncio.create_task(_telegram_watchdog_loop(client, check_interval))
+    return _WATCHDOG_TASK
 
