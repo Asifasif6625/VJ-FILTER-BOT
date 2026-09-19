@@ -2179,6 +2179,93 @@ def schedule_filter_message_delete(client, chat_id: int, message_id: int, delay:
     _FILTER_DELETE_TASKS[key] = task
     return task
 
+_SET_FILTER_DELETE_TASKS = {}
+SET_FILTER_AUTO_DELETE_DELAY = 18000  # 5 hours = 18,000 seconds
+
+async def delete_set_filter_reply(message_or_client, chat_id: int = None, message_id: int = None, delay: int = 18000):
+    """
+    Dedicated safe deletion worker ONLY for Set Filters replies.
+    Waits 5 hours (18000s) and deletes the message safely with structured logging.
+    """
+    client = None
+    target_msg = None
+    if hasattr(message_or_client, "delete") and hasattr(message_or_client, "chat"):
+        target_msg = message_or_client
+        c_id = getattr(getattr(target_msg, "chat", None), "id", None) or chat_id
+        m_id = getattr(target_msg, "id", None) or message_id
+    else:
+        client = message_or_client
+        c_id = chat_id
+        m_id = message_id
+
+    key = (int(c_id), int(m_id)) if (c_id and m_id) else None
+
+    try:
+        await asyncio.sleep(delay)
+        logger.info(
+            f"[SET FILTER AUTO DELETE]\n"
+            f"action=DELETE\n"
+            f"chat_id={c_id}\n"
+            f"message_id={m_id}"
+        )
+        if target_msg is not None:
+            await target_msg.delete()
+        elif client is not None and c_id and m_id:
+            await safe_delete_message(client, c_id, m_id)
+    except asyncio.CancelledError:
+        pass
+    except Exception as e:
+        logger.warning(
+            f"[SET FILTER AUTO DELETE]\n"
+            f"action=FAILED\n"
+            f"error={e}"
+        )
+    finally:
+        if key:
+            _SET_FILTER_DELETE_TASKS.pop(key, None)
+
+def schedule_set_filter_reply_delete(message_or_client, chat_id: int = None, message_id: int = None, delay: int = 18000):
+    """
+    Schedules background auto-deletion ONLY for Set Filters replies after 5 hours (18,000s).
+    Non-blocking, retains chat_id/message_id, cancels existing task to avoid duplicate tasks.
+    """
+    if hasattr(message_or_client, "chat") and hasattr(message_or_client, "id"):
+        target_msg = message_or_client
+        c_id = getattr(target_msg.chat, "id", None)
+        m_id = getattr(target_msg, "id", None)
+        client = None
+    else:
+        target_msg = None
+        client = message_or_client
+        c_id = chat_id
+        m_id = message_id
+
+    if not c_id or not m_id:
+        return None
+
+    key = (int(c_id), int(m_id))
+    old_task = _SET_FILTER_DELETE_TASKS.get(key)
+    if old_task and not old_task.done():
+        try:
+            old_task.cancel()
+        except Exception:
+            pass
+
+    logger.info(
+        f"[SET FILTER AUTO DELETE]\n"
+        f"chat_id={c_id}\n"
+        f"message_id={m_id}\n"
+        f"delete_after={delay}"
+    )
+
+    if target_msg is not None:
+        task = asyncio.create_task(delete_set_filter_reply(target_msg, delay=delay))
+    else:
+        task = asyncio.create_task(delete_set_filter_reply(client, chat_id=c_id, message_id=m_id, delay=delay))
+
+    _SET_FILTER_DELETE_TASKS[key] = task
+    return task
+
 async def cleanup_expired_messages():
     """Periodic cleanup worker for expired state entries."""
     pass
