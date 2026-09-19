@@ -2199,13 +2199,20 @@ async def delete_message_after(client, chat_id: int, message_id: int, delay: int
 
 def schedule_filter_message_delete(client, chat_id: int, message_id: int, delay: int = 600):
     """
-    Schedules auto-deletion of a temporary bot filter/result message after `delay` seconds (default 600s = 10 mins).
+    Schedules auto-deletion of a temporary bot filter/result message after `delay` seconds.
+    For group chats (chat_id < 0), default delay is 18,000s (5 hours).
+    For private messages (chat_id > 0), default delay is 600s (10 mins).
     If the message is refreshed/edited, cancels any pending task and resets the TTL.
     """
     if not client or not chat_id or not message_id:
         return None
 
-    key = (int(chat_id), int(message_id))
+    c_id = int(chat_id)
+    # If in group chat and default 600 was passed, use 5 hours (18,000s)
+    if c_id < 0 and delay == 600:
+        delay = 18000
+
+    key = (c_id, int(message_id))
     old_task = _FILTER_DELETE_TASKS.get(key)
     if old_task and not old_task.done():
         try:
