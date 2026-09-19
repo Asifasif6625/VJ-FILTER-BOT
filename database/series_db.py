@@ -84,6 +84,9 @@ async def _ensure_indexes():
     try:
         await series_col.create_index("normalized_name")
         await series_col.create_index("series_key")
+        await series_col.create_index([("status", 1), ("created_at", -1)])
+        await super_movies_col.create_index("normalized_title")
+        await super_movies_col.create_index([("status", 1), ("created_at", -1)])
         await announcements_col.create_index("series_id", unique=True)
         await sfiles_col.create_index(
             [("series_id", 1), ("language", 1), ("season", 1), ("episode", 1), ("quality", 1)]
@@ -1928,5 +1931,54 @@ async def scan_series_batch_by_name(
     """
     from plugins.series import scan_sdatabase_for_series
     return await scan_sdatabase_for_series(0, title=title, season=None, series_id=series_id)
+
+
+async def get_latest_filters(limit: int = 15, offset: int = 0) -> tuple[list[dict], int]:
+    """
+    Retrieve latest added Movie and Series filters sorted by newest first.
+    Returns (page_items, total_count).
+    """
+    fetch_count = max(offset + limit + 20, 50)
+    
+    m_cursor = super_movies_col.find(
+        {"status": {"$ne": "deleted"}}
+    ).sort([("created_at", -1), ("_id", -1)]).limit(fetch_count)
+    
+    s_cursor = series_col.find(
+        {"status": {"$ne": "deleted"}}
+    ).sort([("created_at", -1), ("_id", -1)]).limit(fetch_count)
+    
+    movies = [doc async for doc in m_cursor]
+    series = [doc async for doc in s_cursor]
+    
+    for m in movies:
+        m["_filter_type"] = "movie"
+    for s in series:
+        s["_filter_type"] = "series"
+        
+    def _get_sort_time(doc):
+        t = doc.get("created_at") or doc.get("updated_at")
+        if isinstance(t, datetime):
+            return t.timestamp()
+        try:
+            return doc["_id"].generation_time.timestamp()
+        except Exception:
+            return 0
+            
+    combined = sorted(movies + series, key=_get_sort_time, reverse=True)
+    
+    # Filter out empty movies without files unless marked coming soon
+    valid_combined = []
+    for item in combined:
+        if item.get("_filter_type") == "movie":
+            if item.get("file_ids") or item.get("coming_soon") or item.get("status") == "coming_soon":
+                valid_combined.append(item)
+        else:
+            valid_combined.append(item)
+            
+    total_count = len(valid_combined)
+    page_items = valid_combined[offset:offset + limit]
+    return page_items, total_count
+
 
 
