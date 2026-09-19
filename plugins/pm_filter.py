@@ -2,7 +2,7 @@
 # Subscribe YouTube Channel For Amazing Bot @Tech_VJ
 # Ask Doubt on telegram @KingVJ01
 
-import os, logging, string, asyncio, time, re, ast, random, math, pytz, pyrogram
+import os, logging, string, asyncio, time, re, ast, random, math, pytz, pyrogram, html
 from datetime import datetime, timedelta, date, time
 from Script import script
 from info import *
@@ -371,6 +371,108 @@ def group_movie_files(files):
                 grouped[lang][fqual].append(f)
     return grouped
 
+def format_movie_metadata_caption(movie_data: dict, grouped_data: dict = None, selected_lang: str = None, page_type: str = "lang") -> str:
+    """
+    Renders Movie filter UI with italic metadata block:
+    <i>○ Movie: <b>Movie Name</b>
+    ○ Year: 2026
+    ○ Genres: Action, Thriller
+    ○ Rating: 8.2/10
+    ○ Quality: 1080p, 720p
+    ○ Languages: Malayalam, Tamil, English</i>
+
+    Followed by page-specific italic prompt:
+    - lang: 📌 <i>select your movie language...!</i>
+    - qual: 📌 <i>choose your files quality..!</i>
+    - coming_soon: ⏳ <b>Coming Soon!</b>
+    """
+    raw_title = movie_data.get("title") or movie_data.get("name") or "Movie"
+    title = html.escape(str(raw_title).strip())
+
+    raw_year = str(movie_data.get("year", "")).strip()
+    if not raw_year or raw_year.upper() == "N/A":
+        year_str = "N/A"
+    else:
+        year_str = html.escape(raw_year)
+
+    raw_genre = movie_data.get("genre") or movie_data.get("genres") or ""
+    if isinstance(raw_genre, list):
+        raw_genre = ", ".join([str(x).strip() for x in raw_genre if str(x).strip()])
+    raw_genre = str(raw_genre).strip()
+    if not raw_genre or raw_genre.upper() == "N/A":
+        genre_str = "N/A"
+    else:
+        genre_str = html.escape(raw_genre)
+
+    raw_rating = str(movie_data.get("rating", "")).strip()
+    if not raw_rating or raw_rating.upper() == "N/A":
+        rating_str = "N/A"
+    else:
+        if raw_rating.endswith("/10"):
+            rating_str = html.escape(raw_rating)
+        else:
+            rating_str = f"{html.escape(raw_rating)}/10"
+
+    # Quality extraction from grouped_data or movie_data
+    quality_order = ["2160p", "4K", "1440p", "1080p", "720p", "480p", "360p", "HDRip", "WEB-DL", "BluRay", "DVDRip", "HEVC", "Unknown"]
+    if grouped_data:
+        if selected_lang and selected_lang in grouped_data:
+            quals = list(grouped_data[selected_lang].keys())
+        else:
+            quals = list({q for l_dict in grouped_data.values() for q in l_dict.keys()})
+        quals_sorted = sorted(quals, key=lambda x: (quality_order.index(x) if x in quality_order else 99, x))
+        quality_str = ", ".join(quals_sorted) if quals_sorted else "N/A"
+    elif movie_data.get("qualities"):
+        m_quals = movie_data.get("qualities")
+        if isinstance(m_quals, list):
+            m_quals_sorted = sorted(m_quals, key=lambda x: (quality_order.index(x) if x in quality_order else 99, x))
+            quality_str = ", ".join(m_quals_sorted) if m_quals_sorted else "N/A"
+        else:
+            quality_str = str(m_quals) or "N/A"
+    else:
+        quality_str = "N/A"
+    quality_str = html.escape(quality_str)
+
+    # Languages extraction from grouped_data or movie_data
+    preferred_order = ["Malayalam", "Tamil", "Hindi", "Telugu", "Kannada", "English", "Multi", "Dual Audio", "Multi Audio"]
+    if grouped_data:
+        langs = list(grouped_data.keys())
+        langs_sorted = sorted(langs, key=lambda x: (preferred_order.index(x) if x in preferred_order else 99, x))
+        languages_str = ", ".join(langs_sorted) if langs_sorted else "N/A"
+    elif movie_data.get("languages"):
+        m_langs = movie_data.get("languages")
+        if isinstance(m_langs, list):
+            m_langs_sorted = sorted(m_langs, key=lambda x: (preferred_order.index(x) if x in preferred_order else 99, x))
+            languages_str = ", ".join(m_langs_sorted) if m_langs_sorted else "N/A"
+        else:
+            languages_str = str(m_langs) or "N/A"
+    else:
+        languages_str = "N/A"
+    languages_str = html.escape(languages_str)
+
+    meta_block = (
+        f"<i>○ Movie: <b>{title}</b>\n"
+        f"○ Year: {year_str}\n"
+        f"○ Genres: {genre_str}\n"
+        f"○ Rating: {rating_str}\n"
+        f"○ Quality: {quality_str}\n"
+        f"○ Languages: {languages_str}</i>"
+    )
+
+    if page_type == "lang":
+        footer = "📌 <i>select your movie language...!</i>"
+    elif page_type == "qual":
+        footer = "📌 <i>choose your files quality..!</i>"
+    elif page_type == "coming_soon":
+        footer = "⏳ <b>Coming Soon!</b>"
+    else:
+        footer = ""
+
+    if footer:
+        return f"{meta_block}\n\n{footer}"
+    return meta_block
+
+
 def build_movie_language_keyboard(key, grouped_data):
     from plugins.series import to_series_font
     buttons = []
@@ -456,18 +558,7 @@ async def movie_lang_callback(client: Client, query: CallbackQuery):
     total_lang_files = sum(len(flist) for flist in qualities_dict.values())
     logger.info(f"[MOVIE LANGUAGE]\nkey={key}\nlanguage={lang}\nfiles={total_lang_files}")
 
-    title = state.get("title", "Movie")
-    year = state.get("year", "")
-    year_str = f" ({year})" if year and year != "N/A" else ""
-    rating = state.get("rating", "")
-    rating_str = f"\n⭐ <b>Rating:</b> {rating}/10" if rating else ""
-    
-    cap = (
-        f"🎬 <b>{title}{year_str}</b>"
-        f"{rating_str}\n\n"
-        f"🌐 <b>Language:</b> {lang}\n\n"
-        f"🎞 <b>Choose Quality:</b>"
-    )
+    cap = format_movie_metadata_caption(state, grouped_data=state.get("grouped", {}), selected_lang=lang, page_type="qual")
     markup = build_movie_quality_keyboard(key, lang, qualities_dict)
     try:
         if query.message.photo or query.message.caption:
@@ -620,34 +711,14 @@ async def movie_back_callback(client: Client, query: CallbackQuery):
     if not state:
         return await query.answer("⚠️ Session expired. Please search again.", show_alert=True)
         
-    title = state.get("title", "Movie")
-    year = state.get("year", "")
-    year_str = f" ({year})" if year and year != "N/A" else ""
-    rating = state.get("rating", "")
-    rating_str = f"\n⭐ <b>Rating:</b> {rating}/10" if rating else ""
-    genre = state.get("genre", "")
-    genre_str = f"\n🎭 <b>Genre:</b> {genre}" if genre and genre != "N/A" else ""
-    
     if target == "langs":
         grouped = state.get("grouped", {})
-        langs_disp = ", ".join(grouped.keys())
-        cap = (
-            f"🎬 <b>{title}{year_str}</b>"
-            f"{rating_str}"
-            f"{genre_str}\n\n"
-            f"🌐 <b>Available Languages:</b> {langs_disp}\n\n"
-            f"🍿 <b>Choose Language:</b>"
-        )
+        cap = format_movie_metadata_caption(state, grouped_data=grouped, page_type="lang")
         markup = build_movie_language_keyboard(key, grouped)
     elif target == "qual":
         lang = parts[3] if len(parts) > 3 else list(state.get("grouped", {}).keys())[0]
         qualities_dict = state.get("grouped", {}).get(lang, {})
-        cap = (
-            f"🎬 <b>{title}{year_str}</b>"
-            f"{rating_str}\n\n"
-            f"🌐 <b>Language:</b> {lang}\n\n"
-            f"🎞 <b>Choose Quality:</b>"
-        )
+        cap = format_movie_metadata_caption(state, grouped_data=state.get("grouped", {}), selected_lang=lang, page_type="qual")
         markup = build_movie_quality_keyboard(key, lang, qualities_dict)
     else:
         return await query.answer()
