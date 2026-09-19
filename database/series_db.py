@@ -411,6 +411,92 @@ def compute_smart_search_score(query: str, target_title: str, aliases: list[str]
     return False, score, "rejected"
 
 
+async def _get_search_candidates(collection, query: str, limit: int = 60) -> list[dict]:
+    """
+    Bounded, indexed candidate retrieval from MongoDB:
+    1. Exact match on normalized_name or search_aliases/aliases
+    2. Prefix / token regex match
+    3. Fallback bounded scan (up to limit)
+    Prevents event-loop blocking by avoiding full collection scans.
+    """
+    raw_query = str(query or "").strip()
+    if not raw_query:
+        return []
+
+    q_norm = normalize_search_text(raw_query)
+    clean_raw = re.sub(r"\b(?:s\d+|season\s*\d+|ep?\d+|episode\s*\d+|\d{4})\b", "", raw_query, flags=re.IGNORECASE).strip()
+    clean_norm = normalize_search_text(clean_raw)
+
+    candidates = []
+    seen_ids = set()
+
+    # 1. Exact or Alias Matches
+    exact_conds = [
+        {"normalized_name": q_norm},
+        {"search_aliases": q_norm},
+        {"aliases": q_norm},
+        {"generated_aliases": q_norm}
+    ]
+    if clean_norm and clean_norm != q_norm:
+        exact_conds.extend([
+            {"normalized_name": clean_norm},
+            {"search_aliases": clean_norm},
+            {"aliases": clean_norm},
+            {"generated_aliases": clean_norm}
+        ])
+
+    try:
+        exact_cursor = collection.find({
+            "status": {"$ne": "deleted"},
+            "$or": exact_conds
+        }).limit(25)
+        async for doc in exact_cursor:
+            if doc["_id"] not in seen_ids:
+                seen_ids.add(doc["_id"])
+                candidates.append(doc)
+    except Exception as e:
+        logger.warning(f"[SEARCH CANDIDATE EXACT ERROR] {e}")
+
+    # 2. Token / Prefix Regex Match (bounded)
+    if len(candidates) < limit:
+        remaining = limit - len(candidates)
+        words = [w for w in q_norm.split() if len(w) >= 2 and w not in COMMON_STOPWORDS]
+        if not words and q_norm:
+            words = [q_norm]
+
+        token_conds = []
+        for w in words[:4]:
+            token_conds.append({"normalized_name": {"$regex": re.escape(w), "$options": "i"}})
+            token_conds.append({"search_aliases": {"$regex": f"^{re.escape(w)}", "$options": "i"}})
+
+        if token_conds:
+            try:
+                regex_cursor = collection.find({
+                    "status": {"$ne": "deleted"},
+                    "_id": {"$nin": list(seen_ids)},
+                    "$or": token_conds
+                }).limit(remaining)
+                async for doc in regex_cursor:
+                    if doc["_id"] not in seen_ids:
+                        seen_ids.add(doc["_id"])
+                        candidates.append(doc)
+            except Exception as e:
+                logger.warning(f"[SEARCH CANDIDATE REGEX ERROR] {e}")
+
+    # 3. Fallback bounded retrieval if no candidates (e.g. heavy typo on 1st word)
+    if not candidates:
+        try:
+            fallback_cursor = collection.find({"status": {"$ne": "deleted"}}).sort("updated_at", -1).limit(40)
+            async for doc in fallback_cursor:
+                if doc["_id"] not in seen_ids:
+                    seen_ids.add(doc["_id"])
+                    candidates.append(doc)
+        except Exception as e:
+            logger.warning(f"[SEARCH CANDIDATE FALLBACK ERROR] {e}")
+
+    return candidates
+
+
 async def search_series(query: str) -> list[dict]:
     """Smart fuzzy search across series names, scored and deduplicated."""
     raw_query = str(query or "").strip()
@@ -423,9 +509,8 @@ async def search_series(query: str) -> list[dict]:
 
     clean_raw = re.sub(r"\b(?:s\d+|season\s*\d+|ep?\d+|episode\s*\d+|\d{4})\b", "", raw_query, flags=re.IGNORECASE).strip()
 
-    # Retrieve all active series from MongoDB
-    cursor = series_col.find({"status": {"$ne": "deleted"}})
-    candidates = [doc async for doc in cursor]
+    # Retrieve bounded candidates from MongoDB
+    candidates = await _get_search_candidates(series_col, raw_query, limit=60)
 
     if not candidates:
         logger.info(f"[SMART SEARCH] type=series query={raw_query!r} matched=False reason=no_candidates")
@@ -1113,9 +1198,8 @@ async def search_super_movies(query: str) -> list[dict]:
     q_year_match = re.search(r"\b(19\d{2}|20\d{2})\b", raw_query)
     q_year = q_year_match.group(1) if q_year_match else None
 
-    # Fetch all active candidates from MongoDB
-    cursor = super_movies_col.find({"status": {"$ne": "deleted"}})
-    candidates = [doc async for doc in cursor]
+    # Fetch bounded active candidates from MongoDB
+    candidates = await _get_search_candidates(super_movies_col, raw_query, limit=60)
 
     if not candidates:
         logger.info(f"[SMART SEARCH] type=movie query={raw_query!r} matched=False reason=no_candidates")
