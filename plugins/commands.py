@@ -11,7 +11,7 @@ from database.ia_filterdb import col, sec_col, get_file_details, unpack_new_file
 from database.users_chats_db import db, delete_all_referal_users, get_referal_users_count, get_referal_all_users, referal_add_user
 from database.join_reqs import JoinReqs
 from info import CLONE_MODE, OWNER_LNK, REACTIONS, CHANNELS, REQUEST_TO_JOIN_MODE, TRY_AGAIN_BTN, ADMINS, SHORTLINK_MODE, PREMIUM_AND_REFERAL_MODE, STREAM_MODE, AUTH_CHANNEL, REFERAL_PREMEIUM_TIME, REFERAL_COUNT, PAYMENT_TEXT, PAYMENT_QR, LOG_CHANNEL, PICS, BATCH_FILE_CAPTION, CUSTOM_FILE_CAPTION, PROTECT_CONTENT, CHNL_LNK, GRP_LNK, REQST_CHANNEL, SUPPORT_CHAT, MAX_B_TN, VERIFY, SHORTLINK_API, SHORTLINK_URL, TUTORIAL, VERIFY_TUTORIAL, IS_TUTORIAL, URL
-from utils import get_settings, pub_is_subscribed, get_size, is_subscribed, save_group_settings, temp, verify_user, check_token, check_verification, get_token, get_shortlink, get_tutorial, get_seconds
+from utils import get_settings, pub_is_subscribed, get_size, is_subscribed, save_group_settings, temp, verify_user, check_token, check_verification, get_token, get_shortlink, get_tutorial, get_seconds, get_fsub_invite_link
 from database.connections_mdb import active_connection
 from urllib.parse import quote_plus
 from TechVJ.util.file_properties import get_name, get_hash, get_media_file_size
@@ -67,27 +67,35 @@ async def process_series_start(client: Client, user_id: int, req_key: str, messa
                 log.info(f"[MOVIE START]\naction=MEMBERSHIP_CHECK\nresult=NOT_JOINED\nrequest_key={req_key}")
                 if not req.get("join_message_id"):
                     try:
-                        invite_link = await client.create_chat_invite_link(int(AUTH_CHANNEL), creates_join_request=True)
-                        text = (
-                            "📢 **Channel Join Request**\n\n"
-                            "ഫയലുകൾ ലഭിക്കുന്നതിന് മുമ്പ് ഞങ്ങളുടെ ചാനലിലേക്ക് Join Request അയയ്ക്കുക.\n\n"
-                            "Request അയച്ച ശേഷം താഴെയുള്ള Try Again ബട്ടൺ ക്ലിക്ക് ചെയ്യുക.\n\n"
-                            "Please send a Join Request to our channel before getting the files.\n\n"
-                            "After sending the request, click Try Again below."
-                        )
-                        btn = [
-                            [InlineKeyboardButton("📢 Send Join Request", url=invite_link.invite_link)],
-                            [InlineKeyboardButton("🔄 Try Again", callback_data=f"checksub#series#{req_key}")]
-                        ]
-                        join_msg = await client.send_message(
-                            chat_id=user_id,
-                            text=text,
-                            reply_markup=InlineKeyboardMarkup(btn),
-                            parse_mode=enums.ParseMode.MARKDOWN
-                        )
-                        req["join_message_id"] = join_msg.id
-                        from database.series_db import save_temp_request
-                        await save_temp_request(req_key, req)
+                        invite_link = await get_fsub_invite_link(client, AUTH_CHANNEL, creates_join_request=REQUEST_TO_JOIN_MODE)
+                        if invite_link:
+                            btn_text = "📢 Send Join Request" if REQUEST_TO_JOIN_MODE else "📢 Join Channel"
+                            text = (
+                                "📢 **Channel Join Request**\n\n"
+                                "ഫയലുകൾ ലഭിക്കുന്നതിന് മുമ്പ് ഞങ്ങളുടെ ചാനലിലേക്ക് Join Request അയയ്ക്കുക.\n\n"
+                                "Request അയച്ച ശേഷം താഴെയുള്ള Try Again ബട്ടൺ ക്ലിക്ക് ചെയ്യുക.\n\n"
+                                "Please send a Join Request to our channel before getting the files.\n\n"
+                                "After sending the request, click Try Again below."
+                            ) if REQUEST_TO_JOIN_MODE else (
+                                "📢 **Force Subscribe Channel**\n\n"
+                                "ഫയലുകൾ ലഭിക്കുന്നതിന് മുമ്പ് ഞങ്ങളുടെ ചാനലിൽ Join ചെയ്യുക.\n\n"
+                                "Join ചെയ്ത ശേഷം താഴെയുള്ള Try Again ബട്ടൺ ക്ലിക്ക് ചെയ്യുക.\n\n"
+                                "Please join our channel before getting the files.\n\n"
+                                "After joining, click Try Again below."
+                            )
+                            btn = [
+                                [InlineKeyboardButton(btn_text, url=invite_link)],
+                                [InlineKeyboardButton("🔄 Try Again", callback_data=f"checksub#series#{req_key}")]
+                            ]
+                            join_msg = await client.send_message(
+                                chat_id=user_id,
+                                text=text,
+                                reply_markup=InlineKeyboardMarkup(btn),
+                                parse_mode=enums.ParseMode.MARKDOWN
+                            )
+                            req["join_message_id"] = join_msg.id
+                            from database.series_db import save_temp_request
+                            await save_temp_request(req_key, req)
                     except Exception as e:
                         log.error(f"Failed to create join request: {e}")
                 return
@@ -156,28 +164,36 @@ async def process_series_start(client: Client, user_id: int, req_key: str, messa
             # Send exactly ONE Join Request message if not already pending
             if not req.get("join_message_id"):
                 try:
-                    invite_link = await client.create_chat_invite_link(int(AUTH_CHANNEL), creates_join_request=True)
-                    text = (
-                        "📢 **Channel Join Request**\n\n"
-                        "ഫയലുകൾ ലഭിക്കുന്നതിന് മുമ്പ് ഞങ്ങളുടെ ചാനലിലേക്ക് Join Request അയയ്ക്കുക.\n\n"
-                        "Request അയച്ച ശേഷം താഴെയുള്ള Try Again ബട്ടൺ ക്ലിക്ക് ചെയ്യുക.\n\n"
-                        "Please send a Join Request to our channel before getting the files.\n\n"
-                        "After sending the request, click Try Again below."
-                    )
-                    btn = [
-                        [InlineKeyboardButton("📢 Send Join Request", url=invite_link.invite_link)],
-                        [InlineKeyboardButton("🔄 Try Again", callback_data=f"checksub#series#{req_key}")]
-                    ]
-                    join_msg = await client.send_message(
-                        chat_id=user_id,
-                        text=text,
-                        reply_markup=InlineKeyboardMarkup(btn),
-                        parse_mode=enums.ParseMode.MARKDOWN
-                    )
-                    req["join_message_id"] = join_msg.id
-                    from database.series_db import save_temp_request
-                    await save_temp_request(req_key, req)
-                    log.info(f"[JOIN REQUEST]\nrequest_key={req_key}\naction=CREATED\nmessage_id={join_msg.id}")
+                    invite_link = await get_fsub_invite_link(client, AUTH_CHANNEL, creates_join_request=REQUEST_TO_JOIN_MODE)
+                    if invite_link:
+                        btn_text = "📢 Send Join Request" if REQUEST_TO_JOIN_MODE else "📢 Join Channel"
+                        text = (
+                            "📢 **Channel Join Request**\n\n"
+                            "ഫയലുകൾ ലഭിക്കുന്നതിന് മുമ്പ് ഞങ്ങളുടെ ചാനലിലേക്ക് Join Request അയയ്ക്കുക.\n\n"
+                            "Request അയച്ച ശേഷം താഴെയുള്ള Try Again ബട്ടൺ ക്ലിക്ക് ചെയ്യുക.\n\n"
+                            "Please send a Join Request to our channel before getting the files.\n\n"
+                            "After sending the request, click Try Again below."
+                        ) if REQUEST_TO_JOIN_MODE else (
+                            "📢 **Force Subscribe Channel**\n\n"
+                            "ഫയലുകൾ ലഭിക്കുന്നതിന് മുമ്പ് ഞങ്ങളുടെ ചാനലിൽ Join ചെയ്യുക.\n\n"
+                            "Join ചെയ്ത ശേഷം താഴെയുള്ള Try Again ബട്ടൺ ക്ലിക്ക് ചെയ്യുക.\n\n"
+                            "Please join our channel before getting the files.\n\n"
+                            "After joining, click Try Again below."
+                        )
+                        btn = [
+                            [InlineKeyboardButton(btn_text, url=invite_link)],
+                            [InlineKeyboardButton("🔄 Try Again", callback_data=f"checksub#series#{req_key}")]
+                        ]
+                        join_msg = await client.send_message(
+                            chat_id=user_id,
+                            text=text,
+                            reply_markup=InlineKeyboardMarkup(btn),
+                            parse_mode=enums.ParseMode.MARKDOWN
+                        )
+                        req["join_message_id"] = join_msg.id
+                        from database.series_db import save_temp_request
+                        await save_temp_request(req_key, req)
+                        log.info(f"[JOIN REQUEST]\nrequest_key={req_key}\naction=CREATED\nmessage_id={join_msg.id}")
                 except Exception as e:
                     log.error(f"Failed to create join request: {e}")
             return
@@ -261,21 +277,27 @@ async def start(client, message):
         import logging
         logging.getLogger(__name__).info(f"[GROUP MOVIE] SHOW JOIN REQUEST")
         
-        try:
-            invite_link = await client.create_chat_invite_link(int(AUTH_CHANNEL), creates_join_request=True)
-        except Exception as e:
+        invite_link = await get_fsub_invite_link(client, AUTH_CHANNEL, creates_join_request=REQUEST_TO_JOIN_MODE)
+        if not invite_link:
             await message.reply_text("Make sure Bot is admin in Forcesub channel")
             return
             
+        btn_text = "📢 Send Join Request" if REQUEST_TO_JOIN_MODE else "📢 Join Channel"
         text = (
             "📢 **Channel Join Request**\n\n"
             "ഫയൽ ലഭിക്കുന്നതിന് മുമ്പ് ഞങ്ങളുടെ ചാനലിലേക്ക് Join Request അയയ്ക്കുക.\n\n"
             "Request അയച്ച ശേഷം താഴെയുള്ള Try Again ബട്ടൺ ക്ലിക്ക് ചെയ്യുക.\n\n"
             "Please send a Join Request to our channel before getting the file.\n\n"
             "After sending the request, click Try Again below."
+        ) if REQUEST_TO_JOIN_MODE else (
+            "📢 **Force Subscribe Channel**\n\n"
+            "ഫയൽ ലഭിക്കുന്നതിന് മുമ്പ് ഞങ്ങളുടെ ചാനലിൽ Join ചെയ്യുക.\n\n"
+            "Join ചെയ്ത ശേഷം താഴെയുള്ള Try Again ബട്ടൺ ക്ലിക്ക് ചെയ്യുക.\n\n"
+            "Please join our channel before getting the file.\n\n"
+            "After joining, click Try Again below."
         )
         btn = [
-            [InlineKeyboardButton("📢 Send Join Request", url=invite_link.invite_link)],
+            [InlineKeyboardButton(btn_text, url=invite_link)],
             [InlineKeyboardButton("🔄 Try Again", callback_data=f"checksub#movie#{req_id}")]
         ]
         await client.send_message(
@@ -313,23 +335,26 @@ async def start(client, message):
     # Global Force Subscribe Check
     if AUTH_CHANNEL and (message.from_user.id not in ADMINS):
         if not await is_subscribed(client, message.from_user.id):
-            try:
-                invite_link = await client.create_chat_invite_link(int(AUTH_CHANNEL), creates_join_request=True)
-            except Exception as e:
-                log.error(f"Failed to create invite link for AUTH_CHANNEL: {e}")
-                invite_link = None
+            invite_link = await get_fsub_invite_link(client, AUTH_CHANNEL, creates_join_request=REQUEST_TO_JOIN_MODE)
 
             if invite_link:
                 req_cmd = data if len(message.command) > 1 else ""
+                btn_text = "📢 Send Join Request" if REQUEST_TO_JOIN_MODE else "📢 Join Channel"
                 text = (
                     "📢 **Channel Join Request**\n\n"
                     "ഫയൽ ലഭിക്കുന്നതിന് മുമ്പ് ഞങ്ങളുടെ ചാനലിലേക്ക് Join Request അയയ്ക്കുക.\n\n"
                     "Request അയച്ച ശേഷം താഴെയുള്ള Try Again ബട്ടൺ ക്ലിക്ക് ചെയ്യുക.\n\n"
                     "Please send a Join Request to our channel before getting the files.\n\n"
                     "After sending the request, click Try Again below."
+                ) if REQUEST_TO_JOIN_MODE else (
+                    "📢 **Force Subscribe Channel**\n\n"
+                    "ഫയൽ ലഭിക്കുന്നതിന് മുമ്പ് ഞങ്ങളുടെ ചാനലിൽ Join ചെയ്യുക.\n\n"
+                    "Join ചെയ്ത ശേഷം താഴെയുള്ള Try Again ബട്ടൺ ക്ലിക്ക് ചെയ്യുക.\n\n"
+                    "Please join our channel before getting the files.\n\n"
+                    "After joining, click Try Again below."
                 )
                 btn = [
-                    [InlineKeyboardButton("📢 Send Join Request", url=invite_link.invite_link)],
+                    [InlineKeyboardButton(btn_text, url=invite_link)],
                     [InlineKeyboardButton("🔄 Try Again", callback_data=f"checksub#all#{req_cmd}" if req_cmd else f"checksub#main#0")]
                 ]
                 return await client.send_message(
@@ -1602,37 +1627,46 @@ async def execute_purge_requests(client=None) -> tuple[int, int]:
     """
     Core purge requests logic: deletes join requests from database
     and declines tracked pending join requests in AUTH_CHANNEL.
-    Reused by both manual /purgerequests command and 24-hour automatic scheduler.
+    Reused by both manual /purgerequests command and automatic scheduler.
     """
     import logging
     import asyncio
     from pyrogram.errors import FloodWait
     from utils import temp
+    import info
     log = logging.getLogger(__name__)
+    auth_ch = getattr(info, "AUTH_CHANNEL", None) or AUTH_CHANNEL
     log.info("[REQUEST PURGE] START")
-    log.info(f"[REQUEST PURGE] CHANNEL = {AUTH_CHANNEL}")
+    log.info(f"[REQUEST PURGE] CHANNEL = {auth_ch}")
 
     db_count = 0
     users = []
-    if join_db().isActive():
-        db_count = await join_db().get_all_users_count()
-        users = await join_db().get_all_users()
-        await join_db().delete_all_users()
+    try:
+        if join_db().isActive():
+            db_count = await join_db().get_all_users_count()
+            users = await join_db().get_all_users()
+            await join_db().delete_all_users()
+    except Exception as e:
+        log.error(f"[REQUEST PURGE DB ERROR] {e}")
 
     bot_client = client or getattr(temp, "BOT", None)
     declined_count = 0
-    if AUTH_CHANNEL and users and bot_client:
+    if auth_ch and users and bot_client:
+        try:
+            target_ch = int(auth_ch) if str(auth_ch).lstrip("-").isdigit() else auth_ch
+        except Exception:
+            target_ch = auth_ch
         for u in users:
-            uid = u.get("user_id")
+            uid = u.get("user_id") if isinstance(u, dict) else (u if isinstance(u, (int, str)) else None)
             if not uid:
                 continue
             try:
-                await bot_client.decline_chat_join_request(int(AUTH_CHANNEL), int(uid))
+                await bot_client.decline_chat_join_request(target_ch, int(uid))
                 declined_count += 1
             except FloodWait as f:
                 await asyncio.sleep(f.value)
                 try:
-                    await bot_client.decline_chat_join_request(int(AUTH_CHANNEL), int(uid))
+                    await bot_client.decline_chat_join_request(target_ch, int(uid))
                     declined_count += 1
                 except Exception:
                     pass
@@ -1643,21 +1677,31 @@ async def execute_purge_requests(client=None) -> tuple[int, int]:
     return db_count, declined_count
 
 
-@Client.on_message(filters.command(["purgerequests", "purgerrequests", "purgerequest", "purge_requests", "purge_request"]) & filters.user(ADMINS))
+@Client.on_message(filters.command(["purgerequests", "purgerrequests", "purgerequest", "purge_requests", "purge_request", "delrequests", "deljoinreqs", "delallrequests"]))
 async def purge_requests(client, message):
-    msg = await message.reply_text("Processing /purgerequests...", parse_mode=enums.ParseMode.MARKDOWN)
+    from info import ADMINS
+    user_id = message.from_user.id if message.from_user else 0
+    admin_list = [int(a) for a in ADMINS if str(a).lstrip("-").isdigit()]
+    if user_id not in admin_list and user_id not in ADMINS:
+        return await message.reply_text("<b>⚠️ This command is only for Bot Admins!</b>", parse_mode=enums.ParseMode.HTML)
 
-    db_count, declined_count = await execute_purge_requests(client)
+    msg = await message.reply_text("⏳ **Processing /purgerequests...**\n*Deleting join requests from database and channel...*", parse_mode=enums.ParseMode.MARKDOWN)
 
-    text = f"✅ **Purged {db_count} Requests from Database.**\n\n"
-    if declined_count > 0:
-        text += f"✅ **Declined {declined_count} tracked pending request(s) in Channel.**\n\n"
-    text += (
-        "⚠️ **Note:** Telegram Bot API does not allow bots to bulk-purge all channel join requests at once "
-        "(`HideAllChatJoinRequests` is restricted to user accounts)."
-    )
-
-    await msg.edit(text, parse_mode=enums.ParseMode.MARKDOWN)
+    try:
+        db_count, declined_count = await execute_purge_requests(client)
+        text = f"✅ **Purged {db_count} Requests from Database.**\n\n"
+        if declined_count > 0:
+            text += f"✅ **Declined {declined_count} tracked pending request(s) in Channel.**\n\n"
+        else:
+            text += "ℹ️ **Channel:** 0 pending requests required declining.\n\n"
+        text += (
+            "⚠️ **Note:** Telegram Bot API does not allow bots to bulk-purge all channel join requests at once "
+            "(`HideAllChatJoinRequests` is restricted to user accounts)."
+        )
+        await msg.edit(text, parse_mode=enums.ParseMode.MARKDOWN)
+    except Exception as e:
+        logger.error(f"[PURGEREQUESTS ERROR] {e}")
+        await msg.edit(f"❌ **Error during /purgerequests:** `{e}`", parse_mode=enums.ParseMode.MARKDOWN)
 
 # ─── BATCH CONCURRENCY CONFIGURATION ──────────────────────────────────────────
 BATCH_SEND_CONCURRENCY = int(os.getenv("BATCH_SEND_CONCURRENCY", "8"))
