@@ -498,7 +498,7 @@ def build_movie_quality_keyboard(key, lang, qualities_dict):
         for q in qualities_sorted[i:i+2]:
             row.append(make_styled_button(to_series_font(q), callback_data=f"movie_quality#{key}#{lang}#{q}", style="danger"))
         buttons.append(row)
-    buttons.append([InlineKeyboardButton(f"⬅️  {to_series_font('Back')}", callback_data=f"movie_back#{key}#langs")])
+    buttons.append([make_styled_button(f"⬅️  {to_series_font('Back')}", callback_data=f"movie_back#{key}#langs", style="success")])
     return InlineKeyboardMarkup(buttons)
 
 def build_movie_file_keyboard(key, lang, qual, files, page=0, pre="file"):
