@@ -2206,7 +2206,7 @@ async def cb_handler(client: Client, query: CallbackQuery):
                     log.warning(f"[SERIES TRY AGAIN] Failed to delete Join Request message: {e}")
 
                 from database.series_db import get_temp_request
-                req = temp.SERIES_STATE.get(req_key) or temp.GETALL.get(req_key) or await get_temp_request(req_key)
+                req = temp.SERIES_STATE.get(req_key) or getattr(temp, "MOVIE_STATE", {}).get(req_key) or temp.GETALL.get(req_key) or await get_temp_request(req_key)
                 if req and (req.get("type") == "movie" or req.get("request_type") == "movie"):
                     from plugins.commands import send_movie_files_to_user
                     req["delivery_status"] = "sending"
