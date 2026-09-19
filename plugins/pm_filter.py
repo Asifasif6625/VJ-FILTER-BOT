@@ -474,7 +474,7 @@ def format_movie_metadata_caption(movie_data: dict, grouped_data: dict = None, s
 
 
 def build_movie_language_keyboard(key, grouped_data):
-    from plugins.series import to_series_font
+    from plugins.series import to_series_font, make_styled_button
     buttons = []
     langs = list(grouped_data.keys())
     preferred_order = ["Malayalam", "Tamil", "Hindi", "Telugu", "Kannada", "English", "Multi", "Dual Audio", "Multi Audio"]
@@ -483,12 +483,12 @@ def build_movie_language_keyboard(key, grouped_data):
     for i in range(0, len(langs), 2):
         row = []
         for l in langs[i:i+2]:
-            row.append(InlineKeyboardButton(to_series_font(l), callback_data=f"movie_lang#{key}#{l}"))
+            row.append(make_styled_button(to_series_font(l), callback_data=f"movie_lang#{key}#{l}", style="success"))
         buttons.append(row)
     return InlineKeyboardMarkup(buttons)
 
 def build_movie_quality_keyboard(key, lang, qualities_dict):
-    from plugins.series import to_series_font
+    from plugins.series import to_series_font, make_styled_button
     buttons = []
     quality_order = ["2160p", "4K", "1440p", "1080p", "720p", "480p", "360p", "HDRip", "WEB-DL", "BluRay", "DVDRip", "HEVC", "Unknown"]
     qualities_sorted = sorted(list(qualities_dict.keys()), key=lambda x: (quality_order.index(x) if x in quality_order else 99, x))
@@ -496,7 +496,7 @@ def build_movie_quality_keyboard(key, lang, qualities_dict):
     for i in range(0, len(qualities_sorted), 2):
         row = []
         for q in qualities_sorted[i:i+2]:
-            row.append(InlineKeyboardButton(to_series_font(q), callback_data=f"movie_quality#{key}#{lang}#{q}"))
+            row.append(make_styled_button(to_series_font(q), callback_data=f"movie_quality#{key}#{lang}#{q}", style="danger"))
         buttons.append(row)
     buttons.append([InlineKeyboardButton(f"⬅️  {to_series_font('Back')}", callback_data=f"movie_back#{key}#langs")])
     return InlineKeyboardMarkup(buttons)
@@ -565,6 +565,8 @@ async def movie_lang_callback(client: Client, query: CallbackQuery):
             await query.message.edit_caption(caption=cap, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
         else:
             await query.message.edit_text(text=cap, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
+        from plugins.series import apply_pm_styled_reply_markup
+        asyncio.create_task(apply_pm_styled_reply_markup(client, query.message.chat.id, query.message.id, markup))
     except MessageNotModified:
         pass
     from utils import schedule_filter_message_delete
@@ -720,6 +722,8 @@ async def movie_back_callback(client: Client, query: CallbackQuery):
             await query.message.edit_caption(caption=cap, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
         else:
             await query.message.edit_text(text=cap, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
+        from plugins.series import apply_pm_styled_reply_markup
+        asyncio.create_task(apply_pm_styled_reply_markup(client, query.message.chat.id, query.message.id, markup))
     except MessageNotModified:
         pass
     from utils import schedule_filter_message_delete
