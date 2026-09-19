@@ -372,6 +372,45 @@ async def pub_is_subscribed(bot, query, channel):
             pass
     return btn
 
+async def get_fsub_invite_link(bot, auth_channel, creates_join_request=True) -> str | None:
+    """
+    Generates an invite link for force subscribe channel.
+    Attempts join-request invite link first if creates_join_request=True,
+    falling back to standard invite link or chat invite link.
+    """
+    if not auth_channel:
+        return None
+    try:
+        ch_id = int(auth_channel) if str(auth_channel).lstrip("-").isdigit() else auth_channel
+        if creates_join_request:
+            try:
+                link_obj = await bot.create_chat_invite_link(ch_id, creates_join_request=True)
+                if link_obj and hasattr(link_obj, "invite_link") and link_obj.invite_link:
+                    return link_obj.invite_link
+                if isinstance(link_obj, str) and link_obj.startswith("http"):
+                    return link_obj
+            except Exception as e:
+                logger.warning(f"[FSUB LINK] creates_join_request failed: {e}, falling back to standard link")
+        try:
+            link_obj = await bot.create_chat_invite_link(ch_id)
+            if link_obj and hasattr(link_obj, "invite_link") and link_obj.invite_link:
+                return link_obj.invite_link
+            if isinstance(link_obj, str) and link_obj.startswith("http"):
+                return link_obj
+        except Exception as e:
+            logger.warning(f"[FSUB LINK] standard create_chat_invite_link failed: {e}")
+        try:
+            chat = await bot.get_chat(ch_id)
+            if getattr(chat, "invite_link", None):
+                return chat.invite_link
+            if getattr(chat, "username", None):
+                return f"https://t.me/{chat.username}"
+        except Exception as e:
+            logger.error(f"[FSUB LINK] get_chat failed: {e}")
+    except Exception as ex:
+        logger.error(f"[FSUB LINK ERROR] {ex}")
+    return None
+
 async def is_subscribed(bot, query):
     if not AUTH_CHANNEL:
         return True
@@ -393,7 +432,6 @@ async def is_subscribed(bot, query):
     if user_id in ADMINS:
         return True
 
-    auth_ch = int(AUTH_CHANNEL)
     try:
         user = await join_db().get_user(user_id)
         if user and int(user.get("user_id", 0)) == int(user_id):
@@ -402,6 +440,7 @@ async def is_subscribed(bot, query):
         logger.warning(f"[IS_SUBSCRIBED] join_db lookup error: {e}")
 
     try:
+        auth_ch = int(AUTH_CHANNEL) if str(AUTH_CHANNEL).lstrip("-").isdigit() else AUTH_CHANNEL
         user_data = await bot.get_chat_member(auth_ch, user_id)
         if user_data:
             st = user_data.status
