@@ -2463,7 +2463,7 @@ def _user_lang_keyboard(sid: str, langs: list[str]) -> InlineKeyboardMarkup:
     for i in range(0, len(langs), 2):
         row = []
         for l in langs[i:i+2]:
-            row.append(InlineKeyboardButton(to_series_font(l), callback_data=f"sr#{sid}#l#{l}"))
+            row.append(make_styled_button(to_series_font(l), callback_data=f"sr#{sid}#l#{l}", style="success"))
         rows.append(row)
     return InlineKeyboardMarkup(rows)
 
@@ -2487,7 +2487,7 @@ async def _user_quality_keyboard(user_id: int, full_id: str, sid: str, lang: str
     for i in range(0, len(quals), 3):
         row = []
         for q in quals[i:i+3]:
-            row.append(InlineKeyboardButton(to_series_font(q), callback_data=f"sr#{sid}#l#{lang}#s#{season}#q#{q}"))
+            row.append(make_styled_button(to_series_font(q), callback_data=f"sr#{sid}#l#{lang}#s#{season}#q#{q}", style="danger"))
         rows.append(row)
     rows.append([
         InlineKeyboardButton(f"⬅️  {to_series_font('Back')}", callback_data=f"sr#{sid}#home" if season == 0 else f"sr#{sid}#l#{lang}"),
@@ -2733,6 +2733,110 @@ async def cmd_sync_series(client: Client, message: Message):
         f"📁 <b>New Episodes Linked:</b> <code>{total_added}</code>",
         parse_mode=enums.ParseMode.HTML
     )
+
+
+def make_styled_button(text: str, callback_data: str = None, url: str = None, style: str = None) -> InlineKeyboardButton:
+    """Creates an InlineKeyboardButton with style support (success, danger, primary)."""
+    btn = None
+    try:
+        if style:
+            btn = InlineKeyboardButton(text=text, callback_data=callback_data, url=url, style=style)
+        else:
+            btn = InlineKeyboardButton(text=text, callback_data=callback_data, url=url)
+    except TypeError:
+        btn = InlineKeyboardButton(text=text, callback_data=callback_data, url=url)
+        if style:
+            try:
+                setattr(btn, "style", style)
+            except Exception:
+                pass
+    except Exception:
+        btn = InlineKeyboardButton(text=text, callback_data=callback_data, url=url)
+
+    if style and btn:
+        try:
+            setattr(btn, "style", style)
+        except Exception:
+            pass
+    return btn
+
+
+async def apply_pm_styled_reply_markup(
+    client: Client,
+    chat_id: int | str,
+    message_id: int,
+    markup: InlineKeyboardMarkup
+) -> bool:
+    """
+    Ensures that custom Telegram button styles (style='success', style='danger', style='primary')
+    are serialized and updated via the Telegram Bot API editMessageReplyMarkup endpoint.
+    """
+    import aiohttp
+    import info
+    
+    bot_tok = (
+        getattr(client, "bot_token", None)
+        or getattr(client, "_bot_token", None)
+        or getattr(info, "BOT_TOKEN", "")
+        or os.environ.get("BOT_TOKEN", "")
+        or getattr(temp, "BOT_TOKEN", "")
+    )
+    if not bot_tok or not markup or not message_id:
+        return False
+
+    raw_keyboard = []
+    has_any_style = False
+    
+    if isinstance(markup, InlineKeyboardMarkup):
+        rows = markup.inline_keyboard or []
+    elif isinstance(markup, list):
+        rows = markup
+    else:
+        rows = []
+
+    for row in rows:
+        raw_row = []
+        for b in (row if isinstance(row, list) else [row]):
+            if isinstance(b, dict):
+                b_dict = dict(b)
+                if b_dict.get("style"):
+                    has_any_style = True
+                raw_row.append(b_dict)
+            else:
+                b_dict = {"text": getattr(b, "text", "")}
+                if getattr(b, "url", None):
+                    b_dict["url"] = b.url
+                elif getattr(b, "callback_data", None):
+                    b_dict["callback_data"] = b.callback_data.decode("utf-8") if isinstance(b.callback_data, bytes) else str(b.callback_data)
+                
+                btn_style = getattr(b, "style", None)
+                if btn_style:
+                    b_dict["style"] = str(btn_style)
+                    has_any_style = True
+                raw_row.append(b_dict)
+        raw_keyboard.append(raw_row)
+
+    if not has_any_style:
+        return False
+
+    payload = {
+        "chat_id": int(chat_id) if str(chat_id).lstrip("-").isdigit() else str(chat_id),
+        "message_id": int(message_id),
+        "reply_markup": {
+            "inline_keyboard": raw_keyboard
+        }
+    }
+    api_url = f"https://api.telegram.org/bot{bot_tok}/editMessageReplyMarkup"
+    
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(api_url, json=payload, timeout=aiohttp.ClientTimeout(total=6)) as resp:
+                res_json = await resp.json()
+                logger.info(f"[PM BUTTON STYLE API] chat_id={chat_id} msg_id={message_id} ok={res_json.get('ok')} desc={res_json.get('description')}")
+                return res_json.get("ok", False)
+    except Exception as e:
+        logger.debug(f"[PM BUTTON STYLE API ERROR] {e}")
+        return False
 
 
 def create_announcement_download_button(
@@ -6158,6 +6262,7 @@ async def render_super_movie_direct(client: Client, message: Message, movie: dic
                         reply_markup=markup
                     )
                     schedule_filter_message_delete(client, reply_msg.chat.id, reply_msg.id, 600)
+                    asyncio.create_task(apply_pm_styled_reply_markup(client, reply_msg.chat.id, reply_msg.id, markup))
                     return True
                 except Exception as me:
                     logger.warning(f"[EDIT MEDIA FAILED] {me}, fallback to edit_caption")
@@ -6167,6 +6272,7 @@ async def render_super_movie_direct(client: Client, message: Message, movie: dic
                         parse_mode=enums.ParseMode.HTML
                     )
                     schedule_filter_message_delete(client, reply_msg.chat.id, reply_msg.id, 600)
+                    asyncio.create_task(apply_pm_styled_reply_markup(client, reply_msg.chat.id, reply_msg.id, markup))
                     return True
             elif reply_msg.photo or reply_msg.caption:
                 await reply_msg.edit_caption(
@@ -6175,6 +6281,7 @@ async def render_super_movie_direct(client: Client, message: Message, movie: dic
                     parse_mode=enums.ParseMode.HTML
                 )
                 schedule_filter_message_delete(client, reply_msg.chat.id, reply_msg.id, 600)
+                asyncio.create_task(apply_pm_styled_reply_markup(client, reply_msg.chat.id, reply_msg.id, markup))
                 return True
             else:
                 await reply_msg.edit_text(
@@ -6183,6 +6290,7 @@ async def render_super_movie_direct(client: Client, message: Message, movie: dic
                     parse_mode=enums.ParseMode.HTML
                 )
                 schedule_filter_message_delete(client, reply_msg.chat.id, reply_msg.id, 600)
+                asyncio.create_task(apply_pm_styled_reply_markup(client, reply_msg.chat.id, reply_msg.id, markup))
                 return True
         except Exception:
             try:
@@ -6208,6 +6316,7 @@ async def render_super_movie_direct(client: Client, message: Message, movie: dic
                 BUTTON_OWNERS[f"{sent_p.chat.id}-{sent_p.id}"] = real_user_id
                 temp.MOVIE_STATE[f"{sent_p.chat.id}-{sent_p.id}"] = temp.MOVIE_STATE[key]
                 schedule_filter_message_delete(client, sent_p.chat.id, sent_p.id, 600)
+                asyncio.create_task(apply_pm_styled_reply_markup(client, sent_p.chat.id, sent_p.id, markup))
             return True
         except Exception as pe:
             logger.warning(f"[SUPER MOVIE PHOTO ERROR] {pe}")
@@ -6226,6 +6335,7 @@ async def render_super_movie_direct(client: Client, message: Message, movie: dic
         BUTTON_OWNERS[f"{sent_t.chat.id}-{sent_t.id}"] = real_user_id
         temp.MOVIE_STATE[f"{sent_t.chat.id}-{sent_t.id}"] = temp.MOVIE_STATE[key]
         schedule_filter_message_delete(client, sent_t.chat.id, sent_t.id, 600)
+        asyncio.create_task(apply_pm_styled_reply_markup(client, sent_t.chat.id, sent_t.id, markup))
     return True
 
 
@@ -6376,7 +6486,7 @@ async def render_series_direct(client: Client, message: Message, series_doc: dic
     for i in range(0, len(langs_sorted), 2):
         row = []
         for l in langs_sorted[i:i+2]:
-            row.append(InlineKeyboardButton(to_series_font(l), callback_data=f"ser_lang#{series_id}#{l}"))
+            row.append(make_styled_button(to_series_font(l), callback_data=f"ser_lang#{series_id}#{l}", style="success"))
         buttons.append(row)
 
     # Removed Close button from Series Language selection
@@ -6397,6 +6507,7 @@ async def render_series_direct(client: Client, message: Message, series_doc: dic
                         reply_markup=markup
                     )
                     schedule_filter_message_delete(client, reply_msg.chat.id, reply_msg.id, 600)
+                    asyncio.create_task(apply_pm_styled_reply_markup(client, reply_msg.chat.id, reply_msg.id, markup))
                     return True
                 except Exception as me:
                     logger.warning(f"[EDIT MEDIA FAILED] {me}, fallback to edit_caption")
@@ -6406,6 +6517,7 @@ async def render_series_direct(client: Client, message: Message, series_doc: dic
                         parse_mode=enums.ParseMode.HTML
                     )
                     schedule_filter_message_delete(client, reply_msg.chat.id, reply_msg.id, 600)
+                    asyncio.create_task(apply_pm_styled_reply_markup(client, reply_msg.chat.id, reply_msg.id, markup))
                     return True
             elif reply_msg.photo or reply_msg.caption:
                 await reply_msg.edit_caption(
@@ -6414,6 +6526,7 @@ async def render_series_direct(client: Client, message: Message, series_doc: dic
                     parse_mode=enums.ParseMode.HTML
                 )
                 schedule_filter_message_delete(client, reply_msg.chat.id, reply_msg.id, 600)
+                asyncio.create_task(apply_pm_styled_reply_markup(client, reply_msg.chat.id, reply_msg.id, markup))
                 return True
             else:
                 await reply_msg.edit_text(
@@ -6422,6 +6535,7 @@ async def render_series_direct(client: Client, message: Message, series_doc: dic
                     parse_mode=enums.ParseMode.HTML
                 )
                 schedule_filter_message_delete(client, reply_msg.chat.id, reply_msg.id, 600)
+                asyncio.create_task(apply_pm_styled_reply_markup(client, reply_msg.chat.id, reply_msg.id, markup))
                 return True
         except Exception:
             try:
@@ -6447,6 +6561,7 @@ async def render_series_direct(client: Client, message: Message, series_doc: dic
                 BUTTON_OWNERS[f"{sent_p.chat.id}-{sent_p.id}"] = real_user_id
                 logger.info(f"[SERIES OWNER REGISTER] key={sent_p.chat.id}-{sent_p.id} owner={real_user_id}")
                 schedule_filter_message_delete(client, sent_p.chat.id, sent_p.id, 600)
+                asyncio.create_task(apply_pm_styled_reply_markup(client, sent_p.chat.id, sent_p.id, markup))
             return True
         except Exception as pe:
             logger.warning(f"[SERIES PHOTO ERROR] {pe}")
@@ -6465,6 +6580,7 @@ async def render_series_direct(client: Client, message: Message, series_doc: dic
         BUTTON_OWNERS[f"{sent_t.chat.id}-{sent_t.id}"] = real_user_id
         logger.info(f"[SERIES OWNER REGISTER] key={sent_t.chat.id}-{sent_t.id} owner={real_user_id}")
         schedule_filter_message_delete(client, sent_t.chat.id, sent_t.id, 600)
+        asyncio.create_task(apply_pm_styled_reply_markup(client, sent_t.chat.id, sent_t.id, markup))
     return True
 
 
@@ -6779,7 +6895,7 @@ async def ser_lang_callback(client: Client, query: CallbackQuery):
         for i in range(0, len(qualities), 2):
             row = []
             for q in qualities[i:i+2]:
-                row.append(InlineKeyboardButton(f"⚡ {q}", callback_data=f"ser_qual#{series_id}#{lang}#{s}#{q}"))
+                row.append(make_styled_button(f"⚡ {q}", callback_data=f"ser_qual#{series_id}#{lang}#{s}#{q}", style="danger"))
             buttons.append(row)
 
         buttons.append([
@@ -6801,6 +6917,7 @@ async def ser_lang_callback(client: Client, query: CallbackQuery):
             await query.message.edit_caption(caption=cap, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
         else:
             await query.message.edit_text(text=cap, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
+        asyncio.create_task(apply_pm_styled_reply_markup(client, query.message.chat.id, query.message.id, markup))
     except MessageNotModified:
         pass
     from utils import schedule_filter_message_delete
@@ -6855,7 +6972,7 @@ async def ser_season_callback(client: Client, query: CallbackQuery):
     for i in range(0, len(qualities), 2):
         row = []
         for q in qualities[i:i+2]:
-            row.append(InlineKeyboardButton(f"⚡ {q}", callback_data=f"ser_qual#{series_id}#{lang}#{season}#{q}"))
+            row.append(make_styled_button(f"⚡ {q}", callback_data=f"ser_qual#{series_id}#{lang}#{season}#{q}", style="danger"))
         buttons.append(row)
 
     buttons.append([
@@ -6875,6 +6992,7 @@ async def ser_season_callback(client: Client, query: CallbackQuery):
             await query.message.edit_caption(caption=cap, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
         else:
             await query.message.edit_text(text=cap, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
+        asyncio.create_task(apply_pm_styled_reply_markup(client, query.message.chat.id, query.message.id, markup))
     except MessageNotModified:
         pass
     from utils import schedule_filter_message_delete
