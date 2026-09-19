@@ -2474,10 +2474,10 @@ def _user_season_keyboard(sid: str, lang: str, seasons: list[int]) -> InlineKeyb
         row = []
         for s in seasons[i:i+3]:
             label = f"{to_series_font('Season')} {s}" if s > 0 else to_series_font("Direct Episodes")
-            row.append(InlineKeyboardButton(label, callback_data=f"sr#{sid}#l#{lang}#s#{s}"))
+            row.append(make_styled_button(label, callback_data=f"sr#{sid}#l#{lang}#s#{s}", style="primary"))
         rows.append(row)
     rows.append([
-        InlineKeyboardButton(f"⬅️  {to_series_font('Back')}", callback_data=f"sr#{sid}#home"),
+        make_styled_button(f"⬅️  {to_series_font('Back')}", callback_data=f"sr#{sid}#home", style="success"),
     ])
     return InlineKeyboardMarkup(rows)
 
@@ -2490,7 +2490,7 @@ async def _user_quality_keyboard(user_id: int, full_id: str, sid: str, lang: str
             row.append(make_styled_button(to_series_font(q), callback_data=f"sr#{sid}#l#{lang}#s#{season}#q#{q}", style="danger"))
         rows.append(row)
     rows.append([
-        InlineKeyboardButton(f"⬅️  {to_series_font('Back')}", callback_data=f"sr#{sid}#home" if season == 0 else f"sr#{sid}#l#{lang}"),
+        make_styled_button(f"⬅️  {to_series_font('Back')}", callback_data=f"sr#{sid}#home" if season == 0 else f"sr#{sid}#l#{lang}", style="success"),
         InlineKeyboardButton(f"🏠 {to_series_font('Home')}", callback_data=f"sr#{sid}#home"),
     ])
     return InlineKeyboardMarkup(rows)
@@ -6863,11 +6863,11 @@ async def ser_lang_callback(client: Client, query: CallbackQuery):
         for i in range(0, len(seasons_sorted), 2):
             row = []
             for s in seasons_sorted[i:i+2]:
-                row.append(InlineKeyboardButton(f"📅 Season {s}", callback_data=f"ser_season#{series_id}#{lang}#{s}"))
+                row.append(make_styled_button(f"📅 Season {s}", callback_data=f"ser_season#{series_id}#{lang}#{s}", style="primary"))
             buttons.append(row)
 
         buttons.append([
-            InlineKeyboardButton("⬅️ Language", callback_data=f"ser_back#{series_id}#{lang}")
+            make_styled_button("⬅️ Language", callback_data=f"ser_back#{series_id}#{lang}", style="success")
         ])
 
         cap = (
@@ -6899,7 +6899,7 @@ async def ser_lang_callback(client: Client, query: CallbackQuery):
             buttons.append(row)
 
         buttons.append([
-            InlineKeyboardButton("⬅️ Language", callback_data=f"ser_back#{series_id}#{lang}")
+            make_styled_button("⬅️ Language", callback_data=f"ser_back#{series_id}#{lang}", style="success")
         ])
 
         cap = (
@@ -6976,8 +6976,8 @@ async def ser_season_callback(client: Client, query: CallbackQuery):
         buttons.append(row)
 
     buttons.append([
-        InlineKeyboardButton("⬅️ Season", callback_data=f"ser_lang#{series_id}#{lang}"),
-        InlineKeyboardButton("⬅️ Language", callback_data=f"ser_back#{series_id}#{lang}")
+        make_styled_button("⬅️ Season", callback_data=f"ser_lang#{series_id}#{lang}", style="primary"),
+        make_styled_button("⬅️ Language", callback_data=f"ser_back#{series_id}#{lang}", style="success")
     ])
 
     cap = (
