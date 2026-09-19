@@ -55,6 +55,7 @@ class temp(object):
     CANCEL = False
     MELCOW = {}
     SERIES_WIZARD = {}
+    MOVIE_WIZARD = {}
     SERIES_STATE = {}
     AUTO_SERIES = {}
     AUTO_MOVIE = {}
@@ -111,6 +112,9 @@ def get_wizard_session(user_id: int, max_age_seconds: int = 900) -> dict | None:
         if getattr(temp, "SERIES_WIZARD", {}).get(user_id):
             wdata = temp.SERIES_WIZARD[user_id]
             return {"user_id": user_id, "workflow": "SERIES_WIZARD", "state": wdata.get("state", "UNKNOWN"), "data": wdata}
+        if getattr(temp, "MOVIE_WIZARD", {}).get(user_id):
+            mdata = temp.MOVIE_WIZARD[user_id]
+            return {"user_id": user_id, "workflow": "MANUAL_MOVIE", "state": mdata.get("state", "UNKNOWN"), "data": mdata}
         return None
 
     # Check timeout
@@ -157,6 +161,8 @@ def clear_wizard_session(user_id: int):
             temp.AUTO_MOVIE_BATCH.pop(k, None)
     if hasattr(temp, "SERIES_WIZARD") and isinstance(temp.SERIES_WIZARD, dict):
         temp.SERIES_WIZARD.pop(user_id, None)
+    if hasattr(temp, "MOVIE_WIZARD") and isinstance(temp.MOVIE_WIZARD, dict):
+        temp.MOVIE_WIZARD.pop(user_id, None)
     if hasattr(temp, "SETTING_SERIES_THUMB") and isinstance(temp.SETTING_SERIES_THUMB, dict):
         temp.SETTING_SERIES_THUMB.pop(user_id, None)
     logger.info(f"[SESSION CLEARED] user_id={user_id}")
