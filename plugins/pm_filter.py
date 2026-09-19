@@ -13,7 +13,8 @@ from pyrogram.errors import MediaEmpty, PhotoInvalidDimensions, WebpageMediaEmpt
 from utils import (
     get_size, is_subscribed, pub_is_subscribed, get_poster, search_gagala, temp,
     get_settings, save_group_settings, get_shortlink, get_tutorial, send_all, get_cap,
-    safe_reply_text, safe_reply_photo, safe_send_message, safe_edit_text, schedule_filter_message_delete, safe_delete_message
+    safe_reply_text, safe_reply_photo, safe_send_message, safe_edit_text, schedule_filter_message_delete, safe_delete_message,
+    schedule_set_filter_reply_delete, delete_set_filter_reply, SET_FILTER_AUTO_DELETE_DELAY
 )
 from database.users_chats_db import db
 from database.ia_filterdb import col, sec_col, db as vjdb, sec_db, get_file_details, get_search_results, get_bad_files
@@ -3613,8 +3614,8 @@ async def manual_filters(client, message, text=False):
                                         if settings['auto_delete']:
                                             await joelkb.delete()
                                 else:
-                                    if settings.get('auto_delete', True) and joelkb:
-                                        schedule_filter_message_delete(client, joelkb.chat.id, joelkb.id, delay=600)
+                                    if joelkb:
+                                        schedule_set_filter_reply_delete(client, joelkb.chat.id, joelkb.id, delay=SET_FILTER_AUTO_DELETE_DELAY)
                             except KeyError:
                                 grpid = await active_connection(str(message.from_user.id))
                                 await save_group_settings(grpid, 'auto_ffilter', True)
@@ -3649,8 +3650,8 @@ async def manual_filters(client, message, text=False):
                                         if settings['auto_delete']:
                                             await joelkb.delete()
                                 else:
-                                    if settings.get('auto_delete', True) and joelkb:
-                                        schedule_filter_message_delete(client, joelkb.chat.id, joelkb.id, delay=600)
+                                    if joelkb:
+                                        schedule_set_filter_reply_delete(client, joelkb.chat.id, joelkb.id, delay=SET_FILTER_AUTO_DELETE_DELAY)
                             except KeyError:
                                 grpid = await active_connection(str(message.from_user.id))
                                 await save_group_settings(grpid, 'auto_ffilter', True)
@@ -3682,8 +3683,8 @@ async def manual_filters(client, message, text=False):
                                     if settings['auto_delete']:
                                         await joelkb.delete()
                             else:
-                                if settings.get('auto_delete', True) and joelkb:
-                                    schedule_filter_message_delete(client, joelkb.chat.id, joelkb.id, delay=600)
+                                if joelkb:
+                                    schedule_set_filter_reply_delete(client, joelkb.chat.id, joelkb.id, delay=SET_FILTER_AUTO_DELETE_DELAY)
                         except KeyError:
                             grpid = await active_connection(str(message.from_user.id))
                             await save_group_settings(grpid, 'auto_ffilter', True)
@@ -3715,8 +3716,8 @@ async def manual_filters(client, message, text=False):
                                     if settings['auto_delete']:
                                         await joelkb.delete()
                             else:
-                                if settings.get('auto_delete', True) and joelkb:
-                                    schedule_filter_message_delete(client, joelkb.chat.id, joelkb.id, delay=600)
+                                if joelkb:
+                                    schedule_set_filter_reply_delete(client, joelkb.chat.id, joelkb.id, delay=SET_FILTER_AUTO_DELETE_DELAY)
                         except KeyError:
                             grpid = await active_connection(str(message.from_user.id))
                             await save_group_settings(grpid, 'auto_ffilter', True)
@@ -3774,8 +3775,8 @@ async def global_filters(client, message, text=False):
                                             if settings['auto_delete']:
                                                 await joelkb.delete()
                                     else:
-                                        if settings.get('auto_delete', True) and joelkb:
-                                            schedule_filter_message_delete(client, joelkb.chat.id, joelkb.id, delay=600)
+                                        if joelkb:
+                                            schedule_set_filter_reply_delete(client, joelkb.chat.id, joelkb.id, delay=SET_FILTER_AUTO_DELETE_DELAY)
                                 except KeyError:
                                     grpid = await active_connection(str(message.from_user.id))
                                     await save_group_settings(grpid, 'auto_ffilter', True)
@@ -3822,8 +3823,8 @@ async def global_filters(client, message, text=False):
                                             if settings['auto_delete']:
                                                 await joelkb.delete()
                                     else:
-                                        if settings.get('auto_delete', True) and joelkb:
-                                            schedule_filter_message_delete(client, joelkb.chat.id, joelkb.id, delay=600)
+                                        if joelkb:
+                                            schedule_set_filter_reply_delete(client, joelkb.chat.id, joelkb.id, delay=SET_FILTER_AUTO_DELETE_DELAY)
                                 except KeyError:
                                     grpid = await active_connection(str(message.from_user.id))
                                     await save_group_settings(grpid, 'auto_ffilter', True)
@@ -3868,8 +3869,8 @@ async def global_filters(client, message, text=False):
                                         if settings['auto_delete']:
                                             await joelkb.delete()
                                 else:
-                                    if settings.get('auto_delete', True) and joelkb:
-                                        schedule_filter_message_delete(client, joelkb.chat.id, joelkb.id, delay=600)
+                                    if joelkb:
+                                        schedule_set_filter_reply_delete(client, joelkb.chat.id, joelkb.id, delay=SET_FILTER_AUTO_DELETE_DELAY)
                             except KeyError:
                                 grpid = await active_connection(str(message.from_user.id))
                                 await save_group_settings(grpid, 'auto_ffilter', True)
@@ -3915,8 +3916,8 @@ async def global_filters(client, message, text=False):
                                         if settings['auto_delete']:
                                             await joelkb.delete()
                                 else:
-                                    if settings.get('auto_delete', True) and joelkb:
-                                        schedule_filter_message_delete(client, joelkb.chat.id, joelkb.id, delay=600)
+                                    if joelkb:
+                                        schedule_set_filter_reply_delete(client, joelkb.chat.id, joelkb.id, delay=SET_FILTER_AUTO_DELETE_DELAY)
                             except KeyError:
                                 grpid = await active_connection(str(message.from_user.id))
                                 await save_group_settings(grpid, 'auto_ffilter', True)
