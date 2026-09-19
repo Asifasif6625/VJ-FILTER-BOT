@@ -2,7 +2,7 @@
 # Subscribe YouTube Channel For Amazing Bot @Tech_VJ
 # Ask Doubt on telegram @KingVJ01
 
-import os, string, logging, random, asyncio, time, datetime, re, sys, json, base64
+import os, string, logging, random, asyncio, time, datetime, re, sys, json, base64, html
 from Script import script
 from pyrogram import Client, filters, enums
 from pyrogram.errors import ChatAdminRequired, FloodWait
@@ -35,6 +35,8 @@ async def process_series_start(client: Client, user_id: int, req_key: str, messa
     
     req = getattr(temp, "SERIES_STATE", {}).get(req_key)
     if not req:
+        req = getattr(temp, "MOVIE_STATE", {}).get(req_key)
+    if not req:
         req = getattr(temp, "GETALL", {}).get(req_key)
     if not req:
         from database.series_db import get_temp_request
@@ -42,11 +44,15 @@ async def process_series_start(client: Client, user_id: int, req_key: str, messa
         if req:
             temp.SERIES_STATE[req_key] = req
             temp.GETALL[req_key] = req
+            if req.get("type") == "movie" or req.get("request_type") == "movie":
+                if not hasattr(temp, "MOVIE_STATE"):
+                    temp.MOVIE_STATE = {}
+                temp.MOVIE_STATE[req_key] = req
             
     if not req:
         from plugins.series import to_series_font
         log.warning(f"[SERIES START]\naction=REQUEST_NOT_FOUND\nrequest_key={req_key}")
-        msg_text = f"<b><i>⚠️ {to_series_font('Request expired. Please search the series again.')}</i></b>"
+        msg_text = f"<b><i>⚠️ {to_series_font('Request expired. Please search again.')}</i></b>"
         if message:
             await message.reply(msg_text)
         else:
@@ -280,12 +286,15 @@ async def start(client, message):
         )
         return
         
-    # --- SERIES GROUP TO PM FLOW ---
+    # --- SERIES & MOVIE REQUEST DEEP LINK FLOW ---
     if data.startswith("all_"):
         file_id = data.split("_", 1)[1]
         await process_series_start(client, message.from_user.id, file_id, message=message)
         return
-    # --- END SERIES GROUP TO PM FLOW ---
+    elif data in getattr(temp, "MOVIE_STATE", {}) or data in getattr(temp, "SERIES_STATE", {}) or data in getattr(temp, "GETALL", {}):
+        await process_series_start(client, message.from_user.id, data, message=message)
+        return
+    # --- END SERIES & MOVIE REQUEST DEEP LINK FLOW ---
 
     # --- SERIES & MOVIE DEEP LINK PM FLOW ---
     if data.startswith("series_"):
@@ -1731,16 +1740,18 @@ async def send_batch_files(
         if custom_caption_builder:
             cap = custom_caption_builder(file_doc, idx, total_files)
         else:
-            fname = file_doc.get("file_name", "File")
+            raw_fname = file_doc.get("file_name", "File")
+            fname = html.escape(str(raw_fname).strip())
             raw_size = file_doc.get("file_size", 0)
             fsize = get_size(raw_size) if raw_size else "Unknown Size"
-            lang = file_doc.get("language", "Unknown")
+            raw_lang = file_doc.get("language", "Unknown")
+            lang = html.escape(str(raw_lang).strip())
             cap = (
-                f"⦿ <i>File name:</i> <code>{fname}</code>\n"
-                f"⦿ <i>Size:</i> {fsize}\n"
-                f"⦿ <i>Language:</i> {lang}\n"
-                f"⦿ <i>File:</i> {idx} / {total_files}\n\n"
-                f"@{bot_uname}"
+                f"<i>⇝ File Name: {fname}\n"
+                f"⇝ Size: {fsize}\n"
+                f"⇝ Language: {lang}\n"
+                f"⇝ Total: {idx}/{total_files}\n\n"
+                f"❧ https://t.me/+5RSSPoQTypk3ZmE1</i>"
             )
 
         prepared_items.append({
@@ -1923,30 +1934,24 @@ async def send_series_files_to_user(client, user_id, files, query=None):
             log.warning(f"Failed to send metadata message: {ex}")
 
     # 5. Caption builder
-    bot_uname = temp.U_NAME if hasattr(temp, "U_NAME") and temp.U_NAME else "BotUsername"
     def series_caption_builder(file_doc, idx, total_eps):
         fname = file_doc.get("file_name", "Unknown File")
-        if len(fname) > 900:
-            fname = fname[:900] + "..."
-        file_name = html.escape(fname)
+        if len(str(fname)) > 900:
+            fname = str(fname)[:900] + "..."
+        file_name = html.escape(str(fname).strip())
 
         raw_size = file_doc.get("file_size", 0)
         file_size = get_size(raw_size) if raw_size else "Unknown Size"
 
-        lang_str = file_doc.get("language", "Unknown")
-        rating = file_doc.get("series_rating", "")
+        raw_lang = file_doc.get("language", language or "Unknown")
+        lang_str = html.escape(str(raw_lang).strip())
 
         f_caption = (
-            f"⦿ <i>File name:</i> <code>{file_name}</code>\n"
-            f"⦿ <i>Size:</i> {file_size}\n"
-            f"⦿ <i>Language:</i> {lang_str}\n"
-        )
-        if rating and str(rating).lower() not in ["skip", "n/a", ""]:
-            f_caption += f"⦿ <i>Rating:</i> ⭐ {rating}\n"
-
-        f_caption += (
-            f"⦿ <i>File:</i> {idx} / {total_eps}\n\n"
-            f"@{bot_uname}"
+            f"<i>⇝ File Name: {file_name}\n"
+            f"⇝ Size: {file_size}\n"
+            f"⇝ Language: {lang_str}\n"
+            f"⇝ Total: {idx}/{total_eps}\n\n"
+            f"❧ https://t.me/+5RSSPoQTypk3ZmE1</i>"
         )
         return f_caption
 
@@ -2025,19 +2030,20 @@ async def send_movie_files_to_user(client, user_id, files, query=None, movie_tit
             log.warning(f"Failed to send movie metadata message: {ex}")
 
     # 3. Caption builder
-    bot_uname = temp.U_NAME if hasattr(temp, "U_NAME") and temp.U_NAME else "BotUsername"
     def movie_caption_builder(file_doc, idx, total_files):
-        file_name = file_doc.get("file_name", "Movie File")
+        raw_fname = file_doc.get("file_name", "Movie File")
+        file_name = html.escape(str(raw_fname).strip())
         raw_size = file_doc.get("file_size", 0)
         file_size = get_size(raw_size) if raw_size else "Unknown Size"
-        lang_str = language or file_doc.get("language", "Unknown")
+        raw_lang = language or file_doc.get("language", "Unknown")
+        lang_str = html.escape(str(raw_lang).strip())
 
         f_caption = (
-            f"⦿ <i>File name:</i> <code>{file_name}</code>\n"
-            f"⦿ <i>Size:</i> {file_size}\n"
-            f"⦿ <i>Language:</i> {lang_str}\n"
-            f"⦿ <i>File:</i> {idx} / {total_files}\n\n"
-            f"@{bot_uname}"
+            f"<i>⇝ File Name: {file_name}\n"
+            f"⇝ Size: {file_size}\n"
+            f"⇝ Language: {lang_str}\n"
+            f"⇝ Total: {idx}/{total_files}\n\n"
+            f"❧ https://t.me/+5RSSPoQTypk3ZmE1</i>"
         )
         return f_caption
 

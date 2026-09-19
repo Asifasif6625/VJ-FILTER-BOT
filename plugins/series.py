@@ -5997,7 +5997,7 @@ async def render_super_movie_direct(client: Client, message: Message, movie: dic
     """Renders the language selection UI for a specific Super Movie Filter."""
     from database.ia_filterdb import get_bulk_file_details
     from database.series_db import is_filter_coming_soon
-    from plugins.pm_filter import group_movie_files, build_movie_language_keyboard, BUTTON_OWNERS
+    from plugins.pm_filter import group_movie_files, build_movie_language_keyboard, BUTTON_OWNERS, format_movie_metadata_caption
     from utils import schedule_filter_message_delete
 
     movie_id = str(movie["_id"])
@@ -6028,23 +6028,12 @@ async def render_super_movie_direct(client: Client, message: Message, movie: dic
         BUTTON_OWNERS[f"{message.chat.id}-{message.id}"] = real_user_id
 
     title = movie.get("title", "")
-    year = str(movie.get("year", ""))
-    year_str = f" ({year})" if year and year != "N/A" else ""
-    rating = str(movie.get("rating", ""))
-    rating_str = f"\n⭐ <b>Rating:</b> {rating}/10" if rating else ""
-    genre = movie.get("genre", "")
-    genre_str = f"\n🎭 <b>Genre:</b> {genre}" if genre and genre != "N/A" else ""
     poster = movie.get("poster", "")
 
     # Coming Soon Check
     if is_filter_coming_soon(movie) or (movie.get("coming_soon") and not file_ids):
         logger.info(f"[COMING SOON SEARCH] rendering super movie coming soon UI title={title} id={movie_id}")
-        caption_text = (
-            f"🎬 <b>{title}{year_str}</b>"
-            f"{rating_str}"
-            f"{genre_str}\n\n"
-            f"⏳ <b>Coming Soon!</b>"
-        )
+        caption_text = format_movie_metadata_caption(movie, page_type="coming_soon")
         markup = build_coming_soon_keyboard("movie", movie_id, key)
 
         if reply_msg:
@@ -6141,24 +6130,23 @@ async def render_super_movie_direct(client: Client, message: Message, movie: dic
     temp.MOVIE_STATE[key] = {
         "movie_id": movie_id,
         "title": movie.get("title", ""),
+        "name": movie.get("name", ""),
         "year": str(movie.get("year", "")),
         "rating": str(movie.get("rating", "")),
-        "genre": movie.get("genre", ""),
+        "genre": movie.get("genre", "") or movie.get("genres", ""),
+        "genres": movie.get("genres", "") or movie.get("genre", ""),
         "poster": movie.get("poster", ""),
         "description": movie.get("description", ""),
         "grouped": grouped,
         "chat_id": chat_id,
-        "user_id": real_user_id
+        "user_id": real_user_id,
+        "languages": movie.get("languages", []),
+        "qualities": movie.get("qualities", [])
     }
     if reply_msg:
         temp.MOVIE_STATE[f"{reply_msg.chat.id}-{reply_msg.id}"] = temp.MOVIE_STATE[key]
 
-    caption_text = (
-        f"🎬 <b>{title}{year_str}</b>"
-        f"{rating_str}"
-        f"{genre_str}\n\n"
-        f"🌐 <b>Select Language:</b>"
-    )
+    caption_text = format_movie_metadata_caption(movie, grouped_data=grouped, page_type="lang")
     markup = build_movie_language_keyboard(key, grouped)
 
     if reply_msg:
@@ -6972,8 +6960,9 @@ async def ser_qual_callback(client: Client, query: CallbackQuery):
     start_url = f"https://t.me/{bot_username}?start=all_{req_key}"
 
     if query.message.chat.type == enums.ChatType.PRIVATE:
+        from plugins.commands import process_series_start
         await query.answer(f"🚀 Sending all {len(files)} episodes...")
-        await deliver_series_request(client, req_key, query.from_user.id, query=query)
+        await process_series_start(client, query.from_user.id, req_key, message=query.message)
         return
 
     try:
