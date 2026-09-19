@@ -128,7 +128,33 @@ def _is_admin(user_id: int) -> bool:
 from utils import temp, get_poster
 
 # ─── Wizard State Names ───────────────────────────────────────────────────────
+# Manual Movie States
+MM_NAME            = "MM_NAME"
+MM_YEAR            = "MM_YEAR"
+MM_GENRES          = "MM_GENRES"
+MM_RATING          = "MM_RATING"
+MM_POSTER          = "MM_POSTER"
+MM_LANG_SELECT     = "MM_LANG_SELECT"
+MM_CUSTOM_LANG     = "MM_CUSTOM_LANG"
+MM_QUAL_SELECT     = "MM_QUAL_SELECT"
+MM_CUSTOM_QUAL     = "MM_CUSTOM_QUAL"
+MM_BATCH_WAIT      = "MM_BATCH_WAIT"
+
 # Manual Series States
+MS_NAME            = "MS_NAME"
+MS_YEAR            = "MS_YEAR"
+MS_GENRES          = "MS_GENRES"
+MS_RATING          = "MS_RATING"
+MS_POSTER          = "MS_POSTER"
+MS_LANG_SELECT     = "MS_LANG_SELECT"
+MS_CUSTOM_LANG     = "MS_CUSTOM_LANG"
+MS_SEASON_SELECT   = "MS_SEASON_SELECT"
+MS_CUSTOM_SEASON   = "MS_CUSTOM_SEASON"
+MS_QUAL_SELECT     = "MS_QUAL_SELECT"
+MS_CUSTOM_QUAL     = "MS_CUSTOM_QUAL"
+MS_BATCH_WAIT      = "MS_BATCH_WAIT"
+
+# Legacy Series States (for backward compatibility)
 S_NAME         = "S_NAME"
 S_YEAR         = "S_YEAR"
 S_RATING       = "S_RATING"
@@ -262,6 +288,146 @@ def extract_quality_from_filename(filename: str) -> str:
         return "DVDRip"
 
     return "Unknown"
+
+
+# ─── Manual Movie & Series Wizard Keyboards ──────────────────────────────────
+DEFAULT_MANUAL_LANGUAGES = [
+    "Malayalam", "Tamil", "Hindi", "Telugu",
+    "Kannada", "English", "Dual Audio", "Multi Audio"
+]
+
+DEFAULT_MANUAL_QUALITIES = [
+    "360p", "480p", "540p", "720p",
+    "1080p", "2160p", "WEB-DL", "BluRay", "HDRip"
+]
+
+def _build_manual_main_menu_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("🎬 Manual Movie Adding", callback_data="sw#mm_start")],
+        [InlineKeyboardButton("📺 Manual Series Adding", callback_data="sw#ms_start")],
+        [InlineKeyboardButton("❌ Cancel", callback_data="sw#cancel")]
+    ])
+
+def _build_mm_lang_keyboard(selected_lang: str = "Malayalam") -> InlineKeyboardMarkup:
+    langs = list(DEFAULT_MANUAL_LANGUAGES)
+    if selected_lang and selected_lang not in langs:
+        langs.append(selected_lang)
+    
+    rows = []
+    for i in range(0, len(langs), 2):
+        row = []
+        for l in langs[i:i+2]:
+            mark = "🟢" if l == selected_lang else "⚪"
+            row.append(InlineKeyboardButton(f"{mark} {l}", callback_data=f"sw#mm_lang#{l}", style="success"))
+        rows.append(row)
+    
+    rows.append([InlineKeyboardButton("➕ Custom Language", callback_data="sw#mm_custom_lang")])
+    rows.append([InlineKeyboardButton("✅ Submit", callback_data="sw#mm_lang_submit")])
+    rows.append([InlineKeyboardButton("❌ Cancel", callback_data="sw#cancel")])
+    return InlineKeyboardMarkup(rows)
+
+def _build_mm_qual_keyboard(selected_qual: str = "720p", excluded_qualities: list = None) -> InlineKeyboardMarkup:
+    excluded = set(excluded_qualities or [])
+    available_quals = [q for q in DEFAULT_MANUAL_QUALITIES if q not in excluded]
+    if selected_qual and selected_qual not in available_quals and selected_qual not in excluded:
+        available_quals.append(selected_qual)
+    
+    rows = []
+    for i in range(0, len(available_quals), 2):
+        row = []
+        for q in available_quals[i:i+2]:
+            mark = "🔴" if q == selected_qual else "⚪"
+            row.append(InlineKeyboardButton(f"{mark} {q}", callback_data=f"sw#mm_qual#{q}", style="danger"))
+        rows.append(row)
+    
+    rows.append([InlineKeyboardButton("➕ Custom Quality", callback_data="sw#mm_custom_qual")])
+    rows.append([InlineKeyboardButton("✅ Submit", callback_data="sw#mm_qual_submit")])
+    rows.append([
+        InlineKeyboardButton("🔙 Back", callback_data="sw#mm_back_to_lang", style="success"),
+        InlineKeyboardButton("❌ Cancel", callback_data="sw#cancel")
+    ])
+    return InlineKeyboardMarkup(rows)
+
+def _build_mm_batch_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("💾 Save Filter", callback_data="sw#mm_save_filter")],
+        [InlineKeyboardButton("➕ Add Another Quality - Same Language", callback_data="sw#mm_add_qual_same_lang")],
+        [InlineKeyboardButton("🌐 Choose Another Language", callback_data="sw#mm_choose_another_lang")],
+        [InlineKeyboardButton("❌ Cancel", callback_data="sw#cancel")]
+    ])
+
+def _build_ms_lang_keyboard(selected_lang: str = "Malayalam") -> InlineKeyboardMarkup:
+    langs = list(DEFAULT_MANUAL_LANGUAGES)
+    if selected_lang and selected_lang not in langs:
+        langs.append(selected_lang)
+    
+    rows = []
+    for i in range(0, len(langs), 2):
+        row = []
+        for l in langs[i:i+2]:
+            mark = "🟢" if l == selected_lang else "⚪"
+            row.append(InlineKeyboardButton(f"{mark} {l}", callback_data=f"sw#ms_lang#{l}", style="success"))
+        rows.append(row)
+    
+    rows.append([InlineKeyboardButton("➕ Custom Language", callback_data="sw#ms_custom_lang")])
+    rows.append([InlineKeyboardButton("✅ Submit", callback_data="sw#ms_lang_submit")])
+    rows.append([InlineKeyboardButton("❌ Cancel", callback_data="sw#cancel")])
+    return InlineKeyboardMarkup(rows)
+
+def _build_ms_season_keyboard(selected_season: int = 1, allow_skip: bool = True) -> InlineKeyboardMarkup:
+    seasons = [1, 2, 3, 4, 5, 6, 7, 8]
+    if selected_season and selected_season not in seasons:
+        seasons.append(selected_season)
+    
+    rows = []
+    for i in range(0, len(seasons), 2):
+        row = []
+        for s in seasons[i:i+2]:
+            mark = "🔵" if s == selected_season else "⚪"
+            row.append(InlineKeyboardButton(f"{mark} Season {s}", callback_data=f"sw#ms_season#{s}", style="primary"))
+        rows.append(row)
+    
+    rows.append([InlineKeyboardButton("➕ Custom Season", callback_data="sw#ms_custom_season")])
+    rows.append([InlineKeyboardButton("✅ Submit", callback_data="sw#ms_season_submit")])
+    
+    bottom_row = []
+    if allow_skip:
+        bottom_row.append(InlineKeyboardButton("⏭ Skip", callback_data="sw#ms_skip_season"))
+    bottom_row.append(InlineKeyboardButton("🔙 Back", callback_data="sw#ms_back_to_lang", style="success"))
+    rows.append(bottom_row)
+    rows.append([InlineKeyboardButton("❌ Cancel", callback_data="sw#cancel")])
+    return InlineKeyboardMarkup(rows)
+
+def _build_ms_qual_keyboard(selected_qual: str = "720p", excluded_qualities: list = None) -> InlineKeyboardMarkup:
+    excluded = set(excluded_qualities or [])
+    available_quals = [q for q in DEFAULT_MANUAL_QUALITIES if q not in excluded]
+    if selected_qual and selected_qual not in available_quals and selected_qual not in excluded:
+        available_quals.append(selected_qual)
+    
+    rows = []
+    for i in range(0, len(available_quals), 2):
+        row = []
+        for q in available_quals[i:i+2]:
+            mark = "🔴" if q == selected_qual else "⚪"
+            row.append(InlineKeyboardButton(f"{mark} {q}", callback_data=f"sw#ms_qual#{q}", style="danger"))
+        rows.append(row)
+    
+    rows.append([InlineKeyboardButton("➕ Custom Quality", callback_data="sw#ms_custom_qual")])
+    rows.append([InlineKeyboardButton("✅ Submit", callback_data="sw#ms_qual_submit")])
+    rows.append([
+        InlineKeyboardButton("🔙 Back", callback_data="sw#ms_back_to_season", style="primary"),
+        InlineKeyboardButton("❌ Cancel", callback_data="sw#cancel")
+    ])
+    return InlineKeyboardMarkup(rows)
+
+def _build_ms_batch_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("💾 Save Filter", callback_data="sw#ms_save_filter")],
+        [InlineKeyboardButton("➕ Add Another Quality - Same Language", callback_data="sw#ms_add_qual_same_lang")],
+        [InlineKeyboardButton("🌐 Choose Another Language", callback_data="sw#ms_choose_another_lang")],
+        [InlineKeyboardButton("❌ Cancel", callback_data="sw#cancel")]
+    ])
+
 
 
 def parse_series_filename(filename: str, series_title: str, target_season: int = None) -> dict:
@@ -2499,6 +2665,10 @@ async def _user_quality_keyboard(user_id: int, full_id: str, sid: str, lang: str
 
 
 
+
+
+
+
 # ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═  
 # ─── GLOBAL THUMBNAIL COMMANDS ───────────────────────────────────────────────
 # ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═  
@@ -4148,6 +4318,7 @@ async def _is_in_wizard_session_filter(_, __, message: Message) -> bool:
     if (uid in getattr(temp, "AUTO_SERIES", {}) or 
         uid in getattr(temp, "AUTO_MOVIE", {}) or 
         uid in getattr(temp, "SERIES_WIZARD", {}) or
+        uid in getattr(temp, "MOVIE_WIZARD", {}) or
         uid in getattr(temp, "AUTO_MOVIE_BATCH", {}) or
         getattr(temp, "SETTING_SERIES_THUMB", {}).get(uid)):
         return True
@@ -4209,8 +4380,10 @@ async def wizard_text_handler(client: Client, message: Message):
             sess = {"user_id": uid, "workflow": "AUTO_SERIES", "state": temp.AUTO_SERIES[uid].get("state", "WAIT_IMDB"), "data": temp.AUTO_SERIES[uid]}
         elif getattr(temp, "AUTO_MOVIE", {}).get(uid):
             sess = {"user_id": uid, "workflow": "AUTO_MOVIE", "state": temp.AUTO_MOVIE[uid].get("state", "WAIT_IMDB"), "data": temp.AUTO_MOVIE[uid]}
+        elif getattr(temp, "MOVIE_WIZARD", {}).get(uid):
+            sess = {"user_id": uid, "workflow": "MANUAL_MOVIE", "state": temp.MOVIE_WIZARD[uid].get("state", MM_NAME), "data": temp.MOVIE_WIZARD[uid]}
         elif getattr(temp, "SERIES_WIZARD", {}).get(uid):
-            sess = {"user_id": uid, "workflow": "SERIES_WIZARD", "state": temp.SERIES_WIZARD[uid].get("state", S_NAME), "data": temp.SERIES_WIZARD[uid]}
+            sess = {"user_id": uid, "workflow": "MANUAL_SERIES", "state": temp.SERIES_WIZARD[uid].get("state", MS_NAME), "data": temp.SERIES_WIZARD[uid]}
         elif getattr(temp, "AUTO_MOVIE_BATCH", {}).get(uid):
             sess = {"user_id": uid, "workflow": "SUPER_MOVIE_BATCH", "state": temp.AUTO_MOVIE_BATCH[uid].get("state", "WAIT_INPUT"), "data": temp.AUTO_MOVIE_BATCH[uid]}
 
@@ -4354,15 +4527,141 @@ async def wizard_text_handler(client: Client, message: Message):
         logger.info(f"[AS_TASK_CREATED] session_id={session_id}")
         return
 
-    # ── Manual Series Wizard Handler ─────────────────────────────────────────
-    elif workflow == "SERIES_WIZARD":
-        wiz = temp.SERIES_WIZARD.get(uid) or sess.get("data", {})
-        cur_state = wiz.get("state", S_NAME)
+    # ── Manual Movie Wizard Handler ──────────────────────────────────────────
+    elif workflow == "MANUAL_MOVIE":
+        wiz = temp.MOVIE_WIZARD.get(uid) or sess.get("data", {})
+        cur_state = wiz.get("state", MM_NAME)
 
-        if cur_state == S_NAME:
+        if cur_state == MM_NAME:
             wiz["name"] = text.strip()
-            wiz["state"] = S_YEAR
-            set_wizard_session(uid, workflow="SERIES_WIZARD", state=S_YEAR, data=wiz, chat_id=chat_id)
+            wiz["state"] = MM_YEAR
+            temp.MOVIE_WIZARD[uid] = wiz
+            set_wizard_session(uid, workflow="MANUAL_MOVIE", state=MM_YEAR, data=wiz, chat_id=chat_id)
+            logger.info(f"[MANUAL MOVIE] NAME {wiz['name']}")
+            return await message.reply_text(
+                f"🎬 Movie Name: <b>{html.escape(wiz['name'])}</b>\n\n"
+                "📅 Please send the <b>Release Year</b> (e.g. <code>2010</code>):",
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="sw#cancel")]]),
+                parse_mode=enums.ParseMode.HTML
+            )
+        elif cur_state == MM_YEAR:
+            wiz["year"] = text.strip()
+            wiz["state"] = MM_GENRES
+            temp.MOVIE_WIZARD[uid] = wiz
+            set_wizard_session(uid, workflow="MANUAL_MOVIE", state=MM_GENRES, data=wiz, chat_id=chat_id)
+            logger.info(f"[MANUAL MOVIE] YEAR {wiz['year']}")
+            return await message.reply_text(
+                "🎭 Please send the <b>Genres</b> (e.g. <code>Action, Sci-Fi</code>) or click <b>Skip</b>:",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("⏭ Skip", callback_data="sw#mm_skip_genre")],
+                    [InlineKeyboardButton("❌ Cancel", callback_data="sw#cancel")]
+                ]),
+                parse_mode=enums.ParseMode.HTML
+            )
+        elif cur_state == MM_GENRES:
+            wiz["genre"] = text.strip()
+            wiz["state"] = MM_RATING
+            temp.MOVIE_WIZARD[uid] = wiz
+            set_wizard_session(uid, workflow="MANUAL_MOVIE", state=MM_RATING, data=wiz, chat_id=chat_id)
+            logger.info(f"[MANUAL MOVIE] GENRES {wiz['genre']}")
+            return await message.reply_text(
+                "⭐ Please send the <b>Rating</b> (e.g. <code>8.8</code>) or click <b>Skip</b>:",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("⏭ Skip", callback_data="sw#mm_skip_rating")],
+                    [InlineKeyboardButton("❌ Cancel", callback_data="sw#cancel")]
+                ]),
+                parse_mode=enums.ParseMode.HTML
+            )
+        elif cur_state == MM_RATING:
+            wiz["rating"] = text.strip()
+            wiz["state"] = MM_POSTER
+            temp.MOVIE_WIZARD[uid] = wiz
+            set_wizard_session(uid, workflow="MANUAL_MOVIE", state=MM_POSTER, data=wiz, chat_id=chat_id)
+            logger.info(f"[MANUAL MOVIE] RATING {wiz['rating']}")
+            return await message.reply_text(
+                "🖼 Please send the <b>Poster Image</b> (photo or image URL) or click <b>Skip</b>:",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("⏭ Skip", callback_data="sw#mm_skip_poster")],
+                    [InlineKeyboardButton("❌ Cancel", callback_data="sw#cancel")]
+                ]),
+                parse_mode=enums.ParseMode.HTML
+            )
+        elif cur_state == MM_POSTER:
+            poster = ""
+            if message.photo:
+                poster = message.photo.file_id
+            elif text.lower() in ("/skip", "skip"):
+                poster = ""
+            elif text.startswith("http://") or text.startswith("https://") or text.startswith("AgAC"):
+                poster = text.strip()
+            else:
+                return await message.reply_text(
+                    "❌ <b>Invalid Poster.</b>\n\n"
+                    "Please send a valid image URL (e.g. <code>https://...</code>), send a Photo directly, or click <b>⏭ Skip</b>.",
+                    reply_markup=InlineKeyboardMarkup([
+                        [InlineKeyboardButton("⏭ Skip", callback_data="sw#mm_skip_poster")],
+                        [InlineKeyboardButton("❌ Cancel", callback_data="sw#cancel")]
+                    ]),
+                    parse_mode=enums.ParseMode.HTML
+                )
+            wiz["poster"] = poster
+            wiz["state"] = MM_LANG_SELECT
+            wiz.setdefault("selected_language", "Malayalam")
+            temp.MOVIE_WIZARD[uid] = wiz
+            set_wizard_session(uid, workflow="MANUAL_MOVIE", state=MM_LANG_SELECT, data=wiz, chat_id=chat_id)
+            logger.info(f"[MANUAL MOVIE] POSTER {poster}")
+            return await message.reply_text(
+                "🌐 <b>Select Language</b> (Select one):",
+                reply_markup=_build_mm_lang_keyboard(wiz["selected_language"]),
+                parse_mode=enums.ParseMode.HTML
+            )
+        elif cur_state == MM_CUSTOM_LANG:
+            custom_lang = text.strip()
+            wiz["selected_language"] = custom_lang
+            if custom_lang not in wiz.get("languages", []):
+                wiz.setdefault("languages", []).append(custom_lang)
+            wiz["state"] = MM_LANG_SELECT
+            temp.MOVIE_WIZARD[uid] = wiz
+            set_wizard_session(uid, workflow="MANUAL_MOVIE", state=MM_LANG_SELECT, data=wiz, chat_id=chat_id)
+            logger.info(f"[MANUAL MOVIE] CUSTOM LANG {custom_lang}")
+            return await message.reply_text(
+                f"🌐 <b>Language set to:</b> <code>{html.escape(custom_lang)}</code>\n\nSelect language and click <b>✅ Submit</b>:",
+                reply_markup=_build_mm_lang_keyboard(custom_lang),
+                parse_mode=enums.ParseMode.HTML
+            )
+        elif cur_state == MM_CUSTOM_QUAL:
+            custom_qual = text.strip()
+            cur_lang = wiz.get("selected_language", "Malayalam")
+            excluded = wiz.get("added_pairs", {}).get(cur_lang, [])
+            if custom_qual in excluded:
+                return await message.reply_text(
+                    f"❌ <b>Quality '{html.escape(custom_qual)}' has already been added for {html.escape(cur_lang)}.</b>\n\nPlease send a different quality:",
+                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="sw#cancel")]]),
+                    parse_mode=enums.ParseMode.HTML
+                )
+            wiz["selected_quality"] = custom_qual
+            if custom_qual not in wiz.get("qualities", []):
+                wiz.setdefault("qualities", []).append(custom_qual)
+            wiz["state"] = MM_QUAL_SELECT
+            temp.MOVIE_WIZARD[uid] = wiz
+            set_wizard_session(uid, workflow="MANUAL_MOVIE", state=MM_QUAL_SELECT, data=wiz, chat_id=chat_id)
+            logger.info(f"[MANUAL MOVIE] CUSTOM QUAL {custom_qual}")
+            return await message.reply_text(
+                f"⚡ <b>Quality set to:</b> <code>{html.escape(custom_qual)}</code>\n\nSelect quality and click <b>✅ Submit</b>:",
+                reply_markup=_build_mm_qual_keyboard(custom_qual, excluded_qualities=excluded),
+                parse_mode=enums.ParseMode.HTML
+            )
+
+    # ── Manual Series Wizard Handler ─────────────────────────────────────────
+    elif workflow in ("MANUAL_SERIES", "SERIES_WIZARD"):
+        wiz = temp.SERIES_WIZARD.get(uid) or sess.get("data", {})
+        cur_state = wiz.get("state", MS_NAME)
+
+        if cur_state in (MS_NAME, S_NAME):
+            wiz["name"] = text.strip()
+            wiz["state"] = MS_YEAR
+            temp.SERIES_WIZARD[uid] = wiz
+            set_wizard_session(uid, workflow="MANUAL_SERIES", state=MS_YEAR, data=wiz, chat_id=chat_id)
             logger.info(f"[MANUAL SERIES] NAME {wiz['name']}")
             return await message.reply_text(
                 f"📺 Series Name: <b>{html.escape(wiz['name'])}</b>\n\n"
@@ -4370,62 +4669,136 @@ async def wizard_text_handler(client: Client, message: Message):
                 reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="sw#cancel")]]),
                 parse_mode=enums.ParseMode.HTML
             )
-        elif cur_state == S_YEAR:
+        elif cur_state in (MS_YEAR, S_YEAR):
             wiz["year"] = text.strip()
-            wiz["state"] = S_RATING
-            set_wizard_session(uid, workflow="SERIES_WIZARD", state=S_RATING, data=wiz, chat_id=chat_id)
+            wiz["state"] = MS_GENRES
+            temp.SERIES_WIZARD[uid] = wiz
+            set_wizard_session(uid, workflow="MANUAL_SERIES", state=MS_GENRES, data=wiz, chat_id=chat_id)
             logger.info(f"[MANUAL SERIES] YEAR {wiz['year']}")
+            return await message.reply_text(
+                "🎭 Please send the <b>Genres</b> (e.g. <code>Action, Drama</code>) or click <b>Skip</b>:",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("⏭ Skip", callback_data="sw#ms_skip_genre")],
+                    [InlineKeyboardButton("❌ Cancel", callback_data="sw#cancel")]
+                ]),
+                parse_mode=enums.ParseMode.HTML
+            )
+        elif cur_state in (MS_GENRES, S_GENRE):
+            wiz["genre"] = text.strip()
+            wiz["state"] = MS_RATING
+            temp.SERIES_WIZARD[uid] = wiz
+            set_wizard_session(uid, workflow="MANUAL_SERIES", state=MS_RATING, data=wiz, chat_id=chat_id)
+            logger.info(f"[MANUAL SERIES] GENRES {wiz['genre']}")
             return await message.reply_text(
                 "⭐ Please send the <b>Rating</b> (e.g. <code>8.5</code>) or click <b>Skip</b>:",
                 reply_markup=InlineKeyboardMarkup([
-                    [InlineKeyboardButton("⏭ Skip", callback_data="sw#skip#rating")],
+                    [InlineKeyboardButton("⏭ Skip", callback_data="sw#ms_skip_rating")],
                     [InlineKeyboardButton("❌ Cancel", callback_data="sw#cancel")]
                 ]),
                 parse_mode=enums.ParseMode.HTML
             )
-        elif cur_state == S_RATING:
+        elif cur_state in (MS_RATING, S_RATING):
             wiz["rating"] = text.strip()
-            wiz["state"] = S_GENRE
-            set_wizard_session(uid, workflow="SERIES_WIZARD", state=S_GENRE, data=wiz, chat_id=chat_id)
+            wiz["state"] = MS_POSTER
+            temp.SERIES_WIZARD[uid] = wiz
+            set_wizard_session(uid, workflow="MANUAL_SERIES", state=MS_POSTER, data=wiz, chat_id=chat_id)
             logger.info(f"[MANUAL SERIES] RATING {wiz['rating']}")
             return await message.reply_text(
-                "🎭 Please send the <b>Genre</b> (e.g. <code>Action, Drama</code>) or click <b>Skip</b>:",
+                "🖼 Please send the <b>Poster Image</b> (photo or image URL) or click <b>Skip</b>:",
                 reply_markup=InlineKeyboardMarkup([
-                    [InlineKeyboardButton("⏭ Skip", callback_data="sw#skip#genre")],
+                    [InlineKeyboardButton("⏭ Skip", callback_data="sw#ms_skip_poster")],
                     [InlineKeyboardButton("❌ Cancel", callback_data="sw#cancel")]
                 ]),
                 parse_mode=enums.ParseMode.HTML
             )
-        elif cur_state == S_GENRE:
-            wiz["genre"] = text.strip()
-            wiz["state"] = S_DESCRIPTION
-            set_wizard_session(uid, workflow="SERIES_WIZARD", state=S_DESCRIPTION, data=wiz, chat_id=chat_id)
-            logger.info(f"[MANUAL SERIES] GENRE {wiz['genre']}")
-            return await message.reply_text(
-                "📝 Please send the <b>Description</b> or click <b>Skip</b>:",
-                reply_markup=InlineKeyboardMarkup([
-                    [InlineKeyboardButton("⏭ Skip", callback_data="sw#skip#desc")],
-                    [InlineKeyboardButton("❌ Cancel", callback_data="sw#cancel")]
-                ]),
-                parse_mode=enums.ParseMode.HTML
-            )
-        elif cur_state == S_DESCRIPTION:
-            wiz["description"] = text.strip()
-            wiz["state"] = S_LANGUAGE
-            set_wizard_session(uid, workflow="SERIES_WIZARD", state=S_LANGUAGE, data=wiz, chat_id=chat_id)
-            logger.info(f"[MANUAL SERIES] DESCRIPTION {wiz['description']}")
-            lang_btns = [
-                [InlineKeyboardButton("Malayalam", callback_data="sw#sel_lang#Malayalam"), InlineKeyboardButton("Tamil", callback_data="sw#sel_lang#Tamil")],
-                [InlineKeyboardButton("Hindi", callback_data="sw#sel_lang#Hindi"), InlineKeyboardButton("Telugu", callback_data="sw#sel_lang#Telugu")],
-                [InlineKeyboardButton("Kannada", callback_data="sw#sel_lang#Kannada"), InlineKeyboardButton("English", callback_data="sw#sel_lang#English")],
-                [InlineKeyboardButton("Dual Audio", callback_data="sw#sel_lang#Dual Audio"), InlineKeyboardButton("Multi Audio", callback_data="sw#sel_lang#Multi Audio")],
-                [InlineKeyboardButton("❌ Cancel", callback_data="sw#cancel")]
-            ]
+        elif cur_state in (MS_POSTER, S_DESCRIPTION):
+            poster = ""
+            if message.photo:
+                poster = message.photo.file_id
+            elif text.lower() in ("/skip", "skip"):
+                poster = ""
+            elif text.startswith("http://") or text.startswith("https://") or text.startswith("AgAC"):
+                poster = text.strip()
+            else:
+                return await message.reply_text(
+                    "❌ <b>Invalid Poster.</b>\n\n"
+                    "Please send a valid image URL (e.g. <code>https://...</code>), send a Photo directly, or click <b>⏭ Skip</b>.",
+                    reply_markup=InlineKeyboardMarkup([
+                        [InlineKeyboardButton("⏭ Skip", callback_data="sw#ms_skip_poster")],
+                        [InlineKeyboardButton("❌ Cancel", callback_data="sw#cancel")]
+                    ]),
+                    parse_mode=enums.ParseMode.HTML
+                )
+            wiz["poster"] = poster
+            wiz["state"] = MS_LANG_SELECT
+            wiz.setdefault("selected_language", "Malayalam")
+            temp.SERIES_WIZARD[uid] = wiz
+            set_wizard_session(uid, workflow="MANUAL_SERIES", state=MS_LANG_SELECT, data=wiz, chat_id=chat_id)
+            logger.info(f"[MANUAL SERIES] POSTER {poster}")
             return await message.reply_text(
                 "🌐 <b>Select Language</b> (Select one):",
-                reply_markup=InlineKeyboardMarkup(lang_btns),
+                reply_markup=_build_ms_lang_keyboard(wiz["selected_language"]),
                 parse_mode=enums.ParseMode.HTML
             )
+        elif cur_state == MS_CUSTOM_LANG:
+            custom_lang = text.strip()
+            wiz["selected_language"] = custom_lang
+            if custom_lang not in wiz.get("languages", []):
+                wiz.setdefault("languages", []).append(custom_lang)
+            wiz["state"] = MS_LANG_SELECT
+            temp.SERIES_WIZARD[uid] = wiz
+            set_wizard_session(uid, workflow="MANUAL_SERIES", state=MS_LANG_SELECT, data=wiz, chat_id=chat_id)
+            logger.info(f"[MANUAL SERIES] CUSTOM LANG {custom_lang}")
+            return await message.reply_text(
+                f"🌐 <b>Language set to:</b> <code>{html.escape(custom_lang)}</code>\n\nSelect language and click <b>✅ Submit</b>:",
+                reply_markup=_build_ms_lang_keyboard(custom_lang),
+                parse_mode=enums.ParseMode.HTML
+            )
+        elif cur_state == MS_CUSTOM_SEASON:
+            if not text.strip().isdigit() or int(text.strip()) <= 0:
+                return await message.reply_text(
+                    "❌ <b>Invalid Season Number.</b>\n\nPlease enter a positive number (e.g. <code>1</code>, <code>2</code>):",
+                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="sw#cancel")]]),
+                    parse_mode=enums.ParseMode.HTML
+                )
+            s_num = int(text.strip())
+            wiz["selected_season"] = s_num
+            if s_num not in wiz.get("seasons", []):
+                wiz.setdefault("seasons", []).append(s_num)
+            wiz["state"] = MS_SEASON_SELECT
+            temp.SERIES_WIZARD[uid] = wiz
+            set_wizard_session(uid, workflow="MANUAL_SERIES", state=MS_SEASON_SELECT, data=wiz, chat_id=chat_id)
+            logger.info(f"[MANUAL SERIES] CUSTOM SEASON {s_num}")
+            return await message.reply_text(
+                f"📅 <b>Season set to:</b> <code>Season {s_num}</code>\n\nSelect season and click <b>✅ Submit</b>:",
+                reply_markup=_build_ms_season_keyboard(s_num, allow_skip=wiz.get("is_first_setup", True)),
+                parse_mode=enums.ParseMode.HTML
+            )
+        elif cur_state == MS_CUSTOM_QUAL:
+            custom_qual = text.strip()
+            cur_lang = wiz.get("selected_language", "Malayalam")
+            cur_season = wiz.get("selected_season")
+            pair_key = f"{cur_lang}#{cur_season}"
+            excluded = wiz.get("added_pairs", {}).get(pair_key, [])
+            if custom_qual in excluded:
+                return await message.reply_text(
+                    f"❌ <b>Quality '{html.escape(custom_qual)}' has already been added for {html.escape(cur_lang)} Season {cur_season}.</b>\n\nPlease send a different quality:",
+                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="sw#cancel")]]),
+                    parse_mode=enums.ParseMode.HTML
+                )
+            wiz["selected_quality"] = custom_qual
+            if custom_qual not in wiz.get("qualities", []):
+                wiz.setdefault("qualities", []).append(custom_qual)
+            wiz["state"] = MS_QUAL_SELECT
+            temp.SERIES_WIZARD[uid] = wiz
+            set_wizard_session(uid, workflow="MANUAL_SERIES", state=MS_QUAL_SELECT, data=wiz, chat_id=chat_id)
+            logger.info(f"[MANUAL SERIES] CUSTOM QUAL {custom_qual}")
+            return await message.reply_text(
+                f"⚡ <b>Quality set to:</b> <code>{html.escape(custom_qual)}</code>\n\nSelect quality and click <b>✅ Submit</b>:",
+                reply_markup=_build_ms_qual_keyboard(custom_qual, excluded_qualities=excluded),
+                parse_mode=enums.ParseMode.HTML
+            )
+
 
     # ── Super Movie Batch Handler ────────────────────────────────────────────
     elif workflow == "SUPER_MOVIE_BATCH":
@@ -4531,13 +4904,13 @@ async def _extract_media_file_doc(media_msg: Message) -> dict | None:
 
 async def _handle_incoming_media_for_series(client: Client, message: Message, uid: int):
     wiz = temp.SERIES_WIZARD.get(uid)
-    if not wiz or not wiz.get("series_id"):
+    if not wiz:
         return
     f_doc = await _extract_media_file_doc(message)
     if not f_doc:
         return
 
-    from database.series_db import add_series_file, series_col
+    from database.series_db import add_series_file, series_col, create_series, get_series_by_name, _normalize
     from bson import ObjectId
 
     s_name = wiz.get("name", "Unknown Series")
@@ -4545,8 +4918,39 @@ async def _handle_incoming_media_for_series(client: Client, message: Message, ui
     s_lang = wiz.get("selected_language", "Malayalam")
     s_season = wiz.get("selected_season") or 1
     s_qual = wiz.get("selected_quality", "720p")
-    series_id = wiz["series_id"]
 
+    # If series record not yet created in DB, create it now
+    if not wiz.get("series_id"):
+        existing = await get_series_by_name(_normalize(s_name))
+        if existing:
+            series_id = str(existing["_id"])
+            await series_col.update_one(
+                {"_id": existing["_id"]},
+                {
+                    "$addToSet": {
+                        "languages": s_lang,
+                        "qualities": s_qual,
+                        **({"seasons": s_season} if s_season else {})
+                    },
+                    "$set": {"updated_at": datetime.utcnow()}
+                }
+            )
+        else:
+            series_id = await create_series({
+                "name": s_name,
+                "year": s_year,
+                "genre": wiz.get("genre", "N/A"),
+                "rating": wiz.get("rating", "N/A"),
+                "poster": wiz.get("poster", ""),
+                "description": wiz.get("description", "N/A"),
+                "languages": [s_lang],
+                "seasons": [s_season] if s_season else [],
+                "qualities": [s_qual],
+                "created_by": uid
+            })
+        wiz["series_id"] = str(series_id)
+
+    series_id = wiz["series_id"]
     ep = _extract_episode_number(f_doc["file_name"]) or -1
     inserted, status = await add_series_file({
         "series_id": series_id,
@@ -4567,25 +4971,90 @@ async def _handle_incoming_media_for_series(client: Client, message: Message, ui
     else:
         wiz["duplicates"] = wiz.get("duplicates", 0) + 1
 
+    if s_lang not in wiz.get("languages", []):
+        wiz.setdefault("languages", []).append(s_lang)
+    if s_season and s_season not in wiz.get("seasons", []):
+        wiz.setdefault("seasons", []).append(s_season)
+    if s_qual not in wiz.get("qualities", []):
+        wiz.setdefault("qualities", []).append(s_qual)
+
+    pair_key = f"{s_lang}#{s_season}"
+    if s_qual not in wiz.setdefault("added_pairs", {}).setdefault(pair_key, []):
+        wiz["added_pairs"][pair_key].append(s_qual)
+
     temp.SERIES_WIZARD[uid] = wiz
 
     summary = (
-        "✅ <b>Series Files Added</b>\n\n"
+        "✅ <b>Series File Added</b>\n\n"
         f"📺 <b>Series:</b> <code>{html.escape(s_name)}</code>\n"
         f"📅 <b>Year:</b> <code>{s_year}</code>\n"
         f"🌐 <b>Language:</b> <code>{s_lang}</code>\n"
         f"📅 <b>Season:</b> <code>{s_season}</code>\n"
-        f"⚡ <b>Quality:</b> <code>{s_qual}</code>\n"
+        f"⚡ <b>Quality:</b> <code>{s_qual}</code>\n\n"
         f"📁 <b>Files Added:</b> <code>{wiz['files_added']}</code>\n"
-        f"♻️ <b>Duplicates:</b> <code>{wiz['duplicates']}</code>"
+        f"♻️ <b>Duplicates:</b> <code>{wiz.get('duplicates', 0)}</code>"
     )
-    markup = InlineKeyboardMarkup([
-        [InlineKeyboardButton("➕ Add Another Quality/Season", callback_data="sw#restart_batch")],
-        [InlineKeyboardButton("🏁 Finish", callback_data="sw#finish_manual")]
-    ])
-    await message.reply_text(summary, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
+    await message.reply_text(summary, reply_markup=_build_ms_batch_keyboard(), parse_mode=enums.ParseMode.HTML)
 
 async def _handle_incoming_media_for_movie(client: Client, message: Message, uid: int):
+    if uid in getattr(temp, "MOVIE_WIZARD", {}):
+        wiz = temp.MOVIE_WIZARD[uid]
+        f_doc = await _extract_media_file_doc(message)
+        if not f_doc:
+            return
+
+        m_title = wiz.get("name", "Movie")
+        m_year = wiz.get("year", "N/A")
+        m_lang = wiz.get("selected_language", "Malayalam")
+        m_qual = wiz.get("selected_quality", "720p")
+
+        fid = f_doc["file_id"]
+        if "file_ids" not in wiz:
+            wiz["file_ids"] = []
+        if fid not in wiz["file_ids"]:
+            wiz["file_ids"].append(fid)
+            wiz["files_added"] = len(wiz["file_ids"])
+            logger.info(f"[MANUAL MOVIE] FILE ADDED file={f_doc['file_name']} total={wiz['files_added']}")
+        else:
+            wiz["duplicates"] = wiz.get("duplicates", 0) + 1
+
+        if m_lang not in wiz.get("languages", []):
+            wiz.setdefault("languages", []).append(m_lang)
+        if m_qual not in wiz.get("qualities", []):
+            wiz.setdefault("qualities", []).append(m_qual)
+
+        if m_qual not in wiz.setdefault("added_pairs", {}).setdefault(m_lang, []):
+            wiz["added_pairs"][m_lang].append(m_qual)
+
+        movie_id = wiz.get("movie_id")
+        if movie_id:
+            from database.series_db import super_movies_col
+            from bson import ObjectId
+            await super_movies_col.update_one(
+                {"_id": ObjectId(movie_id)},
+                {
+                    "$addToSet": {
+                        "file_ids": fid,
+                        "languages": m_lang,
+                        "qualities": m_qual
+                    }
+                }
+            )
+
+        temp.MOVIE_WIZARD[uid] = wiz
+
+        summary = (
+            "📥 <b>Movie File Added</b>\n\n"
+            f"🎬 <b>Movie:</b> <code>{html.escape(m_title)}</code>\n"
+            f"📅 <b>Year:</b> <code>{html.escape(str(m_year))}</code>\n\n"
+            f"🌐 <b>Language:</b> <code>{html.escape(m_lang)}</code>\n"
+            f"⚡ <b>Quality:</b> <code>{html.escape(m_qual)}</code>\n\n"
+            f"📁 <b>Total Files Linked:</b> <code>{wiz['files_added']}</code>\n"
+            f"♻️ <b>Duplicates:</b> <code>{wiz.get('duplicates', 0)}</code>\n\n"
+            "Choose an option below to proceed:"
+        )
+        return await message.reply_text(summary, reply_markup=_build_mm_batch_keyboard(), parse_mode=enums.ParseMode.HTML)
+
     bdata = temp.AUTO_MOVIE_BATCH.get(uid)
     if not bdata:
         return
@@ -4642,13 +5111,13 @@ async def sbatch_slink_commands(client: Client, message: Message):
     workflow = sess.get("workflow") if sess else None
     state = sess.get("state") if sess else None
 
-    is_series_batch = (workflow == "SERIES_WIZARD" and (state == S_BATCH_WAIT or temp.SERIES_WIZARD.get(uid)))
-    is_movie_batch = (workflow == "SUPER_MOVIE_BATCH" and (state == AUTO_MOVIE_BATCH_WAIT or temp.AUTO_MOVIE_BATCH.get(uid)))
+    is_series_batch = (workflow in ("SERIES_WIZARD", "MANUAL_SERIES") and (state in (S_BATCH_WAIT, MS_BATCH_WAIT) or temp.SERIES_WIZARD.get(uid)))
+    is_movie_batch = (workflow in ("SUPER_MOVIE_BATCH", "MANUAL_MOVIE") and (state in (AUTO_MOVIE_BATCH_WAIT, MM_BATCH_WAIT) or temp.MOVIE_WIZARD.get(uid) or temp.AUTO_MOVIE_BATCH.get(uid)))
 
     if not is_series_batch and not is_movie_batch:
         return await message.reply_text(
             "❌ <b>No active batch session.</b>\n\n"
-            "Please start a Manual Series Add or Auto Movie Batch Add session first.",
+            "Please start a Manual Series/Movie Add or Auto Movie Batch Add session first.",
             parse_mode=enums.ParseMode.HTML
         )
 
@@ -4712,10 +5181,11 @@ async def series_and_movie_batch_media_receiver(client: Client, message: Message
     workflow = sess.get("workflow") if sess else None
     state = sess.get("state") if sess else None
 
-    if workflow == "SERIES_WIZARD" and (state == S_BATCH_WAIT or temp.SERIES_WIZARD.get(uid)):
+    if (workflow in ("SERIES_WIZARD", "MANUAL_SERIES")) and (state in (S_BATCH_WAIT, MS_BATCH_WAIT) or temp.SERIES_WIZARD.get(uid)):
         await _handle_incoming_media_for_series(client, message, uid)
-    elif workflow == "SUPER_MOVIE_BATCH" and (state == AUTO_MOVIE_BATCH_WAIT or temp.AUTO_MOVIE_BATCH.get(uid)):
+    elif (workflow in ("SUPER_MOVIE_BATCH", "MANUAL_MOVIE")) and (state in (AUTO_MOVIE_BATCH_WAIT, MM_BATCH_WAIT) or temp.MOVIE_WIZARD.get(uid) or temp.AUTO_MOVIE_BATCH.get(uid)):
         await _handle_incoming_media_for_movie(client, message, uid)
+
 
 
 # ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ ═ 
@@ -4741,11 +5211,299 @@ async def series_wizard_callback(client: Client, query: CallbackQuery):
         clear_wizard_session(uid)
         temp.AUTO_MOVIE.pop(uid, None)
         temp.AUTO_SERIES.pop(uid, None)
+        temp.MOVIE_WIZARD.pop(uid, None)
+        temp.SERIES_WIZARD.pop(uid, None)
+        logger.info("[MANUAL ADDING] MAIN MENU")
+        return await query.message.edit_text(
+            "🎬 <b>Manual Movie & Series Adding</b>\n\nChoose an option below to proceed:",
+            reply_markup=_build_manual_main_menu_keyboard(),
+            parse_mode=enums.ParseMode.HTML
+        )
+
+    # ═════════════════════════════════════════════════════════════════════════
+    # ─── MANUAL MOVIE ADDING CALLBACKS ───────────────────────────────────────
+    # ═════════════════════════════════════════════════════════════════════════
+
+    elif data == "sw#mm_start":
+        clear_wizard_session(uid)
+        temp.MOVIE_WIZARD[uid] = {
+            "mode": "create",
+            "state": MM_NAME,
+            "name": "",
+            "year": "N/A",
+            "rating": "N/A",
+            "genre": "N/A",
+            "poster": "",
+            "languages": [],
+            "qualities": [],
+            "selected_language": "Malayalam",
+            "selected_quality": "720p",
+            "added_pairs": {},
+            "file_ids": [],
+            "files_added": 0,
+            "duplicates": 0
+        }
+        set_wizard_session(uid, workflow="MANUAL_MOVIE", state=MM_NAME, data=temp.MOVIE_WIZARD[uid], chat_id=chat_id)
+        logger.info("[MANUAL MOVIE] START")
+        prompt_text = (
+            "🎬 <b>Manual Movie Add</b>\n\n"
+            "Please send the <b>Movie Name</b>:\n\n"
+            "Example:\n<code>Inception</code>"
+        )
+        return await query.message.edit_text(
+            prompt_text,
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="sw#cancel")]]),
+            parse_mode=enums.ParseMode.HTML
+        )
+
+    elif data == "sw#mm_skip_genre":
+        wiz = temp.MOVIE_WIZARD.get(uid) or {}
+        wiz["genre"] = "N/A"
+        wiz["state"] = MM_RATING
+        temp.MOVIE_WIZARD[uid] = wiz
+        set_wizard_session(uid, workflow="MANUAL_MOVIE", state=MM_RATING, data=wiz, chat_id=chat_id)
+        logger.info("[MANUAL MOVIE] SKIP GENRE")
+        return await query.message.edit_text(
+            "⭐ Please send the <b>Rating</b> (e.g. <code>8.8</code>) or click <b>Skip</b>:",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("⏭ Skip", callback_data="sw#mm_skip_rating")],
+                [InlineKeyboardButton("❌ Cancel", callback_data="sw#cancel")]
+            ]),
+            parse_mode=enums.ParseMode.HTML
+        )
+
+    elif data == "sw#mm_skip_rating":
+        wiz = temp.MOVIE_WIZARD.get(uid) or {}
+        wiz["rating"] = "N/A"
+        wiz["state"] = MM_POSTER
+        temp.MOVIE_WIZARD[uid] = wiz
+        set_wizard_session(uid, workflow="MANUAL_MOVIE", state=MM_POSTER, data=wiz, chat_id=chat_id)
+        logger.info("[MANUAL MOVIE] SKIP RATING")
+        return await query.message.edit_text(
+            "🖼 Please send the <b>Poster Image</b> (photo or image URL) or click <b>Skip</b>:",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("⏭ Skip", callback_data="sw#mm_skip_poster")],
+                [InlineKeyboardButton("❌ Cancel", callback_data="sw#cancel")]
+            ]),
+            parse_mode=enums.ParseMode.HTML
+        )
+
+    elif data == "sw#mm_skip_poster":
+        wiz = temp.MOVIE_WIZARD.get(uid) or {}
+        wiz["poster"] = ""
+        wiz["state"] = MM_LANG_SELECT
+        wiz.setdefault("selected_language", "Malayalam")
+        temp.MOVIE_WIZARD[uid] = wiz
+        set_wizard_session(uid, workflow="MANUAL_MOVIE", state=MM_LANG_SELECT, data=wiz, chat_id=chat_id)
+        logger.info("[MANUAL MOVIE] SKIP POSTER")
+        return await query.message.edit_text(
+            "🌐 <b>Select Language</b> (Select one):",
+            reply_markup=_build_mm_lang_keyboard(wiz["selected_language"]),
+            parse_mode=enums.ParseMode.HTML
+        )
+
+    elif data.startswith("sw#mm_lang#"):
+        lang = data.split("#")[-1]
+        wiz = temp.MOVIE_WIZARD.get(uid) or {}
+        wiz["selected_language"] = lang
+        temp.MOVIE_WIZARD[uid] = wiz
+        set_wizard_session(uid, workflow="MANUAL_MOVIE", state=MM_LANG_SELECT, data=wiz, chat_id=chat_id)
+        return await query.message.edit_text(
+            "🌐 <b>Select Language</b> (Select one):",
+            reply_markup=_build_mm_lang_keyboard(lang),
+            parse_mode=enums.ParseMode.HTML
+        )
+
+    elif data == "sw#mm_custom_lang":
+        wiz = temp.MOVIE_WIZARD.get(uid) or {}
+        wiz["state"] = MM_CUSTOM_LANG
+        temp.MOVIE_WIZARD[uid] = wiz
+        set_wizard_session(uid, workflow="MANUAL_MOVIE", state=MM_CUSTOM_LANG, data=wiz, chat_id=chat_id)
+        return await query.message.edit_text(
+            "🌐 <b>Enter Custom Language:</b>\n\nPlease send the custom language name in chat (e.g. <code>Korean</code>):",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="sw#cancel")]]),
+            parse_mode=enums.ParseMode.HTML
+        )
+
+    elif data == "sw#mm_lang_submit":
+        wiz = temp.MOVIE_WIZARD.get(uid) or {}
+        cur_lang = wiz.get("selected_language", "Malayalam")
+        if cur_lang not in wiz.get("languages", []):
+            wiz.setdefault("languages", []).append(cur_lang)
+        wiz["state"] = MM_QUAL_SELECT
+        
+        excluded = wiz.get("added_pairs", {}).get(cur_lang, [])
+        available = [q for q in DEFAULT_MANUAL_QUALITIES if q not in excluded]
+        if wiz.get("selected_quality") in excluded or not wiz.get("selected_quality"):
+            wiz["selected_quality"] = available[0] if available else "720p"
+
+        temp.MOVIE_WIZARD[uid] = wiz
+        set_wizard_session(uid, workflow="MANUAL_MOVIE", state=MM_QUAL_SELECT, data=wiz, chat_id=chat_id)
+        return await query.message.edit_text(
+            f"🌐 <b>Language:</b> <code>{html.escape(cur_lang)}</code>\n\n⚡ <b>Select Quality</b> (Select one):",
+            reply_markup=_build_mm_qual_keyboard(wiz["selected_quality"], excluded_qualities=excluded),
+            parse_mode=enums.ParseMode.HTML
+        )
+
+    elif data.startswith("sw#mm_qual#"):
+        qual = data.split("#")[-1]
+        wiz = temp.MOVIE_WIZARD.get(uid) or {}
+        cur_lang = wiz.get("selected_language", "Malayalam")
+        excluded = wiz.get("added_pairs", {}).get(cur_lang, [])
+        wiz["selected_quality"] = qual
+        temp.MOVIE_WIZARD[uid] = wiz
+        set_wizard_session(uid, workflow="MANUAL_MOVIE", state=MM_QUAL_SELECT, data=wiz, chat_id=chat_id)
+        return await query.message.edit_text(
+            f"🌐 <b>Language:</b> <code>{html.escape(cur_lang)}</code>\n\n⚡ <b>Select Quality</b> (Select one):",
+            reply_markup=_build_mm_qual_keyboard(qual, excluded_qualities=excluded),
+            parse_mode=enums.ParseMode.HTML
+        )
+
+    elif data == "sw#mm_custom_qual":
+        wiz = temp.MOVIE_WIZARD.get(uid) or {}
+        wiz["state"] = MM_CUSTOM_QUAL
+        temp.MOVIE_WIZARD[uid] = wiz
+        set_wizard_session(uid, workflow="MANUAL_MOVIE", state=MM_CUSTOM_QUAL, data=wiz, chat_id=chat_id)
+        return await query.message.edit_text(
+            "⚡ <b>Enter Custom Quality:</b>\n\nPlease send the custom quality name in chat (e.g. <code>4K IMAX</code>):",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="sw#cancel")]]),
+            parse_mode=enums.ParseMode.HTML
+        )
+
+    elif data == "sw#mm_back_to_lang":
+        wiz = temp.MOVIE_WIZARD.get(uid) or {}
+        wiz["state"] = MM_LANG_SELECT
+        temp.MOVIE_WIZARD[uid] = wiz
+        set_wizard_session(uid, workflow="MANUAL_MOVIE", state=MM_LANG_SELECT, data=wiz, chat_id=chat_id)
+        return await query.message.edit_text(
+            "🌐 <b>Select Language</b> (Select one):",
+            reply_markup=_build_mm_lang_keyboard(wiz.get("selected_language", "Malayalam")),
+            parse_mode=enums.ParseMode.HTML
+        )
+
+    elif data == "sw#mm_qual_submit":
+        wiz = temp.MOVIE_WIZARD.get(uid) or {}
+        cur_lang = wiz.get("selected_language", "Malayalam")
+        cur_qual = wiz.get("selected_quality", "720p")
+        if cur_qual not in wiz.get("qualities", []):
+            wiz.setdefault("qualities", []).append(cur_qual)
+        wiz["state"] = MM_BATCH_WAIT
+        temp.MOVIE_WIZARD[uid] = wiz
+        set_wizard_session(uid, workflow="MANUAL_MOVIE", state=MM_BATCH_WAIT, data=wiz, chat_id=chat_id)
+
+        prompt_files = (
+            f"📥 <b>Send Movie Files</b>\n\n"
+            f"🎬 <b>Movie:</b> <code>{html.escape(wiz.get('name', 'Movie'))}</code> ({wiz.get('year', 'N/A')})\n"
+            f"🌐 <b>Language:</b> <code>{html.escape(cur_lang)}</code>\n"
+            f"⚡ <b>Quality:</b> <code>{html.escape(cur_qual)}</code>\n\n"
+            "👉 <b>How to add files:</b>\n"
+            "1. <b>Forward</b> video/document files directly here.\n"
+            "2. Or send: <code>/sbatch &lt;from_link&gt; &lt;to_link&gt;</code>\n"
+            "3. Or send: <code>/slink &lt;message_link&gt;</code>\n\n"
+            "When finished with this quality, choose an option below:"
+        )
+        return await query.message.edit_text(prompt_files, reply_markup=_build_mm_batch_keyboard(), parse_mode=enums.ParseMode.HTML)
+
+    elif data == "sw#mm_add_qual_same_lang":
+        wiz = temp.MOVIE_WIZARD.get(uid) or {}
+        cur_lang = wiz.get("selected_language", "Malayalam")
+        cur_qual = wiz.get("selected_quality", "720p")
+        if cur_qual not in wiz.setdefault("added_pairs", {}).setdefault(cur_lang, []):
+            wiz["added_pairs"][cur_lang].append(cur_qual)
+        
+        excluded = wiz["added_pairs"][cur_lang]
+        available = [q for q in DEFAULT_MANUAL_QUALITIES if q not in excluded]
+        next_qual = available[0] if available else "720p"
+        wiz["selected_quality"] = next_qual
+        wiz["state"] = MM_QUAL_SELECT
+        temp.MOVIE_WIZARD[uid] = wiz
+        set_wizard_session(uid, workflow="MANUAL_MOVIE", state=MM_QUAL_SELECT, data=wiz, chat_id=chat_id)
+        return await query.message.edit_text(
+            f"🌐 <b>Language:</b> <code>{html.escape(cur_lang)}</code>\n\n⚡ <b>Select Next Quality:</b>",
+            reply_markup=_build_mm_qual_keyboard(next_qual, excluded_qualities=excluded),
+            parse_mode=enums.ParseMode.HTML
+        )
+
+    elif data == "sw#mm_choose_another_lang":
+        wiz = temp.MOVIE_WIZARD.get(uid) or {}
+        cur_lang = wiz.get("selected_language", "Malayalam")
+        cur_qual = wiz.get("selected_quality", "720p")
+        if cur_qual not in wiz.setdefault("added_pairs", {}).setdefault(cur_lang, []):
+            wiz["added_pairs"][cur_lang].append(cur_qual)
+
+        wiz["state"] = MM_LANG_SELECT
+        temp.MOVIE_WIZARD[uid] = wiz
+        set_wizard_session(uid, workflow="MANUAL_MOVIE", state=MM_LANG_SELECT, data=wiz, chat_id=chat_id)
+        return await query.message.edit_text(
+            "🌐 <b>Select Language</b> (Select one):",
+            reply_markup=_build_mm_lang_keyboard(cur_lang),
+            parse_mode=enums.ParseMode.HTML
+        )
+
+    elif data == "sw#mm_save_filter":
+        wiz = temp.MOVIE_WIZARD.get(uid) or {}
+        from database.series_db import create_super_movie, super_movies_col
+        from bson import ObjectId
+
+        m_title = wiz.get("name", "Movie")
+        m_year = wiz.get("year", "N/A")
+        m_poster = wiz.get("poster", "")
+        m_rating = wiz.get("rating", "")
+        m_genre = wiz.get("genre", "")
+        m_langs = wiz.get("languages", [])
+        if wiz.get("selected_language") and wiz["selected_language"] not in m_langs:
+            m_langs.append(wiz["selected_language"])
+        m_quals = wiz.get("qualities", [])
+        if wiz.get("selected_quality") and wiz["selected_quality"] not in m_quals:
+            m_quals.append(wiz["selected_quality"])
+        m_fids = wiz.get("file_ids", [])
+        is_cs = len(m_fids) == 0
+
+        movie_id = await create_super_movie({
+            "title": m_title,
+            "year": m_year,
+            "genre": m_genre,
+            "rating": m_rating,
+            "poster": m_poster,
+            "languages": m_langs,
+            "qualities": m_quals,
+            "file_ids": m_fids,
+            "coming_soon": is_cs,
+            "status": "coming_soon" if is_cs else "active",
+            "created_by": uid
+        })
+
+        clear_wizard_session(uid)
+        temp.MOVIE_WIZARD.pop(uid, None)
+
+        try:
+            if movie_id:
+                await announce_filter_created(client, filter_type="movie", filter_id=str(movie_id))
+        except Exception as ae:
+            logger.warning(f"[MANUAL MOVIE ANNOUNCEMENT ERROR] {ae}")
+
+        return await query.message.edit_text(
+            f"✅ <b>Movie Filter Completed Successfully!</b>\n\n"
+            f"🎬 <b>{html.escape(m_title)}</b> ({m_year})\n"
+            f"🌐 <b>Languages:</b> {', '.join(m_langs) or 'All'}\n"
+            f"⚡ <b>Qualities:</b> {', '.join(m_quals) or 'All'}\n"
+            f"📁 <b>Files Linked:</b> <code>{len(m_fids)}</code>" + (" (<i>Coming Soon</i>)" if is_cs else "") + f"\n\n"
+            f"<i>Movie Filter ID: <code>{movie_id}</code></i>\n\n"
+            "All added files are now active and searchable.",
+            parse_mode=enums.ParseMode.HTML
+        )
+
+    # ═════════════════════════════════════════════════════════════════════════
+    # ─── MANUAL SERIES ADDING CALLBACKS ──────────────────────────────────────
+    # ═════════════════════════════════════════════════════════════════════════
+
+    elif data == "sw#ms_start":
+        clear_wizard_session(uid)
         temp.SERIES_WIZARD[uid] = {
             "mode": "create",
-            "state": S_NAME,
+            "state": MS_NAME,
             "name": "",
-            "year": "",
+            "year": "N/A",
             "rating": "N/A",
             "genre": "N/A",
             "description": "N/A",
@@ -4756,12 +5514,13 @@ async def series_wizard_callback(client: Client, query: CallbackQuery):
             "selected_language": "Malayalam",
             "selected_season": 1,
             "selected_quality": "720p",
+            "added_pairs": {},
             "files_added": 0,
-            "duplicates": 0
+            "duplicates": 0,
+            "is_first_setup": True
         }
-        set_wizard_session(uid, workflow="SERIES_WIZARD", state=S_NAME, data=temp.SERIES_WIZARD[uid], chat_id=chat_id)
+        set_wizard_session(uid, workflow="MANUAL_SERIES", state=MS_NAME, data=temp.SERIES_WIZARD[uid], chat_id=chat_id)
         logger.info("[MANUAL SERIES] START")
-
         prompt_text = (
             "📺 <b>Manual Series Add</b>\n\n"
             "Please send the <b>Series Name</b>:\n\n"
@@ -4773,235 +5532,321 @@ async def series_wizard_callback(client: Client, query: CallbackQuery):
             parse_mode=enums.ParseMode.HTML
         )
 
-    elif data == "sw#skip#rating":
-        wiz = temp.SERIES_WIZARD.get(uid) or {}
-        wiz["rating"] = "N/A"
-        wiz["state"] = S_GENRE
-        set_wizard_session(uid, workflow="SERIES_WIZARD", state=S_GENRE, data=wiz, chat_id=chat_id)
-        temp.SERIES_WIZARD[uid] = wiz
-        logger.info("[MANUAL SERIES] RATING N/A")
-        return await query.message.edit_text(
-            "🎭 Please send the <b>Genre</b> (e.g. <code>Action, Drama</code>) or click <b>Skip</b>:",
-            reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("⏭ Skip", callback_data="sw#skip#genre")],
-                [InlineKeyboardButton("❌ Cancel", callback_data="sw#cancel")]
-            ]),
-            parse_mode=enums.ParseMode.HTML
-        )
-
-    elif data == "sw#skip#genre":
+    elif data in ("sw#ms_skip_genre", "sw#skip#genre"):
         wiz = temp.SERIES_WIZARD.get(uid) or {}
         wiz["genre"] = "N/A"
-        wiz["state"] = S_DESCRIPTION
-        set_wizard_session(uid, workflow="SERIES_WIZARD", state=S_DESCRIPTION, data=wiz, chat_id=chat_id)
+        wiz["state"] = MS_RATING
         temp.SERIES_WIZARD[uid] = wiz
-        logger.info("[MANUAL SERIES] GENRE N/A")
+        set_wizard_session(uid, workflow="MANUAL_SERIES", state=MS_RATING, data=wiz, chat_id=chat_id)
+        logger.info("[MANUAL SERIES] SKIP GENRE")
         return await query.message.edit_text(
-            "📝 Please send the <b>Description</b> or click <b>Skip</b>:",
+            "⭐ Please send the <b>Rating</b> (e.g. <code>8.5</code>) or click <b>Skip</b>:",
             reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("⏭ Skip", callback_data="sw#skip#desc")],
+                [InlineKeyboardButton("⏭ Skip", callback_data="sw#ms_skip_rating")],
                 [InlineKeyboardButton("❌ Cancel", callback_data="sw#cancel")]
             ]),
             parse_mode=enums.ParseMode.HTML
         )
 
-    elif data == "sw#skip#desc":
+    elif data in ("sw#ms_skip_rating", "sw#skip#rating"):
         wiz = temp.SERIES_WIZARD.get(uid) or {}
-        wiz["description"] = "N/A"
-        wiz["state"] = S_LANGUAGE
-        set_wizard_session(uid, workflow="SERIES_WIZARD", state=S_LANGUAGE, data=wiz, chat_id=chat_id)
+        wiz["rating"] = "N/A"
+        wiz["state"] = MS_POSTER
         temp.SERIES_WIZARD[uid] = wiz
-        logger.info("[MANUAL SERIES] DESCRIPTION N/A")
-        lang_btns = [
-            [InlineKeyboardButton("Malayalam", callback_data="sw#sel_lang#Malayalam"), InlineKeyboardButton("Tamil", callback_data="sw#sel_lang#Tamil")],
-            [InlineKeyboardButton("Hindi", callback_data="sw#sel_lang#Hindi"), InlineKeyboardButton("Telugu", callback_data="sw#sel_lang#Telugu")],
-            [InlineKeyboardButton("Kannada", callback_data="sw#sel_lang#Kannada"), InlineKeyboardButton("English", callback_data="sw#sel_lang#English")],
-            [InlineKeyboardButton("Dual Audio", callback_data="sw#sel_lang#Dual Audio"), InlineKeyboardButton("Multi Audio", callback_data="sw#sel_lang#Multi Audio")],
-            [InlineKeyboardButton("❌ Cancel", callback_data="sw#cancel")]
-        ]
+        set_wizard_session(uid, workflow="MANUAL_SERIES", state=MS_POSTER, data=wiz, chat_id=chat_id)
+        logger.info("[MANUAL SERIES] SKIP RATING")
         return await query.message.edit_text(
-            "🌐 <b>Select Language</b> (Select one):",
-            reply_markup=InlineKeyboardMarkup(lang_btns),
+            "🖼 Please send the <b>Poster Image</b> (photo or image URL) or click <b>Skip</b>:",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("⏭ Skip", callback_data="sw#ms_skip_poster")],
+                [InlineKeyboardButton("❌ Cancel", callback_data="sw#cancel")]
+            ]),
             parse_mode=enums.ParseMode.HTML
         )
 
-    elif data.startswith("sw#sel_lang#"):
+    elif data in ("sw#ms_skip_poster", "sw#skip#desc"):
+        wiz = temp.SERIES_WIZARD.get(uid) or {}
+        wiz["poster"] = ""
+        wiz["state"] = MS_LANG_SELECT
+        wiz.setdefault("selected_language", "Malayalam")
+        temp.SERIES_WIZARD[uid] = wiz
+        set_wizard_session(uid, workflow="MANUAL_SERIES", state=MS_LANG_SELECT, data=wiz, chat_id=chat_id)
+        logger.info("[MANUAL SERIES] SKIP POSTER")
+        return await query.message.edit_text(
+            "🌐 <b>Select Language</b> (Select one):",
+            reply_markup=_build_ms_lang_keyboard(wiz["selected_language"]),
+            parse_mode=enums.ParseMode.HTML
+        )
+
+    elif data.startswith("sw#ms_lang#") or data.startswith("sw#sel_lang#"):
         lang = data.split("#")[-1]
         wiz = temp.SERIES_WIZARD.get(uid) or {}
         wiz["selected_language"] = lang
-        wiz["languages"] = [lang]
-        wiz["state"] = S_SEASON
-        set_wizard_session(uid, workflow="SERIES_WIZARD", state=S_SEASON, data=wiz, chat_id=chat_id)
         temp.SERIES_WIZARD[uid] = wiz
-        logger.info(f"[MANUAL SERIES] LANGUAGE {lang}")
-
-        season_btns = [
-            [InlineKeyboardButton("Season 1", callback_data="sw#sel_season#1"), InlineKeyboardButton("Season 2", callback_data="sw#sel_season#2")],
-            [InlineKeyboardButton("Season 3", callback_data="sw#sel_season#3"), InlineKeyboardButton("Season 4", callback_data="sw#sel_season#4")],
-            [InlineKeyboardButton("Season 5", callback_data="sw#sel_season#5"), InlineKeyboardButton("Season 6", callback_data="sw#sel_season#6")],
-            [InlineKeyboardButton("Season 7", callback_data="sw#sel_season#7"), InlineKeyboardButton("Season 8", callback_data="sw#sel_season#8")],
-            [InlineKeyboardButton("⏭ Skip", callback_data="sw#sel_season#skip")],
-            [InlineKeyboardButton("❌ Cancel", callback_data="sw#cancel")]
-        ]
+        set_wizard_session(uid, workflow="MANUAL_SERIES", state=MS_LANG_SELECT, data=wiz, chat_id=chat_id)
         return await query.message.edit_text(
-            f"🌐 <b>Language:</b> <code>{lang}</code>\n\n📅 <b>Select Season:</b>",
-            reply_markup=InlineKeyboardMarkup(season_btns),
+            "🌐 <b>Select Language</b> (Select one):",
+            reply_markup=_build_ms_lang_keyboard(lang),
             parse_mode=enums.ParseMode.HTML
         )
 
-    elif data.startswith("sw#sel_season#"):
+    elif data == "sw#ms_custom_lang":
+        wiz = temp.SERIES_WIZARD.get(uid) or {}
+        wiz["state"] = MS_CUSTOM_LANG
+        temp.SERIES_WIZARD[uid] = wiz
+        set_wizard_session(uid, workflow="MANUAL_SERIES", state=MS_CUSTOM_LANG, data=wiz, chat_id=chat_id)
+        return await query.message.edit_text(
+            "🌐 <b>Enter Custom Language:</b>\n\nPlease send the custom language name in chat (e.g. <code>Korean</code>):",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="sw#cancel")]]),
+            parse_mode=enums.ParseMode.HTML
+        )
+
+    elif data == "sw#ms_lang_submit":
+        wiz = temp.SERIES_WIZARD.get(uid) or {}
+        cur_lang = wiz.get("selected_language", "Malayalam")
+        if cur_lang not in wiz.get("languages", []):
+            wiz.setdefault("languages", []).append(cur_lang)
+        wiz["state"] = MS_SEASON_SELECT
+        temp.SERIES_WIZARD[uid] = wiz
+        set_wizard_session(uid, workflow="MANUAL_SERIES", state=MS_SEASON_SELECT, data=wiz, chat_id=chat_id)
+        return await query.message.edit_text(
+            f"🌐 <b>Language:</b> <code>{html.escape(cur_lang)}</code>\n\n📅 <b>Select Season:</b>",
+            reply_markup=_build_ms_season_keyboard(wiz.get("selected_season", 1), allow_skip=wiz.get("is_first_setup", True)),
+            parse_mode=enums.ParseMode.HTML
+        )
+
+    elif data.startswith("sw#ms_season#") or data.startswith("sw#sel_season#"):
         s_val = data.split("#")[-1]
         wiz = temp.SERIES_WIZARD.get(uid) or {}
         if s_val.isdigit():
             s_num = int(s_val)
             wiz["selected_season"] = s_num
-            wiz["seasons"] = [s_num]
-            logger.info(f"[MANUAL SERIES] SEASON {s_num}")
             season_disp = f"Season {s_num}"
         else:
             wiz["selected_season"] = None
-            wiz["seasons"] = []
-            logger.info("[MANUAL SERIES] SEASON None")
             season_disp = "None (Skipped)"
-
-        wiz["state"] = S_QUALITY
-        set_wizard_session(uid, workflow="SERIES_WIZARD", state=S_QUALITY, data=wiz, chat_id=chat_id)
         temp.SERIES_WIZARD[uid] = wiz
-
-        qual_btns = [
-            [InlineKeyboardButton("360p", callback_data="sw#sel_qual#360p"), InlineKeyboardButton("480p", callback_data="sw#sel_qual#480p")],
-            [InlineKeyboardButton("540p", callback_data="sw#sel_qual#540p"), InlineKeyboardButton("720p", callback_data="sw#sel_qual#720p")],
-            [InlineKeyboardButton("1080p", callback_data="sw#sel_qual#1080p"), InlineKeyboardButton("2160p", callback_data="sw#sel_qual#2160p")],
-            [InlineKeyboardButton("WEB-DL", callback_data="sw#sel_qual#WEB-DL"), InlineKeyboardButton("BluRay", callback_data="sw#sel_qual#BluRay")],
-            [InlineKeyboardButton("❌ Cancel", callback_data="sw#cancel")]
-        ]
+        set_wizard_session(uid, workflow="MANUAL_SERIES", state=MS_SEASON_SELECT, data=wiz, chat_id=chat_id)
         return await query.message.edit_text(
-            f"📅 <b>Season:</b> <code>{season_disp}</code>\n\n⚡ <b>Select Quality</b> (Select one):",
-            reply_markup=InlineKeyboardMarkup(qual_btns),
+            f"🌐 <b>Language:</b> <code>{html.escape(wiz.get('selected_language', 'Malayalam'))}</code>\n\n📅 <b>Select Season:</b>",
+            reply_markup=_build_ms_season_keyboard(wiz.get("selected_season", 1), allow_skip=wiz.get("is_first_setup", True)),
             parse_mode=enums.ParseMode.HTML
         )
 
-    elif data.startswith("sw#sel_qual#"):
-        qual = data.split("#")[-1]
+    elif data == "sw#ms_custom_season":
         wiz = temp.SERIES_WIZARD.get(uid) or {}
-        wiz["selected_quality"] = qual
-        wiz["qualities"] = [qual]
-        wiz["state"] = S_SUBMIT
-        set_wizard_session(uid, workflow="SERIES_WIZARD", state=S_SUBMIT, data=wiz, chat_id=chat_id)
+        wiz["state"] = MS_CUSTOM_SEASON
         temp.SERIES_WIZARD[uid] = wiz
-        logger.info(f"[MANUAL SERIES] QUALITY {qual}")
-
-        s_name = wiz.get("name", "Unknown Series")
-        s_year = wiz.get("year", "N/A")
-        s_rating = wiz.get("rating", "N/A")
-        s_genre = wiz.get("genre", "N/A")
-        s_desc = wiz.get("description", "N/A")
-        s_lang = wiz.get("selected_language", "Malayalam")
-        s_season = f"Season {wiz['selected_season']}" if wiz.get("selected_season") else "None"
-
-        summary_text = (
-            "📋 <b>Series Confirmation</b>\n\n"
-            f"📺 <b>Series:</b> <code>{html.escape(s_name)}</code>\n"
-            f"📅 <b>Year:</b> <code>{html.escape(str(s_year))}</code>\n"
-            f"⭐ <b>Rating:</b> <code>{html.escape(str(s_rating))}</code>\n"
-            f"🎭 <b>Genre:</b> <code>{html.escape(str(s_genre))}</code>\n"
-            f"🌐 <b>Language:</b> <code>{html.escape(s_lang)}</code>\n"
-            f"📅 <b>Season:</b> <code>{html.escape(s_season)}</code>\n"
-            f"⚡ <b>Quality:</b> <code>{html.escape(qual)}</code>\n\n"
-            "Click <b>✅ Submit</b> to save metadata and proceed to adding files."
+        set_wizard_session(uid, workflow="MANUAL_SERIES", state=MS_CUSTOM_SEASON, data=wiz, chat_id=chat_id)
+        return await query.message.edit_text(
+            "📅 <b>Enter Custom Season:</b>\n\nPlease send the season number in chat (e.g. <code>9</code>):",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="sw#cancel")]]),
+            parse_mode=enums.ParseMode.HTML
         )
 
-        submit_btns = [
-            [InlineKeyboardButton("✅ Submit", callback_data="sw#submit_manual")],
-            [InlineKeyboardButton("❌ Cancel", callback_data="sw#cancel")]
-        ]
-        return await query.message.edit_text(summary_text, reply_markup=InlineKeyboardMarkup(submit_btns), parse_mode=enums.ParseMode.HTML)
-
-    elif data == "sw#submit_manual":
+    elif data == "sw#ms_skip_season":
         wiz = temp.SERIES_WIZARD.get(uid) or {}
-        from database.series_db import create_series, series_col, get_series_by_name
-        from bson import ObjectId
-
-        logger.info("[MANUAL SERIES] SUBMIT")
-
-        s_name = wiz.get("name", "Unknown Series")
-        s_year = wiz.get("year", "N/A")
-        s_lang = wiz.get("selected_language", "Malayalam")
-        s_season_num = wiz.get("selected_season")
-        s_season_list = [s_season_num] if s_season_num else []
-        s_qual = wiz.get("selected_quality", "720p")
-
-        existing = await get_series_by_name(_normalize(s_name))
-        if existing:
-            series_id = str(existing["_id"])
-            await series_col.update_one(
-                {"_id": existing["_id"]},
-                {
-                    "$addToSet": {
-                        "languages": s_lang,
-                        "qualities": s_qual,
-                        **({"seasons": s_season_num} if s_season_num else {})
-                    },
-                    "$set": {"updated_at": datetime.utcnow()}
-                }
-            )
-        else:
-            series_id = await create_series({
-                "name": s_name,
-                "year": s_year,
-                "genre": wiz.get("genre", "N/A"),
-                "rating": wiz.get("rating", "N/A"),
-                "poster": wiz.get("poster", ""),
-                "description": wiz.get("description", "N/A"),
-                "languages": [s_lang],
-                "seasons": s_season_list,
-                "qualities": [s_qual],
-                "created_by": uid
-            })
-
-        wiz["series_id"] = str(series_id)
-        wiz["state"] = S_BATCH_WAIT
+        wiz["selected_season"] = None
+        wiz["state"] = MS_QUAL_SELECT
+        cur_lang = wiz.get("selected_language", "Malayalam")
+        pair_key = f"{cur_lang}#None"
+        excluded = wiz.get("added_pairs", {}).get(pair_key, [])
         temp.SERIES_WIZARD[uid] = wiz
-        set_wizard_session(uid, workflow="SERIES_WIZARD", state=S_BATCH_WAIT, data=wiz, chat_id=chat_id)
-        logger.info("[MANUAL SERIES] BATCH START")
+        set_wizard_session(uid, workflow="MANUAL_SERIES", state=MS_QUAL_SELECT, data=wiz, chat_id=chat_id)
+        return await query.message.edit_text(
+            f"🌐 <b>Language:</b> <code>{html.escape(cur_lang)}</code>\n📅 <b>Season:</b> <code>None (Skipped)</code>\n\n⚡ <b>Select Quality:</b>",
+            reply_markup=_build_ms_qual_keyboard(wiz.get("selected_quality", "720p"), excluded_qualities=excluded),
+            parse_mode=enums.ParseMode.HTML
+        )
+
+    elif data == "sw#ms_back_to_lang":
+        wiz = temp.SERIES_WIZARD.get(uid) or {}
+        wiz["state"] = MS_LANG_SELECT
+        temp.SERIES_WIZARD[uid] = wiz
+        set_wizard_session(uid, workflow="MANUAL_SERIES", state=MS_LANG_SELECT, data=wiz, chat_id=chat_id)
+        return await query.message.edit_text(
+            "🌐 <b>Select Language</b> (Select one):",
+            reply_markup=_build_ms_lang_keyboard(wiz.get("selected_language", "Malayalam")),
+            parse_mode=enums.ParseMode.HTML
+        )
+
+    elif data == "sw#ms_season_submit":
+        wiz = temp.SERIES_WIZARD.get(uid) or {}
+        cur_season = wiz.get("selected_season")
+        if cur_season and cur_season not in wiz.get("seasons", []):
+            wiz.setdefault("seasons", []).append(cur_season)
+        wiz["state"] = MS_QUAL_SELECT
+        
+        cur_lang = wiz.get("selected_language", "Malayalam")
+        pair_key = f"{cur_lang}#{cur_season}"
+        excluded = wiz.get("added_pairs", {}).get(pair_key, [])
+        available = [q for q in DEFAULT_MANUAL_QUALITIES if q not in excluded]
+        if wiz.get("selected_quality") in excluded or not wiz.get("selected_quality"):
+            wiz["selected_quality"] = available[0] if available else "720p"
+
+        temp.SERIES_WIZARD[uid] = wiz
+        set_wizard_session(uid, workflow="MANUAL_SERIES", state=MS_QUAL_SELECT, data=wiz, chat_id=chat_id)
+        season_disp = f"Season {cur_season}" if cur_season else "None"
+        return await query.message.edit_text(
+            f"🌐 <b>Language:</b> <code>{html.escape(cur_lang)}</code>\n📅 <b>Season:</b> <code>{html.escape(season_disp)}</code>\n\n⚡ <b>Select Quality</b> (Select one):",
+            reply_markup=_build_ms_qual_keyboard(wiz["selected_quality"], excluded_qualities=excluded),
+            parse_mode=enums.ParseMode.HTML
+        )
+
+    elif data.startswith("sw#ms_qual#") or data.startswith("sw#sel_qual#"):
+        qual = data.split("#")[-1]
+        wiz = temp.SERIES_WIZARD.get(uid) or {}
+        cur_lang = wiz.get("selected_language", "Malayalam")
+        cur_season = wiz.get("selected_season")
+        pair_key = f"{cur_lang}#{cur_season}"
+        excluded = wiz.get("added_pairs", {}).get(pair_key, [])
+        wiz["selected_quality"] = qual
+        temp.SERIES_WIZARD[uid] = wiz
+        set_wizard_session(uid, workflow="MANUAL_SERIES", state=MS_QUAL_SELECT, data=wiz, chat_id=chat_id)
+        season_disp = f"Season {cur_season}" if cur_season else "None"
+        return await query.message.edit_text(
+            f"🌐 <b>Language:</b> <code>{html.escape(cur_lang)}</code>\n📅 <b>Season:</b> <code>{html.escape(season_disp)}</code>\n\n⚡ <b>Select Quality</b> (Select one):",
+            reply_markup=_build_ms_qual_keyboard(qual, excluded_qualities=excluded),
+            parse_mode=enums.ParseMode.HTML
+        )
+
+    elif data == "sw#ms_custom_qual":
+        wiz = temp.SERIES_WIZARD.get(uid) or {}
+        wiz["state"] = MS_CUSTOM_QUAL
+        temp.SERIES_WIZARD[uid] = wiz
+        set_wizard_session(uid, workflow="MANUAL_SERIES", state=MS_CUSTOM_QUAL, data=wiz, chat_id=chat_id)
+        return await query.message.edit_text(
+            "⚡ <b>Enter Custom Quality:</b>\n\nPlease send the custom quality name in chat (e.g. <code>4K IMAX</code>):",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="sw#cancel")]]),
+            parse_mode=enums.ParseMode.HTML
+        )
+
+    elif data == "sw#ms_back_to_season":
+        wiz = temp.SERIES_WIZARD.get(uid) or {}
+        wiz["state"] = MS_SEASON_SELECT
+        temp.SERIES_WIZARD[uid] = wiz
+        set_wizard_session(uid, workflow="MANUAL_SERIES", state=MS_SEASON_SELECT, data=wiz, chat_id=chat_id)
+        return await query.message.edit_text(
+            f"🌐 <b>Language:</b> <code>{html.escape(wiz.get('selected_language', 'Malayalam'))}</code>\n\n📅 <b>Select Season:</b>",
+            reply_markup=_build_ms_season_keyboard(wiz.get("selected_season", 1), allow_skip=wiz.get("is_first_setup", True)),
+            parse_mode=enums.ParseMode.HTML
+        )
+
+    elif data in ("sw#ms_qual_submit", "sw#submit_manual"):
+        wiz = temp.SERIES_WIZARD.get(uid) or {}
+        cur_lang = wiz.get("selected_language", "Malayalam")
+        cur_season = wiz.get("selected_season")
+        cur_qual = wiz.get("selected_quality", "720p")
+        if cur_qual not in wiz.get("qualities", []):
+            wiz.setdefault("qualities", []).append(cur_qual)
+
+        # Mark first setup false so future rounds in this session omit skip on season
+        wiz["is_first_setup"] = False
+        wiz["state"] = MS_BATCH_WAIT
+        temp.SERIES_WIZARD[uid] = wiz
+        set_wizard_session(uid, workflow="MANUAL_SERIES", state=MS_BATCH_WAIT, data=wiz, chat_id=chat_id)
 
         prompt_files = (
             f"📥 <b>Send Series Files</b>\n\n"
-            f"📺 <b>Series:</b> <code>{html.escape(s_name)}</code> ({s_year})\n"
-            f"🌐 <b>Language:</b> <code>{html.escape(s_lang)}</code>\n"
-            f"📅 <b>Season:</b> <code>{s_season_num or 'N/A'}</code>\n"
-            f"⚡ <b>Quality:</b> <code>{html.escape(s_qual)}</code>\n\n"
+            f"📺 <b>Series:</b> <code>{html.escape(wiz.get('name', 'Series'))}</code> ({wiz.get('year', 'N/A')})\n"
+            f"🌐 <b>Language:</b> <code>{html.escape(cur_lang)}</code>\n"
+            f"📅 <b>Season:</b> <code>{cur_season or 'N/A'}</code>\n"
+            f"⚡ <b>Quality:</b> <code>{html.escape(cur_qual)}</code>\n\n"
             "👉 <b>How to add files:</b>\n"
             "1. <b>Forward</b> video/document files directly here.\n"
             "2. Or send: <code>/sbatch &lt;from_link&gt; &lt;to_link&gt;</code>\n"
             "3. Or send: <code>/slink &lt;message_link&gt;</code>\n\n"
-            "Click <b>🏁 Finish</b> when done."
+            "When finished with this quality/season, choose an option below:"
+        )
+        return await query.message.edit_text(prompt_files, reply_markup=_build_ms_batch_keyboard(), parse_mode=enums.ParseMode.HTML)
+
+    elif data in ("sw#ms_add_qual_same_lang", "sw#restart_batch"):
+        wiz = temp.SERIES_WIZARD.get(uid) or {}
+        cur_lang = wiz.get("selected_language", "Malayalam")
+        cur_season = wiz.get("selected_season")
+        cur_qual = wiz.get("selected_quality", "720p")
+        pair_key = f"{cur_lang}#{cur_season}"
+        if cur_qual not in wiz.setdefault("added_pairs", {}).setdefault(pair_key, []):
+            wiz["added_pairs"][pair_key].append(cur_qual)
+
+        excluded = wiz["added_pairs"][pair_key]
+        available = [q for q in DEFAULT_MANUAL_QUALITIES if q not in excluded]
+        next_qual = available[0] if available else "720p"
+        wiz["selected_quality"] = next_qual
+        wiz["state"] = MS_QUAL_SELECT
+        temp.SERIES_WIZARD[uid] = wiz
+        set_wizard_session(uid, workflow="MANUAL_SERIES", state=MS_QUAL_SELECT, data=wiz, chat_id=chat_id)
+        season_disp = f"Season {cur_season}" if cur_season else "None"
+        return await query.message.edit_text(
+            f"🌐 <b>Language:</b> <code>{html.escape(cur_lang)}</code>\n📅 <b>Season:</b> <code>{html.escape(season_disp)}</code>\n\n⚡ <b>Select Next Quality:</b>",
+            reply_markup=_build_ms_qual_keyboard(next_qual, excluded_qualities=excluded),
+            parse_mode=enums.ParseMode.HTML
         )
 
-        batch_markup = InlineKeyboardMarkup([
-            [InlineKeyboardButton("➕ Add Another Quality/Season", callback_data="sw#restart_batch")],
-            [InlineKeyboardButton("🏁 Finish", callback_data="sw#finish_manual")]
-        ])
-        return await query.message.edit_text(prompt_files, reply_markup=batch_markup, parse_mode=enums.ParseMode.HTML)
-
-    elif data == "sw#restart_batch":
+    elif data == "sw#ms_choose_another_lang":
         wiz = temp.SERIES_WIZARD.get(uid) or {}
-        wiz["state"] = S_LANGUAGE
-        set_wizard_session(uid, workflow="SERIES_WIZARD", state=S_LANGUAGE, data=wiz, chat_id=chat_id)
+        cur_lang = wiz.get("selected_language", "Malayalam")
+        cur_season = wiz.get("selected_season")
+        cur_qual = wiz.get("selected_quality", "720p")
+        pair_key = f"{cur_lang}#{cur_season}"
+        if cur_qual not in wiz.setdefault("added_pairs", {}).setdefault(pair_key, []):
+            wiz["added_pairs"][pair_key].append(cur_qual)
+
+        wiz["state"] = MS_LANG_SELECT
         temp.SERIES_WIZARD[uid] = wiz
-        lang_btns = [
-            [InlineKeyboardButton("Malayalam", callback_data="sw#sel_lang#Malayalam"), InlineKeyboardButton("Tamil", callback_data="sw#sel_lang#Tamil")],
-            [InlineKeyboardButton("Hindi", callback_data="sw#sel_lang#Hindi"), InlineKeyboardButton("Telugu", callback_data="sw#sel_lang#Telugu")],
-            [InlineKeyboardButton("Kannada", callback_data="sw#sel_lang#Kannada"), InlineKeyboardButton("English", callback_data="sw#sel_lang#English")],
-            [InlineKeyboardButton("Dual Audio", callback_data="sw#sel_lang#Dual Audio"), InlineKeyboardButton("Multi Audio", callback_data="sw#sel_lang#Multi Audio")],
-            [InlineKeyboardButton("🏁 Finish", callback_data="sw#finish_manual")]
-        ]
-        return await query.message.edit_text("🌐 <b>Select Next Language:</b>", reply_markup=InlineKeyboardMarkup(lang_btns), parse_mode=enums.ParseMode.HTML)
+        set_wizard_session(uid, workflow="MANUAL_SERIES", state=MS_LANG_SELECT, data=wiz, chat_id=chat_id)
+        return await query.message.edit_text(
+            "🌐 <b>Select Language</b> (Select one):",
+            reply_markup=_build_ms_lang_keyboard(cur_lang),
+            parse_mode=enums.ParseMode.HTML
+        )
 
-    elif data == "sw#finish_manual":
+    elif data in ("sw#ms_save_filter", "sw#finish_manual"):
         wiz = temp.SERIES_WIZARD.get(uid) or {}
+        from database.series_db import create_series, series_col, get_series_by_name, _normalize
+        from bson import ObjectId
+
+        s_name = wiz.get("name", "Unknown Series")
+        s_year = wiz.get("year", "N/A")
+        s_langs = wiz.get("languages", [])
+        if wiz.get("selected_language") and wiz["selected_language"] not in s_langs:
+            s_langs.append(wiz["selected_language"])
+        s_seasons = wiz.get("seasons", [])
+        if wiz.get("selected_season") and wiz["selected_season"] not in s_seasons:
+            s_seasons.append(wiz["selected_season"])
+        s_quals = wiz.get("qualities", [])
+        if wiz.get("selected_quality") and wiz["selected_quality"] not in s_quals:
+            s_quals.append(wiz["selected_quality"])
+
         series_id = wiz.get("series_id")
-        logger.info("[MANUAL SERIES] COMPLETE")
+        if not series_id:
+            existing = await get_series_by_name(_normalize(s_name))
+            if existing:
+                series_id = str(existing["_id"])
+                await series_col.update_one(
+                    {"_id": existing["_id"]},
+                    {
+                        "$addToSet": {
+                            "languages": {"$each": s_langs},
+                            "qualities": {"$each": s_quals},
+                            "seasons": {"$each": s_seasons}
+                        },
+                        "$set": {"updated_at": datetime.utcnow()}
+                    }
+                )
+            else:
+                series_id = await create_series({
+                    "name": s_name,
+                    "year": s_year,
+                    "genre": wiz.get("genre", "N/A"),
+                    "rating": wiz.get("rating", "N/A"),
+                    "poster": wiz.get("poster", ""),
+                    "description": wiz.get("description", "N/A"),
+                    "languages": s_langs,
+                    "seasons": s_seasons,
+                    "qualities": s_quals,
+                    "created_by": uid
+                })
 
         clear_wizard_session(uid)
         temp.SERIES_WIZARD.pop(uid, None)
@@ -5014,8 +5859,12 @@ async def series_wizard_callback(client: Client, query: CallbackQuery):
 
         return await query.message.edit_text(
             f"✅ <b>Series Filter Completed Successfully!</b>\n\n"
-            f"📺 <b>{html.escape(wiz.get('name', 'Series'))}</b> ({wiz.get('year', '')})\n"
-            f"<i>Series Filter ID: <code>{series_id or 'Created'}</code></i>\n\n"
+            f"📺 <b>{html.escape(s_name)}</b> ({s_year})\n"
+            f"🌐 <b>Languages:</b> {', '.join(s_langs) or 'All'}\n"
+            f"📅 <b>Seasons:</b> {', '.join(str(s) for s in s_seasons) or 'All'}\n"
+            f"⚡ <b>Qualities:</b> {', '.join(s_quals) or 'All'}\n"
+            f"📁 <b>Files Linked:</b> <code>{wiz.get('files_added', 0)}</code>\n\n"
+            f"<i>Series Filter ID: <code>{series_id}</code></i>\n\n"
             "All added episodes are now active and searchable.",
             parse_mode=enums.ParseMode.HTML
         )
