@@ -4352,7 +4352,7 @@ def _log_wizard_prompt(user_id: int, workflow: str, state: str, message_id: int)
 
 
 @Client.on_message(
-    (filters.text | filters.photo) & wizard_filter,
+    (filters.text | filters.photo | filters.document) & wizard_filter,
     group=-10
 )
 async def wizard_text_handler(client: Client, message: Message):
@@ -4533,124 +4533,274 @@ async def wizard_text_handler(client: Client, message: Message):
         cur_state = wiz.get("state", MM_NAME)
 
         if cur_state == MM_NAME:
-            wiz["name"] = text.strip()
+            name = text.strip()
+            if not name:
+                return await client.send_message(
+                    chat_id=chat_id,
+                    text="❌ Please enter a valid Movie Name:",
+                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="sw#cancel")]]),
+                    parse_mode=enums.ParseMode.HTML
+                )
+
+            old_prompt_id = wiz.get("prompt_message_id")
+            if old_prompt_id:
+                await safe_delete_message(client, chat_id, old_prompt_id)
+            await safe_delete_message(client, chat_id, message.id)
+
+            wiz["name"] = name
             wiz["state"] = MM_YEAR
-            temp.MOVIE_WIZARD[uid] = wiz
-            set_wizard_session(uid, workflow="MANUAL_MOVIE", state=MM_YEAR, data=wiz, chat_id=chat_id)
             logger.info(f"[MANUAL MOVIE] NAME {wiz['name']}")
-            return await message.reply_text(
-                f"🎬 Movie Name: <b>{html.escape(wiz['name'])}</b>\n\n"
-                "📅 Please send the <b>Release Year</b> (e.g. <code>2010</code>):",
+            pmsg = await client.send_message(
+                chat_id=chat_id,
+                text=(
+                    f"🎬 Movie Name: <b>{html.escape(wiz['name'])}</b>\n\n"
+                    "📅 Please send the <b>Release Year</b> (e.g. <code>2010</code>):"
+                ),
                 reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="sw#cancel")]]),
                 parse_mode=enums.ParseMode.HTML
             )
-        elif cur_state == MM_YEAR:
-            wiz["year"] = text.strip()
-            wiz["state"] = MM_GENRES
+            wiz["prompt_message_id"] = pmsg.id if pmsg else None
             temp.MOVIE_WIZARD[uid] = wiz
-            set_wizard_session(uid, workflow="MANUAL_MOVIE", state=MM_GENRES, data=wiz, chat_id=chat_id)
+            set_wizard_session(uid, workflow="MANUAL_MOVIE", state=MM_YEAR, data=wiz, chat_id=chat_id)
+            return
+
+        elif cur_state == MM_YEAR:
+            year = text.strip()
+            if not year.isdigit() or len(year) != 4:
+                return await client.send_message(
+                    chat_id=chat_id,
+                    text="❌ <b>Invalid Year.</b>\n\nPlease send a valid 4-digit year (e.g. <code>2010</code>):",
+                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="sw#cancel")]]),
+                    parse_mode=enums.ParseMode.HTML
+                )
+
+            old_prompt_id = wiz.get("prompt_message_id")
+            if old_prompt_id:
+                await safe_delete_message(client, chat_id, old_prompt_id)
+            await safe_delete_message(client, chat_id, message.id)
+
+            wiz["year"] = year
+            wiz["state"] = MM_GENRES
             logger.info(f"[MANUAL MOVIE] YEAR {wiz['year']}")
-            return await message.reply_text(
-                "🎭 Please send the <b>Genres</b> (e.g. <code>Action, Sci-Fi</code>) or click <b>Skip</b>:",
+            pmsg = await client.send_message(
+                chat_id=chat_id,
+                text="🎭 Please send the <b>Genres</b> (e.g. <code>Action, Sci-Fi</code>) or click <b>Skip</b>:",
                 reply_markup=InlineKeyboardMarkup([
                     [InlineKeyboardButton("⏭ Skip", callback_data="sw#mm_skip_genre")],
                     [InlineKeyboardButton("❌ Cancel", callback_data="sw#cancel")]
                 ]),
                 parse_mode=enums.ParseMode.HTML
             )
-        elif cur_state == MM_GENRES:
-            wiz["genre"] = text.strip()
-            wiz["state"] = MM_RATING
+            wiz["prompt_message_id"] = pmsg.id if pmsg else None
             temp.MOVIE_WIZARD[uid] = wiz
-            set_wizard_session(uid, workflow="MANUAL_MOVIE", state=MM_RATING, data=wiz, chat_id=chat_id)
+            set_wizard_session(uid, workflow="MANUAL_MOVIE", state=MM_GENRES, data=wiz, chat_id=chat_id)
+            return
+
+        elif cur_state == MM_GENRES:
+            genre = text.strip()
+            if not genre:
+                return await client.send_message(
+                    chat_id=chat_id,
+                    text="❌ Please send valid Genres or click <b>Skip</b>:",
+                    reply_markup=InlineKeyboardMarkup([
+                        [InlineKeyboardButton("⏭ Skip", callback_data="sw#mm_skip_genre")],
+                        [InlineKeyboardButton("❌ Cancel", callback_data="sw#cancel")]
+                    ]),
+                    parse_mode=enums.ParseMode.HTML
+                )
+
+            old_prompt_id = wiz.get("prompt_message_id")
+            if old_prompt_id:
+                await safe_delete_message(client, chat_id, old_prompt_id)
+            await safe_delete_message(client, chat_id, message.id)
+
+            wiz["genre"] = genre
+            wiz["state"] = MM_RATING
             logger.info(f"[MANUAL MOVIE] GENRES {wiz['genre']}")
-            return await message.reply_text(
-                "⭐ Please send the <b>Rating</b> (e.g. <code>8.8</code>) or click <b>Skip</b>:",
+            pmsg = await client.send_message(
+                chat_id=chat_id,
+                text="⭐ Please send the <b>Rating</b> (e.g. <code>8.8</code>) or click <b>Skip</b>:",
                 reply_markup=InlineKeyboardMarkup([
                     [InlineKeyboardButton("⏭ Skip", callback_data="sw#mm_skip_rating")],
                     [InlineKeyboardButton("❌ Cancel", callback_data="sw#cancel")]
                 ]),
                 parse_mode=enums.ParseMode.HTML
             )
-        elif cur_state == MM_RATING:
-            wiz["rating"] = text.strip()
-            wiz["state"] = MM_POSTER
+            wiz["prompt_message_id"] = pmsg.id if pmsg else None
             temp.MOVIE_WIZARD[uid] = wiz
-            set_wizard_session(uid, workflow="MANUAL_MOVIE", state=MM_POSTER, data=wiz, chat_id=chat_id)
+            set_wizard_session(uid, workflow="MANUAL_MOVIE", state=MM_RATING, data=wiz, chat_id=chat_id)
+            return
+
+        elif cur_state == MM_RATING:
+            rating = text.strip()
+            if not rating:
+                return await client.send_message(
+                    chat_id=chat_id,
+                    text="❌ Please send a valid Rating or click <b>Skip</b>:",
+                    reply_markup=InlineKeyboardMarkup([
+                        [InlineKeyboardButton("⏭ Skip", callback_data="sw#mm_skip_rating")],
+                        [InlineKeyboardButton("❌ Cancel", callback_data="sw#cancel")]
+                    ]),
+                    parse_mode=enums.ParseMode.HTML
+                )
+
+            old_prompt_id = wiz.get("prompt_message_id")
+            if old_prompt_id:
+                await safe_delete_message(client, chat_id, old_prompt_id)
+            await safe_delete_message(client, chat_id, message.id)
+
+            wiz["rating"] = rating
+            wiz["state"] = MM_POSTER
             logger.info(f"[MANUAL MOVIE] RATING {wiz['rating']}")
-            return await message.reply_text(
-                "🖼 Please send the <b>Poster Image</b> (photo or image URL) or click <b>Skip</b>:",
+            pmsg = await client.send_message(
+                chat_id=chat_id,
+                text="🖼 Please send the <b>Poster Image</b> (photo or image URL) or click <b>Skip</b>:",
                 reply_markup=InlineKeyboardMarkup([
                     [InlineKeyboardButton("⏭ Skip", callback_data="sw#mm_skip_poster")],
                     [InlineKeyboardButton("❌ Cancel", callback_data="sw#cancel")]
                 ]),
                 parse_mode=enums.ParseMode.HTML
             )
+            wiz["prompt_message_id"] = pmsg.id if pmsg else None
+            temp.MOVIE_WIZARD[uid] = wiz
+            set_wizard_session(uid, workflow="MANUAL_MOVIE", state=MM_POSTER, data=wiz, chat_id=chat_id)
+            return
+
         elif cur_state == MM_POSTER:
-            poster = ""
-            if message.photo:
-                poster = message.photo.file_id
-            elif text.lower() in ("/skip", "skip"):
-                poster = ""
-            elif text.startswith("http://") or text.startswith("https://") or text.startswith("AgAC"):
-                poster = text.strip()
-            else:
-                return await message.reply_text(
-                    "❌ <b>Invalid Poster.</b>\n\n"
-                    "Please send a valid image URL (e.g. <code>https://...</code>), send a Photo directly, or click <b>⏭ Skip</b>.",
-                    reply_markup=InlineKeyboardMarkup([
-                        [InlineKeyboardButton("⏭ Skip", callback_data="sw#mm_skip_poster")],
-                        [InlineKeyboardButton("❌ Cancel", callback_data="sw#cancel")]
-                    ]),
+            try:
+                poster = None
+                if message.photo:
+                    logger.info("[MANUAL MOVIE] POSTER PHOTO RECEIVED")
+                    if isinstance(message.photo, list):
+                        poster = message.photo[-1].file_id
+                    else:
+                        poster = getattr(message.photo, "file_id", None)
+                elif message.document and isinstance(getattr(message.document, "mime_type", None), str) and message.document.mime_type.startswith("image/"):
+                    logger.info("[MANUAL MOVIE] POSTER PHOTO RECEIVED")
+                    poster = message.document.file_id
+                elif text and (text.startswith("http://") or text.startswith("https://") or text.startswith("AgAC") or text.startswith("BAAC")):
+                    poster = text.strip()
+                elif text and text.lower() in ("/skip", "skip"):
+                    poster = ""
+
+                if poster is None:
+                    return await client.send_message(
+                        chat_id=chat_id,
+                        text=(
+                            "❌ <b>Invalid Poster</b>\n\n"
+                            "Please send:\n"
+                            "• a Telegram photo\n"
+                            "• an image file\n"
+                            "• a valid image URL\n"
+                            "• or click Skip"
+                        ),
+                        reply_markup=InlineKeyboardMarkup([
+                            [InlineKeyboardButton("⏭ Skip", callback_data="sw#mm_skip_poster")],
+                            [InlineKeyboardButton("❌ Cancel", callback_data="sw#cancel")]
+                        ]),
+                        parse_mode=enums.ParseMode.HTML
+                    )
+
+                old_prompt_id = wiz.get("prompt_message_id")
+                if old_prompt_id:
+                    await safe_delete_message(client, chat_id, old_prompt_id)
+                await safe_delete_message(client, chat_id, message.id)
+
+                wiz["poster"] = poster
+                wiz["state"] = MM_LANG_SELECT
+                wiz.setdefault("selected_language", "Malayalam")
+                logger.info("[MANUAL MOVIE] POSTER FILE_ID SAVED")
+                logger.info("[MANUAL MOVIE] STATE -> MM_LANG_SELECT")
+                pmsg = await client.send_message(
+                    chat_id=chat_id,
+                    text="🌐 <b>Select Language</b> (Select one):",
+                    reply_markup=_build_mm_lang_keyboard(wiz["selected_language"]),
                     parse_mode=enums.ParseMode.HTML
                 )
-            wiz["poster"] = poster
-            wiz["state"] = MM_LANG_SELECT
-            wiz.setdefault("selected_language", "Malayalam")
-            temp.MOVIE_WIZARD[uid] = wiz
-            set_wizard_session(uid, workflow="MANUAL_MOVIE", state=MM_LANG_SELECT, data=wiz, chat_id=chat_id)
-            logger.info(f"[MANUAL MOVIE] POSTER {poster}")
-            return await message.reply_text(
-                "🌐 <b>Select Language</b> (Select one):",
-                reply_markup=_build_mm_lang_keyboard(wiz["selected_language"]),
-                parse_mode=enums.ParseMode.HTML
-            )
+                wiz["prompt_message_id"] = pmsg.id if pmsg else None
+                temp.MOVIE_WIZARD[uid] = wiz
+                set_wizard_session(
+                    uid,
+                    workflow="MANUAL_MOVIE",
+                    state=MM_LANG_SELECT,
+                    data=wiz,
+                    chat_id=chat_id
+                )
+                return
+            except Exception as e:
+                logger.exception(f"[MANUAL MOVIE POSTER ERROR] {e}")
+                return await client.send_message(chat_id=chat_id, text="❌ An error occurred while processing the poster image. Please try again.")
+
         elif cur_state == MM_CUSTOM_LANG:
             custom_lang = text.strip()
+            if not custom_lang:
+                return await client.send_message(
+                    chat_id=chat_id,
+                    text="❌ Please send a valid language name:",
+                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="sw#cancel")]]),
+                    parse_mode=enums.ParseMode.HTML
+                )
+
+            old_prompt_id = wiz.get("prompt_message_id")
+            if old_prompt_id:
+                await safe_delete_message(client, chat_id, old_prompt_id)
+            await safe_delete_message(client, chat_id, message.id)
+
             wiz["selected_language"] = custom_lang
             if custom_lang not in wiz.get("languages", []):
                 wiz.setdefault("languages", []).append(custom_lang)
             wiz["state"] = MM_LANG_SELECT
-            temp.MOVIE_WIZARD[uid] = wiz
-            set_wizard_session(uid, workflow="MANUAL_MOVIE", state=MM_LANG_SELECT, data=wiz, chat_id=chat_id)
             logger.info(f"[MANUAL MOVIE] CUSTOM LANG {custom_lang}")
-            return await message.reply_text(
-                f"🌐 <b>Language set to:</b> <code>{html.escape(custom_lang)}</code>\n\nSelect language and click <b>✅ Submit</b>:",
+            pmsg = await client.send_message(
+                chat_id=chat_id,
+                text=f"🌐 <b>Language set to:</b> <code>{html.escape(custom_lang)}</code>\n\nSelect language and click <b>✅ Submit</b>:",
                 reply_markup=_build_mm_lang_keyboard(custom_lang),
                 parse_mode=enums.ParseMode.HTML
             )
+            wiz["prompt_message_id"] = pmsg.id if pmsg else None
+            temp.MOVIE_WIZARD[uid] = wiz
+            set_wizard_session(uid, workflow="MANUAL_MOVIE", state=MM_LANG_SELECT, data=wiz, chat_id=chat_id)
+            return
+
         elif cur_state == MM_CUSTOM_QUAL:
             custom_qual = text.strip()
             cur_lang = wiz.get("selected_language", "Malayalam")
             excluded = wiz.get("added_pairs", {}).get(cur_lang, [])
-            if custom_qual in excluded:
-                return await message.reply_text(
-                    f"❌ <b>Quality '{html.escape(custom_qual)}' has already been added for {html.escape(cur_lang)}.</b>\n\nPlease send a different quality:",
+            if not custom_qual:
+                return await client.send_message(
+                    chat_id=chat_id,
+                    text="❌ Please send a valid quality name:",
                     reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="sw#cancel")]]),
                     parse_mode=enums.ParseMode.HTML
                 )
+            if custom_qual in excluded:
+                return await client.send_message(
+                    chat_id=chat_id,
+                    text=f"❌ <b>Quality '{html.escape(custom_qual)}' has already been added for {html.escape(cur_lang)}.</b>\n\nPlease send a different quality:",
+                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="sw#cancel")]]),
+                    parse_mode=enums.ParseMode.HTML
+                )
+
+            old_prompt_id = wiz.get("prompt_message_id")
+            if old_prompt_id:
+                await safe_delete_message(client, chat_id, old_prompt_id)
+            await safe_delete_message(client, chat_id, message.id)
+
             wiz["selected_quality"] = custom_qual
             if custom_qual not in wiz.get("qualities", []):
                 wiz.setdefault("qualities", []).append(custom_qual)
             wiz["state"] = MM_QUAL_SELECT
-            temp.MOVIE_WIZARD[uid] = wiz
-            set_wizard_session(uid, workflow="MANUAL_MOVIE", state=MM_QUAL_SELECT, data=wiz, chat_id=chat_id)
             logger.info(f"[MANUAL MOVIE] CUSTOM QUAL {custom_qual}")
-            return await message.reply_text(
-                f"⚡ <b>Quality set to:</b> <code>{html.escape(custom_qual)}</code>\n\nSelect quality and click <b>✅ Submit</b>:",
+            pmsg = await client.send_message(
+                chat_id=chat_id,
+                text=f"⚡ <b>Quality set to:</b> <code>{html.escape(custom_qual)}</code>\n\nSelect quality and click <b>✅ Submit</b>:",
                 reply_markup=_build_mm_qual_keyboard(custom_qual, excluded_qualities=excluded),
                 parse_mode=enums.ParseMode.HTML
             )
+            wiz["prompt_message_id"] = pmsg.id if pmsg else None
+            temp.MOVIE_WIZARD[uid] = wiz
+            set_wizard_session(uid, workflow="MANUAL_MOVIE", state=MM_QUAL_SELECT, data=wiz, chat_id=chat_id)
+            return
 
     # ── Manual Series Wizard Handler ─────────────────────────────────────────
     elif workflow in ("MANUAL_SERIES", "SERIES_WIZARD"):
@@ -4658,146 +4808,307 @@ async def wizard_text_handler(client: Client, message: Message):
         cur_state = wiz.get("state", MS_NAME)
 
         if cur_state in (MS_NAME, S_NAME):
-            wiz["name"] = text.strip()
+            name = text.strip()
+            if not name:
+                return await client.send_message(
+                    chat_id=chat_id,
+                    text="❌ Please enter a valid Series Name:",
+                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="sw#cancel")]]),
+                    parse_mode=enums.ParseMode.HTML
+                )
+
+            old_prompt_id = wiz.get("prompt_message_id")
+            if old_prompt_id:
+                await safe_delete_message(client, chat_id, old_prompt_id)
+            await safe_delete_message(client, chat_id, message.id)
+
+            wiz["name"] = name
             wiz["state"] = MS_YEAR
-            temp.SERIES_WIZARD[uid] = wiz
-            set_wizard_session(uid, workflow="MANUAL_SERIES", state=MS_YEAR, data=wiz, chat_id=chat_id)
             logger.info(f"[MANUAL SERIES] NAME {wiz['name']}")
-            return await message.reply_text(
-                f"📺 Series Name: <b>{html.escape(wiz['name'])}</b>\n\n"
-                "📅 Please send the <b>Release Year</b> (e.g. <code>2021</code>):",
+            pmsg = await client.send_message(
+                chat_id=chat_id,
+                text=(
+                    f"📺 Series Name: <b>{html.escape(wiz['name'])}</b>\n\n"
+                    "📅 Please send the <b>Release Year</b> (e.g. <code>2021</code>):"
+                ),
                 reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="sw#cancel")]]),
                 parse_mode=enums.ParseMode.HTML
             )
-        elif cur_state in (MS_YEAR, S_YEAR):
-            wiz["year"] = text.strip()
-            wiz["state"] = MS_GENRES
+            wiz["prompt_message_id"] = pmsg.id if pmsg else None
             temp.SERIES_WIZARD[uid] = wiz
-            set_wizard_session(uid, workflow="MANUAL_SERIES", state=MS_GENRES, data=wiz, chat_id=chat_id)
+            set_wizard_session(uid, workflow="MANUAL_SERIES", state=MS_YEAR, data=wiz, chat_id=chat_id)
+            return
+
+        elif cur_state in (MS_YEAR, S_YEAR):
+            year = text.strip()
+            if not year.isdigit() or len(year) != 4:
+                return await client.send_message(
+                    chat_id=chat_id,
+                    text="❌ <b>Invalid Year.</b>\n\nPlease send a valid 4-digit year (e.g. <code>2021</code>):",
+                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="sw#cancel")]]),
+                    parse_mode=enums.ParseMode.HTML
+                )
+
+            old_prompt_id = wiz.get("prompt_message_id")
+            if old_prompt_id:
+                await safe_delete_message(client, chat_id, old_prompt_id)
+            await safe_delete_message(client, chat_id, message.id)
+
+            wiz["year"] = year
+            wiz["state"] = MS_GENRES
             logger.info(f"[MANUAL SERIES] YEAR {wiz['year']}")
-            return await message.reply_text(
-                "🎭 Please send the <b>Genres</b> (e.g. <code>Action, Drama</code>) or click <b>Skip</b>:",
+            pmsg = await client.send_message(
+                chat_id=chat_id,
+                text="🎭 Please send the <b>Genres</b> (e.g. <code>Action, Drama</code>) or click <b>Skip</b>:",
                 reply_markup=InlineKeyboardMarkup([
                     [InlineKeyboardButton("⏭ Skip", callback_data="sw#ms_skip_genre")],
                     [InlineKeyboardButton("❌ Cancel", callback_data="sw#cancel")]
                 ]),
                 parse_mode=enums.ParseMode.HTML
             )
-        elif cur_state in (MS_GENRES, S_GENRE):
-            wiz["genre"] = text.strip()
-            wiz["state"] = MS_RATING
+            wiz["prompt_message_id"] = pmsg.id if pmsg else None
             temp.SERIES_WIZARD[uid] = wiz
-            set_wizard_session(uid, workflow="MANUAL_SERIES", state=MS_RATING, data=wiz, chat_id=chat_id)
+            set_wizard_session(uid, workflow="MANUAL_SERIES", state=MS_GENRES, data=wiz, chat_id=chat_id)
+            return
+
+        elif cur_state in (MS_GENRES, S_GENRE):
+            genre = text.strip()
+            if not genre:
+                return await client.send_message(
+                    chat_id=chat_id,
+                    text="❌ Please send valid Genres or click <b>Skip</b>:",
+                    reply_markup=InlineKeyboardMarkup([
+                        [InlineKeyboardButton("⏭ Skip", callback_data="sw#ms_skip_genre")],
+                        [InlineKeyboardButton("❌ Cancel", callback_data="sw#cancel")]
+                    ]),
+                    parse_mode=enums.ParseMode.HTML
+                )
+
+            old_prompt_id = wiz.get("prompt_message_id")
+            if old_prompt_id:
+                await safe_delete_message(client, chat_id, old_prompt_id)
+            await safe_delete_message(client, chat_id, message.id)
+
+            wiz["genre"] = genre
+            wiz["state"] = MS_RATING
             logger.info(f"[MANUAL SERIES] GENRES {wiz['genre']}")
-            return await message.reply_text(
-                "⭐ Please send the <b>Rating</b> (e.g. <code>8.5</code>) or click <b>Skip</b>:",
+            pmsg = await client.send_message(
+                chat_id=chat_id,
+                text="⭐ Please send the <b>Rating</b> (e.g. <code>8.5</code>) or click <b>Skip</b>:",
                 reply_markup=InlineKeyboardMarkup([
                     [InlineKeyboardButton("⏭ Skip", callback_data="sw#ms_skip_rating")],
                     [InlineKeyboardButton("❌ Cancel", callback_data="sw#cancel")]
                 ]),
                 parse_mode=enums.ParseMode.HTML
             )
-        elif cur_state in (MS_RATING, S_RATING):
-            wiz["rating"] = text.strip()
-            wiz["state"] = MS_POSTER
+            wiz["prompt_message_id"] = pmsg.id if pmsg else None
             temp.SERIES_WIZARD[uid] = wiz
-            set_wizard_session(uid, workflow="MANUAL_SERIES", state=MS_POSTER, data=wiz, chat_id=chat_id)
+            set_wizard_session(uid, workflow="MANUAL_SERIES", state=MS_RATING, data=wiz, chat_id=chat_id)
+            return
+
+        elif cur_state in (MS_RATING, S_RATING):
+            rating = text.strip()
+            if not rating:
+                return await client.send_message(
+                    chat_id=chat_id,
+                    text="❌ Please send a valid Rating or click <b>Skip</b>:",
+                    reply_markup=InlineKeyboardMarkup([
+                        [InlineKeyboardButton("⏭ Skip", callback_data="sw#ms_skip_rating")],
+                        [InlineKeyboardButton("❌ Cancel", callback_data="sw#cancel")]
+                    ]),
+                    parse_mode=enums.ParseMode.HTML
+                )
+
+            old_prompt_id = wiz.get("prompt_message_id")
+            if old_prompt_id:
+                await safe_delete_message(client, chat_id, old_prompt_id)
+            await safe_delete_message(client, chat_id, message.id)
+
+            wiz["rating"] = rating
+            wiz["state"] = MS_POSTER
             logger.info(f"[MANUAL SERIES] RATING {wiz['rating']}")
-            return await message.reply_text(
-                "🖼 Please send the <b>Poster Image</b> (photo or image URL) or click <b>Skip</b>:",
+            pmsg = await client.send_message(
+                chat_id=chat_id,
+                text="🖼 Please send the <b>Poster Image</b> (photo or image URL) or click <b>Skip</b>:",
                 reply_markup=InlineKeyboardMarkup([
                     [InlineKeyboardButton("⏭ Skip", callback_data="sw#ms_skip_poster")],
                     [InlineKeyboardButton("❌ Cancel", callback_data="sw#cancel")]
                 ]),
                 parse_mode=enums.ParseMode.HTML
             )
+            wiz["prompt_message_id"] = pmsg.id if pmsg else None
+            temp.SERIES_WIZARD[uid] = wiz
+            set_wizard_session(uid, workflow="MANUAL_SERIES", state=MS_POSTER, data=wiz, chat_id=chat_id)
+            return
+
         elif cur_state in (MS_POSTER, S_DESCRIPTION):
-            poster = ""
-            if message.photo:
-                poster = message.photo.file_id
-            elif text.lower() in ("/skip", "skip"):
-                poster = ""
-            elif text.startswith("http://") or text.startswith("https://") or text.startswith("AgAC"):
-                poster = text.strip()
-            else:
-                return await message.reply_text(
-                    "❌ <b>Invalid Poster.</b>\n\n"
-                    "Please send a valid image URL (e.g. <code>https://...</code>), send a Photo directly, or click <b>⏭ Skip</b>.",
-                    reply_markup=InlineKeyboardMarkup([
-                        [InlineKeyboardButton("⏭ Skip", callback_data="sw#ms_skip_poster")],
-                        [InlineKeyboardButton("❌ Cancel", callback_data="sw#cancel")]
-                    ]),
+            try:
+                poster = None
+                if message.photo:
+                    logger.info("[MANUAL SERIES] POSTER PHOTO RECEIVED")
+                    if isinstance(message.photo, list):
+                        poster = message.photo[-1].file_id
+                    else:
+                        poster = getattr(message.photo, "file_id", None)
+                elif message.document and isinstance(getattr(message.document, "mime_type", None), str) and message.document.mime_type.startswith("image/"):
+                    logger.info("[MANUAL SERIES] POSTER PHOTO RECEIVED")
+                    poster = message.document.file_id
+                elif text and (text.startswith("http://") or text.startswith("https://") or text.startswith("AgAC") or text.startswith("BAAC")):
+                    poster = text.strip()
+                elif text and text.lower() in ("/skip", "skip"):
+                    poster = ""
+
+                if poster is None:
+                    return await client.send_message(
+                        chat_id=chat_id,
+                        text=(
+                            "❌ <b>Invalid Poster</b>\n\n"
+                            "Please send:\n"
+                            "• a Telegram photo\n"
+                            "• an image file\n"
+                            "• a valid image URL\n"
+                            "• or click Skip"
+                        ),
+                        reply_markup=InlineKeyboardMarkup([
+                            [InlineKeyboardButton("⏭ Skip", callback_data="sw#ms_skip_poster")],
+                            [InlineKeyboardButton("❌ Cancel", callback_data="sw#cancel")]
+                        ]),
+                        parse_mode=enums.ParseMode.HTML
+                    )
+
+                old_prompt_id = wiz.get("prompt_message_id")
+                if old_prompt_id:
+                    await safe_delete_message(client, chat_id, old_prompt_id)
+                await safe_delete_message(client, chat_id, message.id)
+
+                wiz["poster"] = poster
+                wiz["state"] = MS_LANG_SELECT
+                wiz.setdefault("selected_language", "Malayalam")
+                logger.info("[MANUAL SERIES] POSTER FILE_ID SAVED")
+                logger.info("[MANUAL SERIES] STATE -> MS_LANG_SELECT")
+                pmsg = await client.send_message(
+                    chat_id=chat_id,
+                    text="🌐 <b>Select Language</b> (Select one):",
+                    reply_markup=_build_ms_lang_keyboard(wiz["selected_language"]),
                     parse_mode=enums.ParseMode.HTML
                 )
-            wiz["poster"] = poster
-            wiz["state"] = MS_LANG_SELECT
-            wiz.setdefault("selected_language", "Malayalam")
-            temp.SERIES_WIZARD[uid] = wiz
-            set_wizard_session(uid, workflow="MANUAL_SERIES", state=MS_LANG_SELECT, data=wiz, chat_id=chat_id)
-            logger.info(f"[MANUAL SERIES] POSTER {poster}")
-            return await message.reply_text(
-                "🌐 <b>Select Language</b> (Select one):",
-                reply_markup=_build_ms_lang_keyboard(wiz["selected_language"]),
-                parse_mode=enums.ParseMode.HTML
-            )
+                wiz["prompt_message_id"] = pmsg.id if pmsg else None
+                temp.SERIES_WIZARD[uid] = wiz
+                set_wizard_session(
+                    uid,
+                    workflow="MANUAL_SERIES",
+                    state=MS_LANG_SELECT,
+                    data=wiz,
+                    chat_id=chat_id
+                )
+                return
+            except Exception as e:
+                logger.exception(f"[MANUAL SERIES POSTER ERROR] {e}")
+                return await client.send_message(chat_id=chat_id, text="❌ An error occurred while processing the poster image. Please try again.")
+
         elif cur_state == MS_CUSTOM_LANG:
             custom_lang = text.strip()
+            if not custom_lang:
+                return await client.send_message(
+                    chat_id=chat_id,
+                    text="❌ Please send a valid language name:",
+                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="sw#cancel")]]),
+                    parse_mode=enums.ParseMode.HTML
+                )
+
+            old_prompt_id = wiz.get("prompt_message_id")
+            if old_prompt_id:
+                await safe_delete_message(client, chat_id, old_prompt_id)
+            await safe_delete_message(client, chat_id, message.id)
+
             wiz["selected_language"] = custom_lang
             if custom_lang not in wiz.get("languages", []):
                 wiz.setdefault("languages", []).append(custom_lang)
             wiz["state"] = MS_LANG_SELECT
-            temp.SERIES_WIZARD[uid] = wiz
-            set_wizard_session(uid, workflow="MANUAL_SERIES", state=MS_LANG_SELECT, data=wiz, chat_id=chat_id)
             logger.info(f"[MANUAL SERIES] CUSTOM LANG {custom_lang}")
-            return await message.reply_text(
-                f"🌐 <b>Language set to:</b> <code>{html.escape(custom_lang)}</code>\n\nSelect language and click <b>✅ Submit</b>:",
+            pmsg = await client.send_message(
+                chat_id=chat_id,
+                text=f"🌐 <b>Language set to:</b> <code>{html.escape(custom_lang)}</code>\n\nSelect language and click <b>✅ Submit</b>:",
                 reply_markup=_build_ms_lang_keyboard(custom_lang),
                 parse_mode=enums.ParseMode.HTML
             )
+            wiz["prompt_message_id"] = pmsg.id if pmsg else None
+            temp.SERIES_WIZARD[uid] = wiz
+            set_wizard_session(uid, workflow="MANUAL_SERIES", state=MS_LANG_SELECT, data=wiz, chat_id=chat_id)
+            return
+
         elif cur_state == MS_CUSTOM_SEASON:
             if not text.strip().isdigit() or int(text.strip()) <= 0:
-                return await message.reply_text(
-                    "❌ <b>Invalid Season Number.</b>\n\nPlease enter a positive number (e.g. <code>1</code>, <code>2</code>):",
+                return await client.send_message(
+                    chat_id=chat_id,
+                    text="❌ <b>Invalid Season Number.</b>\n\nPlease enter a positive number (e.g. <code>1</code>, <code>2</code>):",
                     reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="sw#cancel")]]),
                     parse_mode=enums.ParseMode.HTML
                 )
             s_num = int(text.strip())
+
+            old_prompt_id = wiz.get("prompt_message_id")
+            if old_prompt_id:
+                await safe_delete_message(client, chat_id, old_prompt_id)
+            await safe_delete_message(client, chat_id, message.id)
+
             wiz["selected_season"] = s_num
             if s_num not in wiz.get("seasons", []):
                 wiz.setdefault("seasons", []).append(s_num)
             wiz["state"] = MS_SEASON_SELECT
-            temp.SERIES_WIZARD[uid] = wiz
-            set_wizard_session(uid, workflow="MANUAL_SERIES", state=MS_SEASON_SELECT, data=wiz, chat_id=chat_id)
             logger.info(f"[MANUAL SERIES] CUSTOM SEASON {s_num}")
-            return await message.reply_text(
-                f"📅 <b>Season set to:</b> <code>Season {s_num}</code>\n\nSelect season and click <b>✅ Submit</b>:",
+            pmsg = await client.send_message(
+                chat_id=chat_id,
+                text=f"📅 <b>Season set to:</b> <code>Season {s_num}</code>\n\nSelect season and click <b>✅ Submit</b>:",
                 reply_markup=_build_ms_season_keyboard(s_num, allow_skip=wiz.get("is_first_setup", True)),
                 parse_mode=enums.ParseMode.HTML
             )
+            wiz["prompt_message_id"] = pmsg.id if pmsg else None
+            temp.SERIES_WIZARD[uid] = wiz
+            set_wizard_session(uid, workflow="MANUAL_SERIES", state=MS_SEASON_SELECT, data=wiz, chat_id=chat_id)
+            return
+
         elif cur_state == MS_CUSTOM_QUAL:
             custom_qual = text.strip()
             cur_lang = wiz.get("selected_language", "Malayalam")
             cur_season = wiz.get("selected_season")
             pair_key = f"{cur_lang}#{cur_season}"
             excluded = wiz.get("added_pairs", {}).get(pair_key, [])
-            if custom_qual in excluded:
-                return await message.reply_text(
-                    f"❌ <b>Quality '{html.escape(custom_qual)}' has already been added for {html.escape(cur_lang)} Season {cur_season}.</b>\n\nPlease send a different quality:",
+            if not custom_qual:
+                return await client.send_message(
+                    chat_id=chat_id,
+                    text="❌ Please send a valid quality name:",
                     reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="sw#cancel")]]),
                     parse_mode=enums.ParseMode.HTML
                 )
+            if custom_qual in excluded:
+                return await client.send_message(
+                    chat_id=chat_id,
+                    text=f"❌ <b>Quality '{html.escape(custom_qual)}' has already been added for {html.escape(cur_lang)} Season {cur_season}.</b>\n\nPlease send a different quality:",
+                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="sw#cancel")]]),
+                    parse_mode=enums.ParseMode.HTML
+                )
+
+            old_prompt_id = wiz.get("prompt_message_id")
+            if old_prompt_id:
+                await safe_delete_message(client, chat_id, old_prompt_id)
+            await safe_delete_message(client, chat_id, message.id)
+
             wiz["selected_quality"] = custom_qual
             if custom_qual not in wiz.get("qualities", []):
                 wiz.setdefault("qualities", []).append(custom_qual)
             wiz["state"] = MS_QUAL_SELECT
-            temp.SERIES_WIZARD[uid] = wiz
-            set_wizard_session(uid, workflow="MANUAL_SERIES", state=MS_QUAL_SELECT, data=wiz, chat_id=chat_id)
             logger.info(f"[MANUAL SERIES] CUSTOM QUAL {custom_qual}")
-            return await message.reply_text(
-                f"⚡ <b>Quality set to:</b> <code>{html.escape(custom_qual)}</code>\n\nSelect quality and click <b>✅ Submit</b>:",
+            pmsg = await client.send_message(
+                chat_id=chat_id,
+                text=f"⚡ <b>Quality set to:</b> <code>{html.escape(custom_qual)}</code>\n\nSelect quality and click <b>✅ Submit</b>:",
                 reply_markup=_build_ms_qual_keyboard(custom_qual, excluded_qualities=excluded),
                 parse_mode=enums.ParseMode.HTML
             )
+            wiz["prompt_message_id"] = pmsg.id if pmsg else None
+            temp.SERIES_WIZARD[uid] = wiz
+            set_wizard_session(uid, workflow="MANUAL_SERIES", state=MS_QUAL_SELECT, data=wiz, chat_id=chat_id)
+            return
 
 
     # ── Super Movie Batch Handler ────────────────────────────────────────────
@@ -5241,7 +5552,8 @@ async def series_wizard_callback(client: Client, query: CallbackQuery):
             "added_pairs": {},
             "file_ids": [],
             "files_added": 0,
-            "duplicates": 0
+            "duplicates": 0,
+            "prompt_message_id": query.message.id if query.message else None
         }
         set_wizard_session(uid, workflow="MANUAL_MOVIE", state=MM_NAME, data=temp.MOVIE_WIZARD[uid], chat_id=chat_id)
         logger.info("[MANUAL MOVIE] START")
@@ -5250,20 +5562,21 @@ async def series_wizard_callback(client: Client, query: CallbackQuery):
             "Please send the <b>Movie Name</b>:\n\n"
             "Example:\n<code>Inception</code>"
         )
-        return await query.message.edit_text(
+        msg = await query.message.edit_text(
             prompt_text,
             reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="sw#cancel")]]),
             parse_mode=enums.ParseMode.HTML
         )
+        temp.MOVIE_WIZARD[uid]["prompt_message_id"] = msg.id if msg else query.message.id
+        set_wizard_session(uid, workflow="MANUAL_MOVIE", state=MM_NAME, data=temp.MOVIE_WIZARD[uid], chat_id=chat_id)
+        return
 
     elif data == "sw#mm_skip_genre":
         wiz = temp.MOVIE_WIZARD.get(uid) or {}
         wiz["genre"] = "N/A"
         wiz["state"] = MM_RATING
-        temp.MOVIE_WIZARD[uid] = wiz
-        set_wizard_session(uid, workflow="MANUAL_MOVIE", state=MM_RATING, data=wiz, chat_id=chat_id)
         logger.info("[MANUAL MOVIE] SKIP GENRE")
-        return await query.message.edit_text(
+        pmsg = await query.message.edit_text(
             "⭐ Please send the <b>Rating</b> (e.g. <code>8.8</code>) or click <b>Skip</b>:",
             reply_markup=InlineKeyboardMarkup([
                 [InlineKeyboardButton("⏭ Skip", callback_data="sw#mm_skip_rating")],
@@ -5271,15 +5584,17 @@ async def series_wizard_callback(client: Client, query: CallbackQuery):
             ]),
             parse_mode=enums.ParseMode.HTML
         )
+        wiz["prompt_message_id"] = pmsg.id if pmsg else query.message.id
+        temp.MOVIE_WIZARD[uid] = wiz
+        set_wizard_session(uid, workflow="MANUAL_MOVIE", state=MM_RATING, data=wiz, chat_id=chat_id)
+        return
 
     elif data == "sw#mm_skip_rating":
         wiz = temp.MOVIE_WIZARD.get(uid) or {}
         wiz["rating"] = "N/A"
         wiz["state"] = MM_POSTER
-        temp.MOVIE_WIZARD[uid] = wiz
-        set_wizard_session(uid, workflow="MANUAL_MOVIE", state=MM_POSTER, data=wiz, chat_id=chat_id)
         logger.info("[MANUAL MOVIE] SKIP RATING")
-        return await query.message.edit_text(
+        pmsg = await query.message.edit_text(
             "🖼 Please send the <b>Poster Image</b> (photo or image URL) or click <b>Skip</b>:",
             reply_markup=InlineKeyboardMarkup([
                 [InlineKeyboardButton("⏭ Skip", callback_data="sw#mm_skip_poster")],
@@ -5287,20 +5602,26 @@ async def series_wizard_callback(client: Client, query: CallbackQuery):
             ]),
             parse_mode=enums.ParseMode.HTML
         )
+        wiz["prompt_message_id"] = pmsg.id if pmsg else query.message.id
+        temp.MOVIE_WIZARD[uid] = wiz
+        set_wizard_session(uid, workflow="MANUAL_MOVIE", state=MM_POSTER, data=wiz, chat_id=chat_id)
+        return
 
     elif data == "sw#mm_skip_poster":
         wiz = temp.MOVIE_WIZARD.get(uid) or {}
         wiz["poster"] = ""
         wiz["state"] = MM_LANG_SELECT
         wiz.setdefault("selected_language", "Malayalam")
-        temp.MOVIE_WIZARD[uid] = wiz
-        set_wizard_session(uid, workflow="MANUAL_MOVIE", state=MM_LANG_SELECT, data=wiz, chat_id=chat_id)
         logger.info("[MANUAL MOVIE] SKIP POSTER")
-        return await query.message.edit_text(
+        pmsg = await query.message.edit_text(
             "🌐 <b>Select Language</b> (Select one):",
             reply_markup=_build_mm_lang_keyboard(wiz["selected_language"]),
             parse_mode=enums.ParseMode.HTML
         )
+        wiz["prompt_message_id"] = pmsg.id if pmsg else query.message.id
+        temp.MOVIE_WIZARD[uid] = wiz
+        set_wizard_session(uid, workflow="MANUAL_MOVIE", state=MM_LANG_SELECT, data=wiz, chat_id=chat_id)
+        return
 
     elif data.startswith("sw#mm_lang#"):
         lang = data.split("#")[-1]
@@ -5317,13 +5638,16 @@ async def series_wizard_callback(client: Client, query: CallbackQuery):
     elif data == "sw#mm_custom_lang":
         wiz = temp.MOVIE_WIZARD.get(uid) or {}
         wiz["state"] = MM_CUSTOM_LANG
-        temp.MOVIE_WIZARD[uid] = wiz
-        set_wizard_session(uid, workflow="MANUAL_MOVIE", state=MM_CUSTOM_LANG, data=wiz, chat_id=chat_id)
-        return await query.message.edit_text(
+        logger.info("[MANUAL MOVIE] PROMPT CUSTOM LANG")
+        pmsg = await query.message.edit_text(
             "🌐 <b>Enter Custom Language:</b>\n\nPlease send the custom language name in chat (e.g. <code>Korean</code>):",
             reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="sw#cancel")]]),
             parse_mode=enums.ParseMode.HTML
         )
+        wiz["prompt_message_id"] = pmsg.id if pmsg else query.message.id
+        temp.MOVIE_WIZARD[uid] = wiz
+        set_wizard_session(uid, workflow="MANUAL_MOVIE", state=MM_CUSTOM_LANG, data=wiz, chat_id=chat_id)
+        return
 
     elif data == "sw#mm_lang_submit":
         wiz = temp.MOVIE_WIZARD.get(uid) or {}
@@ -5362,13 +5686,16 @@ async def series_wizard_callback(client: Client, query: CallbackQuery):
     elif data == "sw#mm_custom_qual":
         wiz = temp.MOVIE_WIZARD.get(uid) or {}
         wiz["state"] = MM_CUSTOM_QUAL
-        temp.MOVIE_WIZARD[uid] = wiz
-        set_wizard_session(uid, workflow="MANUAL_MOVIE", state=MM_CUSTOM_QUAL, data=wiz, chat_id=chat_id)
-        return await query.message.edit_text(
+        logger.info("[MANUAL MOVIE] PROMPT CUSTOM QUAL")
+        pmsg = await query.message.edit_text(
             "⚡ <b>Enter Custom Quality:</b>\n\nPlease send the custom quality name in chat (e.g. <code>4K IMAX</code>):",
             reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="sw#cancel")]]),
             parse_mode=enums.ParseMode.HTML
         )
+        wiz["prompt_message_id"] = pmsg.id if pmsg else query.message.id
+        temp.MOVIE_WIZARD[uid] = wiz
+        set_wizard_session(uid, workflow="MANUAL_MOVIE", state=MM_CUSTOM_QUAL, data=wiz, chat_id=chat_id)
+        return
 
     elif data == "sw#mm_back_to_lang":
         wiz = temp.MOVIE_WIZARD.get(uid) or {}
@@ -5517,7 +5844,8 @@ async def series_wizard_callback(client: Client, query: CallbackQuery):
             "added_pairs": {},
             "files_added": 0,
             "duplicates": 0,
-            "is_first_setup": True
+            "is_first_setup": True,
+            "prompt_message_id": query.message.id if query.message else None
         }
         set_wizard_session(uid, workflow="MANUAL_SERIES", state=MS_NAME, data=temp.SERIES_WIZARD[uid], chat_id=chat_id)
         logger.info("[MANUAL SERIES] START")
@@ -5526,20 +5854,21 @@ async def series_wizard_callback(client: Client, query: CallbackQuery):
             "Please send the <b>Series Name</b>:\n\n"
             "Example:\n<code>Loki</code>"
         )
-        return await query.message.edit_text(
+        msg = await query.message.edit_text(
             prompt_text,
             reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="sw#cancel")]]),
             parse_mode=enums.ParseMode.HTML
         )
+        temp.SERIES_WIZARD[uid]["prompt_message_id"] = msg.id if msg else query.message.id
+        set_wizard_session(uid, workflow="MANUAL_SERIES", state=MS_NAME, data=temp.SERIES_WIZARD[uid], chat_id=chat_id)
+        return
 
     elif data in ("sw#ms_skip_genre", "sw#skip#genre"):
         wiz = temp.SERIES_WIZARD.get(uid) or {}
         wiz["genre"] = "N/A"
         wiz["state"] = MS_RATING
-        temp.SERIES_WIZARD[uid] = wiz
-        set_wizard_session(uid, workflow="MANUAL_SERIES", state=MS_RATING, data=wiz, chat_id=chat_id)
         logger.info("[MANUAL SERIES] SKIP GENRE")
-        return await query.message.edit_text(
+        pmsg = await query.message.edit_text(
             "⭐ Please send the <b>Rating</b> (e.g. <code>8.5</code>) or click <b>Skip</b>:",
             reply_markup=InlineKeyboardMarkup([
                 [InlineKeyboardButton("⏭ Skip", callback_data="sw#ms_skip_rating")],
@@ -5547,15 +5876,17 @@ async def series_wizard_callback(client: Client, query: CallbackQuery):
             ]),
             parse_mode=enums.ParseMode.HTML
         )
+        wiz["prompt_message_id"] = pmsg.id if pmsg else query.message.id
+        temp.SERIES_WIZARD[uid] = wiz
+        set_wizard_session(uid, workflow="MANUAL_SERIES", state=MS_RATING, data=wiz, chat_id=chat_id)
+        return
 
     elif data in ("sw#ms_skip_rating", "sw#skip#rating"):
         wiz = temp.SERIES_WIZARD.get(uid) or {}
         wiz["rating"] = "N/A"
         wiz["state"] = MS_POSTER
-        temp.SERIES_WIZARD[uid] = wiz
-        set_wizard_session(uid, workflow="MANUAL_SERIES", state=MS_POSTER, data=wiz, chat_id=chat_id)
         logger.info("[MANUAL SERIES] SKIP RATING")
-        return await query.message.edit_text(
+        pmsg = await query.message.edit_text(
             "🖼 Please send the <b>Poster Image</b> (photo or image URL) or click <b>Skip</b>:",
             reply_markup=InlineKeyboardMarkup([
                 [InlineKeyboardButton("⏭ Skip", callback_data="sw#ms_skip_poster")],
@@ -5563,20 +5894,26 @@ async def series_wizard_callback(client: Client, query: CallbackQuery):
             ]),
             parse_mode=enums.ParseMode.HTML
         )
+        wiz["prompt_message_id"] = pmsg.id if pmsg else query.message.id
+        temp.SERIES_WIZARD[uid] = wiz
+        set_wizard_session(uid, workflow="MANUAL_SERIES", state=MS_POSTER, data=wiz, chat_id=chat_id)
+        return
 
     elif data in ("sw#ms_skip_poster", "sw#skip#desc"):
         wiz = temp.SERIES_WIZARD.get(uid) or {}
         wiz["poster"] = ""
         wiz["state"] = MS_LANG_SELECT
         wiz.setdefault("selected_language", "Malayalam")
-        temp.SERIES_WIZARD[uid] = wiz
-        set_wizard_session(uid, workflow="MANUAL_SERIES", state=MS_LANG_SELECT, data=wiz, chat_id=chat_id)
         logger.info("[MANUAL SERIES] SKIP POSTER")
-        return await query.message.edit_text(
+        pmsg = await query.message.edit_text(
             "🌐 <b>Select Language</b> (Select one):",
             reply_markup=_build_ms_lang_keyboard(wiz["selected_language"]),
             parse_mode=enums.ParseMode.HTML
         )
+        wiz["prompt_message_id"] = pmsg.id if pmsg else query.message.id
+        temp.SERIES_WIZARD[uid] = wiz
+        set_wizard_session(uid, workflow="MANUAL_SERIES", state=MS_LANG_SELECT, data=wiz, chat_id=chat_id)
+        return
 
     elif data.startswith("sw#ms_lang#") or data.startswith("sw#sel_lang#"):
         lang = data.split("#")[-1]
@@ -5593,13 +5930,16 @@ async def series_wizard_callback(client: Client, query: CallbackQuery):
     elif data == "sw#ms_custom_lang":
         wiz = temp.SERIES_WIZARD.get(uid) or {}
         wiz["state"] = MS_CUSTOM_LANG
-        temp.SERIES_WIZARD[uid] = wiz
-        set_wizard_session(uid, workflow="MANUAL_SERIES", state=MS_CUSTOM_LANG, data=wiz, chat_id=chat_id)
-        return await query.message.edit_text(
+        logger.info("[MANUAL SERIES] PROMPT CUSTOM LANG")
+        pmsg = await query.message.edit_text(
             "🌐 <b>Enter Custom Language:</b>\n\nPlease send the custom language name in chat (e.g. <code>Korean</code>):",
             reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="sw#cancel")]]),
             parse_mode=enums.ParseMode.HTML
         )
+        wiz["prompt_message_id"] = pmsg.id if pmsg else query.message.id
+        temp.SERIES_WIZARD[uid] = wiz
+        set_wizard_session(uid, workflow="MANUAL_SERIES", state=MS_CUSTOM_LANG, data=wiz, chat_id=chat_id)
+        return
 
     elif data == "sw#ms_lang_submit":
         wiz = temp.SERIES_WIZARD.get(uid) or {}
@@ -5636,13 +5976,16 @@ async def series_wizard_callback(client: Client, query: CallbackQuery):
     elif data == "sw#ms_custom_season":
         wiz = temp.SERIES_WIZARD.get(uid) or {}
         wiz["state"] = MS_CUSTOM_SEASON
-        temp.SERIES_WIZARD[uid] = wiz
-        set_wizard_session(uid, workflow="MANUAL_SERIES", state=MS_CUSTOM_SEASON, data=wiz, chat_id=chat_id)
-        return await query.message.edit_text(
+        logger.info("[MANUAL SERIES] PROMPT CUSTOM SEASON")
+        pmsg = await query.message.edit_text(
             "📅 <b>Enter Custom Season:</b>\n\nPlease send the season number in chat (e.g. <code>9</code>):",
             reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="sw#cancel")]]),
             parse_mode=enums.ParseMode.HTML
         )
+        wiz["prompt_message_id"] = pmsg.id if pmsg else query.message.id
+        temp.SERIES_WIZARD[uid] = wiz
+        set_wizard_session(uid, workflow="MANUAL_SERIES", state=MS_CUSTOM_SEASON, data=wiz, chat_id=chat_id)
+        return
 
     elif data == "sw#ms_skip_season":
         wiz = temp.SERIES_WIZARD.get(uid) or {}
@@ -5713,13 +6056,16 @@ async def series_wizard_callback(client: Client, query: CallbackQuery):
     elif data == "sw#ms_custom_qual":
         wiz = temp.SERIES_WIZARD.get(uid) or {}
         wiz["state"] = MS_CUSTOM_QUAL
-        temp.SERIES_WIZARD[uid] = wiz
-        set_wizard_session(uid, workflow="MANUAL_SERIES", state=MS_CUSTOM_QUAL, data=wiz, chat_id=chat_id)
-        return await query.message.edit_text(
+        logger.info("[MANUAL SERIES] PROMPT CUSTOM QUAL")
+        pmsg = await query.message.edit_text(
             "⚡ <b>Enter Custom Quality:</b>\n\nPlease send the custom quality name in chat (e.g. <code>4K IMAX</code>):",
             reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="sw#cancel")]]),
             parse_mode=enums.ParseMode.HTML
         )
+        wiz["prompt_message_id"] = pmsg.id if pmsg else query.message.id
+        temp.SERIES_WIZARD[uid] = wiz
+        set_wizard_session(uid, workflow="MANUAL_SERIES", state=MS_CUSTOM_QUAL, data=wiz, chat_id=chat_id)
+        return
 
     elif data == "sw#ms_back_to_season":
         wiz = temp.SERIES_WIZARD.get(uid) or {}
@@ -6197,6 +6543,7 @@ async def series_wizard_callback(client: Client, query: CallbackQuery):
         clear_wizard_session(uid)
         temp.AUTO_MOVIE.pop(uid, None)
         temp.AUTO_SERIES.pop(uid, None)
+        temp.MOVIE_WIZARD.pop(uid, None)
         temp.SERIES_WIZARD.pop(uid, None)
         return await query.message.edit_text(
             "❌ <b>Action cancelled.</b>",
