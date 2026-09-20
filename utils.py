@@ -2629,3 +2629,71 @@ def adjust_srt_timing(srt_text: str, offset_seconds: float = 0.0, drift_scale: f
     return "\n".join(new_lines)
 
 
+def extract_poster_file_id(message, workflow: str = "UNKNOWN", state: str = "UNKNOWN") -> str | None:
+    """
+    Safely extracts a poster file_id, image document, or image URL from an incoming message.
+    Returns:
+      - str file_id or URL for valid image input
+      - "" (empty string) for Skip command/text
+      - None for invalid input
+    """
+    uid = message.from_user.id if message.from_user else 0
+    has_photo = bool(message.photo)
+    has_doc = bool(message.document)
+    doc_mime = getattr(message.document, "mime_type", "") or "" if has_doc else ""
+    doc_name = getattr(message.document, "file_name", "") or "" if has_doc else ""
+    text_content = (message.text or message.caption or "").strip()
+
+    photo_type = type(message.photo).__name__ if has_photo else "None"
+    logger.info(
+        f"[MANUAL POSTER INPUT]\n"
+        f"user_id={uid}\n"
+        f"workflow={workflow}\n"
+        f"state={state}\n"
+        f"message_id={message.id}\n"
+        f"chat_id={message.chat.id if message.chat else 0}\n"
+        f"has_photo={has_photo}\n"
+        f"photo_type={photo_type}\n"
+        f"has_document={has_doc}\n"
+        f"document_mime={doc_mime}\n"
+        f"document_file_name={doc_name}\n"
+        f"text={text_content[:50]}"
+    )
+
+    # 1. Telegram Photo
+    if message.photo:
+        try:
+            if isinstance(message.photo, (list, tuple)) and len(message.photo) > 0:
+                return message.photo[-1].file_id
+            return getattr(message.photo, "file_id", None) or message.photo[-1].file_id
+        except Exception as e:
+            logger.warning(f"[POSTER ERROR] stage=EXTRACT_PHOTO err={e}")
+            return getattr(message.photo, "file_id", None)
+
+    # 2. Telegram Image Document
+    if message.document:
+        mime = doc_mime.lower()
+        fname = doc_name.lower()
+        if mime in ("image/jpeg", "image/png", "image/webp", "image/jpg") or fname.endswith((".jpg", ".jpeg", ".png", ".webp")):
+            return message.document.file_id
+        else:
+            logger.info(f"[POSTER REJECTED] Document not an image: mime={mime}, file_name={fname}")
+            return None
+
+    # 3. Skip command / text
+    if text_content.lower() in ("skip", "/skip", "⏭ skip"):
+        return ""
+
+    # 4. URL or File-ID string
+    if (
+        text_content.startswith("http://")
+        or text_content.startswith("https://")
+        or text_content.startswith("AgAC")
+        or text_content.startswith("BAAC")
+    ):
+        return text_content
+
+    return None
+
+
+
