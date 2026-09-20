@@ -2056,11 +2056,15 @@ async def send_movie_files_to_user(client, user_id, files, query=None, movie_tit
 
     # 2. Send metadata tag ONCE if available
     if movie_title and language and quality:
-        lang_clean = str(language).strip().replace(" ", "_")
-        lang_tag = f"#{lang_clean}" if not lang_clean.startswith("#") else lang_clean
-        qual_clean = str(quality).strip().replace(" ", "_")
-        qual_tag = f"#{qual_clean}" if not qual_clean.startswith("#") else qual_clean
-        metadata_text = f"🎬 <b>{movie_title}</b>\n{lang_tag}\n{qual_tag}"
+        if quality == "SRT" or language == "Subtitle":
+            metadata_text = f"📝 <b>{movie_title} (Subtitles)</b>\n#Subtitles"
+        else:
+            lang_clean = str(language).strip().replace(" ", "_")
+            lang_tag = f"#{lang_clean}" if not lang_clean.startswith("#") else lang_clean
+            qual_clean = str(quality).strip().replace(" ", "_")
+            qual_tag = f"#{qual_clean}" if not qual_clean.startswith("#") else qual_clean
+            metadata_text = f"🎬 <b>{movie_title}</b>\n{lang_tag}\n{qual_tag}"
+
         try:
             meta_msg = await client.send_message(
                 chat_id=user_id,
