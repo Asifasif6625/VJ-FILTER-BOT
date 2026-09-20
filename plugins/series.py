@@ -4815,59 +4815,9 @@ async def wizard_text_handler(client: Client, message: Message):
             return
 
         elif cur_state == MM_POSTER:
-            poster = None
-            has_photo = bool(message.photo)
-            has_doc = bool(message.document)
-            doc_mime = (getattr(message.document, "mime_type", "") or "") if has_doc else None
-            doc_name = (getattr(message.document, "file_name", "") or "") if has_doc else None
+            from utils import extract_poster_file_id
+            poster = extract_poster_file_id(message, workflow="MANUAL_MOVIE", state="MM_POSTER")
 
-            # 1. Telegram Photo
-            if message.photo:
-                if isinstance(message.photo, (list, tuple)) and len(message.photo) > 0:
-                    try:
-                        poster = message.photo[-1].file_id
-                    except (TypeError, IndexError, AttributeError):
-                        poster = getattr(message.photo, "file_id", None)
-                else:
-                    poster = getattr(message.photo, "file_id", None)
-                    if not poster:
-                        try:
-                            poster = message.photo[-1].file_id
-                        except (TypeError, IndexError, AttributeError):
-                            poster = None
-            
-            # 2. Telegram Image Document
-            elif message.document:
-                mime = (getattr(message.document, "mime_type", "") or "").lower()
-                filename = (getattr(message.document, "file_name", "") or "").lower()
-                if mime.startswith("image/") or filename.endswith((".jpg", ".jpeg", ".png", ".webp")):
-                    poster = message.document.file_id
-
-            # 3. URL or File ID Text
-            elif text and (
-                text.startswith("http://")
-                or text.startswith("https://")
-                or text.startswith("AgAC")
-                or text.startswith("BAAC")
-            ):
-                poster = text.strip()
-
-            # 4. Skip
-            elif text and text.lower() in ("skip", "/skip"):
-                poster = ""
-
-            logger.info(
-                f"[MANUAL MOVIE POSTER]\n"
-                f"user_id={uid}\n"
-                f"message_id={message.id}\n"
-                f"has_photo={has_photo}\n"
-                f"has_document={has_doc}\n"
-                f"mime_type={doc_mime}\n"
-                f"file_name={doc_name}\n"
-                f"poster_detected={bool(poster is not None)}"
-            )
-
-            # 5. Invalid poster check
             if poster is None:
                 return await client.send_message(
                     chat_id=chat_id,
@@ -4886,20 +4836,19 @@ async def wizard_text_handler(client: Client, message: Message):
                     parse_mode=enums.ParseMode.HTML
                 )
 
-            # 6. Delete old prompt & user message without breaking wizard on deletion failure
+            # Delete old prompt & user message without breaking wizard on deletion failure
             old_prompt_id = wiz.get("prompt_message_id")
             if old_prompt_id:
                 try:
                     await safe_delete_message(client, chat_id, old_prompt_id)
                 except Exception as de:
-                    logger.warning(f"[MANUAL MOVIE POSTER] Failed deleting old prompt {old_prompt_id}: {de}")
+                    logger.warning(f"[POSTER ERROR] stage=DELETE_PROMPT workflow=MANUAL_MOVIE err={de}")
 
             try:
                 await safe_delete_message(client, chat_id, message.id)
             except Exception as de:
-                logger.warning(f"[MANUAL MOVIE POSTER] Failed deleting user message {message.id}: {de}")
+                logger.warning(f"[POSTER ERROR] stage=DELETE_USER_MSG workflow=MANUAL_MOVIE err={de}")
 
-            # 7. Update wizard state
             try:
                 wiz["poster"] = poster
                 wiz["state"] = MM_LANG_SELECT
@@ -4915,18 +4864,8 @@ async def wizard_text_handler(client: Client, message: Message):
                 logger.info("[MANUAL MOVIE] POSTER FILE_ID SAVED")
                 logger.info("[MANUAL MOVIE] STATE -> MM_LANG_SELECT")
             except Exception as se:
-                logger.exception(
-                    f"[MANUAL MOVIE POSTER ERROR] Failed saving state: "
-                    f"user_id={uid} message_id={message.id} "
-                    f"has_photo={has_photo} has_document={has_doc}"
-                )
-                return await client.send_message(
-                    chat_id=chat_id,
-                    text=f"❌ <b>Poster processing failed.</b>\nError: <code>{html.escape(str(se))}</code>",
-                    parse_mode=enums.ParseMode.HTML
-                )
+                logger.error(f"[POSTER ERROR] stage=SAVE_STATE workflow=MANUAL_MOVIE err={se}")
 
-            # 8. Send next Language message
             try:
                 pmsg = await client.send_message(
                     chat_id=chat_id,
@@ -4943,18 +4882,10 @@ async def wizard_text_handler(client: Client, message: Message):
                     data=wiz,
                     chat_id=chat_id
                 )
-                return
             except Exception as pe:
-                logger.exception(
-                    f"[MANUAL MOVIE POSTER ERROR] Failed sending language keyboard: "
-                    f"user_id={uid} message_id={message.id} "
-                    f"has_photo={has_photo} has_document={has_doc}"
-                )
-                return await client.send_message(
-                    chat_id=chat_id,
-                    text=f"❌ <b>Poster processing failed.</b>\nError: <code>{html.escape(str(pe))}</code>",
-                    parse_mode=enums.ParseMode.HTML
-                )
+                logger.error(f"[POSTER ERROR] stage=SEND_LANGUAGE workflow=MANUAL_MOVIE err={pe}")
+            return
+
 
         elif cur_state == MM_CUSTOM_LANG:
             custom_lang = text.strip()
@@ -5167,59 +5098,9 @@ async def wizard_text_handler(client: Client, message: Message):
             return
 
         elif cur_state in (MS_POSTER, S_DESCRIPTION):
-            poster = None
-            has_photo = bool(message.photo)
-            has_doc = bool(message.document)
-            doc_mime = (getattr(message.document, "mime_type", "") or "") if has_doc else None
-            doc_name = (getattr(message.document, "file_name", "") or "") if has_doc else None
+            from utils import extract_poster_file_id
+            poster = extract_poster_file_id(message, workflow="MANUAL_SERIES", state="MS_POSTER")
 
-            # 1. Telegram Photo
-            if message.photo:
-                if isinstance(message.photo, (list, tuple)) and len(message.photo) > 0:
-                    try:
-                        poster = message.photo[-1].file_id
-                    except (TypeError, IndexError, AttributeError):
-                        poster = getattr(message.photo, "file_id", None)
-                else:
-                    poster = getattr(message.photo, "file_id", None)
-                    if not poster:
-                        try:
-                            poster = message.photo[-1].file_id
-                        except (TypeError, IndexError, AttributeError):
-                            poster = None
-            
-            # 2. Telegram Image Document
-            elif message.document:
-                mime = (getattr(message.document, "mime_type", "") or "").lower()
-                filename = (getattr(message.document, "file_name", "") or "").lower()
-                if mime.startswith("image/") or filename.endswith((".jpg", ".jpeg", ".png", ".webp")):
-                    poster = message.document.file_id
-
-            # 3. URL or File ID Text
-            elif text and (
-                text.startswith("http://")
-                or text.startswith("https://")
-                or text.startswith("AgAC")
-                or text.startswith("BAAC")
-            ):
-                poster = text.strip()
-
-            # 4. Skip
-            elif text and text.lower() in ("skip", "/skip"):
-                poster = ""
-
-            logger.info(
-                f"[MANUAL SERIES POSTER]\n"
-                f"user_id={uid}\n"
-                f"message_id={message.id}\n"
-                f"has_photo={has_photo}\n"
-                f"has_document={has_doc}\n"
-                f"mime_type={doc_mime}\n"
-                f"file_name={doc_name}\n"
-                f"poster_detected={bool(poster is not None)}"
-            )
-
-            # 5. Invalid poster check
             if poster is None:
                 return await client.send_message(
                     chat_id=chat_id,
@@ -5238,20 +5119,19 @@ async def wizard_text_handler(client: Client, message: Message):
                     parse_mode=enums.ParseMode.HTML
                 )
 
-            # 6. Delete old prompt & user message without breaking wizard on deletion failure
+            # Delete old prompt & user message without breaking wizard on deletion failure
             old_prompt_id = wiz.get("prompt_message_id")
             if old_prompt_id:
                 try:
                     await safe_delete_message(client, chat_id, old_prompt_id)
                 except Exception as de:
-                    logger.warning(f"[MANUAL SERIES POSTER] Failed deleting old prompt {old_prompt_id}: {de}")
+                    logger.warning(f"[POSTER ERROR] stage=DELETE_PROMPT workflow=MANUAL_SERIES err={de}")
 
             try:
                 await safe_delete_message(client, chat_id, message.id)
             except Exception as de:
-                logger.warning(f"[MANUAL SERIES POSTER] Failed deleting user message {message.id}: {de}")
+                logger.warning(f"[POSTER ERROR] stage=DELETE_USER_MSG workflow=MANUAL_SERIES err={de}")
 
-            # 7. Update wizard state
             try:
                 wiz["poster"] = poster
                 wiz["state"] = MS_LANG_SELECT
@@ -5267,18 +5147,8 @@ async def wizard_text_handler(client: Client, message: Message):
                 logger.info("[MANUAL SERIES] POSTER FILE_ID SAVED")
                 logger.info("[MANUAL SERIES] STATE -> MS_LANG_SELECT")
             except Exception as se:
-                logger.exception(
-                    f"[MANUAL SERIES POSTER ERROR] Failed saving state: "
-                    f"user_id={uid} message_id={message.id} "
-                    f"has_photo={has_photo} has_document={has_doc}"
-                )
-                return await client.send_message(
-                    chat_id=chat_id,
-                    text=f"❌ <b>Poster processing failed.</b>\nError: <code>{html.escape(str(se))}</code>",
-                    parse_mode=enums.ParseMode.HTML
-                )
+                logger.error(f"[POSTER ERROR] stage=SAVE_STATE workflow=MANUAL_SERIES err={se}")
 
-            # 8. Send next Language message
             try:
                 pmsg = await client.send_message(
                     chat_id=chat_id,
@@ -5297,16 +5167,9 @@ async def wizard_text_handler(client: Client, message: Message):
                 )
                 return
             except Exception as pe:
-                logger.exception(
-                    f"[MANUAL SERIES POSTER ERROR] Failed sending language keyboard: "
-                    f"user_id={uid} message_id={message.id} "
-                    f"has_photo={has_photo} has_document={has_doc}"
-                )
-                return await client.send_message(
-                    chat_id=chat_id,
-                    text=f"❌ <b>Poster processing failed.</b>\nError: <code>{html.escape(str(pe))}</code>",
-                    parse_mode=enums.ParseMode.HTML
-                )
+                logger.error(f"[POSTER ERROR] stage=SEND_LANGUAGE workflow=MANUAL_SERIES err={pe}")
+                return
+
 
         elif cur_state == MS_CUSTOM_LANG:
             custom_lang = text.strip()
@@ -5430,12 +5293,11 @@ async def wizard_text_handler(client: Client, message: Message):
             )
 
     elif workflow == "SERIES_WIZARD_EDIT_POSTER":
+        from utils import extract_poster_file_id
         wiz = temp.SERIES_WIZARD.get(uid) or sess.get("data", {})
-        poster_url = ""
-        if message.photo:
-            poster_url = message.photo.file_id
-        elif text and text.lower() != "/skip":
-            poster_url = text
+        poster_url = extract_poster_file_id(message, workflow="SERIES_WIZARD_EDIT_POSTER", state="EDIT_POSTER")
+        if poster_url is None:
+            return await message.reply_text("❌ <b>Invalid Poster.</b> Please send an image or /skip.", parse_mode=enums.ParseMode.HTML)
         if poster_url:
             wiz["poster"] = poster_url
             temp.SERIES_WIZARD[uid] = wiz
@@ -5444,8 +5306,8 @@ async def wizard_text_handler(client: Client, message: Message):
                 from bson import ObjectId
                 try:
                     await series_col.update_one({"_id": ObjectId(wiz["series_id"])}, {"$set": {"poster": poster_url, "updated_at": datetime.utcnow()}})
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.warning(f"[POSTER ERROR] stage=SAVE_DB workflow=SERIES_WIZARD_EDIT_POSTER err={e}")
         clear_wizard_session(uid)
         return await message.reply_text(
             _series_card(wiz) + "\n\n✅ <b>Poster updated!</b>\n⚙️ <b>Series Configuration:</b>",
@@ -5454,20 +5316,19 @@ async def wizard_text_handler(client: Client, message: Message):
         )
 
     elif workflow == "MOVIE_EDIT_POSTER":
+        from utils import extract_poster_file_id
         movie_data = sess.get("data", {})
         movie_id = movie_data.get("movie_id")
-        poster_url = ""
-        if message.photo:
-            poster_url = message.photo.file_id
-        elif text and text.lower() != "/skip":
-            poster_url = text
+        poster_url = extract_poster_file_id(message, workflow="MOVIE_EDIT_POSTER", state="EDIT_POSTER")
+        if poster_url is None:
+            return await message.reply_text("❌ <b>Invalid Poster.</b> Please send an image or /skip.", parse_mode=enums.ParseMode.HTML)
         if poster_url and movie_id:
             from database.series_db import super_movies_col
             from bson import ObjectId
             try:
                 await super_movies_col.update_one({"_id": ObjectId(movie_id)}, {"$set": {"poster": poster_url, "updated_at": datetime.utcnow()}})
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning(f"[POSTER ERROR] stage=SAVE_DB workflow=MOVIE_EDIT_POSTER err={e}")
         clear_wizard_session(uid)
         return await message.reply_text(
             "✅ <b>Movie poster updated!</b>\nUse /viewmovies to inspect.",
@@ -5508,14 +5369,28 @@ async def wizard_text_handler(client: Client, message: Message):
                 parse_mode=enums.ParseMode.HTML
             )
 
-        # Strict Movie Name + Year matching check:
-        # If year is known for the movie filter (4 digits) and filename contains a year that does not match:
+        # 1. Strict Year Validation
         fname_years = re.findall(r"\b(19\d\d|20\d\d)\b", doc_fname)
         if year and year != "N/A" and fname_years:
             if year not in fname_years:
                 return await message.reply_text(
                     f"❌ <b>Movie year does not match the selected filter.</b>\n\n"
                     f"Filter Year: <code>{html.escape(year)}</code>\n"
+                    f"SRT Filename: <code>{html.escape(doc_fname)}</code>",
+                    parse_mode=enums.ParseMode.HTML
+                )
+
+        # 2. Strict Title Validation
+        norm_title = re.sub(r"[^\w\s]", " ", title.lower()).strip()
+        norm_fname = re.sub(r"[^\w\s]", " ", doc_fname.lower()).strip()
+        title_words = [w for w in norm_title.split() if len(w) > 1 and not w.isdigit()]
+        generic_sub_prefixes = ("sub", "malayalam", "english", "tamil", "hindi", "telugu", "kannada")
+        if title_words and not any(doc_fname.lower().startswith(x) for x in generic_sub_prefixes):
+            matched_words = sum(1 for w in title_words if w in norm_fname)
+            if matched_words < max(1, int(len(title_words) * 0.5)):
+                return await message.reply_text(
+                    f"❌ <b>Subtitle filename does not match the selected movie.</b>\n\n"
+                    f"Selected Movie: <code>{html.escape(title)} ({year})</code>\n"
                     f"SRT Filename: <code>{html.escape(doc_fname)}</code>",
                     parse_mode=enums.ParseMode.HTML
                 )
@@ -5548,7 +5423,9 @@ async def wizard_text_handler(client: Client, message: Message):
             "channel_id": cid,
             "message_id": mid,
             "source_link": text.strip(),
-            "synced": True
+            "movie_id": str(movie_id),
+            "movie_title": title,
+            "movie_year": year
         }
         new_subs.append(sub_entry)
 
@@ -5556,6 +5433,36 @@ async def wizard_text_handler(client: Client, message: Message):
             {"_id": ObjectId(movie_id)},
             {"$set": {"subtitles": new_subs, "updated_at": datetime.utcnow()}}
         )
+
+        # Immediate DB Re-read Verification
+        updated_movie = await get_super_movie(movie_id)
+        if not updated_movie:
+            try:
+                updated_movie = await super_movies_col.find_one({"_id": ObjectId(movie_id)})
+            except Exception:
+                pass
+
+        verified_sub = any(s.get("file_id") == doc.file_id for s in (updated_movie.get("subtitles") or [])) if updated_movie else False
+
+        if not verified_sub:
+            logger.error(
+                f"[SUBTITLE SYNC FAILED]\n"
+                f"movie_id={movie_id}\n"
+                f"title={title}\n"
+                f"year={year}\n"
+                f"file_id={doc.file_id}"
+            )
+            return await message.reply_text("❌ Subtitle could not be linked to this movie filter.", parse_mode=enums.ParseMode.HTML)
+
+        logger.info(
+            f"[SUBTITLE SYNC SUCCESS]\n"
+            f"movie_id={movie_id}\n"
+            f"title={title}\n"
+            f"year={year}\n"
+            f"file_id={doc.file_id}\n"
+            f"language={detected_lang}"
+        )
+
         clear_wizard_session(uid)
         return await message.reply_text(
             f"✅ <b>Subtitle added successfully!</b>\n\n"
@@ -5565,6 +5472,7 @@ async def wizard_text_handler(client: Client, message: Message):
             f"Use /viewmovies to inspect.",
             parse_mode=enums.ParseMode.HTML
         )
+
 
     elif workflow == "ADD_SUB_SELECT_MOVIE":
         from database.series_db import search_super_movies
@@ -7852,33 +7760,21 @@ async def render_super_movie_direct(client: Client, message: Message, movie: dic
             schedule_filter_message_delete(client, sent_t.chat.id, sent_t.id, 600)
         return True
 
-    if not file_ids:
+    from plugins.pm_filter import get_movie_subtitle_files
+    subtitle_files = await get_movie_subtitle_files(movie)
+    has_subtitles = len(subtitle_files) > 0
+
+    if not file_ids and not has_subtitles:
         logger.info(f"[SUPER MOVIE SEARCH] matched_filter_but_no_files title={movie.get('title')} id={movie_id}")
         return False
 
-    file_map = await get_bulk_file_details(file_ids)
+    file_map = await get_bulk_file_details(file_ids) if file_ids else {}
     file_docs = [file_map[fid] for fid in file_ids if fid in file_map]
 
-    if not file_docs:
-        return False
-
-    subtitle_files = [f for f in file_docs if is_subtitle_file(f)]
-    movie_stored_subtitles = movie.get("subtitles") or []
-    for s in movie_stored_subtitles:
-        if s.get("file_id"):
-            subtitle_files.append({
-                "file_id": s.get("file_id"),
-                "file_name": s.get("file_name", "Subtitle.srt"),
-                "file_size": s.get("file_size", 0),
-                "language": s.get("language", "Subtitle"),
-                "caption": f"{movie.get('title')} {s.get('language', '')} Subtitle",
-                "is_subtitle": True
-            })
-
-    has_subtitles = len(subtitle_files) > 0
     grouped = group_movie_files(file_docs)
     if not grouped and not has_subtitles:
         return False
+
 
     temp.MOVIE_STATE[key] = {
         "movie_id": movie_id,
