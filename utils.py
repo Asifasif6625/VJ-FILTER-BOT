@@ -2568,3 +2568,64 @@ def start_telegram_watchdog(client, check_interval: int = 30):
     _WATCHDOG_TASK = asyncio.create_task(_telegram_watchdog_loop(client, check_interval))
     return _WATCHDOG_TASK
 
+
+def parse_srt_timestamp(ts: str) -> float:
+    """Parses HH:MM:SS,mmm or HH:MM:SS.mmm into float seconds."""
+    ts = ts.strip().replace('.', ',')
+    parts = ts.split(':')
+    if len(parts) == 3:
+        h = int(parts[0])
+        m = int(parts[1])
+        s_parts = parts[2].split(',')
+        s = int(s_parts[0])
+        ms = int(s_parts[1]) if len(s_parts) > 1 else 0
+        return h * 3600 + m * 60 + s + ms / 1000.0
+    return 0.0
+
+
+def format_srt_timestamp(seconds: float) -> str:
+    """Formats float seconds into HH:MM:SS,mmm format."""
+    if seconds < 0:
+        seconds = 0.0
+    h = int(seconds // 3600)
+    m = int((seconds % 3600) // 60)
+    s_float = seconds % 60
+    s = int(s_float)
+    ms = int(round((s_float - s) * 1000))
+    if ms >= 1000:
+        s += 1
+        ms -= 1000
+    if s >= 60:
+        m += 1
+        s -= 60
+    if m >= 60:
+        h += 1
+        m -= 60
+    return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
+
+
+
+def adjust_srt_timing(srt_text: str, offset_seconds: float = 0.0, drift_scale: float = 1.0) -> str:
+    """
+    Adjusts SRT timestamps using linear correction: corrected_time = drift_scale * original_time + offset_seconds.
+    Leaves non-timestamp lines unchanged.
+    """
+    if offset_seconds == 0.0 and drift_scale == 1.0:
+        return srt_text
+
+    time_pat = re.compile(r'(\d{2}:\d{2}:\d{2}[,\.]\d{3})\s*-->\s*(\d{2}:\d{2}:\d{2}[,\.]\d{3})')
+    lines = srt_text.splitlines()
+    new_lines = []
+    for line in lines:
+        m = time_pat.search(line)
+        if m:
+            start_ts = parse_srt_timestamp(m.group(1))
+            end_ts = parse_srt_timestamp(m.group(2))
+            new_start = drift_scale * start_ts + offset_seconds
+            new_end = drift_scale * end_ts + offset_seconds
+            new_lines.append(f"{format_srt_timestamp(new_start)} --> {format_srt_timestamp(new_end)}")
+        else:
+            new_lines.append(line)
+    return "\n".join(new_lines)
+
+
