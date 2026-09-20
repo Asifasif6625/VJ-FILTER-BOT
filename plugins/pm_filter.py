@@ -355,10 +355,23 @@ def get_movie_qualities(files, target_lang=None):
     quality_order = ["2160p", "4K", "1440p", "1080p", "720p", "480p", "360p", "HDRip", "WEB-DL", "BluRay", "DVDRip", "HEVC", "Unknown"]
     return sorted(list(quals), key=lambda x: (quality_order.index(x) if x in quality_order else 99, x))
 
+def is_subtitle_file(file_obj_or_name) -> bool:
+    if isinstance(file_obj_or_name, dict):
+        fname = file_obj_or_name.get("file_name", "") or file_obj_or_name.get("caption", "") or ""
+        mime = file_obj_or_name.get("mime_type", "")
+        if mime == "application/x-subrip":
+            return True
+    else:
+        fname = str(file_obj_or_name or "")
+    fname = fname.strip().lower()
+    return fname.endswith(".srt") or ".srt" in fname.split() or fname.endswith(".sub")
+
 def group_movie_files(files):
     from plugins.series import extract_quality_from_filename
     grouped = {}
     for f in files:
+        if is_subtitle_file(f):
+            continue
         fname = f.get("file_name", "")
         fqual = extract_quality_from_filename(fname)
         flangs = detect_file_languages(fname, f.get("caption"))
@@ -485,6 +498,9 @@ def build_movie_language_keyboard(key, grouped_data):
         for l in langs[i:i+2]:
             row.append(make_styled_button(to_series_font(l), callback_data=f"movie_lang#{key}#{l}", style="success"))
         buttons.append(row)
+        
+    # Subtitles button is always the LAST row of the Movie Language selection keyboard
+    buttons.append([make_styled_button(to_series_font("Subtitles"), callback_data=f"movie_sub#{key}", style="success")])
     return InlineKeyboardMarkup(buttons)
 
 def build_movie_quality_keyboard(key, lang, qualities_dict):
@@ -660,6 +676,85 @@ async def movie_qual_callback(client: Client, query: CallbackQuery):
         if fb_msg:
             schedule_filter_message_delete(client, fb_msg.chat.id, fb_msg.id, 600)
         return
+
+@Client.on_callback_query(filters.regex(r"^(mvsub#|movie_sub#)"))
+async def movie_sub_callback(client: Client, query: CallbackQuery):
+    parts = query.data.split("#")
+    key = parts[1]
+    is_owner, err_msg = is_button_owner(query, key)
+    if not is_owner:
+        return await query.answer(err_msg, show_alert=True)
+        
+    state = getattr(temp, "MOVIE_STATE", {}).get(key)
+    if not state:
+        return await query.answer("⚠️ Session expired. Please search again.", show_alert=True)
+        
+    subtitle_files = state.get("subtitle_files", [])
+    if not subtitle_files:
+        all_files = state.get("all_files", [])
+        subtitle_files = [
+            f for f in all_files 
+            if is_subtitle_file(f)
+        ]
+
+    if not subtitle_files:
+        return await query.answer("⚠️ No subtitle files available for this movie.", show_alert=True)
+
+    title = state.get("title", "Movie")
+    logger.info(f"[MOVIE SUBTITLE]\ntitle={title}\nfiles={len(subtitle_files)}")
+
+    import uuid, time
+    from database.series_db import save_temp_request
+    req_key = str(uuid.uuid4())[:8]
+    req_data = {
+        "request_key": req_key,
+        "user": query.from_user.id,
+        "user_id": query.from_user.id,
+        "type": "movie",
+        "request_type": "movie",
+        "is_subtitle": True,
+        "source": "MOVIE_SUBTITLE",
+        "movie_title": title,
+        "title": title,
+        "language": "Subtitle",
+        "quality": "SRT",
+        "files": subtitle_files,
+        "delivery_status": "pending",
+        "state": "PENDING",
+        "created_at": time.time()
+    }
+    if not hasattr(temp, "MOVIE_STATE"):
+        temp.MOVIE_STATE = {}
+    temp.MOVIE_STATE[req_key] = req_data
+    if not hasattr(temp, "GETALL"):
+        temp.GETALL = {}
+    temp.GETALL[req_key] = req_data
+    try:
+        await save_temp_request(req_key, req_data)
+    except Exception:
+        pass
+
+    bot_username = temp.U_NAME if (hasattr(temp, "U_NAME") and temp.U_NAME) else getattr(getattr(client, "me", None), "username", None)
+    if bot_username:
+        bot_username = str(bot_username).lstrip("@")
+    else:
+        bot_username = "Bot"
+
+    start_url = f"https://t.me/{bot_username}?start=all_{req_key}"
+    MALAYALAM_ALERT_TEXT = "ഇത് subtitle ഫയൽ ആണ് മൂവി ഫയൽ അല്ല, താഴെ കാണുന്ന ഓക്കേ ക്ലിക്ക് ചെയ്താൽ നിങ്ങൾക്ക് ഫയൽ കിട്ടും."
+
+    try:
+        return await query.answer(
+            text=MALAYALAM_ALERT_TEXT,
+            show_alert=True,
+            url=start_url
+        )
+    except Exception as e:
+        logger.warning(f"[MOVIE SUBTITLE ROUTING] query.answer(url=start_url) failed: {e}")
+        return await query.answer(
+            text=MALAYALAM_ALERT_TEXT,
+            show_alert=True
+        )
 
 @Client.on_callback_query(filters.regex(r"^(mvpage#|movie_files#)"))
 async def movie_page_callback(client: Client, query: CallbackQuery):
