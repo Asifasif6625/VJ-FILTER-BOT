@@ -3845,6 +3845,73 @@ async def cmd_view_movies(client: Client, message: Message):
     await send_filter_manager(message, ftype="movies", page=0)
 
 
+@Client.on_message(filters.command(["add_sub", "addsubtitle", "add_subtitle", "addsub"]), group=-1)
+async def cmd_add_subtitle(client: Client, message: Message):
+    uid = message.from_user.id if message.from_user else 0
+    if not _is_admin(uid):
+        return await message.reply_text("❌ You are not authorized to use this command.")
+
+    args = message.text.split(None, 1)
+    if len(args) > 1:
+        query_title = args[1].strip()
+        from database.series_db import search_super_movies
+        matched = await search_super_movies(query_title)
+        if not matched:
+            return await message.reply_text(
+                f"❌ <b>No movie filter found for:</b> <code>{html.escape(query_title)}</code>\n\n"
+                f"Please check the name or use /viewmovies.",
+                parse_mode=enums.ParseMode.HTML
+            )
+        if len(matched) == 1:
+            m = matched[0]
+            mid_str = str(m.get("_id"))
+            m_title = m.get("title", "Movie")
+            m_year = str(m.get("year", ""))
+            from utils import set_wizard_session
+            set_wizard_session(
+                uid,
+                workflow="MOVIE_ADD_SUBTITLE",
+                state="WAIT_CHANNEL_LINK",
+                data={"movie_id": mid_str, "title": m_title, "year": m_year},
+                chat_id=message.chat.id
+            )
+            return await message.reply_text(
+                f"📝 <b>Add Subtitle (SRT)</b>\n\n"
+                f"🎬 <b>Selected Movie:</b> <code>{html.escape(m_title)} ({m_year})</code>\n\n"
+                f"📎 <b>Please send the Telegram Channel link containing the .srt file:</b>\n"
+                f"<i>Example:</i> <code>https://t.me/c/1234567890/10</code> or <code>https://t.me/channel/10</code>",
+                parse_mode=enums.ParseMode.HTML
+            )
+        else:
+            buttons = []
+            for m in matched[:10]:
+                mid_str = str(m.get("_id"))
+                m_title = m.get("title", "Movie")
+                m_year = str(m.get("year", ""))
+                buttons.append([InlineKeyboardButton(f"🎬 {m_title} ({m_year})", callback_data=f"emov#add_sub#{mid_str}")])
+            return await message.reply_text(
+                f"🔍 <b>Multiple movies found for '{html.escape(query_title)}'.</b>\n"
+                f"Please select the exact movie and year:",
+                reply_markup=InlineKeyboardMarkup(buttons),
+                parse_mode=enums.ParseMode.HTML
+            )
+    else:
+        from utils import set_wizard_session
+        set_wizard_session(
+            uid,
+            workflow="ADD_SUB_SELECT_MOVIE",
+            state="WAIT_MOVIE_NAME",
+            data={},
+            chat_id=message.chat.id
+        )
+        return await message.reply_text(
+            "📝 <b>Add Movie Subtitle</b>\n\n"
+            "🎬 <b>Please send the Movie Name:</b>",
+            parse_mode=enums.ParseMode.HTML
+        )
+
+
+
 @Client.on_callback_query(filters.regex(r"^vser#"))
 async def cb_vser(client: Client, query: CallbackQuery):
     await query.answer()
@@ -4069,6 +4136,80 @@ async def cb_movie_management(client: Client, query: CallbackQuery):
             await query.answer("⚠️ No new files found to sync.", show_alert=True)
         data = f"emovie_select#{movie_id}"
 
+    if data.startswith("emov#add_sub#"):
+        movie_id = data.split("#")[2]
+        movie = await get_super_movie(movie_id)
+        if not movie:
+            return await query.answer("❌ Movie not found.", show_alert=True)
+        title = movie.get("title", "Movie")
+        year = str(movie.get("year", ""))
+        from utils import set_wizard_session
+        set_wizard_session(
+            uid,
+            workflow="MOVIE_ADD_SUBTITLE",
+            state="WAIT_CHANNEL_LINK",
+            data={"movie_id": movie_id, "title": title, "year": year},
+            chat_id=query.message.chat.id
+        )
+        return await query.message.edit_text(
+            f"📝 <b>Add Subtitle (SRT)</b>\n\n"
+            f"🎬 <b>Movie:</b> <code>{html.escape(title)}</code>\n"
+            f"📅 <b>Year:</b> <code>{html.escape(year)}</code>\n\n"
+            "📎 <b>Please send the Telegram Channel link containing the .srt file:</b>\n"
+            "<i>Example:</i> <code>https://t.me/c/1234567890/10</code> or <code>https://t.me/channel/10</code>",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data=f"emovie_select#{movie_id}")]]),
+            parse_mode=enums.ParseMode.HTML
+        )
+
+    if data.startswith("emov#man_sub#"):
+        movie_id = data.split("#")[2]
+        movie = await get_super_movie(movie_id)
+        if not movie:
+            return await query.answer("❌ Movie not found.", show_alert=True)
+        title = movie.get("title", "Movie")
+        year = str(movie.get("year", ""))
+        subs = movie.get("subtitles") or []
+        
+        sub_list_text = ""
+        if subs:
+            for idx, s in enumerate(subs, 1):
+                slang = s.get("language", "Unknown")
+                sfn = s.get("file_name", "subtitle.srt")
+                sub_list_text += f"\n{idx}. 🌐 <b>{html.escape(slang)}:</b> <code>{html.escape(sfn)}</code>"
+        else:
+            sub_list_text = "\n<i>No subtitles attached yet.</i>"
+
+        text = (
+            f"📝 <b>Manage Subtitles</b>\n\n"
+            f"🎬 <b>Movie:</b> <code>{html.escape(title)} ({year})</code>\n"
+            f"<b>Attached Subtitles:</b>"
+            f"{sub_list_text}"
+        )
+        buttons = []
+        buttons.append([InlineKeyboardButton("➕ Add Subtitle", callback_data=f"emov#add_sub#{movie_id}")])
+        for s in subs:
+            slang = s.get("language", "Subtitle")
+            buttons.append([InlineKeyboardButton(f"🗑 Delete {slang}", callback_data=f"emov#del_sub#{movie_id}#{slang}")])
+        buttons.append([InlineKeyboardButton("⬅️ Back to Movie", callback_data=f"emovie_select#{movie_id}")])
+        
+        return await query.message.edit_text(text, reply_markup=InlineKeyboardMarkup(buttons), parse_mode=enums.ParseMode.HTML)
+
+    if data.startswith("emov#del_sub#"):
+        parts_sub = data.split("#")
+        movie_id = parts_sub[2]
+        del_lang = parts_sub[3] if len(parts_sub) > 3 else ""
+        movie = await get_super_movie(movie_id)
+        if not movie:
+            return await query.answer("❌ Movie not found.", show_alert=True)
+        subs = movie.get("subtitles") or []
+        new_subs = [s for s in subs if s.get("language") != del_lang]
+        await super_movies_col.update_one(
+            {"_id": ObjectId(movie_id)},
+            {"$set": {"subtitles": new_subs, "updated_at": datetime.utcnow()}}
+        )
+        await query.answer(f"✅ Deleted {del_lang} subtitle.", show_alert=True)
+        data = f"emov#man_sub#{movie_id}"
+
     if data.startswith("emov#del#"):
         movie_id = data.split("#")[2]
         movie = await get_super_movie(movie_id)
@@ -4137,6 +4278,8 @@ async def cb_movie_management(client: Client, query: CallbackQuery):
     quals = movie.get("qualities", [])
     qual_str = ", ".join(quals) if quals else "1080p, 720p, 480p"
     tot_files = len(movie.get("file_ids") or [])
+    tot_subs = len(movie.get("subtitles") or [])
+    sub_info_str = f"\n📝 <b>Subtitles:</b> {tot_subs} attached" if tot_subs else ""
 
     logger.info(
         f"[VIEW FILTER CLICK]\n"
@@ -4156,7 +4299,8 @@ async def cb_movie_management(client: Client, query: CallbackQuery):
         f"{genre_str}\n"
         f"🌐 <b>Languages:</b> <code>{html.escape(lang_str)}</code>\n"
         f"⚡ <b>Qualities:</b> <code>{html.escape(qual_str)}</code>\n"
-        f"📁 <b>Linked Files:</b> {tot_files}\n"
+        f"📁 <b>Linked Files:</b> {tot_files}"
+        f"{sub_info_str}\n"
         f"<i>ID: <code>{movie_id}</code></i>"
     )
 
@@ -4168,6 +4312,10 @@ async def cb_movie_management(client: Client, query: CallbackQuery):
         [
             InlineKeyboardButton("🖼 Edit Poster", callback_data=f"emov#edit_poster#{movie_id}"),
             InlineKeyboardButton("🗑 Delete Movie", callback_data=f"emov#del#{movie_id}")
+        ],
+        [
+            InlineKeyboardButton("📝 Add Subtitle", callback_data=f"emov#add_sub#{movie_id}"),
+            InlineKeyboardButton("📝 Manage Subtitles", callback_data=f"emov#man_sub#{movie_id}")
         ],
         [
             InlineKeyboardButton("⬅️ Back", callback_data="emov#back")
@@ -5325,6 +5473,143 @@ async def wizard_text_handler(client: Client, message: Message):
             "✅ <b>Movie poster updated!</b>\nUse /viewmovies to inspect.",
             parse_mode=enums.ParseMode.HTML
         )
+
+    elif workflow == "MOVIE_ADD_SUBTITLE":
+        movie_data = sess.get("data", {})
+        movie_id = movie_data.get("movie_id")
+        title = movie_data.get("title", "Movie")
+        year = str(movie_data.get("year", "")).strip()
+
+        parsed = _parse_telegram_link(text)
+        if not parsed:
+            return await message.reply_text(
+                "❌ <b>Invalid Telegram channel message link.</b>\n\n"
+                "Please send a valid Telegram link (e.g. <code>https://t.me/channel/123</code> or <code>https://t.me/c/1234567890/123</code>).",
+                parse_mode=enums.ParseMode.HTML
+            )
+        cid, mid = parsed
+        try:
+            target_msg = await client.get_messages(cid, mid)
+        except Exception as e:
+            logger.warning(f"[ADD_SUBTITLE] get_messages failed: {e}")
+            target_msg = None
+
+        if not target_msg or not target_msg.document:
+            return await message.reply_text(
+                "❌ <b>No subtitle file was found in that channel message.</b>",
+                parse_mode=enums.ParseMode.HTML
+            )
+
+        doc = target_msg.document
+        doc_fname = getattr(doc, "file_name", "") or ""
+        if not doc_fname.lower().endswith(".srt"):
+            return await message.reply_text(
+                "❌ <b>The linked file is not an SRT subtitle file.</b>",
+                parse_mode=enums.ParseMode.HTML
+            )
+
+        # Strict Movie Name + Year matching check:
+        # If year is known for the movie filter (4 digits) and filename contains a year that does not match:
+        fname_years = re.findall(r"\b(19\d\d|20\d\d)\b", doc_fname)
+        if year and year != "N/A" and fname_years:
+            if year not in fname_years:
+                return await message.reply_text(
+                    f"❌ <b>Movie year does not match the selected filter.</b>\n\n"
+                    f"Filter Year: <code>{html.escape(year)}</code>\n"
+                    f"SRT Filename: <code>{html.escape(doc_fname)}</code>",
+                    parse_mode=enums.ParseMode.HTML
+                )
+
+        # Detect subtitle language
+        detected_langs = detect_file_languages(doc_fname, target_msg.caption.html if target_msg.caption else "")
+        detected_lang = detected_langs[0] if detected_langs else "Malayalam"
+
+        from database.series_db import super_movies_col, get_super_movie
+        from bson import ObjectId
+
+        movie = await get_super_movie(movie_id)
+        if not movie and ObjectId.is_valid(movie_id):
+            try:
+                movie = await super_movies_col.find_one({"_id": ObjectId(movie_id)})
+            except Exception:
+                pass
+
+        if not movie:
+            clear_wizard_session(uid)
+            return await message.reply_text("❌ <b>Movie filter not found.</b>", parse_mode=enums.ParseMode.HTML)
+
+        existing_subs = movie.get("subtitles") or []
+        new_subs = [s for s in existing_subs if s.get("language") != detected_lang]
+        sub_entry = {
+            "file_id": doc.file_id,
+            "file_name": doc_fname,
+            "file_size": getattr(doc, "file_size", 0),
+            "language": detected_lang,
+            "channel_id": cid,
+            "message_id": mid,
+            "source_link": text.strip(),
+            "synced": True
+        }
+        new_subs.append(sub_entry)
+
+        await super_movies_col.update_one(
+            {"_id": ObjectId(movie_id)},
+            {"$set": {"subtitles": new_subs, "updated_at": datetime.utcnow()}}
+        )
+        clear_wizard_session(uid)
+        return await message.reply_text(
+            f"✅ <b>Subtitle added successfully!</b>\n\n"
+            f"🎬 <b>Movie:</b> <code>{html.escape(title)} ({year})</code>\n"
+            f"🌐 <b>Language:</b> <code>{html.escape(detected_lang)}</code>\n"
+            f"📁 <b>File:</b> <code>{html.escape(doc_fname)}</code>\n\n"
+            f"Use /viewmovies to inspect.",
+            parse_mode=enums.ParseMode.HTML
+        )
+
+    elif workflow == "ADD_SUB_SELECT_MOVIE":
+        from database.series_db import search_super_movies
+        query_title = text.strip()
+        matched = await search_super_movies(query_title)
+        if not matched:
+            return await message.reply_text(
+                f"❌ <b>No movie filter found for:</b> <code>{html.escape(query_title)}</code>\n\n"
+                f"Please verify the movie title or create a filter first.",
+                parse_mode=enums.ParseMode.HTML
+            )
+        if len(matched) == 1:
+            m = matched[0]
+            mid_str = str(m.get("_id"))
+            m_title = m.get("title", "Movie")
+            m_year = str(m.get("year", ""))
+            set_wizard_session(
+                uid,
+                workflow="MOVIE_ADD_SUBTITLE",
+                state="WAIT_CHANNEL_LINK",
+                data={"movie_id": mid_str, "title": m_title, "year": m_year},
+                chat_id=message.chat.id
+            )
+            return await message.reply_text(
+                f"📝 <b>Add Subtitle (SRT)</b>\n\n"
+                f"🎬 <b>Selected Movie:</b> <code>{html.escape(m_title)} ({m_year})</code>\n\n"
+                f"📎 <b>Please send the Telegram Channel link containing the .srt file:</b>\n"
+                f"<i>Example:</i> <code>https://t.me/c/1234567890/10</code> or <code>https://t.me/channel/10</code>",
+                parse_mode=enums.ParseMode.HTML
+            )
+        else:
+            buttons = []
+            for m in matched[:10]:
+                mid_str = str(m.get("_id"))
+                m_title = m.get("title", "Movie")
+                m_year = str(m.get("year", ""))
+                buttons.append([InlineKeyboardButton(f"🎬 {m_title} ({m_year})", callback_data=f"emov#add_sub#{mid_str}")])
+            clear_wizard_session(uid)
+            return await message.reply_text(
+                f"🔍 <b>Multiple movies found for '{html.escape(query_title)}'.</b>\n"
+                f"Please select the exact movie and year:",
+                reply_markup=InlineKeyboardMarkup(buttons),
+                parse_mode=enums.ParseMode.HTML
+            )
+
 
 
 def _parse_telegram_link(link: str) -> tuple[int | str, int] | None:
@@ -7578,8 +7863,21 @@ async def render_super_movie_direct(client: Client, message: Message, movie: dic
         return False
 
     subtitle_files = [f for f in file_docs if is_subtitle_file(f)]
+    movie_stored_subtitles = movie.get("subtitles") or []
+    for s in movie_stored_subtitles:
+        if s.get("file_id"):
+            subtitle_files.append({
+                "file_id": s.get("file_id"),
+                "file_name": s.get("file_name", "Subtitle.srt"),
+                "file_size": s.get("file_size", 0),
+                "language": s.get("language", "Subtitle"),
+                "caption": f"{movie.get('title')} {s.get('language', '')} Subtitle",
+                "is_subtitle": True
+            })
+
+    has_subtitles = len(subtitle_files) > 0
     grouped = group_movie_files(file_docs)
-    if not grouped and not subtitle_files:
+    if not grouped and not has_subtitles:
         return False
 
     temp.MOVIE_STATE[key] = {
@@ -7604,7 +7902,7 @@ async def render_super_movie_direct(client: Client, message: Message, movie: dic
         temp.MOVIE_STATE[f"{reply_msg.chat.id}-{reply_msg.id}"] = temp.MOVIE_STATE[key]
 
     caption_text = format_movie_metadata_caption(movie, grouped_data=grouped, page_type="lang")
-    markup = build_movie_language_keyboard(key, grouped)
+    markup = build_movie_language_keyboard(key, grouped, has_subtitles=has_subtitles)
 
     if reply_msg:
         try:

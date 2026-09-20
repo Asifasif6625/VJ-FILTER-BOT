@@ -486,7 +486,7 @@ def format_movie_metadata_caption(movie_data: dict, grouped_data: dict = None, s
     return meta_block
 
 
-def build_movie_language_keyboard(key, grouped_data):
+def build_movie_language_keyboard(key, grouped_data, has_subtitles: bool = False):
     from plugins.series import to_series_font, make_styled_button
     buttons = []
     langs = list(grouped_data.keys())
@@ -499,8 +499,9 @@ def build_movie_language_keyboard(key, grouped_data):
             row.append(make_styled_button(to_series_font(l), callback_data=f"movie_lang#{key}#{l}", style="success"))
         buttons.append(row)
         
-    # Subtitles button is always the LAST row of the Movie Language selection keyboard
-    buttons.append([make_styled_button(to_series_font("Subtitles"), callback_data=f"movie_sub#{key}", style="success")])
+    # Subtitles button is appended ONLY when has_subtitles is True
+    if has_subtitles:
+        buttons.append([make_styled_button(to_series_font("Subtitles"), callback_data=f"movie_sub#{key}", style="success")])
     return InlineKeyboardMarkup(buttons)
 
 def build_movie_quality_keyboard(key, lang, qualities_dict):
@@ -689,16 +690,26 @@ async def movie_sub_callback(client: Client, query: CallbackQuery):
     if not state:
         return await query.answer("⚠️ Session expired. Please search again.", show_alert=True)
         
-    subtitle_files = state.get("subtitle_files", [])
+    subtitle_files = list(state.get("subtitle_files", []))
     if not subtitle_files:
-        all_files = state.get("all_files", [])
-        subtitle_files = [
-            f for f in all_files 
-            if is_subtitle_file(f)
-        ]
+        # Check movie document directly in database
+        movie_id = state.get("movie_id")
+        if movie_id:
+            from database.series_db import get_super_movie
+            movie = await get_super_movie(movie_id)
+            if movie and movie.get("subtitles"):
+                for s in movie.get("subtitles"):
+                    subtitle_files.append({
+                        "file_id": s.get("file_id"),
+                        "file_name": s.get("file_name", "Subtitle.srt"),
+                        "file_size": s.get("file_size", 0),
+                        "language": s.get("language", "Subtitle"),
+                        "caption": f"{movie.get('title')} {s.get('language', '')} Subtitle",
+                        "is_subtitle": True
+                    })
 
     if not subtitle_files:
-        return await query.answer("⚠️ No subtitle files available for this movie.", show_alert=True)
+        return await query.answer("❌ Subtitle not available.", show_alert=True)
 
     title = state.get("title", "Movie")
     logger.info(f"[MOVIE SUBTITLE]\ntitle={title}\nfiles={len(subtitle_files)}")
@@ -802,8 +813,9 @@ async def movie_back_callback(client: Client, query: CallbackQuery):
         
     if target == "langs":
         grouped = state.get("grouped", {})
+        has_subtitles = bool(state.get("subtitle_files"))
         cap = format_movie_metadata_caption(state, grouped_data=grouped, page_type="lang")
-        markup = build_movie_language_keyboard(key, grouped)
+        markup = build_movie_language_keyboard(key, grouped, has_subtitles=has_subtitles)
     elif target == "qual":
         lang = parts[3] if len(parts) > 3 else list(state.get("grouped", {}).keys())[0]
         qualities_dict = state.get("grouped", {}).get(lang, {})
