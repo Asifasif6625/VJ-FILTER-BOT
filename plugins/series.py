@@ -7297,7 +7297,7 @@ async def render_super_movie_direct(client: Client, message: Message, movie: dic
     """Renders the language selection UI for a specific Super Movie Filter."""
     from database.ia_filterdb import get_bulk_file_details
     from database.series_db import is_filter_coming_soon
-    from plugins.pm_filter import group_movie_files, build_movie_language_keyboard, BUTTON_OWNERS, format_movie_metadata_caption
+    from plugins.pm_filter import group_movie_files, is_subtitle_file, build_movie_language_keyboard, BUTTON_OWNERS, format_movie_metadata_caption
     from utils import schedule_filter_message_delete
 
     movie_id = str(movie["_id"])
@@ -7423,8 +7423,9 @@ async def render_super_movie_direct(client: Client, message: Message, movie: dic
     if not file_docs:
         return False
 
+    subtitle_files = [f for f in file_docs if is_subtitle_file(f)]
     grouped = group_movie_files(file_docs)
-    if not grouped:
+    if not grouped and not subtitle_files:
         return False
 
     temp.MOVIE_STATE[key] = {
@@ -7438,6 +7439,8 @@ async def render_super_movie_direct(client: Client, message: Message, movie: dic
         "poster": movie.get("poster", ""),
         "description": movie.get("description", ""),
         "grouped": grouped,
+        "subtitle_files": subtitle_files,
+        "all_files": file_docs,
         "chat_id": chat_id,
         "user_id": real_user_id,
         "languages": movie.get("languages", []),
