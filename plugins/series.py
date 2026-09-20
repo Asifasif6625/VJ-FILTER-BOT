@@ -4667,50 +4667,119 @@ async def wizard_text_handler(client: Client, message: Message):
             return
 
         elif cur_state == MM_POSTER:
-            try:
-                poster = None
-                if message.photo:
-                    logger.info("[MANUAL MOVIE] POSTER PHOTO RECEIVED")
-                    if isinstance(message.photo, list):
+            poster = None
+            has_photo = bool(message.photo)
+            has_doc = bool(message.document)
+            doc_mime = (getattr(message.document, "mime_type", "") or "") if has_doc else None
+            doc_name = (getattr(message.document, "file_name", "") or "") if has_doc else None
+
+            # 1. Telegram Photo
+            if message.photo:
+                if isinstance(message.photo, (list, tuple)) and len(message.photo) > 0:
+                    try:
                         poster = message.photo[-1].file_id
-                    else:
+                    except (TypeError, IndexError, AttributeError):
                         poster = getattr(message.photo, "file_id", None)
-                elif message.document and isinstance(getattr(message.document, "mime_type", None), str) and message.document.mime_type.startswith("image/"):
-                    logger.info("[MANUAL MOVIE] POSTER PHOTO RECEIVED")
+                else:
+                    poster = getattr(message.photo, "file_id", None)
+                    if not poster:
+                        try:
+                            poster = message.photo[-1].file_id
+                        except (TypeError, IndexError, AttributeError):
+                            poster = None
+            
+            # 2. Telegram Image Document
+            elif message.document:
+                mime = (getattr(message.document, "mime_type", "") or "").lower()
+                filename = (getattr(message.document, "file_name", "") or "").lower()
+                if mime.startswith("image/") or filename.endswith((".jpg", ".jpeg", ".png", ".webp")):
                     poster = message.document.file_id
-                elif text and (text.startswith("http://") or text.startswith("https://") or text.startswith("AgAC") or text.startswith("BAAC")):
-                    poster = text.strip()
-                elif text and text.lower() in ("/skip", "skip"):
-                    poster = ""
 
-                if poster is None:
-                    return await client.send_message(
-                        chat_id=chat_id,
-                        text=(
-                            "❌ <b>Invalid Poster</b>\n\n"
-                            "Please send:\n"
-                            "• a Telegram photo\n"
-                            "• an image file\n"
-                            "• a valid image URL\n"
-                            "• or click Skip"
-                        ),
-                        reply_markup=InlineKeyboardMarkup([
-                            [InlineKeyboardButton("⏭ Skip", callback_data="sw#mm_skip_poster")],
-                            [InlineKeyboardButton("❌ Cancel", callback_data="sw#cancel")]
-                        ]),
-                        parse_mode=enums.ParseMode.HTML
-                    )
+            # 3. URL or File ID Text
+            elif text and (
+                text.startswith("http://")
+                or text.startswith("https://")
+                or text.startswith("AgAC")
+                or text.startswith("BAAC")
+            ):
+                poster = text.strip()
 
-                old_prompt_id = wiz.get("prompt_message_id")
-                if old_prompt_id:
+            # 4. Skip
+            elif text and text.lower() in ("skip", "/skip"):
+                poster = ""
+
+            logger.info(
+                f"[MANUAL MOVIE POSTER]\n"
+                f"user_id={uid}\n"
+                f"message_id={message.id}\n"
+                f"has_photo={has_photo}\n"
+                f"has_document={has_doc}\n"
+                f"mime_type={doc_mime}\n"
+                f"file_name={doc_name}\n"
+                f"poster_detected={bool(poster is not None)}"
+            )
+
+            # 5. Invalid poster check
+            if poster is None:
+                return await client.send_message(
+                    chat_id=chat_id,
+                    text=(
+                        "❌ <b>Invalid Poster</b>\n\n"
+                        "Please send:\n"
+                        "• a Telegram photo\n"
+                        "• an image file\n"
+                        "• a valid image URL\n"
+                        "• or click Skip"
+                    ),
+                    reply_markup=InlineKeyboardMarkup([
+                        [InlineKeyboardButton("⏭ Skip", callback_data="sw#mm_skip_poster")],
+                        [InlineKeyboardButton("❌ Cancel", callback_data="sw#cancel")]
+                    ]),
+                    parse_mode=enums.ParseMode.HTML
+                )
+
+            # 6. Delete old prompt & user message without breaking wizard on deletion failure
+            old_prompt_id = wiz.get("prompt_message_id")
+            if old_prompt_id:
+                try:
                     await safe_delete_message(client, chat_id, old_prompt_id)
-                await safe_delete_message(client, chat_id, message.id)
+                except Exception as de:
+                    logger.warning(f"[MANUAL MOVIE POSTER] Failed deleting old prompt {old_prompt_id}: {de}")
 
+            try:
+                await safe_delete_message(client, chat_id, message.id)
+            except Exception as de:
+                logger.warning(f"[MANUAL MOVIE POSTER] Failed deleting user message {message.id}: {de}")
+
+            # 7. Update wizard state
+            try:
                 wiz["poster"] = poster
                 wiz["state"] = MM_LANG_SELECT
                 wiz.setdefault("selected_language", "Malayalam")
+                temp.MOVIE_WIZARD[uid] = wiz
+                set_wizard_session(
+                    uid,
+                    workflow="MANUAL_MOVIE",
+                    state=MM_LANG_SELECT,
+                    data=wiz,
+                    chat_id=chat_id
+                )
                 logger.info("[MANUAL MOVIE] POSTER FILE_ID SAVED")
                 logger.info("[MANUAL MOVIE] STATE -> MM_LANG_SELECT")
+            except Exception as se:
+                logger.exception(
+                    f"[MANUAL MOVIE POSTER ERROR] Failed saving state: "
+                    f"user_id={uid} message_id={message.id} "
+                    f"has_photo={has_photo} has_document={has_doc}"
+                )
+                return await client.send_message(
+                    chat_id=chat_id,
+                    text=f"❌ <b>Poster processing failed.</b>\nError: <code>{html.escape(str(se))}</code>",
+                    parse_mode=enums.ParseMode.HTML
+                )
+
+            # 8. Send next Language message
+            try:
                 pmsg = await client.send_message(
                     chat_id=chat_id,
                     text="🌐 <b>Select Language</b> (Select one):",
@@ -4727,9 +4796,17 @@ async def wizard_text_handler(client: Client, message: Message):
                     chat_id=chat_id
                 )
                 return
-            except Exception as e:
-                logger.exception(f"[MANUAL MOVIE POSTER ERROR] {e}")
-                return await client.send_message(chat_id=chat_id, text="❌ An error occurred while processing the poster image. Please try again.")
+            except Exception as pe:
+                logger.exception(
+                    f"[MANUAL MOVIE POSTER ERROR] Failed sending language keyboard: "
+                    f"user_id={uid} message_id={message.id} "
+                    f"has_photo={has_photo} has_document={has_doc}"
+                )
+                return await client.send_message(
+                    chat_id=chat_id,
+                    text=f"❌ <b>Poster processing failed.</b>\nError: <code>{html.escape(str(pe))}</code>",
+                    parse_mode=enums.ParseMode.HTML
+                )
 
         elif cur_state == MM_CUSTOM_LANG:
             custom_lang = text.strip()
@@ -4942,50 +5019,119 @@ async def wizard_text_handler(client: Client, message: Message):
             return
 
         elif cur_state in (MS_POSTER, S_DESCRIPTION):
-            try:
-                poster = None
-                if message.photo:
-                    logger.info("[MANUAL SERIES] POSTER PHOTO RECEIVED")
-                    if isinstance(message.photo, list):
+            poster = None
+            has_photo = bool(message.photo)
+            has_doc = bool(message.document)
+            doc_mime = (getattr(message.document, "mime_type", "") or "") if has_doc else None
+            doc_name = (getattr(message.document, "file_name", "") or "") if has_doc else None
+
+            # 1. Telegram Photo
+            if message.photo:
+                if isinstance(message.photo, (list, tuple)) and len(message.photo) > 0:
+                    try:
                         poster = message.photo[-1].file_id
-                    else:
+                    except (TypeError, IndexError, AttributeError):
                         poster = getattr(message.photo, "file_id", None)
-                elif message.document and isinstance(getattr(message.document, "mime_type", None), str) and message.document.mime_type.startswith("image/"):
-                    logger.info("[MANUAL SERIES] POSTER PHOTO RECEIVED")
+                else:
+                    poster = getattr(message.photo, "file_id", None)
+                    if not poster:
+                        try:
+                            poster = message.photo[-1].file_id
+                        except (TypeError, IndexError, AttributeError):
+                            poster = None
+            
+            # 2. Telegram Image Document
+            elif message.document:
+                mime = (getattr(message.document, "mime_type", "") or "").lower()
+                filename = (getattr(message.document, "file_name", "") or "").lower()
+                if mime.startswith("image/") or filename.endswith((".jpg", ".jpeg", ".png", ".webp")):
                     poster = message.document.file_id
-                elif text and (text.startswith("http://") or text.startswith("https://") or text.startswith("AgAC") or text.startswith("BAAC")):
-                    poster = text.strip()
-                elif text and text.lower() in ("/skip", "skip"):
-                    poster = ""
 
-                if poster is None:
-                    return await client.send_message(
-                        chat_id=chat_id,
-                        text=(
-                            "❌ <b>Invalid Poster</b>\n\n"
-                            "Please send:\n"
-                            "• a Telegram photo\n"
-                            "• an image file\n"
-                            "• a valid image URL\n"
-                            "• or click Skip"
-                        ),
-                        reply_markup=InlineKeyboardMarkup([
-                            [InlineKeyboardButton("⏭ Skip", callback_data="sw#ms_skip_poster")],
-                            [InlineKeyboardButton("❌ Cancel", callback_data="sw#cancel")]
-                        ]),
-                        parse_mode=enums.ParseMode.HTML
-                    )
+            # 3. URL or File ID Text
+            elif text and (
+                text.startswith("http://")
+                or text.startswith("https://")
+                or text.startswith("AgAC")
+                or text.startswith("BAAC")
+            ):
+                poster = text.strip()
 
-                old_prompt_id = wiz.get("prompt_message_id")
-                if old_prompt_id:
+            # 4. Skip
+            elif text and text.lower() in ("skip", "/skip"):
+                poster = ""
+
+            logger.info(
+                f"[MANUAL SERIES POSTER]\n"
+                f"user_id={uid}\n"
+                f"message_id={message.id}\n"
+                f"has_photo={has_photo}\n"
+                f"has_document={has_doc}\n"
+                f"mime_type={doc_mime}\n"
+                f"file_name={doc_name}\n"
+                f"poster_detected={bool(poster is not None)}"
+            )
+
+            # 5. Invalid poster check
+            if poster is None:
+                return await client.send_message(
+                    chat_id=chat_id,
+                    text=(
+                        "❌ <b>Invalid Poster</b>\n\n"
+                        "Please send:\n"
+                        "• a Telegram photo\n"
+                        "• an image file\n"
+                        "• a valid image URL\n"
+                        "• or click Skip"
+                    ),
+                    reply_markup=InlineKeyboardMarkup([
+                        [InlineKeyboardButton("⏭ Skip", callback_data="sw#ms_skip_poster")],
+                        [InlineKeyboardButton("❌ Cancel", callback_data="sw#cancel")]
+                    ]),
+                    parse_mode=enums.ParseMode.HTML
+                )
+
+            # 6. Delete old prompt & user message without breaking wizard on deletion failure
+            old_prompt_id = wiz.get("prompt_message_id")
+            if old_prompt_id:
+                try:
                     await safe_delete_message(client, chat_id, old_prompt_id)
-                await safe_delete_message(client, chat_id, message.id)
+                except Exception as de:
+                    logger.warning(f"[MANUAL SERIES POSTER] Failed deleting old prompt {old_prompt_id}: {de}")
 
+            try:
+                await safe_delete_message(client, chat_id, message.id)
+            except Exception as de:
+                logger.warning(f"[MANUAL SERIES POSTER] Failed deleting user message {message.id}: {de}")
+
+            # 7. Update wizard state
+            try:
                 wiz["poster"] = poster
                 wiz["state"] = MS_LANG_SELECT
                 wiz.setdefault("selected_language", "Malayalam")
+                temp.SERIES_WIZARD[uid] = wiz
+                set_wizard_session(
+                    uid,
+                    workflow="MANUAL_SERIES",
+                    state=MS_LANG_SELECT,
+                    data=wiz,
+                    chat_id=chat_id
+                )
                 logger.info("[MANUAL SERIES] POSTER FILE_ID SAVED")
                 logger.info("[MANUAL SERIES] STATE -> MS_LANG_SELECT")
+            except Exception as se:
+                logger.exception(
+                    f"[MANUAL SERIES POSTER ERROR] Failed saving state: "
+                    f"user_id={uid} message_id={message.id} "
+                    f"has_photo={has_photo} has_document={has_doc}"
+                )
+                return await client.send_message(
+                    chat_id=chat_id,
+                    text=f"❌ <b>Poster processing failed.</b>\nError: <code>{html.escape(str(se))}</code>",
+                    parse_mode=enums.ParseMode.HTML
+                )
+
+            # 8. Send next Language message
+            try:
                 pmsg = await client.send_message(
                     chat_id=chat_id,
                     text="🌐 <b>Select Language</b> (Select one):",
@@ -5002,9 +5148,17 @@ async def wizard_text_handler(client: Client, message: Message):
                     chat_id=chat_id
                 )
                 return
-            except Exception as e:
-                logger.exception(f"[MANUAL SERIES POSTER ERROR] {e}")
-                return await client.send_message(chat_id=chat_id, text="❌ An error occurred while processing the poster image. Please try again.")
+            except Exception as pe:
+                logger.exception(
+                    f"[MANUAL SERIES POSTER ERROR] Failed sending language keyboard: "
+                    f"user_id={uid} message_id={message.id} "
+                    f"has_photo={has_photo} has_document={has_doc}"
+                )
+                return await client.send_message(
+                    chat_id=chat_id,
+                    text=f"❌ <b>Poster processing failed.</b>\nError: <code>{html.escape(str(pe))}</code>",
+                    parse_mode=enums.ParseMode.HTML
+                )
 
         elif cur_state == MS_CUSTOM_LANG:
             custom_lang = text.strip()
