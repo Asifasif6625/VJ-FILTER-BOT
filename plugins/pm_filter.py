@@ -678,6 +678,70 @@ async def movie_qual_callback(client: Client, query: CallbackQuery):
             schedule_filter_message_delete(client, fb_msg.chat.id, fb_msg.id, 600)
         return
 
+async def get_movie_subtitle_files(movie: dict) -> list[dict]:
+    """
+    Returns only valid SRT subtitle records associated with the movie filter.
+    Checks:
+    1. SRT records stored in movie['subtitles']
+    2. SRT files in movie.file_ids
+    """
+    if not movie or not isinstance(movie, dict):
+        return []
+
+    subtitle_files = []
+    seen_fids = set()
+    movie_id = str(movie.get("_id", ""))
+    movie_title = movie.get("title", "")
+    movie_year = str(movie.get("year", ""))
+
+    # 1. Stored subtitles records
+    stored_subs = movie.get("subtitles") or []
+    for s in stored_subs:
+        fid = s.get("file_id")
+        fname = s.get("file_name", "") or ""
+        if fid and fid not in seen_fids:
+            if fname.lower().endswith(".srt") or s.get("mime_type") == "application/x-subrip":
+                seen_fids.add(fid)
+                subtitle_files.append({
+                    "file_id": fid,
+                    "file_name": fname or "Subtitle.srt",
+                    "file_size": s.get("file_size", 0),
+                    "language": s.get("language", "Subtitle"),
+                    "caption": f"{movie_title} {s.get('language', '')} Subtitle".strip(),
+                    "is_subtitle": True,
+                    "movie_id": movie_id,
+                    "movie_title": movie_title,
+                    "movie_year": movie_year
+                })
+
+    # 2. File IDs associated with the movie
+    file_ids = movie.get("file_ids") or []
+    if file_ids:
+        try:
+            from database.ia_filterdb import get_bulk_file_details
+            file_map = await get_bulk_file_details(file_ids)
+            for fid in file_ids:
+                if fid in file_map and fid not in seen_fids:
+                    f_doc = file_map[fid]
+                    if is_subtitle_file(f_doc):
+                        seen_fids.add(fid)
+                        subtitle_files.append({
+                            "file_id": f_doc.get("file_id"),
+                            "file_name": f_doc.get("file_name", "Subtitle.srt"),
+                            "file_size": f_doc.get("file_size", 0),
+                            "language": f_doc.get("language", "Subtitle"),
+                            "caption": f_doc.get("caption") or f"{movie_title} Subtitle",
+                            "is_subtitle": True,
+                            "movie_id": movie_id,
+                            "movie_title": movie_title,
+                            "movie_year": movie_year
+                        })
+        except Exception as e:
+            logger.warning(f"[GET_MOVIE_SUBTITLE_FILES] get_bulk_file_details error: {e}")
+
+    return subtitle_files
+
+
 @Client.on_callback_query(filters.regex(r"^(mvsub#|movie_sub#)"))
 async def movie_sub_callback(client: Client, query: CallbackQuery):
     parts = query.data.split("#")
@@ -692,27 +756,70 @@ async def movie_sub_callback(client: Client, query: CallbackQuery):
         
     subtitle_files = list(state.get("subtitle_files", []))
     if not subtitle_files:
-        # Check movie document directly in database
         movie_id = state.get("movie_id")
         if movie_id:
             from database.series_db import get_super_movie
             movie = await get_super_movie(movie_id)
-            if movie and movie.get("subtitles"):
-                for s in movie.get("subtitles"):
-                    subtitle_files.append({
-                        "file_id": s.get("file_id"),
-                        "file_name": s.get("file_name", "Subtitle.srt"),
-                        "file_size": s.get("file_size", 0),
-                        "language": s.get("language", "Subtitle"),
-                        "caption": f"{movie.get('title')} {s.get('language', '')} Subtitle",
-                        "is_subtitle": True
-                    })
+            subtitle_files = await get_movie_subtitle_files(movie)
+            if subtitle_files:
+                state["subtitle_files"] = subtitle_files
 
     if not subtitle_files:
         return await query.answer("❌ Subtitle not available.", show_alert=True)
 
     title = state.get("title", "Movie")
     logger.info(f"[MOVIE SUBTITLE]\ntitle={title}\nfiles={len(subtitle_files)}")
+
+    # Telegram's show_alert=True popup does NOT provide a callback for the alert's OK button.
+    # Therefore, the confirmation UI is presented via inline buttons ([ ✅ OK ], [ ❌ Cancel ]).
+    MALAYALAM_ALERT_TEXT = "ഇത് subtitle ഫയൽ ആണ് മൂവി ഫയൽ അല്ല, താഴെ കാണുന്ന ഓക്കേ ക്ലിക്ക് ചെയ്താൽ നിങ്ങൾക്ക് ഫയൽ കിട്ടും."
+    confirm_text = (
+        f"📝 <b>Movie Subtitles</b>\n\n"
+        f"{MALAYALAM_ALERT_TEXT}"
+    )
+    confirm_markup = InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("✅ OK", callback_data=f"mvsub_ok#{key}"),
+            InlineKeyboardButton("❌ Cancel", callback_data=f"mvback#{key}#langs")
+        ]
+    ])
+
+    try:
+        if query.message.photo or query.message.caption:
+            await query.message.edit_caption(caption=confirm_text, reply_markup=confirm_markup, parse_mode=enums.ParseMode.HTML)
+        else:
+            await query.message.edit_text(text=confirm_text, reply_markup=confirm_markup, parse_mode=enums.ParseMode.HTML)
+        await query.answer()
+    except Exception as e:
+        logger.warning(f"[MOVIE SUBTITLE CONFIRMATION] edit failed: {e}")
+        await query.answer(text=MALAYALAM_ALERT_TEXT, show_alert=True)
+
+
+@Client.on_callback_query(filters.regex(r"^(mvsub_ok#|movie_sub_ok#)"))
+async def movie_sub_ok_callback(client: Client, query: CallbackQuery):
+    parts = query.data.split("#")
+    key = parts[1]
+    is_owner, err_msg = is_button_owner(query, key)
+    if not is_owner:
+        return await query.answer(err_msg, show_alert=True)
+
+    state = getattr(temp, "MOVIE_STATE", {}).get(key)
+    if not state:
+        return await query.answer("⚠️ Session expired. Please search again.", show_alert=True)
+
+    subtitle_files = list(state.get("subtitle_files", []))
+    if not subtitle_files:
+        movie_id = state.get("movie_id")
+        if movie_id:
+            from database.series_db import get_super_movie
+            movie = await get_super_movie(movie_id)
+            subtitle_files = await get_movie_subtitle_files(movie)
+
+    if not subtitle_files:
+        return await query.answer("❌ Subtitle not available.", show_alert=True)
+
+    title = state.get("title", "Movie")
+    logger.info(f"[MOVIE SUBTITLE DELIVER]\ntitle={title}\nfiles={len(subtitle_files)}")
 
     import uuid, time
     from database.series_db import save_temp_request
@@ -752,20 +859,36 @@ async def movie_sub_callback(client: Client, query: CallbackQuery):
         bot_username = "Bot"
 
     start_url = f"https://t.me/{bot_username}?start=all_{req_key}"
-    MALAYALAM_ALERT_TEXT = "ഇത് subtitle ഫയൽ ആണ് മൂവി ഫയൽ അല്ല, താഴെ കാണുന്ന ഓക്കേ ക്ലിക്ക് ചെയ്താൽ നിങ്ങൾക്ക് ഫയൽ കിട്ടും."
+
+    if query.message.chat.type == enums.ChatType.PRIVATE:
+        from plugins.commands import send_movie_files_to_user
+        await query.answer("🚀 Sending subtitle files...")
+        await send_movie_files_to_user(
+            client=client,
+            user_id=query.from_user.id,
+            files=subtitle_files,
+            movie_title=title,
+            language="Subtitle",
+            quality="SRT"
+        )
+        return
 
     try:
-        return await query.answer(
-            text=MALAYALAM_ALERT_TEXT,
-            show_alert=True,
-            url=start_url
-        )
+        return await query.answer(url=start_url)
     except Exception as e:
         logger.warning(f"[MOVIE SUBTITLE ROUTING] query.answer(url=start_url) failed: {e}")
-        return await query.answer(
-            text=MALAYALAM_ALERT_TEXT,
-            show_alert=True
+        fb_msg = await query.message.reply_text(
+            f"📩 Open bot to get <b>{html.escape(title)}</b> subtitle:",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("📂 Open Bot", url=start_url)]
+            ]),
+            parse_mode=enums.ParseMode.HTML
         )
+        from utils import schedule_filter_message_delete
+        if fb_msg:
+            schedule_filter_message_delete(client, fb_msg.chat.id, fb_msg.id, 600)
+        await query.answer()
+
 
 @Client.on_callback_query(filters.regex(r"^(mvpage#|movie_files#)"))
 async def movie_page_callback(client: Client, query: CallbackQuery):
