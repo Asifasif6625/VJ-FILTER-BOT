@@ -4020,7 +4020,7 @@ async def cb_edser(client: Client, query: CallbackQuery):
             pass
         temp.SERIES_WIZARD.pop(uid, None)
         logger.info(f"[DELETE SERIES SUCCESS]\nseries_id={series_id}")
-        await query.answer("✅ Series Filter Deleted\n📁 Original files were preserved.", show_alert=True)
+        await query.answer("✅ Series Filter Deleted Completely from Database.", show_alert=True)
         return await send_filter_manager(query, ftype="series", page=0)
 
     parts = query.data.split("#")
@@ -4224,16 +4224,13 @@ async def cb_movie_management(client: Client, query: CallbackQuery):
 
     if data.startswith("emov#del_confirm#"):
         movie_id = data.split("#")[2]
-        await super_movies_col.update_one(
-            {"_id": ObjectId(movie_id)},
-            {"$set": {"status": "deleted", "updated_at": datetime.utcnow()}}
-        )
+        await delete_super_movie(movie_id)
         try:
             await delete_announcement(f"movie:{movie_id}")
             await delete_announcement(str(movie_id))
         except Exception:
             pass
-        await query.answer("✅ Movie Filter Deleted", show_alert=True)
+        await query.answer("✅ Movie Filter Deleted Completely from Database.", show_alert=True)
         return await send_filter_manager(query, ftype="movies", page=0)
 
     # View movie detail card
@@ -4242,11 +4239,13 @@ async def cb_movie_management(client: Client, query: CallbackQuery):
     movie = await get_super_movie(movie_id)
     if not movie and ObjectId.is_valid(movie_id):
         try:
-            movie = await super_movies_col.find_one({"_id": ObjectId(movie_id)})
+            doc = await super_movies_col.find_one({"_id": ObjectId(movie_id), "status": {"$ne": "deleted"}})
+            if doc:
+                movie = doc
         except Exception:
             pass
 
-    if not movie:
+    if not movie or movie.get("status") == "deleted":
         return await query.answer("❌ Movie not found. Please refresh /viewmovies.", show_alert=True)
 
     title = movie.get("title", "Movie")
@@ -8388,12 +8387,14 @@ async def process_series_deeplink(client: Client, message: Message, series_key: 
     series_doc = await get_series(series_key)
     if not series_doc:
         series_doc = await get_series_by_key(series_key)
-    if not series_doc:
+    if not series_doc and ObjectId.is_valid(str(series_key).strip()):
         try:
-            series_doc = await series_col.find_one({"_id": ObjectId(series_key)})
+            doc = await series_col.find_one({"_id": ObjectId(str(series_key).strip()), "status": {"$ne": "deleted"}})
+            if doc:
+                series_doc = doc
         except Exception:
             pass
-    if not series_doc:
+    if not series_doc or series_doc.get("status") == "deleted":
         await message.reply_text("<b>❌ Requested series filter was not found or has been removed.</b>")
         return False
     u_id = message.from_user.id if message.from_user else (message.chat.id if message.chat else 0)
@@ -8409,12 +8410,14 @@ async def process_movie_deeplink(client: Client, message: Message, movie_key: st
     from bson import ObjectId
 
     movie_doc = await get_super_movie(movie_key)
-    if not movie_doc:
+    if not movie_doc and ObjectId.is_valid(str(movie_key).strip()):
         try:
-            movie_doc = await super_movies_col.find_one({"_id": ObjectId(movie_key)})
+            doc = await super_movies_col.find_one({"_id": ObjectId(str(movie_key).strip()), "status": {"$ne": "deleted"}})
+            if doc:
+                movie_doc = doc
         except Exception:
             pass
-    if not movie_doc:
+    if not movie_doc or movie_doc.get("status") == "deleted":
         await message.reply_text("<b>❌ Requested movie filter was not found or has been removed.</b>")
         return False
     u_id = message.from_user.id if message.from_user else (message.chat.id if message.chat else 0)
