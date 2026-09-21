@@ -121,11 +121,13 @@ async def create_series(data: dict) -> str:
         "name": clean_name,
         "normalized_name": _normalize(clean_name),
         "series_key": make_series_key(clean_name),
-        "year": data.get("year", "N/A"),
+        "year": str(data.get("year", "N/A")),
         "genre": data.get("genre", "N/A"),
-        "rating": data.get("rating", ""),
+        "rating": str(data.get("rating", "")),
         "description": data.get("description", ""),
         "poster": data.get("poster", ""),
+        "imdb_id": data.get("imdb_id", ""),
+        "tmdb_id": data.get("tmdb_id", ""),
         "languages": data.get("languages", []),
         "seasons": data.get("seasons", []),
         "qualities": data.get("qualities", []),
@@ -140,6 +142,56 @@ async def create_series(data: dict) -> str:
         "updated_at": datetime.utcnow(),
         "status": status,
     }
+
+    existing = None
+    if doc.get("imdb_id"):
+        existing = await series_col.find_one({"imdb_id": doc["imdb_id"], "status": {"$ne": "deleted"}})
+    if not existing:
+        existing = await series_col.find_one({"normalized_name": doc["normalized_name"], "year": doc["year"], "status": {"$ne": "deleted"}})
+    if not existing and doc["year"] == "N/A":
+        existing = await series_col.find_one({"normalized_name": doc["normalized_name"], "status": {"$ne": "deleted"}})
+
+    if existing:
+        merged_seasons = sorted(list(set((existing.get("seasons") or []) + (doc.get("seasons") or []))))
+        merged_langs = list(dict.fromkeys((existing.get("languages") or []) + (doc.get("languages") or [])))
+        merged_quals = list(dict.fromkeys((existing.get("qualities") or []) + (doc.get("qualities") or [])))
+        merged_user_aliases = list(dict.fromkeys((existing.get("aliases") or []) + user_aliases))
+        merged_gen_aliases = list(dict.fromkeys(generate_smart_aliases(doc["name"] or existing.get("name"))))
+
+        was_cs = is_filter_coming_soon(existing)
+        new_status = "active" if merged_seasons else (doc.get("status") or existing.get("status", "active"))
+        new_cs = False if merged_seasons else (is_cs if "coming_soon" in data else existing.get("coming_soon", False))
+
+        if was_cs and merged_seasons:
+            logger.info(
+                f"[COMING SOON ACTIVATED]\n"
+                f"type=series\n"
+                f"filter_id={existing['_id']}\n"
+                f"status=active"
+            )
+
+        update_fields = {
+            "name": doc["name"] or existing.get("name"),
+            "year": doc["year"] if doc["year"] != "N/A" else existing.get("year", "N/A"),
+            "genre": doc["genre"] if doc["genre"] != "N/A" else existing.get("genre", "N/A"),
+            "rating": doc["rating"] or existing.get("rating", ""),
+            "poster": doc["poster"] or existing.get("poster", ""),
+            "description": doc["description"] or existing.get("description", ""),
+            "imdb_id": doc.get("imdb_id") or existing.get("imdb_id", ""),
+            "tmdb_id": doc.get("tmdb_id") or existing.get("tmdb_id", ""),
+            "languages": merged_langs,
+            "seasons": merged_seasons,
+            "qualities": merged_quals,
+            "aliases": merged_user_aliases,
+            "generated_aliases": merged_gen_aliases,
+            "search_aliases": list(dict.fromkeys(merged_user_aliases + merged_gen_aliases)),
+            "coming_soon": new_cs,
+            "status": new_status,
+            "updated_at": datetime.utcnow(),
+        }
+        await series_col.update_one({"_id": existing["_id"]}, {"$set": update_fields})
+        return str(existing["_id"])
+
     result = await series_col.insert_one(doc)
     return str(result.inserted_id)
 
@@ -1098,6 +1150,8 @@ async def create_super_movie(data: dict) -> str:
         "languages": data.get("languages", []),
         "qualities": data.get("qualities", []),
         "file_ids": unique_file_ids,
+        "file_associations": data.get("file_associations") or data.get("file_map") or {},
+        "file_map": data.get("file_map") or data.get("file_associations") or {},
         "aliases": user_aliases,
         "generated_aliases": gen_aliases,
         "search_aliases": search_aliases,
@@ -1121,6 +1175,11 @@ async def create_super_movie(data: dict) -> str:
         merged_user_aliases = list(dict.fromkeys((existing.get("aliases") or []) + user_aliases))
         merged_gen_aliases = list(dict.fromkeys(generate_smart_aliases(doc["title"] or existing.get("title"))))
         
+        merged_associations = dict(existing.get("file_associations") or existing.get("file_map") or {})
+        new_associations = data.get("file_associations") or data.get("file_map") or {}
+        if isinstance(new_associations, dict):
+            merged_associations.update(new_associations)
+        
         was_cs = is_filter_coming_soon(existing)
         new_status = "active" if merged_file_ids else (doc.get("status") or existing.get("status", "active"))
         new_cs = False if merged_file_ids else (is_cs if "coming_soon" in data else existing.get("coming_soon", False))
@@ -1143,6 +1202,8 @@ async def create_super_movie(data: dict) -> str:
             "languages": merged_langs,
             "qualities": merged_quals,
             "file_ids": merged_file_ids,
+            "file_associations": merged_associations,
+            "file_map": merged_associations,
             "aliases": merged_user_aliases,
             "generated_aliases": merged_gen_aliases,
             "search_aliases": list(dict.fromkeys(merged_user_aliases + merged_gen_aliases)),
