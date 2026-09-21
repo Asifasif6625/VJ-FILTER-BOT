@@ -290,37 +290,97 @@ VIDEO_EXTENSIONS = (
 SUBTITLE_EXTENSIONS = (
     ".srt", ".vtt", ".sub", ".ass", ".ssa", ".idx", ".sup", ".smi"
 )
+RAW_VIDEO_EXTS = {ext.lstrip(".") for ext in VIDEO_EXTENSIONS}
+RAW_SUBTITLE_EXTS = {ext.lstrip(".") for ext in SUBTITLE_EXTENSIONS}
+NON_VIDEO_EXTS = {
+    "mp3", "flac", "wav", "m4a", "aac", "ogg", "wma", "opus",
+    "pdf", "apk", "zip", "rar", "7z", "tar", "gz", "iso",
+    "txt", "docx", "doc", "epub", "srt", "vtt", "sub", "ass", "ssa", "idx", "sup", "smi",
+    "jpg", "jpeg", "png", "webp", "gif", "exe"
+}
 
 def is_subtitle_file(file_obj_or_name) -> bool:
     """Returns True if the given file object or name is a subtitle file."""
     if not file_obj_or_name:
         return False
-    if isinstance(file_obj_or_name, dict):
-        fname = file_obj_or_name.get("file_name", "") or file_obj_or_name.get("caption", "") or ""
+    if hasattr(file_obj_or_name, "document"):
+        doc = getattr(file_obj_or_name, "document", None)
+        if doc:
+            mime = str(getattr(doc, "mime_type", "")).lower()
+            if mime == "application/x-subrip" or "subtitle" in mime:
+                return True
+            fname = str(getattr(doc, "file_name", "") or getattr(file_obj_or_name, "caption", "") or "")
+        else:
+            fname = str(getattr(file_obj_or_name, "caption", "") or "")
+    elif isinstance(file_obj_or_name, dict):
         mime = str(file_obj_or_name.get("mime_type", "")).lower()
-        if mime == "application/x-subrip":
+        if mime == "application/x-subrip" or "subtitle" in mime:
             return True
+        fname = file_obj_or_name.get("file_name", "") or file_obj_or_name.get("caption", "") or ""
     else:
         fname = str(file_obj_or_name)
+
     fname_lower = fname.strip().lower()
-    return any(fname_lower.endswith(ext) for ext in SUBTITLE_EXTENSIONS) or ".srt" in fname_lower.split()
+    if not fname_lower:
+        return False
+    if any(fname_lower.endswith(ext) for ext in SUBTITLE_EXTENSIONS):
+        return True
+    tokens = fname_lower.replace(".", " ").split()
+    if tokens and tokens[-1] in RAW_SUBTITLE_EXTS:
+        return True
+    return False
 
 def is_video_file(file_obj_or_name) -> bool:
-    """Returns True only if the file is a recognized video file (.mkv, .mp4, .avi, etc.)."""
+    """Returns True if the file is a recognized video file (.mkv, .mp4, .avi, etc. or video object/mime/name)."""
     if not file_obj_or_name:
         return False
     if is_subtitle_file(file_obj_or_name):
         return False
-    if isinstance(file_obj_or_name, dict):
-        fname = file_obj_or_name.get("file_name", "") or file_obj_or_name.get("caption", "") or ""
+    if hasattr(file_obj_or_name, "video") and getattr(file_obj_or_name, "video", None):
+        return True
+    if hasattr(file_obj_or_name, "document"):
+        doc = getattr(file_obj_or_name, "document", None)
+        if doc:
+            mime = str(getattr(doc, "mime_type", "")).lower()
+            if mime.startswith("video/"):
+                return True
+            fname = str(getattr(doc, "file_name", "") or getattr(file_obj_or_name, "caption", "") or "")
+        else:
+            fname = str(getattr(file_obj_or_name, "caption", "") or "")
+    elif isinstance(file_obj_or_name, dict):
         mime = str(file_obj_or_name.get("mime_type", "")).lower()
         ftype = str(file_obj_or_name.get("file_type", "")).lower()
         if ftype == "video" or mime.startswith("video/"):
             return True
+        fname = file_obj_or_name.get("file_name", "") or file_obj_or_name.get("caption", "") or ""
     else:
         fname = str(file_obj_or_name)
+
     fname_lower = fname.strip().lower()
-    return any(fname_lower.endswith(ext) for ext in VIDEO_EXTENSIONS)
+    if not fname_lower:
+        return False
+
+    # Check extension with dot (e.g. .mkv, .mp4)
+    if any(fname_lower.endswith(ext) for ext in VIDEO_EXTENSIONS):
+        return True
+
+    # Check space-separated tokens or cleaned extensions (e.g. "Interstellar 2014 1080p mkv")
+    tokens = fname_lower.replace(".", " ").split()
+    if tokens:
+        if tokens[-1] in RAW_VIDEO_EXTS:
+            return True
+        if tokens[-1] in NON_VIDEO_EXTS:
+            return False
+
+    # If the file has video tags / resolution indicators and is not non-video
+    if re.search(r"(?i)\b(s\d{1,2}[\s\.\-_]?e\d{1,4}|\d{1,2}x\d{1,4}|ep\d+|2160p|4k|1440p|2k|1080p|720p|480p|360p|240p|bluray|web-dl|webdl|webrip|dvdrip|hevc|x264|x265|h264|h265)\b", fname_lower):
+        return True
+
+    # Fallback: Check if any token is a known video extension
+    if any(tok in RAW_VIDEO_EXTS for tok in tokens):
+        return True
+
+    return True
 
 
 def match_movie_identity(file_doc: dict, requested_title: str, requested_year: str | int = None, imdb_id: str = None, tmdb_id: str = None, known_conflicts: set = None) -> tuple[bool, str]:
