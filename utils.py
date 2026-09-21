@@ -282,12 +282,57 @@ def extract_quality_from_filename(filename: str) -> str:
         return m.group(1).upper() if m else "Unknown"
 
 
+VIDEO_EXTENSIONS = (
+    ".mkv", ".mp4", ".avi", ".mov", ".webm", ".flv", ".wmv",
+    ".m4v", ".ts", ".3gp", ".mpeg", ".mpg", ".vob", ".ogv",
+    ".divx", ".m2ts", ".m2v", ".f4v"
+)
+SUBTITLE_EXTENSIONS = (
+    ".srt", ".vtt", ".sub", ".ass", ".ssa", ".idx", ".sup", ".smi"
+)
+
+def is_subtitle_file(file_obj_or_name) -> bool:
+    """Returns True if the given file object or name is a subtitle file."""
+    if not file_obj_or_name:
+        return False
+    if isinstance(file_obj_or_name, dict):
+        fname = file_obj_or_name.get("file_name", "") or file_obj_or_name.get("caption", "") or ""
+        mime = str(file_obj_or_name.get("mime_type", "")).lower()
+        if mime == "application/x-subrip":
+            return True
+    else:
+        fname = str(file_obj_or_name)
+    fname_lower = fname.strip().lower()
+    return any(fname_lower.endswith(ext) for ext in SUBTITLE_EXTENSIONS) or ".srt" in fname_lower.split()
+
+def is_video_file(file_obj_or_name) -> bool:
+    """Returns True only if the file is a recognized video file (.mkv, .mp4, .avi, etc.)."""
+    if not file_obj_or_name:
+        return False
+    if is_subtitle_file(file_obj_or_name):
+        return False
+    if isinstance(file_obj_or_name, dict):
+        fname = file_obj_or_name.get("file_name", "") or file_obj_or_name.get("caption", "") or ""
+        mime = str(file_obj_or_name.get("mime_type", "")).lower()
+        ftype = str(file_obj_or_name.get("file_type", "")).lower()
+        if ftype == "video" or mime.startswith("video/"):
+            return True
+    else:
+        fname = str(file_obj_or_name)
+    fname_lower = fname.strip().lower()
+    return any(fname_lower.endswith(ext) for ext in VIDEO_EXTENSIONS)
+
+
 def match_movie_identity(file_doc: dict, requested_title: str, requested_year: str | int = None, imdb_id: str = None, tmdb_id: str = None, known_conflicts: set = None) -> tuple[bool, str]:
     """
     Strict identity matcher for Auto Movie Add / Super Movie Filter synchronization.
     Enforces BOTH Title and Release Year matching to prevent cross-contamination across sequels/different years.
     Returns: (is_match: bool, reason: str)
     """
+    # 0. Reject subtitle / non-video files
+    if not is_video_file(file_doc) or is_subtitle_file(file_doc):
+        return False, "IS_SUBTITLE_OR_NON_VIDEO"
+
     file_name = file_doc.get("file_name", "") or ""
     caption = file_doc.get("caption", "") or ""
     combined_text = f"{file_name} {caption}"
