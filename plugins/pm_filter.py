@@ -684,6 +684,7 @@ async def get_movie_subtitle_files(movie: dict) -> list[dict]:
     Checks:
     1. SRT records stored in movie['subtitles']
     2. SRT files in movie.file_ids
+    3. SRT files in ia_filterdb matching movie title and year
     """
     if not movie or not isinstance(movie, dict):
         return []
@@ -739,7 +740,60 @@ async def get_movie_subtitle_files(movie: dict) -> list[dict]:
         except Exception as e:
             logger.warning(f"[GET_MOVIE_SUBTITLE_FILES] get_bulk_file_details error: {e}")
 
+    # 3. Dynamic lookup in ia_filterdb for matching SRT files
+    if movie_title:
+        try:
+            from database.ia_filterdb import col, sec_col, MULTIPLE_DATABASE
+            from utils import match_movie_identity, clean_series_title
+            clean_title = clean_series_title(movie_title)
+            regex_title = re.escape(clean_title)
+            query = {"file_name": {"$regex": rf"(?i){regex_title}.*\.srt$"}}
+            
+            async for doc in col.find(query).limit(50):
+                fid = doc.get("file_id")
+                if fid and fid not in seen_fids:
+                    fname = doc.get("file_name", "")
+                    fname_years = re.findall(r"\b(19\d\d|20\d\d)\b", fname)
+                    if movie_year and movie_year != "N/A" and fname_years and movie_year not in fname_years:
+                        continue
+                    seen_fids.add(fid)
+                    subtitle_files.append({
+                        "file_id": fid,
+                        "file_name": fname,
+                        "file_size": doc.get("file_size", 0),
+                        "language": doc.get("language", "Subtitle"),
+                        "caption": doc.get("caption") or f"{movie_title} Subtitle",
+                        "is_subtitle": True,
+                        "movie_id": movie_id,
+                        "movie_title": movie_title,
+                        "movie_year": movie_year
+                    })
+
+            if MULTIPLE_DATABASE and sec_col:
+                async for doc in sec_col.find(query).limit(50):
+                    fid = doc.get("file_id")
+                    if fid and fid not in seen_fids:
+                        fname = doc.get("file_name", "")
+                        fname_years = re.findall(r"\b(19\d\d|20\d\d)\b", fname)
+                        if movie_year and movie_year != "N/A" and fname_years and movie_year not in fname_years:
+                            continue
+                        seen_fids.add(fid)
+                        subtitle_files.append({
+                            "file_id": fid,
+                            "file_name": fname,
+                            "file_size": doc.get("file_size", 0),
+                            "language": doc.get("language", "Subtitle"),
+                            "caption": doc.get("caption") or f"{movie_title} Subtitle",
+                            "is_subtitle": True,
+                            "movie_id": movie_id,
+                            "movie_title": movie_title,
+                            "movie_year": movie_year
+                        })
+        except Exception:
+            pass
+
     return subtitle_files
+
 
 
 @Client.on_callback_query(filters.regex(r"^(mvsub#|movie_sub#)"))
@@ -770,9 +824,55 @@ async def movie_sub_callback(client: Client, query: CallbackQuery):
     title = state.get("title", "Movie")
     logger.info(f"[MOVIE SUBTITLE]\ntitle={title}\nfiles={len(subtitle_files)}")
 
-    # Telegram's show_alert=True popup does NOT provide a callback for the alert's OK button.
-    # Therefore, the confirmation UI is presented via inline buttons ([ ✅ OK ], [ ❌ Cancel ]).
-    MALAYALAM_ALERT_TEXT = "ഇത് subtitle ഫയൽ ആണ് മൂവി ഫയൽ അല്ല, താഴെ കാണുന്ന ഓക്കേ ക്ലിക്ക് ചെയ്താൽ നിങ്ങൾക്ക് ഫയൽ കിട്ടും."
+    import uuid, time
+    from database.series_db import save_temp_request
+    req_key = str(uuid.uuid4())[:8]
+    req_data = {
+        "request_key": req_key,
+        "user": query.from_user.id,
+        "user_id": query.from_user.id,
+        "type": "movie",
+        "request_type": "movie",
+        "is_subtitle": True,
+        "source": "MOVIE_SUBTITLE",
+        "movie_title": title,
+        "title": title,
+        "language": "Subtitle",
+        "quality": "SRT",
+        "files": subtitle_files,
+        "delivery_status": "pending",
+        "state": "PENDING",
+        "created_at": time.time()
+    }
+    if not hasattr(temp, "MOVIE_STATE"):
+        temp.MOVIE_STATE = {}
+    temp.MOVIE_STATE[req_key] = req_data
+    if not hasattr(temp, "GETALL"):
+        temp.GETALL = {}
+    temp.GETALL[req_key] = req_data
+    try:
+        await save_temp_request(req_key, req_data)
+    except Exception:
+        pass
+
+    bot_username = temp.U_NAME if (hasattr(temp, "U_NAME") and temp.U_NAME) else getattr(getattr(client, "me", None), "username", None)
+    if bot_username:
+        bot_username = str(bot_username).lstrip("@")
+    else:
+        bot_username = "Bot"
+
+    start_url = f"https://t.me/{bot_username}?start=all_{req_key}"
+    MALAYALAM_ALERT_TEXT = "📝 Movie Subtitles\n\nഇത് subtitle ഫയൽ ആണ് മൂവി ഫയൽ അല്ല, താഴെ കാണുന്ന ഓക്കേ ക്ലിക്ക് ചെയ്താൽ നിങ്ങൾക്ക് ഫയൽ കിട്ടും."
+
+    try:
+        return await query.answer(text=MALAYALAM_ALERT_TEXT, show_alert=True, url=start_url)
+    except Exception as e:
+        logger.warning(f"[MOVIE SUBTITLE ROUTING] query.answer with alert+url failed: {e}. Trying url only or fallback.")
+        try:
+            return await query.answer(url=start_url)
+        except Exception:
+            pass
+
     confirm_text = (
         f"📝 <b>Movie Subtitles</b>\n\n"
         f"{MALAYALAM_ALERT_TEXT}"
