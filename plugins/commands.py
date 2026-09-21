@@ -874,7 +874,8 @@ async def delete(bot, message):
         await msg.edit('This is not supported file format')
         return
     
-    file_id, file_ref = unpack_new_file_id(media.file_id)
+    res = unpack_new_file_id(media.file_id)
+    file_id = res[0] if isinstance(res, (tuple, list)) else res
 
     result = col.delete_one({
         'file_id': file_id,
