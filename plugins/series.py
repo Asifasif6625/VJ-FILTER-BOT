@@ -318,7 +318,7 @@ def _build_mm_lang_keyboard(selected_lang: str = "Malayalam") -> InlineKeyboardM
         row = []
         for l in langs[i:i+2]:
             mark = "🟢" if l == selected_lang else "⚪"
-            row.append(InlineKeyboardButton(f"{mark} {l}", callback_data=f"sw#mm_lang#{l}", style="success"))
+            row.append(InlineKeyboardButton(f"{mark} {l}", callback_data=f"sw#mm_lang#{l}"))
         rows.append(row)
     
     rows.append([InlineKeyboardButton("➕ Custom Language", callback_data="sw#mm_custom_lang")])
@@ -337,13 +337,13 @@ def _build_mm_qual_keyboard(selected_qual: str = "720p", excluded_qualities: lis
         row = []
         for q in available_quals[i:i+2]:
             mark = "🔴" if q == selected_qual else "⚪"
-            row.append(InlineKeyboardButton(f"{mark} {q}", callback_data=f"sw#mm_qual#{q}", style="danger"))
+            row.append(InlineKeyboardButton(f"{mark} {q}", callback_data=f"sw#mm_qual#{q}"))
         rows.append(row)
     
     rows.append([InlineKeyboardButton("➕ Custom Quality", callback_data="sw#mm_custom_qual")])
     rows.append([InlineKeyboardButton("✅ Submit", callback_data="sw#mm_qual_submit")])
     rows.append([
-        InlineKeyboardButton("🔙 Back", callback_data="sw#mm_back_to_lang", style="success"),
+        InlineKeyboardButton("🔙 Back", callback_data="sw#mm_back_to_lang"),
         InlineKeyboardButton("❌ Cancel", callback_data="sw#cancel")
     ])
     return InlineKeyboardMarkup(rows)
@@ -366,7 +366,7 @@ def _build_ms_lang_keyboard(selected_lang: str = "Malayalam") -> InlineKeyboardM
         row = []
         for l in langs[i:i+2]:
             mark = "🟢" if l == selected_lang else "⚪"
-            row.append(InlineKeyboardButton(f"{mark} {l}", callback_data=f"sw#ms_lang#{l}", style="success"))
+            row.append(InlineKeyboardButton(f"{mark} {l}", callback_data=f"sw#ms_lang#{l}"))
         rows.append(row)
     
     rows.append([InlineKeyboardButton("➕ Custom Language", callback_data="sw#ms_custom_lang")])
@@ -384,7 +384,7 @@ def _build_ms_season_keyboard(selected_season: int = 1, allow_skip: bool = True)
         row = []
         for s in seasons[i:i+2]:
             mark = "🔵" if s == selected_season else "⚪"
-            row.append(InlineKeyboardButton(f"{mark} Season {s}", callback_data=f"sw#ms_season#{s}", style="primary"))
+            row.append(InlineKeyboardButton(f"{mark} Season {s}", callback_data=f"sw#ms_season#{s}"))
         rows.append(row)
     
     rows.append([InlineKeyboardButton("➕ Custom Season", callback_data="sw#ms_custom_season")])
@@ -393,7 +393,7 @@ def _build_ms_season_keyboard(selected_season: int = 1, allow_skip: bool = True)
     bottom_row = []
     if allow_skip:
         bottom_row.append(InlineKeyboardButton("⏭ Skip", callback_data="sw#ms_skip_season"))
-    bottom_row.append(InlineKeyboardButton("🔙 Back", callback_data="sw#ms_back_to_lang", style="success"))
+    bottom_row.append(InlineKeyboardButton("🔙 Back", callback_data="sw#ms_back_to_lang"))
     rows.append(bottom_row)
     rows.append([InlineKeyboardButton("❌ Cancel", callback_data="sw#cancel")])
     return InlineKeyboardMarkup(rows)
@@ -409,13 +409,13 @@ def _build_ms_qual_keyboard(selected_qual: str = "720p", excluded_qualities: lis
         row = []
         for q in available_quals[i:i+2]:
             mark = "🔴" if q == selected_qual else "⚪"
-            row.append(InlineKeyboardButton(f"{mark} {q}", callback_data=f"sw#ms_qual#{q}", style="danger"))
+            row.append(InlineKeyboardButton(f"{mark} {q}", callback_data=f"sw#ms_qual#{q}"))
         rows.append(row)
     
     rows.append([InlineKeyboardButton("➕ Custom Quality", callback_data="sw#ms_custom_qual")])
     rows.append([InlineKeyboardButton("✅ Submit", callback_data="sw#ms_qual_submit")])
     rows.append([
-        InlineKeyboardButton("🔙 Back", callback_data="sw#ms_back_to_season", style="primary"),
+        InlineKeyboardButton("🔙 Back", callback_data="sw#ms_back_to_season"),
         InlineKeyboardButton("❌ Cancel", callback_data="sw#cancel")
     ])
     return InlineKeyboardMarkup(rows)
