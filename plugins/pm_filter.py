@@ -366,21 +366,39 @@ def is_subtitle_file(file_obj_or_name) -> bool:
     fname = fname.strip().lower()
     return fname.endswith(".srt") or ".srt" in fname.split() or fname.endswith(".sub")
 
-def group_movie_files(files):
+def group_movie_files(files, movie_doc: dict = None):
     from plugins.series import extract_quality_from_filename
     grouped = {}
+    file_associations = {}
+    if isinstance(movie_doc, dict):
+        file_associations = movie_doc.get("file_associations") or movie_doc.get("file_map") or {}
+
     for f in files:
         if is_subtitle_file(f):
             continue
-        fname = f.get("file_name", "")
-        fqual = extract_quality_from_filename(fname)
-        flangs = detect_file_languages(fname, f.get("caption"))
+        fid = str(f.get("file_id") or f.get("_id") or "")
+        
+        # Check if manual association exists in movie_doc or inside file dict
+        assoc = file_associations.get(fid) if file_associations else None
+        if not assoc and isinstance(f, dict):
+            if f.get("language") and f.get("quality"):
+                assoc = {"language": f.get("language"), "quality": f.get("quality")}
+        
+        if assoc and isinstance(assoc, dict) and assoc.get("language") and assoc.get("quality"):
+            lang = str(assoc["language"]).strip()
+            fqual = str(assoc["quality"]).strip()
+            flangs = [lang]
+        else:
+            fname = f.get("file_name", "")
+            fqual = extract_quality_from_filename(fname)
+            flangs = detect_file_languages(fname, f.get("caption"))
+
         for lang in flangs:
             if lang not in grouped:
                 grouped[lang] = {}
             if fqual not in grouped[lang]:
                 grouped[lang][fqual] = []
-            if not any(x.get("file_id") == f.get("file_id") for x in grouped[lang][fqual]):
+            if not any(str(x.get("file_id") or x.get("_id")) == fid for x in grouped[lang][fqual]):
                 grouped[lang][fqual].append(f)
     return grouped
 
