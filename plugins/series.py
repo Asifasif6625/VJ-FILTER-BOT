@@ -351,8 +351,8 @@ def _build_mm_qual_keyboard(selected_qual: str = "720p", excluded_qualities: lis
 def _build_mm_batch_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("💾 Save Filter", callback_data="sw#mm_save_filter")],
-        [InlineKeyboardButton("➕ Add Another Quality - Same Language", callback_data="sw#mm_add_qual_same_lang")],
-        [InlineKeyboardButton("🌐 Choose Another Language", callback_data="sw#mm_choose_another_lang")],
+        [InlineKeyboardButton("➕ Add Quality - Same Language", callback_data="sw#mm_add_qual_same_lang")],
+        [InlineKeyboardButton("🌐 Add New Language", callback_data="sw#mm_choose_another_lang")],
         [InlineKeyboardButton("❌ Cancel", callback_data="sw#cancel")]
     ])
 
@@ -423,8 +423,9 @@ def _build_ms_qual_keyboard(selected_qual: str = "720p", excluded_qualities: lis
 def _build_ms_batch_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("💾 Save Filter", callback_data="sw#ms_save_filter")],
-        [InlineKeyboardButton("➕ Add Another Quality - Same Language", callback_data="sw#ms_add_qual_same_lang")],
-        [InlineKeyboardButton("🌐 Choose Another Language", callback_data="sw#ms_choose_another_lang")],
+        [InlineKeyboardButton("➕ Add Quality - Same Season", callback_data="sw#ms_add_qual_same_season")],
+        [InlineKeyboardButton("📅 Add New Season - Same Language", callback_data="sw#ms_add_season_same_lang")],
+        [InlineKeyboardButton("🌐 Add New Language", callback_data="sw#ms_choose_another_lang")],
         [InlineKeyboardButton("❌ Cancel", callback_data="sw#cancel")]
     ])
 
@@ -5541,7 +5542,13 @@ async def _extract_media_file_doc(media_msg: Message) -> dict | None:
     if not media:
         return None
     from database.ia_filterdb import unpack_new_file_id, save_file
-    file_id, file_ref = unpack_new_file_id(media.file_id)
+    try:
+        res = unpack_new_file_id(media.file_id)
+        file_id = res[0] if isinstance(res, (tuple, list)) else res
+    except Exception:
+        file_id = getattr(media, "file_id", None)
+    if not file_id:
+        return None
     caption_html = media_msg.caption.html if media_msg.caption else None
     fname = getattr(media, "file_name", None) or f"file_{file_id[:8]}"
     fsize = getattr(media, "file_size", 0)
@@ -5560,7 +5567,7 @@ async def _extract_media_file_doc(media_msg: Message) -> dict | None:
         "chat_id": media_msg.chat.id
     }
 
-async def _handle_incoming_media_for_series(client: Client, message: Message, uid: int):
+async def _handle_incoming_media_for_series(client: Client, message: Message, uid: int, send_reply: bool = True):
     wiz = temp.SERIES_WIZARD.get(uid)
     if not wiz:
         return
@@ -5642,19 +5649,20 @@ async def _handle_incoming_media_for_series(client: Client, message: Message, ui
 
     temp.SERIES_WIZARD[uid] = wiz
 
-    summary = (
-        "✅ <b>Series File Added</b>\n\n"
-        f"📺 <b>Series:</b> <code>{html.escape(s_name)}</code>\n"
-        f"📅 <b>Year:</b> <code>{s_year}</code>\n"
-        f"🌐 <b>Language:</b> <code>{s_lang}</code>\n"
-        f"📅 <b>Season:</b> <code>{s_season}</code>\n"
-        f"⚡ <b>Quality:</b> <code>{s_qual}</code>\n\n"
-        f"📁 <b>Files Added:</b> <code>{wiz['files_added']}</code>\n"
-        f"♻️ <b>Duplicates:</b> <code>{wiz.get('duplicates', 0)}</code>"
-    )
-    await message.reply_text(summary, reply_markup=_build_ms_batch_keyboard(), parse_mode=enums.ParseMode.HTML)
+    if send_reply:
+        summary = (
+            "✅ <b>Series File Added</b>\n\n"
+            f"📺 <b>Series:</b> <code>{html.escape(s_name)}</code>\n"
+            f"📅 <b>Year:</b> <code>{s_year}</code>\n"
+            f"🌐 <b>Language:</b> <code>{s_lang}</code>\n"
+            f"📅 <b>Season:</b> <code>{s_season}</code>\n"
+            f"⚡ <b>Quality:</b> <code>{s_qual}</code>\n\n"
+            f"📁 <b>Files Added:</b> <code>{wiz['files_added']}</code>\n"
+            f"♻️ <b>Duplicates:</b> <code>{wiz.get('duplicates', 0)}</code>"
+        )
+        await message.reply_text(summary, reply_markup=_build_ms_batch_keyboard(), parse_mode=enums.ParseMode.HTML)
 
-async def _handle_incoming_media_for_movie(client: Client, message: Message, uid: int):
+async def _handle_incoming_media_for_movie(client: Client, message: Message, uid: int, send_reply: bool = True):
     if uid in getattr(temp, "MOVIE_WIZARD", {}):
         wiz = temp.MOVIE_WIZARD[uid]
         f_doc = await _extract_media_file_doc(message)
@@ -5701,17 +5709,18 @@ async def _handle_incoming_media_for_movie(client: Client, message: Message, uid
 
         temp.MOVIE_WIZARD[uid] = wiz
 
-        summary = (
-            "📥 <b>Movie File Added</b>\n\n"
-            f"🎬 <b>Movie:</b> <code>{html.escape(m_title)}</code>\n"
-            f"📅 <b>Year:</b> <code>{html.escape(str(m_year))}</code>\n\n"
-            f"🌐 <b>Language:</b> <code>{html.escape(m_lang)}</code>\n"
-            f"⚡ <b>Quality:</b> <code>{html.escape(m_qual)}</code>\n\n"
-            f"📁 <b>Total Files Linked:</b> <code>{wiz['files_added']}</code>\n"
-            f"♻️ <b>Duplicates:</b> <code>{wiz.get('duplicates', 0)}</code>\n\n"
-            "Choose an option below to proceed:"
-        )
-        return await message.reply_text(summary, reply_markup=_build_mm_batch_keyboard(), parse_mode=enums.ParseMode.HTML)
+        if send_reply:
+            summary = (
+                "📥 <b>Movie File Added</b>\n\n"
+                f"🎬 <b>Movie:</b> <code>{html.escape(m_title)}</code>\n"
+                f"📅 <b>Year:</b> <code>{html.escape(str(m_year))}</code>\n\n"
+                f"🌐 <b>Language:</b> <code>{html.escape(m_lang)}</code>\n"
+                f"⚡ <b>Quality:</b> <code>{html.escape(m_qual)}</code>\n\n"
+                f"📁 <b>Total Files Linked:</b> <code>{wiz['files_added']}</code>\n"
+                f"♻️ <b>Duplicates:</b> <code>{wiz.get('duplicates', 0)}</code>\n\n"
+                "Choose an option below to proceed:"
+            )
+            return await message.reply_text(summary, reply_markup=_build_mm_batch_keyboard(), parse_mode=enums.ParseMode.HTML)
 
     bdata = temp.AUTO_MOVIE_BATCH.get(uid)
     if not bdata:
@@ -5741,22 +5750,23 @@ async def _handle_incoming_media_for_movie(client: Client, message: Message, uid
     bdata["files_added"] = bdata.get("files_added", 0) + 1
     temp.AUTO_MOVIE_BATCH[uid] = bdata
 
-    summary = (
-        "📦 <b>AUTO MOVIE BATCH COMPLETE</b>\n\n"
-        f"🎬 <b>Movie:</b> <code>{html.escape(m_title)}</code>\n"
-        f"📅 <b>Year:</b> <code>{html.escape(str(m_year))}</code>\n\n"
-        f"🌐 <b>Language:</b> <code>{html.escape(m_lang)}</code>\n"
-        f"🎞 <b>Quality:</b> <code>{html.escape(m_qual)}</code>\n\n"
-        f"📁 <b>Files Added:</b> <code>{bdata['files_added']}</code>\n"
-        f"♻️ <b>Duplicates:</b> <code>{bdata.get('duplicates', 0)}</code>\n\n"
-        "✅ <b>Files linked to Super Movie Filter.</b>"
-    )
-    markup = InlineKeyboardMarkup([
-        [InlineKeyboardButton("🔎 Search Movie", callback_data=f"amb_search:{movie_id}")],
-        [InlineKeyboardButton("➕ Add Another Quality", callback_data=f"am_batch:{bdata.get('session_id')}")],
-        [InlineKeyboardButton("🏠 Close", callback_data="amb_close")]
-    ])
-    await message.reply_text(summary, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
+    if send_reply:
+        summary = (
+            "📦 <b>AUTO MOVIE BATCH COMPLETE</b>\n\n"
+            f"🎬 <b>Movie:</b> <code>{html.escape(m_title)}</code>\n"
+            f"📅 <b>Year:</b> <code>{html.escape(str(m_year))}</code>\n\n"
+            f"🌐 <b>Language:</b> <code>{html.escape(m_lang)}</code>\n"
+            f"🎞 <b>Quality:</b> <code>{html.escape(m_qual)}</code>\n\n"
+            f"📁 <b>Files Added:</b> <code>{bdata['files_added']}</code>\n"
+            f"♻️ <b>Duplicates:</b> <code>{bdata.get('duplicates', 0)}</code>\n\n"
+            "✅ <b>Files linked to Super Movie Filter.</b>"
+        )
+        markup = InlineKeyboardMarkup([
+            [InlineKeyboardButton("🔎 Search Movie", callback_data=f"amb_search:{movie_id}")],
+            [InlineKeyboardButton("➕ Add Another Quality", callback_data=f"am_batch:{bdata.get('session_id')}")],
+            [InlineKeyboardButton("🏠 Close", callback_data="amb_close")]
+        ])
+        await message.reply_text(summary, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
 
 
 @Client.on_message(filters.command(["sbatch", "slink"]) & filters.private, group=-8)
@@ -5824,9 +5834,45 @@ async def sbatch_slink_commands(client: Client, message: Message):
     await status_msg.delete()
     for tmsg in target_msgs:
         if is_series_batch:
-            await _handle_incoming_media_for_series(client, tmsg, uid)
+            await _handle_incoming_media_for_series(client, tmsg, uid, send_reply=False)
         elif is_movie_batch:
-            await _handle_incoming_media_for_movie(client, tmsg, uid)
+            await _handle_incoming_media_for_movie(client, tmsg, uid, send_reply=False)
+
+    if is_movie_batch and uid in getattr(temp, "MOVIE_WIZARD", {}):
+        wiz = temp.MOVIE_WIZARD[uid]
+        m_title = wiz.get("name", "Movie")
+        m_year = wiz.get("year", "N/A")
+        m_lang = wiz.get("selected_language", "Malayalam")
+        m_qual = wiz.get("selected_quality", "720p")
+        summary = (
+            "📥 <b>Movie Files Added</b>\n\n"
+            f"🎬 <b>Movie:</b> <code>{html.escape(m_title)}</code>\n"
+            f"📅 <b>Year:</b> <code>{html.escape(str(m_year))}</code>\n\n"
+            f"🌐 <b>Language:</b> <code>{html.escape(m_lang)}</code>\n"
+            f"⚡ <b>Quality:</b> <code>{html.escape(m_qual)}</code>\n\n"
+            f"📁 <b>Total Files Linked:</b> <code>{wiz.get('files_added', len(wiz.get('file_ids', [])))}</code>\n"
+            f"♻️ <b>Duplicates:</b> <code>{wiz.get('duplicates', 0)}</code>\n\n"
+            "Choose an option below to proceed:"
+        )
+        return await message.reply_text(summary, reply_markup=_build_mm_batch_keyboard(), parse_mode=enums.ParseMode.HTML)
+    elif is_series_batch and uid in getattr(temp, "SERIES_WIZARD", {}):
+        wiz = temp.SERIES_WIZARD[uid]
+        s_name = wiz.get("name", "Unknown Series")
+        s_year = wiz.get("year", "N/A")
+        s_lang = wiz.get("selected_language", "Malayalam")
+        s_season = wiz.get("selected_season") or 1
+        s_qual = wiz.get("selected_quality", "720p")
+        summary = (
+            "✅ <b>Series Files Added</b>\n\n"
+            f"📺 <b>Series:</b> <code>{html.escape(s_name)}</code>\n"
+            f"📅 <b>Year:</b> <code>{s_year}</code>\n"
+            f"🌐 <b>Language:</b> <code>{s_lang}</code>\n"
+            f"📅 <b>Season:</b> <code>{s_season}</code>\n"
+            f"⚡ <b>Quality:</b> <code>{s_qual}</code>\n\n"
+            f"📁 <b>Files Added:</b> <code>{wiz.get('files_added', 0)}</code>\n"
+            f"♻️ <b>Duplicates:</b> <code>{wiz.get('duplicates', 0)}</code>"
+        )
+        return await message.reply_text(summary, reply_markup=_build_ms_batch_keyboard(), parse_mode=enums.ParseMode.HTML)
 
 
 @Client.on_message(filters.private & (filters.document | filters.video), group=-6)
@@ -6453,7 +6499,7 @@ async def series_wizard_callback(client: Client, query: CallbackQuery):
         )
         return await query.message.edit_text(prompt_files, reply_markup=_build_ms_batch_keyboard(), parse_mode=enums.ParseMode.HTML)
 
-    elif data in ("sw#ms_add_qual_same_lang", "sw#restart_batch"):
+    elif data in ("sw#ms_add_qual_same_season", "sw#ms_add_qual_same_lang", "sw#restart_batch"):
         wiz = temp.SERIES_WIZARD.get(uid) or {}
         cur_lang = wiz.get("selected_language", "Malayalam")
         cur_season = wiz.get("selected_season")
@@ -6473,6 +6519,25 @@ async def series_wizard_callback(client: Client, query: CallbackQuery):
         return await query.message.edit_text(
             f"🌐 <b>Language:</b> <code>{html.escape(cur_lang)}</code>\n📅 <b>Season:</b> <code>{html.escape(season_disp)}</code>\n\n⚡ <b>Select Next Quality:</b>",
             reply_markup=_build_ms_qual_keyboard(next_qual, excluded_qualities=excluded),
+            parse_mode=enums.ParseMode.HTML
+        )
+
+    elif data == "sw#ms_add_season_same_lang":
+        wiz = temp.SERIES_WIZARD.get(uid) or {}
+        cur_lang = wiz.get("selected_language", "Malayalam")
+        cur_season = wiz.get("selected_season")
+        cur_qual = wiz.get("selected_quality", "720p")
+        pair_key = f"{cur_lang}#{cur_season}"
+        if cur_qual not in wiz.setdefault("added_pairs", {}).setdefault(pair_key, []):
+            wiz["added_pairs"][pair_key].append(cur_qual)
+
+        # Move to season selection keeping current language
+        wiz["state"] = MS_SEASON_SELECT
+        temp.SERIES_WIZARD[uid] = wiz
+        set_wizard_session(uid, workflow="MANUAL_SERIES", state=MS_SEASON_SELECT, data=wiz, chat_id=chat_id)
+        return await query.message.edit_text(
+            f"🌐 <b>Language:</b> <code>{html.escape(cur_lang)}</code>\n\n📅 <b>Select Season:</b>",
+            reply_markup=_build_ms_season_keyboard(wiz.get("selected_season", 1), allow_skip=False),
             parse_mode=enums.ParseMode.HTML
         )
 
