@@ -448,8 +448,12 @@ def parse_series_filename(filename: str, series_title: str, target_season: int =
     if not filename:
         return {"status": "invalid", "reason": "empty_filename"}
 
+    from utils import is_video_file, is_subtitle_file
+    if not is_video_file(filename) or is_subtitle_file(filename):
+        return {"status": "invalid", "reason": "not_a_video_file"}
+
     raw_name = str(filename)
-    raw_name = re.sub(r"\.(mkv|mp4|avi|mov|wmv|flv|webm|m4v|ts)$", "", raw_name, flags=re.I)
+    raw_name = re.sub(r"\.(mkv|mp4|avi|mov|wmv|flv|webm|m4v|ts|3gp|mpeg|mpg|vob|ogv|divx|m2ts|m2v|f4v)$", "", raw_name, flags=re.I)
     cleaned = ' '.join(filter(lambda x: not x.startswith('@') and not x.startswith('http') and not x.startswith('www.') and not x.startswith('t.me'), raw_name.split()))
     token_text = " " + re.sub(r"[\._\-\+\[\]\(\)\{\}]", " ", cleaned) + " "
 
@@ -578,11 +582,15 @@ def _fetch_movie_candidates_sync(title: str, year: str | int = None, limit: int 
     except Exception:
         reg = re.compile(re.escape(clean_title), re.IGNORECASE)
 
+    from utils import is_video_file, is_subtitle_file
+
     # Execute on primary collection
     cursor = None
     try:
         cursor = col.find({"file_name": reg}).max_time_ms(4000).limit(limit)
         for doc in cursor:
+            if not is_video_file(doc) or is_subtitle_file(doc):
+                continue
             fid = doc.get("file_id")
             if fid and fid not in seen_ids:
                 seen_ids.add(fid)
@@ -602,6 +610,8 @@ def _fetch_movie_candidates_sync(title: str, year: str | int = None, limit: int 
         try:
             sec_cursor = sec_col.find({"file_name": reg}).max_time_ms(4000).limit(limit - len(results))
             for doc in sec_cursor:
+                if not is_video_file(doc) or is_subtitle_file(doc):
+                    continue
                 fid = doc.get("file_id")
                 if fid and fid not in seen_ids:
                     seen_ids.add(fid)
@@ -631,6 +641,7 @@ async def scan_sdatabase_for_series(chat_id: int | str, title: str, season: int 
     Returns structured results with valid files, organized hierarchy, and accurate statistics.
     """
     from database.series_db import check_episode_exists
+    from utils import is_video_file, is_subtitle_file
 
     clean_title = clean_series_title(title)
     docs = await get_movie_candidates(chat_id, title, limit=500)
@@ -647,6 +658,9 @@ async def scan_sdatabase_for_series(chat_id: int | str, title: str, season: int 
     seen_file_keys = set()
 
     for doc in docs:
+        if not is_video_file(doc) or is_subtitle_file(doc):
+            total_invalid += 1
+            continue
         fname = doc.get("file_name", "")
         parsed = parse_series_filename(fname, clean_title, season)
 
