@@ -1877,7 +1877,7 @@ async def scan_movie_batch_by_name_year(
     Queries database candidates broadly, extracts release year, enforces strict Name + Year
     matching, and returns structured batch scan results.
     """
-    from utils import match_movie_identity, normalize_title_for_matching, extract_release_year
+    from utils import match_movie_identity, normalize_title_for_matching, extract_release_year, is_video_file, is_subtitle_file
     from plugins.pm_filter import detect_file_languages
     from plugins.series import extract_quality_from_filename, get_movie_candidates
 
@@ -1903,6 +1903,8 @@ async def scan_movie_batch_by_name_year(
     norm_req_title = normalize_title_for_matching(title)
     known_conflicts = set()
     for d in candidate_docs:
+        if not is_video_file(d) or is_subtitle_file(d):
+            continue
         fn = d.get("file_name", "")
         if normalize_title_for_matching(fn) == norm_req_title:
             fy = extract_release_year(fn, d.get("caption", ""))
@@ -1910,6 +1912,8 @@ async def scan_movie_batch_by_name_year(
                 known_conflicts.add(fy)
 
     for fdoc in candidate_docs:
+        if not is_video_file(fdoc) or is_subtitle_file(fdoc):
+            continue
         fname = fdoc.get("file_name", "")
         cap = fdoc.get("caption", "") or ""
         f_year = extract_release_year(fname, cap)
