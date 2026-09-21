@@ -199,7 +199,16 @@ async def create_series(data: dict) -> str:
 async def get_series(series_id: str) -> dict | None:
     """Fetch a series by its string _id."""
     try:
-        return await series_col.find_one({"_id": ObjectId(series_id)})
+        raw_id = str(series_id or "").strip()
+        if not raw_id:
+            return None
+        if ObjectId.is_valid(raw_id):
+            doc = await series_col.find_one({"_id": ObjectId(raw_id)})
+        else:
+            doc = await series_col.find_one({"_id": raw_id})
+        if doc and doc.get("status") == "deleted":
+            return None
+        return doc
     except Exception:
         return None
 
@@ -856,18 +865,47 @@ async def get_temp_request(req_id: str) -> dict:
     return doc
 
 
-async def delete_series(series_id: str):
-    """Soft-delete: set status='deleted'."""
-    await series_col.update_one(
-        {"_id": ObjectId(series_id)},
-        {"$set": {"status": "deleted", "updated_at": datetime.utcnow()}}
-    )
-
-
-async def delete_series_filter(series_id: str):
+async def delete_series(series_id: str) -> bool:
     """
-    Canonical helper: Soft-delete/disable ONLY the series filter metadata/index.
-    Preserves series_files (sfiles_col) intact.
+    Completely and permanently delete series, its files, batches, and announcement records from the database.
+    """
+    try:
+        raw_id = str(series_id or "").strip()
+        if not raw_id:
+            return False
+        q_or = []
+        if ObjectId.is_valid(raw_id):
+            q_or.append({"_id": ObjectId(raw_id)})
+        q_or.extend([{"_id": raw_id}, {"series_key": raw_id}, {"normalized_name": raw_id}])
+        await series_col.delete_many({"$or": q_or})
+
+        # 2. Delete all files from sfiles_col
+        await sfiles_col.delete_many({"series_id": _sid_query(raw_id)})
+
+        # 3. Delete all batches from sbatch_col
+        await sbatch_col.delete_many({"series_id": _sid_query(raw_id)})
+
+        # 4. Delete all announcement records from announcements_col
+        await announcements_col.delete_many({
+            "$or": [
+                {"series_id": raw_id},
+                {"filter_id": raw_id},
+                {"content_id": raw_id},
+                {"announcement_key": f"series:{raw_id}"},
+                {"announcement_key": raw_id},
+                {"ann_key": f"series:{raw_id}"},
+                {"ann_key": raw_id}
+            ]
+        })
+        return True
+    except Exception as e:
+        logger.error(f"[DELETE SERIES ERROR] series_id={series_id}: {e}")
+        return False
+
+
+async def delete_series_filter(series_id: str) -> bool:
+    """
+    Canonical helper: Permanently delete the series filter and all related files from the database.
     """
     return await delete_series(series_id)
 
@@ -1218,8 +1256,18 @@ async def create_super_movie(data: dict) -> str:
 
 
 async def get_super_movie(movie_id: str) -> dict | None:
+    """Fetch a Super Movie by its string _id."""
     try:
-        return await super_movies_col.find_one({"_id": ObjectId(movie_id)})
+        raw_id = str(movie_id or "").strip()
+        if not raw_id:
+            return None
+        if ObjectId.is_valid(raw_id):
+            doc = await super_movies_col.find_one({"_id": ObjectId(raw_id)})
+        else:
+            doc = await super_movies_col.find_one({"_id": raw_id})
+        if doc and doc.get("status") == "deleted":
+            return None
+        return doc
     except Exception:
         return None
 
@@ -1304,14 +1352,35 @@ async def list_all_super_movies() -> list[dict]:
 
 
 async def delete_super_movie(movie_id: str) -> bool:
-    """Soft-delete a Super Movie record."""
+    """
+    Completely and permanently delete Super Movie filter and its announcement records from the database.
+    """
     try:
-        res = await super_movies_col.update_one(
-            {"_id": ObjectId(movie_id)},
-            {"$set": {"status": "deleted", "updated_at": datetime.utcnow()}}
-        )
-        return res.modified_count > 0
-    except Exception:
+        raw_id = str(movie_id or "").strip()
+        if not raw_id:
+            return False
+        q_or = []
+        if ObjectId.is_valid(raw_id):
+            q_or.append({"_id": ObjectId(raw_id)})
+        q_or.append({"_id": raw_id})
+        
+        await super_movies_col.delete_many({"$or": q_or})
+
+        # Delete all announcement records
+        await announcements_col.delete_many({
+            "$or": [
+                {"filter_id": raw_id},
+                {"content_id": raw_id},
+                {"series_id": raw_id},
+                {"announcement_key": f"movie:{raw_id}"},
+                {"announcement_key": raw_id},
+                {"ann_key": f"movie:{raw_id}"},
+                {"ann_key": raw_id}
+            ]
+        })
+        return True
+    except Exception as e:
+        logger.error(f"[DELETE SUPER MOVIE ERROR] movie_id={movie_id}: {e}")
         return False
 
 
