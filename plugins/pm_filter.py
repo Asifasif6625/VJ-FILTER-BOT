@@ -504,6 +504,105 @@ def format_movie_metadata_caption(movie_data: dict, grouped_data: dict = None, s
     return meta_block
 
 
+def format_series_metadata_caption(series_data: dict, selected_lang: str = None, selected_season: int = None, page_type: str = "lang") -> str:
+    """
+    Renders Series filter UI with italic metadata block identical to Movie Filter:
+    <i>○ Series: <b>Series Name</b>
+    ○ Year: 2026
+    ○ Genres: Action, Thriller
+    ○ Rating: 8.2/10
+    ○ Quality: 1080p, 720p
+    ○ Seasons: Season 1, Season 2
+    ○ Languages: Malayalam, Tamil, English</i>
+
+    Followed by page-specific italic prompt:
+    - lang: 📌 <i>select your series language...!</i>
+    - season: 📌 <i>choose your season..!</i>
+    - qual: 📌 <i>choose your files quality..!</i>
+    - coming_soon: ⏳ <b>Coming Soon!</b>
+    """
+    raw_title = series_data.get("name") or series_data.get("title") or "Series"
+    title = html.escape(str(raw_title).strip())
+
+    raw_year = str(series_data.get("year", "")).strip()
+    if not raw_year or raw_year.upper() == "N/A":
+        year_str = "N/A"
+    else:
+        year_str = html.escape(raw_year)
+
+    raw_genre = series_data.get("genre") or series_data.get("genres") or ""
+    if isinstance(raw_genre, list):
+        raw_genre = ", ".join([str(x).strip() for x in raw_genre if str(x).strip()])
+    raw_genre = str(raw_genre).strip()
+    if not raw_genre or raw_genre.upper() == "N/A":
+        genre_str = "N/A"
+    else:
+        genre_str = html.escape(raw_genre)
+
+    raw_rating = str(series_data.get("rating", "")).strip()
+    if not raw_rating or raw_rating.upper() == "N/A":
+        rating_str = "N/A"
+    else:
+        if raw_rating.endswith("/10"):
+            rating_str = html.escape(raw_rating)
+        else:
+            rating_str = f"{html.escape(raw_rating)}/10"
+
+    # Qualities
+    quality_order = ["2160p", "4K", "1440p", "1080p", "720p", "480p", "360p", "HDRip", "WEB-DL", "BluRay", "DVDRip", "HEVC", "Unknown"]
+    m_quals = series_data.get("qualities") or []
+    if isinstance(m_quals, list):
+        m_quals_sorted = sorted(m_quals, key=lambda x: (quality_order.index(x) if x in quality_order else 99, x))
+        quality_str = ", ".join(m_quals_sorted) if m_quals_sorted else "N/A"
+    else:
+        quality_str = str(m_quals) or "N/A"
+    quality_str = html.escape(quality_str)
+
+    # Seasons
+    m_seasons = series_data.get("seasons") or []
+    if isinstance(m_seasons, list):
+        seasons_sorted = sorted([int(s) for s in m_seasons if str(s).isdigit()])
+        seasons_str = ", ".join(f"Season {s}" for s in seasons_sorted) if seasons_sorted else "N/A"
+    else:
+        seasons_str = str(m_seasons) or "N/A"
+    seasons_str = html.escape(seasons_str)
+
+    # Languages
+    preferred_order = ["Malayalam", "Tamil", "Hindi", "Telugu", "Kannada", "English", "Multi", "Dual Audio", "Multi Audio"]
+    m_langs = series_data.get("languages") or []
+    if isinstance(m_langs, list):
+        m_langs_sorted = sorted(m_langs, key=lambda x: (preferred_order.index(x) if x in preferred_order else 99, x))
+        languages_str = ", ".join(m_langs_sorted) if m_langs_sorted else "N/A"
+    else:
+        languages_str = str(m_langs) or "N/A"
+    languages_str = html.escape(languages_str)
+
+    meta_block = (
+        f"<i>○ Series: <b>{title}</b>\n"
+        f"○ Year: {year_str}\n"
+        f"○ Genres: {genre_str}\n"
+        f"○ Rating: {rating_str}\n"
+        f"○ Quality: {quality_str}\n"
+        f"○ Seasons: {seasons_str}\n"
+        f"○ Languages: {languages_str}</i>"
+    )
+
+    if page_type == "lang":
+        footer = "📌 <i>select your series language...!</i>"
+    elif page_type == "season":
+        footer = "📌 <i>choose your season..!</i>"
+    elif page_type == "qual":
+        footer = "📌 <i>choose your files quality..!</i>"
+    elif page_type == "coming_soon":
+        footer = "⏳ <b>Coming Soon!</b>"
+    else:
+        footer = ""
+
+    if footer:
+        return f"{meta_block}\n\n{footer}"
+    return meta_block
+
+
 def build_movie_language_keyboard(key, grouped_data, has_subtitles: bool = False):
     from plugins.series import to_series_font, make_styled_button
     buttons = []

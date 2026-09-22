@@ -7951,17 +7951,11 @@ async def render_super_movie_direct(client: Client, message: Message, movie: dic
 async def render_series_direct(client: Client, message: Message, series_doc: dict, reply_msg: Message = None, user_id: int = None) -> bool:
     """Renders the language selection UI for a specific Series Filter."""
     from database.series_db import list_series_languages, is_filter_coming_soon
-    from plugins.pm_filter import BUTTON_OWNERS
+    from plugins.pm_filter import BUTTON_OWNERS, format_series_metadata_caption
     from utils import schedule_filter_message_delete
 
     series_id = str(series_doc["_id"])
     name = series_doc.get("name", "")
-    year = str(series_doc.get("year", ""))
-    year_str = f" ({year})" if year and year != "N/A" else ""
-    rating = str(series_doc.get("rating", ""))
-    rating_str = f"\n⭐ <b>Rating:</b> {rating}/10" if rating else ""
-    genre = series_doc.get("genre", "")
-    genre_str = f"\n🎭 <b>Genre:</b> {genre}" if genre and genre != "N/A" else ""
     poster = str(series_doc.get("poster") or "").strip()
     if poster.upper() == "N/A":
         poster = ""
@@ -8004,12 +7998,7 @@ async def render_series_direct(client: Client, message: Message, series_doc: dic
     # Coming Soon Check
     if is_filter_coming_soon(series_doc) or (series_doc.get("coming_soon") and not langs):
         logger.info(f"[COMING SOON SEARCH] rendering series coming soon UI name={name} id={series_id}")
-        caption_text = (
-            f"📺 <b>{name}{year_str}</b>"
-            f"{rating_str}"
-            f"{genre_str}\n\n"
-            f"⏳ <b>Coming Soon!</b>"
-        )
+        caption_text = format_series_metadata_caption(series_doc, page_type="coming_soon")
         markup = build_coming_soon_keyboard("series", series_id, key)
 
         if reply_msg:
@@ -8100,13 +8089,7 @@ async def render_series_direct(client: Client, message: Message, series_doc: dic
             row.append(make_styled_button(to_series_font(l), callback_data=f"ser_lang#{series_id}#{l}", style="success"))
         buttons.append(row)
 
-    # Removed Close button from Series Language selection
-    caption_text = (
-        f"📺 <b>{name}{year_str}</b>"
-        f"{rating_str}"
-        f"{genre_str}\n\n"
-        f"🌐 <b>Select Language:</b>"
-    )
+    caption_text = format_series_metadata_caption(series_doc, page_type="lang")
     markup = InlineKeyboardMarkup(buttons)
 
     if reply_msg:
@@ -8446,6 +8429,7 @@ async def ser_lang_callback(client: Client, query: CallbackQuery):
         return await query.answer(err_msg, show_alert=True)
 
     from database.series_db import get_series, get_series_by_key, list_series_seasons, list_season_qualities, sfiles_col, _sid_query, _num_query
+    from plugins.pm_filter import format_series_metadata_caption
     series = await get_series(series_id)
     if not series:
         series = await get_series_by_key(series_id)
@@ -8453,12 +8437,6 @@ async def ser_lang_callback(client: Client, query: CallbackQuery):
         return await query.answer("⚠️ Series not found in database.", show_alert=True)
 
     name = series.get("name", "Series")
-    year = str(series.get("year", ""))
-    year_str = f" ({year})" if year and year != "N/A" else ""
-    rating = str(series.get("rating", ""))
-    rating_str = f"\n⭐ <b>Rating:</b> {rating}/10" if rating else ""
-    genre = series.get("genre", "")
-    genre_str = f"\n🎭 <b>Genre:</b> {genre}" if genre and genre != "N/A" else ""
 
     seasons = await list_series_seasons(series_id, lang)
     if not seasons:
@@ -8485,13 +8463,7 @@ async def ser_lang_callback(client: Client, query: CallbackQuery):
             make_styled_button("⬅️ Language", callback_data=f"ser_back#{series_id}#{lang}", style="success")
         ])
 
-        cap = (
-            f"📺 <b>{name}{year_str}</b>"
-            f"{rating_str}"
-            f"{genre_str}\n\n"
-            f"🌐 <b>Language:</b> {lang}\n\n"
-            f"📅 <b>Select Season:</b>"
-        )
+        cap = format_series_metadata_caption(series, selected_lang=lang, page_type="season")
     else:
         # Single season -> Show Qualities directly
         s = seasons_sorted[0]
@@ -8517,13 +8489,7 @@ async def ser_lang_callback(client: Client, query: CallbackQuery):
             make_styled_button("⬅️ Language", callback_data=f"ser_back#{series_id}#{lang}", style="success")
         ])
 
-        cap = (
-            f"📺 <b>{name}{year_str}</b>"
-            f"{rating_str}"
-            f"{genre_str}\n\n"
-            f"🌐 <b>Language:</b> {lang} | 📅 <b>Season {s}</b>\n\n"
-            f"🎞 <b>Select Quality:</b>"
-        )
+        cap = format_series_metadata_caption(series, selected_lang=lang, selected_season=s, page_type="qual")
 
     logger.info(f"[SERIES CALLBACK RENDER] action=language buttons={len(buttons)}")
     markup = InlineKeyboardMarkup(buttons)
@@ -8555,7 +8521,7 @@ async def ser_season_callback(client: Client, query: CallbackQuery):
 
     logger.info(f"[SERIES CALLBACK PARSED] action=season series_id={series_id} language={lang} season={season} quality=None key={key}")
 
-    from plugins.pm_filter import is_button_owner
+    from plugins.pm_filter import is_button_owner, format_series_metadata_caption
     is_owner, err_msg = is_button_owner(query, key)
     logger.info(f"[SERIES CALLBACK OWNER] key={key} user={query.from_user.id} allowed={is_owner}")
     if not is_owner:
@@ -8567,10 +8533,6 @@ async def ser_season_callback(client: Client, query: CallbackQuery):
         series = await get_series_by_key(series_id)
     if not series:
         return await query.answer("⚠️ Series not found in database.", show_alert=True)
-
-    name = series.get("name", "Series")
-    year = str(series.get("year", ""))
-    year_str = f" ({year})" if year and year != "N/A" else ""
 
     qual_vals = await sfiles_col.distinct("quality", {
         "series_id": _sid_query(series_id),
@@ -8595,11 +8557,7 @@ async def ser_season_callback(client: Client, query: CallbackQuery):
         make_styled_button("⬅️ Language", callback_data=f"ser_back#{series_id}#{lang}", style="success")
     ])
 
-    cap = (
-        f"📺 <b>{name}{year_str}</b>\n\n"
-        f"🌐 <b>Language:</b> {lang} | 📅 <b>Season {season}</b>\n\n"
-        f"🎞 <b>Select Quality:</b>"
-    )
+    cap = format_series_metadata_caption(series, selected_lang=lang, selected_season=season, page_type="qual")
     logger.info(f"[SERIES CALLBACK RENDER] action=season buttons={len(buttons)}")
     markup = InlineKeyboardMarkup(buttons)
     try:
