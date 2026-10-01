@@ -1971,7 +1971,7 @@ async def scan_movie_batch_by_name_year(
     Queries database candidates broadly, extracts release year, enforces strict Name + Year
     matching, and returns structured batch scan results.
     """
-    from utils import match_movie_identity, normalize_title_for_matching, extract_release_year, is_video_file, is_subtitle_file, normalize_language_name
+    from utils import match_automatic_movie_file, is_video_file, is_subtitle_file, normalize_language_name
     from plugins.pm_filter import detect_file_languages, resolve_file_language
     from plugins.series import extract_quality_from_filename, get_movie_candidates
 
@@ -1995,42 +1995,25 @@ async def scan_movie_batch_by_name_year(
     unknown_year_count = 0
     series_count = 0
 
-    norm_req_title = normalize_title_for_matching(title)
-    known_conflicts = set()
-    for d in candidate_docs:
-        if not is_video_file(d) or is_subtitle_file(d):
-            continue
-        fn = d.get("file_name", "")
-        if normalize_title_for_matching(fn) == norm_req_title:
-            fy = extract_release_year(fn, d.get("caption", ""))
-            if fy:
-                known_conflicts.add(fy)
-
     for fdoc in candidate_docs:
         if not is_video_file(fdoc) or is_subtitle_file(fdoc):
             continue
         fname = fdoc.get("file_name", "")
         cap = fdoc.get("caption", "") or ""
-        f_year = extract_release_year(fname, cap)
 
-        is_match, reason = match_movie_identity(
-            fdoc,
-            requested_title=title,
-            requested_year=year,
+        parsed = match_automatic_movie_file(
+            target_movie_name=title,
+            target_year=year,
+            filename=fname,
+            caption=cap,
+            original_language=original_language,
             imdb_id=imdb_id,
-            tmdb_id=tmdb_id,
-            known_conflicts=known_conflicts
+            tmdb_id=tmdb_id
         )
 
-        if is_match:
-            langs = detect_file_languages(fname, cap, default=None)
-            if langs:
-                l_val = langs[0]
-            elif original_language:
-                l_val = normalize_language_name(original_language) or original_language
-            else:
-                l_val = "English"
-            q_val = extract_quality_from_filename(fname)
+        if parsed.get("matched"):
+            l_val = parsed.get("language") or original_language or "English"
+            q_val = parsed.get("quality") or "Unknown"
 
             fdoc_copy = dict(fdoc)
             fdoc_copy["language"] = l_val
@@ -2038,13 +2021,12 @@ async def scan_movie_batch_by_name_year(
             fdoc_copy["title"] = title
             matching_files.append(fdoc_copy)
         else:
-            if reason == "YEAR_MISMATCH":
+            reason = str(parsed.get("reason", "")).lower()
+            if "year_mismatch" in reason:
                 year_mismatch_count += 1
-            elif reason == "TITLE_MISMATCH":
-                title_mismatch_count += 1
-            elif reason in ("UNKNOWN_YEAR", "YEAR_NOT_FOUND_IN_FILENAME"):
+            elif "year_not_found" in reason:
                 unknown_year_count += 1
-            elif reason == "IS_SERIES":
+            elif "is_series" in reason:
                 series_count += 1
             else:
                 title_mismatch_count += 1
