@@ -272,7 +272,7 @@ def normalize_title_for_matching(text: str) -> str:
 
 TMDB_LANGUAGE_CODE_MAP = {
     "en": "English", "eng": "English", "english": "English",
-    "ml": "Malayalam", "mal": "Malayalam", "malayalam": "Malayalam",
+    "ml": "Malayalam", "mal": "Malayalam", "malayalam": "Malayalam", "malayala": "Malayalam",
     "hi": "Hindi", "hin": "Hindi", "hindi": "Hindi",
     "ta": "Tamil", "tam": "Tamil", "tamil": "Tamil",
     "te": "Telugu", "tel": "Telugu", "telugu": "Telugu",
@@ -425,7 +425,8 @@ def normalize_series_identity_title(text: str) -> str:
 
 def match_automatic_series_file(
     target_series_name: str,
-    filename: str,
+    target_year: str | int = None,
+    filename: str = "",
     caption: str = "",
     target_season: int = None,
     original_language: str = None,
@@ -434,11 +435,21 @@ def match_automatic_series_file(
     """
     Strict authoritative Automatic Series file matcher.
     Rule:
-      Filename structure is strictly: {EXACT SERIES NAME} {SxxEyy} {ANY OTHER DETAILS}
-      ONLY the text BEFORE the SxxEyy boundary represents the candidate series name.
-      Everything AFTER the SxxEyy boundary is file metadata (quality, language, etc.)
-      and MUST NOT be included in series-name comparison.
+      Filename structure: {EXACT SERIES NAME} [YEAR] {SxxEyy} [YEAR] {METADATA}
+      - ONLY the text BEFORE the SxxEyy boundary represents the candidate series name.
+      - A standalone 4-digit release year (1900-2099) may appear EITHER BEFORE OR AFTER
+        the SxxEyy marker and MUST NOT become part of the series name.
+      - If a year is detected in filename and target_year is specified, they must match.
+      - If no year in filename, exact normalized title + SxxEyy is accepted.
     """
+    # Handle flexible positional argument calling: match_automatic_series_file(target, filename, ...)
+    if isinstance(target_year, str) and (
+        any(target_year.lower().endswith(ext) for ext in [".mkv", ".mp4", ".avi", ".mov", ".webm", ".ts", ".flv", ".m4v", ".3gp"])
+        or (not filename and ("." in target_year or " " in target_year or "s0" in target_year.lower()))
+    ):
+        filename = target_year
+        target_year = None
+
     if not filename:
         return {"matched": False, "status": "invalid", "reason": "empty_filename"}
 
@@ -518,18 +529,15 @@ def match_automatic_series_file(
     candidate_raw = cleaned_name[:boundary_start].strip()
     remaining_text = cleaned_name[boundary_end:].strip()
 
-    norm_candidate = normalize_series_identity_title(candidate_raw)
-    norm_target = normalize_series_identity_title(target_series_name)
+    # Standalone 4-digit year detector (1900-2099)
+    YEAR_REGEX = re.compile(r"(?i)(?<![0-9a-zA-Z])(19\d{2}|20\d{2})(?![0-9a-zA-Z])")
 
-    if not norm_candidate or not norm_target:
-        return {
-            "matched": False,
-            "status": "invalid",
-            "series_name": candidate_raw,
-            "season": season_val,
-            "episode": episode_val,
-            "reason": "empty_series_name"
-        }
+    detected_year = None
+    candidate_series_name = candidate_raw
+
+    # Check if a standalone year is present before the SxxEyy marker
+    cand_year_matches = list(YEAR_REGEX.finditer(candidate_raw))
+    norm_target = normalize_series_identity_title(target_series_name)
 
     valid_targets = {norm_target}
     if target_aliases and isinstance(target_aliases, (list, set, tuple)):
@@ -538,29 +546,114 @@ def match_automatic_series_file(
             if na:
                 valid_targets.add(na)
 
-    # EXACT comparison between candidate series name and target series name
-    if norm_candidate not in valid_targets:
+    # Check if stripping year from candidate_raw matches target title
+    title_matched = False
+    if cand_year_matches:
+        # Check from last found year match before marker
+        for ym in reversed(cand_year_matches):
+            y_val = int(ym.group(1))
+            cand_without_year = (candidate_raw[:ym.start()] + " " + candidate_raw[ym.end():]).strip()
+            norm_without_year = normalize_series_identity_title(cand_without_year)
+            if norm_without_year in valid_targets:
+                candidate_series_name = cand_without_year
+                detected_year = y_val
+                title_matched = True
+                break
+
+    if not title_matched:
+        # Check direct candidate_raw without year stripping
+        norm_candidate = normalize_series_identity_title(candidate_raw)
+        if norm_candidate in valid_targets:
+            candidate_series_name = candidate_raw
+            title_matched = True
+
+    # If year wasn't found before SxxEyy marker, check remaining_text / filename
+    if detected_year is None:
+        rem_year_matches = list(YEAR_REGEX.finditer(remaining_text))
+        if rem_year_matches:
+            detected_year = int(rem_year_matches[0].group(1))
+
+    # Parse target year requirement if provided
+    req_year = None
+    if target_year and str(target_year).strip() not in ["N/A", "None", "0", ""]:
+        try:
+            req_year = int(str(target_year).strip())
+        except (ValueError, TypeError):
+            req_year = None
+
+    if not title_matched or not normalize_series_identity_title(candidate_series_name):
+        reason = f"series_name_mismatch: '{candidate_raw}' != '{target_series_name}'"
+        logger.debug(
+            f"[AUTO SERIES MATCH REJECT] "
+            f"target_series={target_series_name!r} "
+            f"candidate_series={candidate_series_name!r} "
+            f"target_year={req_year!r} "
+            f"detected_year={detected_year!r} "
+            f"season={season_val!r} "
+            f"episode={episode_val!r} "
+            f"filename={filename!r} "
+            f"reason={reason}"
+        )
         return {
             "matched": False,
             "status": "invalid",
             "series": target_series_name,
-            "series_name": candidate_raw,
+            "series_name": candidate_series_name,
+            "year": detected_year,
             "season": season_val,
             "episode": episode_val,
-            "reason": f"series_name_mismatch: '{candidate_raw}' != '{target_series_name}'"
+            "reason": reason
+        }
+
+    # Year validation if both target_year and detected_year exist
+    if req_year is not None and detected_year is not None and detected_year != req_year:
+        reason = f"year_mismatch: file year {detected_year} != target year {req_year}"
+        logger.debug(
+            f"[AUTO SERIES MATCH REJECT] "
+            f"target_series={target_series_name!r} "
+            f"candidate_series={candidate_series_name!r} "
+            f"target_year={req_year!r} "
+            f"detected_year={detected_year!r} "
+            f"season={season_val!r} "
+            f"episode={episode_val!r} "
+            f"filename={filename!r} "
+            f"reason={reason}"
+        )
+        return {
+            "matched": False,
+            "status": "invalid",
+            "series": target_series_name,
+            "series_name": candidate_series_name,
+            "year": detected_year,
+            "season": season_val,
+            "episode": episode_val,
+            "reason": reason
         }
 
     # Target season filter check if specified
     if target_season is not None and int(season_val) != int(target_season):
+        reason = f"season_{season_val}_not_target_{target_season}"
+        logger.debug(
+            f"[AUTO SERIES MATCH REJECT] "
+            f"target_series={target_series_name!r} "
+            f"candidate_series={candidate_series_name!r} "
+            f"target_year={req_year!r} "
+            f"detected_year={detected_year!r} "
+            f"season={season_val!r} "
+            f"episode={episode_val!r} "
+            f"filename={filename!r} "
+            f"reason={reason}"
+        )
         return {
             "matched": False,
             "status": "other_season",
             "series": target_series_name,
-            "series_name": candidate_raw,
+            "series_name": candidate_series_name,
+            "year": detected_year,
             "season": season_val,
             "episode": episode_val,
             "remaining_text": remaining_text,
-            "reason": f"season_{season_val}_not_target_{target_season}"
+            "reason": reason
         }
 
     # Metadata extraction strictly from remaining_text / filename
@@ -579,7 +672,8 @@ def match_automatic_series_file(
         "matched": True,
         "status": "matched",
         "series": target_series_name,
-        "series_name": candidate_raw,
+        "series_name": candidate_series_name,
+        "year": detected_year,
         "season": season_val,
         "episode": episode_val,
         "quality": detected_quality,
