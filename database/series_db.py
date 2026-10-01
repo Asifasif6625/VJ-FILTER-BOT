@@ -1742,6 +1742,7 @@ async def sync_series_filter_for_files(file_docs, *, trigger="file_add"):
 
                 parsed = match_automatic_series_file(
                     target_series_name=series_name,
+                    target_year=series_doc.get("year"),
                     filename=fname,
                     caption=caption,
                     original_language=series_doc.get("original_language"),
