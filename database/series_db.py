@@ -126,8 +126,10 @@ async def create_series(data: dict) -> str:
         "rating": str(data.get("rating", "")),
         "description": data.get("description", ""),
         "poster": data.get("poster", ""),
+        "posters": data.get("posters") or ([data.get("poster")] if data.get("poster") else []),
         "imdb_id": data.get("imdb_id", ""),
         "tmdb_id": data.get("tmdb_id", ""),
+        "original_language": data.get("original_language", ""),
         "languages": data.get("languages", []),
         "seasons": data.get("seasons", []),
         "qualities": data.get("qualities", []),
@@ -155,6 +157,7 @@ async def create_series(data: dict) -> str:
         merged_seasons = sorted(list(set((existing.get("seasons") or []) + (doc.get("seasons") or []))))
         merged_langs = list(dict.fromkeys((existing.get("languages") or []) + (doc.get("languages") or [])))
         merged_quals = list(dict.fromkeys((existing.get("qualities") or []) + (doc.get("qualities") or [])))
+        merged_posters = list(dict.fromkeys((existing.get("posters") or []) + (doc.get("posters") or [])))
         merged_user_aliases = list(dict.fromkeys((existing.get("aliases") or []) + user_aliases))
         merged_gen_aliases = list(dict.fromkeys(generate_smart_aliases(doc["name"] or existing.get("name"))))
 
@@ -176,9 +179,11 @@ async def create_series(data: dict) -> str:
             "genre": doc["genre"] if doc["genre"] != "N/A" else existing.get("genre", "N/A"),
             "rating": doc["rating"] or existing.get("rating", ""),
             "poster": doc["poster"] or existing.get("poster", ""),
+            "posters": merged_posters if merged_posters else (doc.get("posters") or existing.get("posters") or []),
             "description": doc["description"] or existing.get("description", ""),
             "imdb_id": doc.get("imdb_id") or existing.get("imdb_id", ""),
             "tmdb_id": doc.get("tmdb_id") or existing.get("tmdb_id", ""),
+            "original_language": doc.get("original_language") or existing.get("original_language", ""),
             "languages": merged_langs,
             "seasons": merged_seasons,
             "qualities": merged_quals,
@@ -1184,7 +1189,10 @@ async def create_super_movie(data: dict) -> str:
         "genre": data.get("genre", "N/A"),
         "rating": str(data.get("rating", "")),
         "poster": data.get("poster", ""),
+        "posters": data.get("posters") or ([data.get("poster")] if data.get("poster") else []),
         "imdb_id": data.get("imdb_id", ""),
+        "tmdb_id": data.get("tmdb_id", ""),
+        "original_language": data.get("original_language", ""),
         "languages": data.get("languages", []),
         "qualities": data.get("qualities", []),
         "file_ids": unique_file_ids,
@@ -1210,6 +1218,7 @@ async def create_super_movie(data: dict) -> str:
         merged_file_ids = list(dict.fromkeys((existing.get("file_ids") or []) + unique_file_ids))
         merged_langs = list(dict.fromkeys((existing.get("languages") or []) + (doc.get("languages") or [])))
         merged_quals = list(dict.fromkeys((existing.get("qualities") or []) + (doc.get("qualities") or [])))
+        merged_posters = list(dict.fromkeys((existing.get("posters") or []) + (doc.get("posters") or [])))
         merged_user_aliases = list(dict.fromkeys((existing.get("aliases") or []) + user_aliases))
         merged_gen_aliases = list(dict.fromkeys(generate_smart_aliases(doc["title"] or existing.get("title"))))
         
@@ -1236,7 +1245,10 @@ async def create_super_movie(data: dict) -> str:
             "genre": doc["genre"] if doc["genre"] != "N/A" else existing.get("genre", "N/A"),
             "rating": doc["rating"] or existing.get("rating", ""),
             "poster": doc["poster"] or existing.get("poster", ""),
+            "posters": merged_posters if merged_posters else (doc.get("posters") or existing.get("posters") or []),
             "imdb_id": doc["imdb_id"] or existing.get("imdb_id", ""),
+            "tmdb_id": doc.get("tmdb_id") or existing.get("tmdb_id", ""),
+            "original_language": doc.get("original_language") or existing.get("original_language", ""),
             "languages": merged_langs,
             "qualities": merged_quals,
             "file_ids": merged_file_ids,
@@ -1511,7 +1523,10 @@ async def resync_super_movie_filter(movie_id: str) -> dict | None:
             valid_fids.append(fid)
             fname = fdoc.get("file_name", "")
             caption = fdoc.get("caption", "") or ""
-            langs = detect_file_languages(fname, caption)
+            langs = detect_file_languages(fname, caption, default=None)
+            if not langs and movie:
+                orig_l = movie.get("original_language")
+                langs = [orig_l] if orig_l else ["English"]
             for l in langs:
                 if l:
                     new_langs.add(l)
@@ -1577,13 +1592,16 @@ async def sync_movie_filter_for_files(file_docs, *, trigger="file_add"):
             fname = fdoc.get("file_name", "")
             caption = fdoc.get("caption", "") or ""
 
-            langs = detect_file_languages(fname, caption)
-            qual = extract_quality_from_filename(fname)
-
             movie = await find_matching_super_movie(fname, caption)
             if not movie:
                 logger.info(f"[AUTO MOVIE FILTER SYNC SKIP]\nreason=no_existing_filter\nfile_name={fname}\ntrigger={trigger}")
                 continue
+
+            langs = detect_file_languages(fname, caption, default=None)
+            if not langs and movie:
+                orig_l = movie.get("original_language")
+                langs = [orig_l] if orig_l else ["English"]
+            qual = extract_quality_from_filename(fname)
 
             mid = str(movie["_id"])
             if mid not in matched_updates:
@@ -1693,6 +1711,7 @@ async def sync_movie_filter_for_files(file_docs, *, trigger="file_add"):
 async def sync_series_filter_for_files(file_docs, *, trigger="file_add"):
     """
     Central helper to automatically synchronize incoming series files into matching Series Filter(s).
+    Uses strict match_automatic_series_file: {SERIES NAME} {SxxEyy} {REMAINING METADATA}.
     Extracts Series Name, Season, Episode, Language, Quality and inserts into sfiles_col and updates series_col.
     """
     if not file_docs:
@@ -1700,8 +1719,12 @@ async def sync_series_filter_for_files(file_docs, *, trigger="file_add"):
     if isinstance(file_docs, dict):
         file_docs = [file_docs]
 
-    from plugins.pm_filter import detect_file_languages
-    from plugins.series import extract_quality_from_filename, _extract_episode_number, clean_series_title
+    from utils import match_automatic_series_file
+
+    active_series_cursor = series_col.find({"status": {"$ne": "deleted"}})
+    active_series_list = await active_series_cursor.to_list(length=1000)
+    if not active_series_list:
+        return
 
     for fdoc in file_docs:
         try:
@@ -1712,69 +1735,70 @@ async def sync_series_filter_for_files(file_docs, *, trigger="file_add"):
             caption = fdoc.get("caption", "") or ""
             fsize = fdoc.get("file_size", 0)
 
-            clean_name = clean_series_title(fname)
-            m_season = re.search(r"\bS(?:eason)?[\s\.\-_]?(\d{1,2})\b", fname, re.IGNORECASE)
-            season = int(m_season.group(1)) if m_season else 1
-            episode = _extract_episode_number(fname) or 0
+            for series_doc in active_series_list:
+                series_name = series_doc.get("name", "")
+                if not series_name:
+                    continue
 
-            matches = await search_series(clean_name)
-            if not matches:
-                stripped = re.sub(r"\b(s\d{1,2}|e\d{1,4}|ep\d{1,4}|season\s*\d{1,2}|episode\s*\d{1,4}|2160p|1080p|720p|480p|360p|4k|mkv|mp4|avi)\b", " ", clean_name, flags=re.IGNORECASE)
-                stripped = re.sub(r"\s+", " ", stripped).strip()
-                if stripped:
-                    matches = await search_series(stripped)
+                parsed = match_automatic_series_file(
+                    target_series_name=series_name,
+                    filename=fname,
+                    caption=caption,
+                    original_language=series_doc.get("original_language"),
+                    target_aliases=series_doc.get("aliases")
+                )
 
-            if not matches:
-                continue
+                if not parsed.get("matched"):
+                    continue
 
-            series_doc = matches[0]
-            series_id = str(series_doc["_id"])
+                series_id = str(series_doc["_id"])
+                season = parsed["season"]
+                episode = parsed["episode"]
+                qual = parsed["quality"]
+                lang = parsed["language"]
 
-            langs = detect_file_languages(fname, caption)
-            qual = extract_quality_from_filename(fname)
-            lang = langs[0] if langs else "Multi"
+                existing = await sfiles_col.find_one({
+                    "series_id": _sid_query(series_id),
+                    "file_id": str(fid)
+                })
+                if existing:
+                    break
 
-            existing = await sfiles_col.find_one({
-                "series_id": _sid_query(series_id),
-                "file_id": str(fid)
-            })
-            if existing:
-                continue
+                file_record = {
+                    "series_id": series_id,
+                    "language": lang,
+                    "season": season,
+                    "episode": episode,
+                    "quality": qual,
+                    "file_id": str(fid),
+                    "file_name": fname,
+                    "file_size": fsize,
+                    "created_at": datetime.utcnow()
+                }
+                await sfiles_col.insert_one(file_record)
+                logger.info(
+                    f"[AUTO SERIES FILTER SYNC]\n"
+                    f"series_id={series_id}\n"
+                    f"title={series_doc.get('name')}\n"
+                    f"season={season}\n"
+                    f"episode={episode}\n"
+                    f"quality={qual}\n"
+                    f"language={lang}\n"
+                    f"file={fname}\n"
+                    f"trigger={trigger}"
+                )
 
-            file_record = {
-                "series_id": series_id,
-                "language": lang,
-                "season": season,
-                "episode": episode,
-                "quality": qual,
-                "file_id": str(fid),
-                "file_name": fname,
-                "file_size": fsize,
-                "created_at": datetime.utcnow()
-            }
-            await sfiles_col.insert_one(file_record)
-            logger.info(
-                f"[AUTO SERIES FILTER SYNC]\n"
-                f"series_id={series_id}\n"
-                f"title={series_doc.get('name')}\n"
-                f"season={season}\n"
-                f"episode={episode}\n"
-                f"quality={qual}\n"
-                f"language={lang}\n"
-                f"file={fname}\n"
-                f"trigger={trigger}"
-            )
+                update_fields = {}
+                if lang and lang not in (series_doc.get("languages") or []):
+                    update_fields.setdefault("$addToSet", {})["languages"] = lang
+                if season and season not in (series_doc.get("seasons") or []):
+                    update_fields.setdefault("$addToSet", {})["seasons"] = season
+                if qual and qual != "Unknown" and qual not in (series_doc.get("qualities") or []):
+                    update_fields.setdefault("$addToSet", {})["qualities"] = qual
 
-            update_fields = {}
-            if lang and lang not in (series_doc.get("languages") or []):
-                update_fields.setdefault("$addToSet", {})["languages"] = lang
-            if season and season not in (series_doc.get("seasons") or []):
-                update_fields.setdefault("$addToSet", {})["seasons"] = season
-            if qual and qual != "Unknown" and qual not in (series_doc.get("qualities") or []):
-                update_fields.setdefault("$addToSet", {})["qualities"] = qual
-
-            if update_fields:
-                await series_col.update_one({"_id": ObjectId(series_id)}, update_fields)
+                if update_fields:
+                    await series_col.update_one({"_id": ObjectId(series_id)}, update_fields)
+                break
         except Exception as e:
             logger.error(f"[AUTO SERIES FILTER SYNC ERROR] {e}", exc_info=True)
 
@@ -1939,21 +1963,23 @@ async def scan_movie_batch_by_name_year(
     title: str,
     year: str | int = None,
     imdb_id: str = None,
-    tmdb_id: str = None
+    tmdb_id: str = None,
+    original_language: str = None,
 ) -> dict:
     """
     Dedicated batch scanner to find ONLY files belonging strictly to an exact movie name + release year.
     Queries database candidates broadly, extracts release year, enforces strict Name + Year
     matching, and returns structured batch scan results.
     """
-    from utils import match_movie_identity, normalize_title_for_matching, extract_release_year, is_video_file, is_subtitle_file
-    from plugins.pm_filter import detect_file_languages
+    from utils import match_movie_identity, normalize_title_for_matching, extract_release_year, is_video_file, is_subtitle_file, normalize_language_name
+    from plugins.pm_filter import detect_file_languages, resolve_file_language
     from plugins.series import extract_quality_from_filename, get_movie_candidates
 
     logger.info(
         f"[AUTO MOVIE BATCH] START\n"
         f"title={title}\n"
-        f"year={year}"
+        f"year={year}\n"
+        f"original_language={original_language}"
     )
 
     req_year_str = str(year).strip() if (year and str(year).strip() not in ["N/A", "None", "0", ""]) else None
@@ -1997,8 +2023,13 @@ async def scan_movie_batch_by_name_year(
         )
 
         if is_match:
-            langs = detect_file_languages(fname, cap)
-            l_val = langs[0] if langs else "English"
+            langs = detect_file_languages(fname, cap, default=None)
+            if langs:
+                l_val = langs[0]
+            elif original_language:
+                l_val = normalize_language_name(original_language) or original_language
+            else:
+                l_val = "English"
             q_val = extract_quality_from_filename(fname)
 
             fdoc_copy = dict(fdoc)
@@ -2049,10 +2080,11 @@ async def scan_movie_files_by_identity(
     title: str,
     year: str | int = None,
     imdb_id: str = None,
-    tmdb_id: str = None
+    tmdb_id: str = None,
+    original_language: str = None
 ) -> dict:
     """Alias for scan_movie_batch_by_name_year for backward compatibility."""
-    return await scan_movie_batch_by_name_year(title, year, imdb_id=imdb_id, tmdb_id=tmdb_id)
+    return await scan_movie_batch_by_name_year(title, year, imdb_id=imdb_id, tmdb_id=tmdb_id, original_language=original_language)
 
 
 async def scan_series_batch_by_name(
