@@ -702,90 +702,231 @@ def is_video_file(file_obj_or_name) -> bool:
     return True
 
 
+def normalize_movie_identity_title(text: str) -> str:
+    """
+    Normalizes a movie title for strict identity comparison.
+    Lowercases, unifies unicode, replaces punctuation (. _ - [ ] etc.) with spaces,
+    and collapses whitespace.
+    DOES NOT strip meaningful words like 'The', 'Real', 'Love', 'Ishq', 'Starts', 'Today', etc.
+    """
+    return normalize_series_identity_title(text)
+
+
+def match_automatic_movie_file(
+    target_movie_name: str,
+    target_year: str | int = None,
+    filename: str = "",
+    caption: str = "",
+    original_language: str = None,
+    target_aliases: list = None,
+    imdb_id: str = None,
+    tmdb_id: str = None
+) -> dict:
+    """
+    Strict authoritative Automatic Movie file matcher.
+    Rule:
+      Filename structure is strictly: {EXACT MOVIE NAME} {YEAR} {OTHER FILE DETAILS}
+      ONLY the text BEFORE the 4-digit release year represents candidate movie name.
+      Everything AFTER the year is file metadata (quality, language, etc.)
+      and MUST NOT be included in movie-name comparison.
+      
+      Matches iff:
+        normalized_candidate_title == normalized_target_title (or exact alias)
+        AND
+        candidate_year == target_year (if target_year is provided)
+    """
+    if not filename:
+        return {"matched": False, "status": "invalid", "reason": "empty_filename"}
+
+    from utils import is_video_file, is_subtitle_file
+    if not is_video_file(filename) or is_subtitle_file(filename):
+        return {"matched": False, "status": "invalid", "reason": "not_a_video_file"}
+
+    raw_name = str(filename).strip()
+    cap_text = str(caption or "").strip()
+    combined_text = f"{raw_name} {cap_text}"
+
+    # 1. Exact IMDb ID match if present in file or caption
+    if imdb_id and str(imdb_id).startswith("tt"):
+        file_imdb = re.search(r"\b(tt\d{7,10})\b", combined_text, re.I)
+        if file_imdb and file_imdb.group(1).lower() != imdb_id.lower():
+            return {"matched": False, "status": "invalid", "reason": "imdb_id_mismatch"}
+
+    # 2. Reject series files
+    token_text = " " + re.sub(r"[\._\-\+\[\]\(\)\{\}]", " ", raw_name) + " "
+    if re.search(r"(?i)\b(?:s\d{1,2}[\s\.\-_]?e\d{1,4}|\d{1,2}x\d{1,4}|(?:season|series)\s*\d{1,2}|ep(?:isode)?\s*\d{1,4})\b", token_text):
+        return {"matched": False, "status": "invalid", "reason": "is_series"}
+
+    # 3. Strip file extension
+    name_no_ext = re.sub(
+        r"\.(mkv|mp4|avi|mov|wmv|flv|webm|m4v|ts|3gp|mpeg|mpg|vob|ogv|divx|m2ts|m2v|f4v)$",
+        "",
+        raw_name,
+        flags=re.IGNORECASE
+    ).strip()
+
+    # 4. Clean usernames / URLs
+    cleaned_name = ' '.join(
+        filter(
+            lambda x: not x.startswith('@') and not x.startswith('http://') and not x.startswith('https://') and not x.startswith('www.') and not x.startswith('t.me/'),
+            name_no_ext.split()
+        )
+    )
+
+    # 5. Parse target requirements
+    norm_target = normalize_movie_identity_title(target_movie_name)
+    if not norm_target:
+        return {"matched": False, "status": "invalid", "reason": "empty_target_title"}
+
+    valid_targets = {norm_target}
+    if target_aliases and isinstance(target_aliases, (list, set, tuple)):
+        for a in target_aliases:
+            na = normalize_movie_identity_title(a)
+            if na:
+                valid_targets.add(na)
+
+    req_year = None
+    if target_year and str(target_year).strip() not in ["N/A", "None", "0", ""]:
+        try:
+            req_year = int(str(target_year).strip())
+        except (ValueError, TypeError):
+            req_year = None
+
+    # 6. Locate standalone 4-digit years (1900-2099) using zero-width lookaround
+    year_iter = list(re.finditer(r"(?i)(?<![0-9a-zA-Z])(19\d{2}|20\d{2})(?![0-9a-zA-Z])", cleaned_name))
+    if not year_iter:
+        return {"matched": False, "status": "invalid", "reason": "year_not_found_in_filename"}
+
+    # Find the matching year boundary
+    matched_candidate = None
+    first_candidate = None
+
+    for m in year_iter:
+        year_start = m.start()
+        year_end = m.end()
+        digits_str = m.group(1)
+
+        cand_raw = cleaned_name[:year_start].strip()
+        rem_text = cleaned_name[year_end:].strip()
+        c_year = int(digits_str)
+
+        norm_cand = normalize_movie_identity_title(cand_raw)
+
+        info = {
+            "candidate_raw": cand_raw,
+            "norm_candidate": norm_cand,
+            "candidate_year": c_year,
+            "remaining_text": rem_text,
+        }
+
+        if first_candidate is None:
+            first_candidate = info
+
+        # Check title match & year match
+        title_matches = (norm_cand in valid_targets)
+        year_matches = (req_year is None or c_year == req_year)
+
+        if title_matches and year_matches:
+            matched_candidate = info
+            break
+
+    if not matched_candidate:
+        eval_cand = first_candidate or {}
+        c_raw = eval_cand.get("candidate_raw", "")
+        n_cand = eval_cand.get("norm_candidate", "")
+        c_yr = eval_cand.get("candidate_year")
+
+        if n_cand not in valid_targets:
+            reason = f"movie_name_mismatch: '{c_raw}' != '{target_movie_name}'"
+        elif req_year is not None and c_yr != req_year:
+            reason = f"year_mismatch: file year {c_yr} != target year {req_year}"
+        else:
+            reason = "movie_identity_mismatch"
+
+        return {
+            "matched": False,
+            "status": "invalid",
+            "movie_name": c_raw,
+            "year": c_yr,
+            "reason": reason
+        }
+
+    # 7. Metadata extraction from remaining_text / filename
+    from utils import extract_quality_from_filename
+    from plugins.pm_filter import resolve_file_language, detect_file_languages
+    from utils import normalize_language_name
+
+    rem_text = matched_candidate["remaining_text"]
+    c_year = matched_candidate["candidate_year"]
+    cand_raw = matched_candidate["candidate_raw"]
+
+    detected_quality = extract_quality_from_filename(rem_text or raw_name)
+    detected_lang = resolve_file_language(
+        rem_text or raw_name,
+        caption=caption,
+        metadata={"original_language": original_language},
+        default_fallback=None
+    )
+    detected_langs = detect_file_languages(rem_text or raw_name, caption=caption, default=None)
+    if not detected_langs and original_language:
+        norm_orig = normalize_language_name(original_language) or original_language
+        detected_langs = [norm_orig]
+        if not detected_lang:
+            detected_lang = norm_orig
+
+    if not detected_lang:
+        detected_lang = "English"
+
+    return {
+        "matched": True,
+        "status": "matched",
+        "movie_name": target_movie_name,
+        "title": target_movie_name,
+        "candidate_movie_name": cand_raw,
+        "year": c_year,
+        "quality": detected_quality,
+        "language": detected_lang,
+        "languages": detected_langs or [detected_lang],
+        "remaining_text": rem_text,
+        "reason": "exact_identity_match"
+    }
+
+
 def match_movie_identity(file_doc: dict, requested_title: str, requested_year: str | int = None, imdb_id: str = None, tmdb_id: str = None, known_conflicts: set = None) -> tuple[bool, str]:
     """
     Strict identity matcher for Auto Movie Add / Super Movie Filter synchronization.
     Enforces BOTH Title and Release Year matching to prevent cross-contamination across sequels/different years.
     Returns: (is_match: bool, reason: str)
     """
-    # 0. Reject subtitle / non-video files
-    if not is_video_file(file_doc) or is_subtitle_file(file_doc):
-        return False, "IS_SUBTITLE_OR_NON_VIDEO"
+    if not isinstance(file_doc, dict):
+        return False, "INVALID_FILE_DOC"
 
     file_name = file_doc.get("file_name", "") or ""
     caption = file_doc.get("caption", "") or ""
-    combined_text = f"{file_name} {caption}"
 
-    # 1. Exact IMDb ID match if present
-    if imdb_id and str(imdb_id).startswith("tt"):
-        file_imdb = re.search(r"\b(tt\d{7,10})\b", combined_text, re.I)
-        if file_imdb:
-            if file_imdb.group(1).lower() == imdb_id.lower():
-                return True, "IMDB_ID_MATCH"
-            else:
-                return False, "IMDB_ID_MISMATCH"
+    res = match_automatic_movie_file(
+        target_movie_name=requested_title,
+        target_year=requested_year,
+        filename=file_name,
+        caption=caption,
+        imdb_id=imdb_id,
+        tmdb_id=tmdb_id
+    )
 
-    # 2. Reject series files
-    token_text = " " + re.sub(r"[\._\-\+\[\]\(\)\{\}]", " ", file_name) + " "
-    if re.search(r"(?i)\b(?:s\d{1,2}[\s\.\-_]?e\d{1,4}|\d{1,2}x\d{1,4}|(?:season|series)\s*\d{1,2}|ep(?:isode)?\s*\d{1,4})\b", token_text):
-        return False, "IS_SERIES"
-
-    # 3. Extract Titles and Years
-    file_year = extract_release_year(file_name, caption)
-    req_year_str = str(requested_year).strip() if (requested_year and str(requested_year).strip() not in ["N/A", "None", "0", ""]) else None
-
-    # Strict Year validation: If a release year is specified, only accept files with the exact matching year
-    if req_year_str:
-        if not file_year:
-            return False, "YEAR_NOT_FOUND_IN_FILENAME"
-        if file_year != req_year_str:
+    if res.get("matched"):
+        return True, "EXACT_TITLE_AND_YEAR_MATCH"
+    else:
+        reason = res.get("reason", "MISMATCH")
+        if "year_mismatch" in reason.lower():
             return False, "YEAR_MISMATCH"
-
-    norm_req_title = normalize_title_for_matching(requested_title)
-    r_tokens = norm_req_title.split()
-    if not r_tokens:
-        return False, "EMPTY_TITLE"
-
-    sequel_indicators = {"2", "3", "4", "5", "6", "7", "8", "9", "ii", "iii", "iv", "v", "vi", "part", "chapter", "reloaded", "returns"}
-    req_has_sequel = any(t in sequel_indicators for t in r_tokens)
-
-    def _check_tokens(f_tokens: list[str]) -> bool:
-        n_r = len(r_tokens)
-        for i in range(len(f_tokens) - n_r + 1):
-            if f_tokens[i:i+n_r] == r_tokens:
-                # If matched, verify it is not followed by an unrequested sequel indicator
-                if i + n_r < len(f_tokens):
-                    next_tok = f_tokens[i + n_r]
-                    if not req_has_sequel and next_tok in sequel_indicators:
-                        return False
-                return True
-        return False
-
-    title_match = False
-
-    # Strategy A: Check title extracted before release year in filename
-    if file_year and file_year in file_name:
-        idx = file_name.find(file_year)
-        norm_before = normalize_title_for_matching(file_name[:idx])
-        if _check_tokens(norm_before.split()):
-            title_match = True
-
-    # Strategy B: Full normalized filename comparison
-    if not title_match:
-        norm_file = normalize_title_for_matching(file_name)
-        if _check_tokens(norm_file.split()):
-            title_match = True
-
-    # Strategy C: Check caption
-    if not title_match and caption:
-        norm_cap = normalize_title_for_matching(caption)
-        if _check_tokens(norm_cap.split()):
-            title_match = True
-
-    if not title_match:
-        return False, "TITLE_MISMATCH"
-
-    return True, "TITLE_AND_YEAR_MATCH" if (req_year_str and file_year) else "TITLE_MATCH"
+        elif "year_not_found" in reason.lower():
+            return False, "YEAR_NOT_FOUND_IN_FILENAME"
+        elif "is_series" in reason.lower():
+            return False, "IS_SERIES"
+        elif "empty_filename" in reason.lower() or "not_a_video" in reason.lower():
+            return False, "IS_SUBTITLE_OR_NON_VIDEO"
+        else:
+            return False, "TITLE_MISMATCH"
 
 
 async def pub_is_subscribed(bot, query, channel):
