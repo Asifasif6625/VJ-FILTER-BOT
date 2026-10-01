@@ -210,30 +210,30 @@ MAX_SEASONS = 15
 
 # ─── Auto S Add Language & Quality Mapping ──────────────────────────────────
 AUTO_LANGUAGE_MAP = {
-    "malayalam": "Malayalam", "mal": "Malayalam",
-    "english": "English", "eng": "English",
-    "hindi": "Hindi", "hin": "Hindi",
-    "tamil": "Tamil", "tam": "Tamil",
-    "telugu": "Telugu", "tel": "Telugu",
-    "kannada": "Kannada", "kan": "Kannada",
-    "bengali": "Bengali", "ben": "Bengali",
-    "marathi": "Marathi", "mar": "Marathi",
-    "punjabi": "Punjabi", "pun": "Punjabi",
-    "gujarati": "Gujarati", "guj": "Gujarati",
-    "urdu": "Urdu", "urd": "Urdu",
-    "odia": "Odia", "ori": "Odia", "oriya": "Odia",
-    "german": "German", "ger": "German",
-    "korean": "Korean", "kor": "Korean",
-    "japanese": "Japanese", "jap": "Japanese", "jpn": "Japanese",
-    "spanish": "Spanish", "spa": "Spanish",
-    "french": "French", "fre": "French", "fra": "French",
-    "arabic": "Arabic", "ara": "Arabic",
-    "russian": "Russian", "rus": "Russian",
-    "chinese": "Chinese", "chi": "Chinese", "zho": "Chinese",
-    "italian": "Italian", "ita": "Italian",
-    "portuguese": "Portuguese", "por": "Portuguese",
-    "turkish": "Turkish", "tur": "Turkish",
-    "thai": "Thai",
+    "malayalam": "Malayalam", "mal": "Malayalam", "ml": "Malayalam",
+    "english": "English", "eng": "English", "en": "English",
+    "hindi": "Hindi", "hin": "Hindi", "hi": "Hindi",
+    "tamil": "Tamil", "tam": "Tamil", "ta": "Tamil",
+    "telugu": "Telugu", "tel": "Telugu", "te": "Telugu",
+    "kannada": "Kannada", "kan": "Kannada", "kn": "Kannada",
+    "bengali": "Bengali", "ben": "Bengali", "bn": "Bengali",
+    "marathi": "Marathi", "mar": "Marathi", "mr": "Marathi",
+    "punjabi": "Punjabi", "pun": "Punjabi", "pa": "Punjabi",
+    "gujarati": "Gujarati", "guj": "Gujarati", "gu": "Gujarati",
+    "urdu": "Urdu", "urd": "Urdu", "ur": "Urdu",
+    "odia": "Odia", "ori": "Odia", "oriya": "Odia", "or": "Odia",
+    "german": "German", "ger": "German", "de": "German",
+    "korean": "Korean", "kor": "Korean", "ko": "Korean",
+    "japanese": "Japanese", "jap": "Japanese", "jpn": "Japanese", "ja": "Japanese",
+    "spanish": "Spanish", "spa": "Spanish", "es": "Spanish",
+    "french": "French", "fre": "French", "fra": "French", "fr": "French",
+    "arabic": "Arabic", "ara": "Arabic", "ar": "Arabic",
+    "russian": "Russian", "rus": "Russian", "ru": "Russian",
+    "chinese": "Chinese", "chi": "Chinese", "zho": "Chinese", "zh": "Chinese", "cn": "Chinese",
+    "italian": "Italian", "ita": "Italian", "it": "Italian",
+    "portuguese": "Portuguese", "por": "Portuguese", "pt": "Portuguese",
+    "turkish": "Turkish", "tur": "Turkish", "tr": "Turkish",
+    "thai": "Thai", "th": "Thai",
 }
 
 def extract_quality_from_filename(filename: str) -> str:
@@ -431,131 +431,32 @@ def _build_ms_batch_keyboard() -> InlineKeyboardMarkup:
 
 
 
-def parse_series_filename(filename: str, series_title: str, target_season: int = None) -> dict:
+def parse_series_filename(filename: str, series_title: str, target_season: int = None, caption: str = "", original_language: str = None, target_aliases: list = None) -> dict:
     """
-    Parse a media filename to extract series metadata.
+    Parse a media filename to extract series metadata strictly using match_automatic_series_file.
     Returns dict:
       {
          "status": "matched" | "other_season" | "invalid",
+         "matched": bool,
          "series": series_title,
+         "series_name": str,
          "season": int,
          "episode": int,
          "language": str,
          "quality": str,
+         "remaining_text": str,
          "reason": str,
       }
     """
-    if not filename:
-        return {"status": "invalid", "reason": "empty_filename"}
-
-    from utils import is_video_file, is_subtitle_file
-    if not is_video_file(filename) or is_subtitle_file(filename):
-        return {"status": "invalid", "reason": "not_a_video_file"}
-
-    raw_name = str(filename)
-    raw_name = re.sub(r"\.(mkv|mp4|avi|mov|wmv|flv|webm|m4v|ts|3gp|mpeg|mpg|vob|ogv|divx|m2ts|m2v|f4v)$", "", raw_name, flags=re.I)
-    cleaned = ' '.join(filter(lambda x: not x.startswith('@') and not x.startswith('http') and not x.startswith('www.') and not x.startswith('t.me'), raw_name.split()))
-    token_text = " " + re.sub(r"[\._\-\+\[\]\(\)\{\}]", " ", cleaned) + " "
-
-    # 1. Season & Episode Extraction
-    season_val = None
-    episode_val = None
-
-    # Try combined S01E03 / S1E3 / S01.E03 / S01-E03 / S01_E03
-    m = re.search(r"(?i)(?:^|[^A-Z0-9])S(\d{1,3})\s*[\.\-_]?\s*E(\d{1,4})(?:[^A-Z0-9]|$)", token_text)
-    if m:
-        season_val = int(m.group(1))
-        episode_val = int(m.group(2))
-    else:
-        # Try 01x03 / 1x03
-        m = re.search(r"(?i)(?:^|[^A-Z0-9])(\d{1,3})\s*x\s*(\d{1,4})(?:[^A-Z0-9]|$)", token_text)
-        if m:
-            season_val = int(m.group(1))
-            episode_val = int(m.group(2))
-        else:
-            # Clean resolution strings (e.g. 1080p, 720p, 480p) to avoid matching 1080 as episode/season
-            clean_for_ep = re.sub(r'(?i)\b(2160|1440|1080|720|576|480|360|240)p?\b', '', token_text)
-            
-            # S01 / Season 01
-            m_s = re.search(r"(?i)(?:^|[^A-Z0-9])(?:S|SEASON)\s*(\d{1,3})(?:[^A-Z0-9]|$)", clean_for_ep)
-            # E01 / Episode 01 / EP 01
-            m_e = re.search(r"(?i)(?:^|[^A-Z0-9])(?:E|EP|EPISODE)\s*(\d{1,4})(?:[^A-Z0-9]|$)", clean_for_ep)
-            if m_s and m_e:
-                season_val = int(m_s.group(1))
-                episode_val = int(m_e.group(1))
-            elif m_e:
-                episode_val = int(m_e.group(1))
-                season_val = int(m_s.group(1)) if m_s else (target_season if target_season is not None else 1)
-            elif m_s and target_season is not None:
-                season_val = int(m_s.group(1))
-                m_num = re.search(r"(?:^|[^A-Z0-9])\[?(\d{1,3})\]?(?:[^A-Z0-9]|$)", clean_for_ep)
-    if season_val is None and target_season is not None:
-        season_val = target_season
-    if season_val is None:
-        season_val = 1
-
-    if episode_val is None or episode_val <= 0:
-        ep_fallback = _extract_episode_number(raw_name)
-        if ep_fallback and ep_fallback > 0:
-            episode_val = ep_fallback
-
-    if episode_val is None or episode_val <= 0:
-        return {"status": "invalid", "reason": "missing_season_or_episode"}
-
-    # 2. Series Title Match Validation
-    from utils import normalize_title_for_matching
-    norm_series = normalize_title_for_matching(series_title)
-    clean_no_ep = re.sub(r"(?i)\b(?:s\d{1,2}|season\s*\d{1,2}|e\d{1,4}|ep\s*\d{1,4}|\d{1,2}x\d{1,4})\b", " ", cleaned)
-    clean_no_ep = re.sub(r"\b(19\d\d|20\d\d)\b", " ", clean_no_ep)
-    norm_fname = normalize_title_for_matching(clean_no_ep)
-
-    if not norm_fname or not norm_series:
-        return {"status": "invalid", "reason": "empty_title"}
-
-    f_toks = norm_fname.split()
-    s_toks = norm_series.split()
-
-    if f_toks != s_toks:
-        if any(t in f_toks and t not in s_toks for t in ["2", "3", "4", "5", "6", "7", "8", "9", "10", "chapter", "part", "korea"]):
-            return {"status": "invalid", "reason": "title_mismatch"}
-        if sum(1 for tok in s_toks if tok in f_toks) < max(1, len(s_toks) - (1 if len(s_toks) >= 4 else 0)):
-            return {"status": "invalid", "reason": "title_mismatch"}
-
-    # 3. Check Target Season
-    if target_season is not None and int(season_val) != int(target_season):
-        return {
-            "status": "other_season",
-            "series": series_title,
-            "season": season_val,
-            "episode": episode_val,
-            "reason": f"season_{season_val}_not_target_{target_season}"
-        }
-
-    # 4. Quality Detection
-    detected_quality = extract_quality_from_filename(raw_name)
-
-    # 5. Language Detection
-    detected_lang = "English"  # Default fallback when no specific regional tag is present
-    f_words = re.split(r"[\s._\-\[\]\(\)\{\}\+]+", cleaned.lower())
-    if "dual" in f_words and "audio" in f_words:
-        detected_lang = "Dual Audio"
-    elif "multi" in f_words and "audio" in f_words:
-        detected_lang = "Multi Audio"
-    else:
-        for w in f_words:
-            if w in AUTO_LANGUAGE_MAP:
-                detected_lang = AUTO_LANGUAGE_MAP[w]
-                break
-
-    return {
-        "status": "matched",
-        "series": series_title,
-        "season": season_val,
-        "episode": episode_val,
-        "language": detected_lang,
-        "quality": detected_quality,
-        "reason": "season_episode_quality_detected",
-    }
+    from utils import match_automatic_series_file
+    return match_automatic_series_file(
+        target_series_name=series_title,
+        filename=filename,
+        caption=caption,
+        target_season=target_season,
+        original_language=original_language,
+        target_aliases=target_aliases
+    )
 
 
 def _fetch_movie_candidates_sync(title: str, year: str | int = None, limit: int = 500) -> list:
@@ -634,7 +535,7 @@ async def get_movie_candidates(chat_id: int | str, title: str, year: str | int =
     return await loop.run_in_executor(None, _fetch_movie_candidates_sync, title, year, limit)
 
 
-async def scan_sdatabase_for_series(chat_id: int | str, title: str, season: int = None, series_id: str = None, client: Client = None) -> dict:
+async def scan_sdatabase_for_series(chat_id: int | str, title: str, season: int = None, series_id: str = None, client: Client = None, original_language: str = None) -> dict:
     """
     Scan the stored file database for files matching the given Series and Season.
     If season is None (Skip Season mode), automatically scans and detects all available seasons.
@@ -662,7 +563,8 @@ async def scan_sdatabase_for_series(chat_id: int | str, title: str, season: int 
             total_invalid += 1
             continue
         fname = doc.get("file_name", "")
-        parsed = parse_series_filename(fname, clean_title, season)
+        cap = doc.get("caption", "") or ""
+        parsed = parse_series_filename(fname, clean_title, season, caption=cap, original_language=original_language)
 
         status = parsed.get("status")
         if status == "invalid":
@@ -764,7 +666,7 @@ async def scan_sdatabase_for_series(chat_id: int | str, title: str, season: int 
     }
 
 
-def parse_movie_filename(filename: str, movie_title: str, movie_year: str = None, imdb_id: str = None, tmdb_id: str = None, known_conflicts: set = None, caption: str = "") -> dict:
+def parse_movie_filename(filename: str, movie_title: str, movie_year: str = None, imdb_id: str = None, tmdb_id: str = None, known_conflicts: set = None, caption: str = "", original_language: str = None) -> dict:
     """
     Validates whether a candidate file belongs to requested movie using strict identity matching.
     """
@@ -780,7 +682,8 @@ def parse_movie_filename(filename: str, movie_title: str, movie_year: str = None
         f"filename={filename!r} "
         f"caption={caption!r} "
         f"imdb_id={imdb_id!r} "
-        f"tmdb_id={tmdb_id!r}"
+        f"tmdb_id={tmdb_id!r} "
+        f"original_language={original_language!r}"
     )
 
     file_doc = {"file_name": filename, "caption": caption}
@@ -819,12 +722,8 @@ def parse_movie_filename(filename: str, movie_title: str, movie_year: str = None
     raw_name = str(filename)
     detected_quality = extract_quality_from_filename(raw_name)
 
-    from plugins.pm_filter import detect_file_languages
-    langs = detect_file_languages(raw_name, caption)
-    if langs:
-        detected_lang = langs[0]
-    else:
-        detected_lang = "English"
+    from plugins.pm_filter import resolve_file_language
+    detected_lang = resolve_file_language(raw_name, caption, metadata={"original_language": original_language}, default_fallback="English")
 
     return {
         "status": "matched",
@@ -842,7 +741,8 @@ async def scan_sdatabase_for_movie(
     client: Client = None,
     imdb_id: str = None,
     tmdb_id: str = None,
-    movie_id: str = None
+    movie_id: str = None,
+    original_language: str = None,
 ) -> dict:
     """
     Scan database for files belonging strictly to the specified movie (Title + Release Year).
@@ -865,7 +765,8 @@ async def scan_sdatabase_for_movie(
         title=title,
         year=year,
         imdb_id=imdb_id,
-        tmdb_id=tmdb_id
+        tmdb_id=tmdb_id,
+        original_language=original_language,
     )
 
     all_matching_files = scan_res.get("matching_files", [])
@@ -875,7 +776,7 @@ async def scan_sdatabase_for_movie(
 
     for doc in all_matching_files:
         fid = doc.get("file_id")
-        lang = doc.get("language", "English")
+        lang = doc.get("language") or original_language or "English"
         qual = doc.get("quality", "Unknown")
 
         file_entry = {
@@ -977,11 +878,11 @@ LANGUAGE_FLAGS = {
     "Thai": "????",
 }
 
-def _group_auto_movie_files(res):
+def _group_auto_movie_files(res, orig_lang=None):
     match_list = res.get("all_matching_files") or res.get("valid_files") or []
     grouped = {}
     for f in match_list:
-        l = f.get("language") or "English"
+        l = f.get("language") or orig_lang or "English"
         q = f.get("quality") or "Unknown"
         if l not in grouped:
             grouped[l] = {}
@@ -995,7 +896,7 @@ def _build_auto_movie_lang_text(movie_data):
     res = movie_data.get("scan", {})
     grouped = movie_data.get("grouped", {})
     if not grouped:
-        grouped = _group_auto_movie_files(res)
+        grouped = _group_auto_movie_files(res, orig_lang=movie_data.get("original_language"))
         movie_data["grouped"] = grouped
 
     title_esc = html.escape(str(movie_data.get('title', '')))
@@ -1402,9 +1303,11 @@ async def fetch_auto_movie_metadata(client: Client, chat_id: int | str, loading_
             "genre": genre,
             "rating": rating,
             "poster": poster,
+            "posters": info.get("posters") or ([poster] if poster else []),
             "description": description,
             "imdb_id": resolved_imdb_id,
             "tmdb_id": resolved_tmdb_id,
+            "original_language": info.get("original_language"),
             "metadata_complete": True,
             "state": "METADATA_COMPLETE",
             "created_at": time.time(),
@@ -1577,7 +1480,8 @@ async def fetch_auto_series_metadata(client: Client, chat_id: int | str, loading
             series_col,
         )
 
-        scan_res = await scan_sdatabase_for_series(chat_id, s_title, season=None, client=client)
+        s_orig_lang = info.get("original_language")
+        scan_res = await scan_sdatabase_for_series(chat_id, s_title, season=None, client=client, original_language=s_orig_lang)
         all_files = scan_res.get("all_matching_files") or scan_res.get("valid_new_files") or []
 
         s_data.update({
@@ -1589,9 +1493,11 @@ async def fetch_auto_series_metadata(client: Client, chat_id: int | str, loading
             "genre": s_genre,
             "rating": s_rating,
             "poster": s_poster,
+            "posters": info.get("posters") or ([s_poster] if s_poster else []),
             "description": s_plot,
             "imdb_id": imdb_id,
             "tmdb_id": tmdb_id,
+            "original_language": s_orig_lang,
             "total_seasons": total_seasons,
             "all_files": all_files,
             "metadata_complete": True,
@@ -1684,7 +1590,7 @@ async def fetch_auto_series_metadata(client: Client, chat_id: int | str, loading
             detected_seasons = [1]
         detected_langs = sorted(list({str(f["language"]) for f in all_files if f.get("language")}))
         if not detected_langs:
-            detected_langs = ["Malayalam"]
+            detected_langs = [s_orig_lang] if s_orig_lang else ["Malayalam"]
         detected_quals = sorted(list({str(f["quality"]) for f in all_files if f.get("quality")}))
         if not detected_quals:
             detected_quals = ["720p", "1080p"]
@@ -1695,12 +1601,14 @@ async def fetch_auto_series_metadata(client: Client, chat_id: int | str, loading
             "genre": s_genre or "Drama",
             "rating": s_rating,
             "poster": s_poster,
+            "posters": s_data.get("posters") or ([s_poster] if s_poster else []),
             "description": s_plot,
             "languages": detected_langs,
             "seasons": detected_seasons,
             "qualities": detected_quals,
             "imdb_id": imdb_id,
             "tmdb_id": tmdb_id,
+            "original_language": s_orig_lang or "",
             "created_by": uid,
             "status": "active",
             "coming_soon": False
@@ -1712,7 +1620,7 @@ async def fetch_auto_series_metadata(client: Client, chat_id: int | str, loading
             try:
                 ok, _ = await add_series_file({
                     "series_id": str(series_id),
-                    "language": f.get("language", "Malayalam"),
+                    "language": f.get("language") or s_orig_lang or "English",
                     "season": int(f.get("season", 1)),
                     "episode": int(f.get("episode", -1)) if f.get("episode") is not None else -1,
                     "quality": f.get("quality", "720p"),
@@ -2023,7 +1931,8 @@ async def run_auto_movie_scan(client, chat_id, target_msg, session_id, movie_dat
                     movie_data["year"],
                     client=client,
                     imdb_id=movie_data.get("imdb_id"),
-                    tmdb_id=movie_data.get("tmdb_id")
+                    tmdb_id=movie_data.get("tmdb_id"),
+                    original_language=movie_data.get("original_language"),
                 ),
                 timeout=20
             )
@@ -2102,7 +2011,7 @@ async def run_auto_movie_scan(client, chat_id, target_msg, session_id, movie_dat
         )
         logger.info(f"[AUTO MOVIE] MATCH RESULT matched={res.get('total_matched', 0)}")
         movie_data["scan"] = res
-        movie_data["grouped"] = _group_auto_movie_files(res)
+        movie_data["grouped"] = _group_auto_movie_files(res, orig_lang=movie_data.get("original_language"))
         movie_data["state"] = "RESULT"
         temp.AUTO_MOVIE[session_id] = movie_data
         if uid:
@@ -7360,7 +7269,8 @@ async def auto_movie_callbacks(client: Client, query: CallbackQuery):
             title=movie_data["title"],
             year=movie_data.get("year"),
             imdb_id=movie_data.get("imdb_id"),
-            tmdb_id=movie_data.get("tmdb_id")
+            tmdb_id=movie_data.get("tmdb_id"),
+            original_language=movie_data.get("original_language"),
         )
         matching_files = scan_check.get("matching_files", [])
         if not matching_files:
@@ -7376,12 +7286,14 @@ async def auto_movie_callbacks(client: Client, query: CallbackQuery):
             "genre": movie_data.get("genre", "N/A"),
             "rating": movie_data.get("rating", ""),
             "poster": movie_data.get("poster", ""),
+            "posters": movie_data.get("posters") or ([movie_data.get("poster")] if movie_data.get("poster") else []),
             "description": movie_data.get("description", ""),
             "languages": list(movie_data.get("grouped", {}).keys()),
             "qualities": list({q for l in movie_data.get("grouped", {}).values() for q in l.keys()}),
             "file_ids": file_ids,
             "imdb_id": movie_data.get("imdb_id"),
             "tmdb_id": movie_data.get("tmdb_id"),
+            "original_language": movie_data.get("original_language", ""),
             "created_by": uid,
             "status": "active"
         })
@@ -7433,12 +7345,14 @@ async def auto_movie_callbacks(client: Client, query: CallbackQuery):
             "genre": movie_data.get("genre", "N/A"),
             "rating": movie_data.get("rating", ""),
             "poster": movie_data.get("poster", ""),
+            "posters": movie_data.get("posters") or ([movie_data.get("poster")] if movie_data.get("poster") else []),
             "description": movie_data.get("description", ""),
             "languages": list(movie_data.get("grouped", {}).keys()),
             "qualities": list({q for l in movie_data.get("grouped", {}).values() for q in l.keys()}),
             "file_ids": [],
             "imdb_id": movie_data.get("imdb_id"),
             "tmdb_id": movie_data.get("tmdb_id"),
+            "original_language": movie_data.get("original_language", ""),
             "created_by": uid,
             "status": "coming_soon",
             "coming_soon": True
@@ -7735,7 +7649,20 @@ async def render_super_movie_direct(client: Client, message: Message, movie: dic
         BUTTON_OWNERS[f"{message.chat.id}-{message.id}"] = real_user_id
 
     title = movie.get("title", "")
-    poster = str(movie.get("poster") or "").strip()
+    from utils import get_random_filter_poster
+    posters_to_try = []
+    if isinstance(movie.get("posters"), list) and movie.get("posters"):
+        valid_p = [str(p).strip() for p in movie["posters"] if p and str(p).strip() and str(p).strip().upper() != "N/A"]
+        if valid_p:
+            import random
+            shuffled_p = list(valid_p)
+            random.shuffle(shuffled_p)
+            posters_to_try.extend(shuffled_p)
+    single_p = str(movie.get("poster") or "").strip()
+    if single_p and single_p.upper() != "N/A" and single_p not in posters_to_try:
+        posters_to_try.append(single_p)
+
+    poster = posters_to_try[0] if posters_to_try else (get_random_filter_poster(movie) or "")
     if poster.upper() == "N/A":
         poster = ""
 
@@ -7747,16 +7674,20 @@ async def render_super_movie_direct(client: Client, message: Message, movie: dic
 
         if reply_msg:
             try:
-                if poster and (reply_msg.photo or reply_msg.caption):
-                    try:
-                        await reply_msg.edit_media(
-                            media=InputMediaPhoto(media=poster, caption=caption_text, parse_mode=enums.ParseMode.HTML),
-                            reply_markup=markup
-                        )
-                        schedule_filter_message_delete(client, reply_msg.chat.id, reply_msg.id, 600)
-                        return True
-                    except Exception as me:
-                        logger.warning(f"[EDIT MEDIA FAILED] {me}, fallback to edit_caption")
+                if posters_to_try and (reply_msg.photo or reply_msg.caption):
+                    edited = False
+                    for p_cand in posters_to_try:
+                        try:
+                            await reply_msg.edit_media(
+                                media=InputMediaPhoto(media=p_cand, caption=caption_text, parse_mode=enums.ParseMode.HTML),
+                                reply_markup=markup
+                            )
+                            edited = True
+                            schedule_filter_message_delete(client, reply_msg.chat.id, reply_msg.id, 600)
+                            return True
+                        except Exception as me:
+                            logger.warning(f"[EDIT MEDIA FAILED for {p_cand}] {me}")
+                    if not edited:
                         await reply_msg.edit_caption(
                             caption=caption_text,
                             reply_markup=markup,
@@ -7786,26 +7717,30 @@ async def render_super_movie_direct(client: Client, message: Message, movie: dic
                 except Exception:
                     pass
 
-        if poster:
-            try:
-                sent_p = await (message.reply_photo(
-                    photo=poster,
-                    caption=caption_text,
-                    reply_markup=markup,
-                    parse_mode=enums.ParseMode.HTML
-                ) if message else client.send_photo(
-                    chat_id=chat_id,
-                    photo=poster,
-                    caption=caption_text,
-                    reply_markup=markup,
-                    parse_mode=enums.ParseMode.HTML
-                ))
-                if sent_p:
-                    BUTTON_OWNERS[f"{sent_p.chat.id}-{sent_p.id}"] = real_user_id
-                    schedule_filter_message_delete(client, sent_p.chat.id, sent_p.id, 600)
+        if posters_to_try:
+            sent_p = None
+            for p_cand in posters_to_try:
+                try:
+                    sent_p = await (message.reply_photo(
+                        photo=p_cand,
+                        caption=caption_text,
+                        reply_markup=markup,
+                        parse_mode=enums.ParseMode.HTML
+                    ) if message else client.send_photo(
+                        chat_id=chat_id,
+                        photo=p_cand,
+                        caption=caption_text,
+                        reply_markup=markup,
+                        parse_mode=enums.ParseMode.HTML
+                    ))
+                    if sent_p:
+                        break
+                except Exception as pe:
+                    logger.warning(f"[SUPER MOVIE PHOTO ERROR for {p_cand}] {pe}")
+            if sent_p:
+                BUTTON_OWNERS[f"{sent_p.chat.id}-{sent_p.id}"] = real_user_id
+                schedule_filter_message_delete(client, sent_p.chat.id, sent_p.id, 600)
                 return True
-            except Exception as pe:
-                logger.warning(f"[SUPER MOVIE PHOTO ERROR] {pe}")
 
         sent_t = await (message.reply_text(
             text=caption_text,
@@ -7846,7 +7781,8 @@ async def render_super_movie_direct(client: Client, message: Message, movie: dic
         "rating": str(movie.get("rating", "")),
         "genre": movie.get("genre", "") or movie.get("genres", ""),
         "genres": movie.get("genres", "") or movie.get("genre", ""),
-        "poster": movie.get("poster", ""),
+        "poster": poster,
+        "posters": movie.get("posters", []),
         "description": movie.get("description", ""),
         "grouped": grouped,
         "subtitle_files": subtitle_files,
@@ -7864,17 +7800,21 @@ async def render_super_movie_direct(client: Client, message: Message, movie: dic
 
     if reply_msg:
         try:
-            if poster and (reply_msg.photo or reply_msg.caption):
-                try:
-                    await reply_msg.edit_media(
-                        media=InputMediaPhoto(media=poster, caption=caption_text, parse_mode=enums.ParseMode.HTML),
-                        reply_markup=markup
-                    )
-                    schedule_filter_message_delete(client, reply_msg.chat.id, reply_msg.id, 600)
-                    asyncio.create_task(apply_pm_styled_reply_markup(client, reply_msg.chat.id, reply_msg.id, markup))
-                    return True
-                except Exception as me:
-                    logger.warning(f"[EDIT MEDIA FAILED] {me}, fallback to edit_caption")
+            if posters_to_try and (reply_msg.photo or reply_msg.caption):
+                edited = False
+                for p_cand in posters_to_try:
+                    try:
+                        await reply_msg.edit_media(
+                            media=InputMediaPhoto(media=p_cand, caption=caption_text, parse_mode=enums.ParseMode.HTML),
+                            reply_markup=markup
+                        )
+                        edited = True
+                        schedule_filter_message_delete(client, reply_msg.chat.id, reply_msg.id, 600)
+                        asyncio.create_task(apply_pm_styled_reply_markup(client, reply_msg.chat.id, reply_msg.id, markup))
+                        return True
+                    except Exception as me:
+                        logger.warning(f"[EDIT MEDIA FAILED for {p_cand}] {me}")
+                if not edited:
                     await reply_msg.edit_caption(
                         caption=caption_text,
                         reply_markup=markup,
@@ -7907,28 +7847,32 @@ async def render_super_movie_direct(client: Client, message: Message, movie: dic
             except Exception:
                 pass
 
-    if poster:
-        try:
-            sent_p = await (message.reply_photo(
-                photo=poster,
-                caption=caption_text,
-                reply_markup=markup,
-                parse_mode=enums.ParseMode.HTML
-            ) if message else client.send_photo(
-                chat_id=chat_id,
-                photo=poster,
-                caption=caption_text,
-                reply_markup=markup,
-                parse_mode=enums.ParseMode.HTML
-            ))
-            if sent_p:
-                BUTTON_OWNERS[f"{sent_p.chat.id}-{sent_p.id}"] = real_user_id
-                temp.MOVIE_STATE[f"{sent_p.chat.id}-{sent_p.id}"] = temp.MOVIE_STATE[key]
-                schedule_filter_message_delete(client, sent_p.chat.id, sent_p.id, 600)
-                asyncio.create_task(apply_pm_styled_reply_markup(client, sent_p.chat.id, sent_p.id, markup))
+    if posters_to_try:
+        sent_p = None
+        for p_cand in posters_to_try:
+            try:
+                sent_p = await (message.reply_photo(
+                    photo=p_cand,
+                    caption=caption_text,
+                    reply_markup=markup,
+                    parse_mode=enums.ParseMode.HTML
+                ) if message else client.send_photo(
+                    chat_id=chat_id,
+                    photo=p_cand,
+                    caption=caption_text,
+                    reply_markup=markup,
+                    parse_mode=enums.ParseMode.HTML
+                ))
+                if sent_p:
+                    break
+            except Exception as pe:
+                logger.warning(f"[SUPER MOVIE PHOTO ERROR for {p_cand}] {pe}")
+        if sent_p:
+            BUTTON_OWNERS[f"{sent_p.chat.id}-{sent_p.id}"] = real_user_id
+            temp.MOVIE_STATE[f"{sent_p.chat.id}-{sent_p.id}"] = temp.MOVIE_STATE[key]
+            schedule_filter_message_delete(client, sent_p.chat.id, sent_p.id, 600)
+            asyncio.create_task(apply_pm_styled_reply_markup(client, sent_p.chat.id, sent_p.id, markup))
             return True
-        except Exception as pe:
-            logger.warning(f"[SUPER MOVIE PHOTO ERROR] {pe}")
 
     sent_t = await (message.reply_text(
         text=caption_text,
@@ -7956,7 +7900,20 @@ async def render_series_direct(client: Client, message: Message, series_doc: dic
 
     series_id = str(series_doc["_id"])
     name = series_doc.get("name", "")
-    poster = str(series_doc.get("poster") or "").strip()
+    from utils import get_random_filter_poster
+    posters_to_try = []
+    if isinstance(series_doc.get("posters"), list) and series_doc.get("posters"):
+        valid_p = [str(p).strip() for p in series_doc["posters"] if p and str(p).strip() and str(p).strip().upper() != "N/A"]
+        if valid_p:
+            import random
+            shuffled_p = list(valid_p)
+            random.shuffle(shuffled_p)
+            posters_to_try.extend(shuffled_p)
+    single_p = str(series_doc.get("poster") or "").strip()
+    if single_p and single_p.upper() != "N/A" and single_p not in posters_to_try:
+        posters_to_try.append(single_p)
+
+    poster = posters_to_try[0] if posters_to_try else (get_random_filter_poster(series_doc) or "")
     if poster.upper() == "N/A":
         poster = ""
 
@@ -8003,16 +7960,20 @@ async def render_series_direct(client: Client, message: Message, series_doc: dic
 
         if reply_msg:
             try:
-                if poster and (reply_msg.photo or reply_msg.caption):
-                    try:
-                        await reply_msg.edit_media(
-                            media=InputMediaPhoto(media=poster, caption=caption_text, parse_mode=enums.ParseMode.HTML),
-                            reply_markup=markup
-                        )
-                        schedule_filter_message_delete(client, reply_msg.chat.id, reply_msg.id, 600)
-                        return True
-                    except Exception as me:
-                        logger.warning(f"[EDIT MEDIA FAILED] {me}, fallback to edit_caption")
+                if posters_to_try and (reply_msg.photo or reply_msg.caption):
+                    edited = False
+                    for p_cand in posters_to_try:
+                        try:
+                            await reply_msg.edit_media(
+                                media=InputMediaPhoto(media=p_cand, caption=caption_text, parse_mode=enums.ParseMode.HTML),
+                                reply_markup=markup
+                            )
+                            edited = True
+                            schedule_filter_message_delete(client, reply_msg.chat.id, reply_msg.id, 600)
+                            return True
+                        except Exception as me:
+                            logger.warning(f"[EDIT MEDIA FAILED for {p_cand}] {me}")
+                    if not edited:
                         await reply_msg.edit_caption(
                             caption=caption_text,
                             reply_markup=markup,
@@ -8042,27 +8003,31 @@ async def render_series_direct(client: Client, message: Message, series_doc: dic
                 except Exception:
                     pass
 
-        if poster:
-            try:
-                sent_p = await (message.reply_photo(
-                    photo=poster,
-                    caption=caption_text,
-                    reply_markup=markup,
-                    parse_mode=enums.ParseMode.HTML
-                ) if message else client.send_photo(
-                    chat_id=chat_id,
-                    photo=poster,
-                    caption=caption_text,
-                    reply_markup=markup,
-                    parse_mode=enums.ParseMode.HTML
-                ))
-                if sent_p:
-                    BUTTON_OWNERS[f"{sent_p.chat.id}-{sent_p.id}"] = real_user_id
-                    logger.info(f"[SERIES OWNER REGISTER] key={sent_p.chat.id}-{sent_p.id} owner={real_user_id}")
-                    schedule_filter_message_delete(client, sent_p.chat.id, sent_p.id, 600)
+        if posters_to_try:
+            sent_p = None
+            for p_cand in posters_to_try:
+                try:
+                    sent_p = await (message.reply_photo(
+                        photo=p_cand,
+                        caption=caption_text,
+                        reply_markup=markup,
+                        parse_mode=enums.ParseMode.HTML
+                    ) if message else client.send_photo(
+                        chat_id=chat_id,
+                        photo=p_cand,
+                        caption=caption_text,
+                        reply_markup=markup,
+                        parse_mode=enums.ParseMode.HTML
+                    ))
+                    if sent_p:
+                        break
+                except Exception as pe:
+                    logger.warning(f"[SERIES PHOTO ERROR for {p_cand}] {pe}")
+            if sent_p:
+                BUTTON_OWNERS[f"{sent_p.chat.id}-{sent_p.id}"] = real_user_id
+                logger.info(f"[SERIES OWNER REGISTER] key={sent_p.chat.id}-{sent_p.id} owner={real_user_id}")
+                schedule_filter_message_delete(client, sent_p.chat.id, sent_p.id, 600)
                 return True
-            except Exception as pe:
-                logger.warning(f"[SERIES PHOTO ERROR] {pe}")
 
         sent_t = await (message.reply_text(
             text=caption_text,
@@ -8094,17 +8059,21 @@ async def render_series_direct(client: Client, message: Message, series_doc: dic
 
     if reply_msg:
         try:
-            if poster and (reply_msg.photo or reply_msg.caption):
-                try:
-                    await reply_msg.edit_media(
-                        media=InputMediaPhoto(media=poster, caption=caption_text, parse_mode=enums.ParseMode.HTML),
-                        reply_markup=markup
-                    )
-                    schedule_filter_message_delete(client, reply_msg.chat.id, reply_msg.id, 600)
-                    asyncio.create_task(apply_pm_styled_reply_markup(client, reply_msg.chat.id, reply_msg.id, markup))
-                    return True
-                except Exception as me:
-                    logger.warning(f"[EDIT MEDIA FAILED] {me}, fallback to edit_caption")
+            if posters_to_try and (reply_msg.photo or reply_msg.caption):
+                edited = False
+                for p_cand in posters_to_try:
+                    try:
+                        await reply_msg.edit_media(
+                            media=InputMediaPhoto(media=p_cand, caption=caption_text, parse_mode=enums.ParseMode.HTML),
+                            reply_markup=markup
+                        )
+                        edited = True
+                        schedule_filter_message_delete(client, reply_msg.chat.id, reply_msg.id, 600)
+                        asyncio.create_task(apply_pm_styled_reply_markup(client, reply_msg.chat.id, reply_msg.id, markup))
+                        return True
+                    except Exception as me:
+                        logger.warning(f"[EDIT MEDIA FAILED for {p_cand}] {me}")
+                if not edited:
                     await reply_msg.edit_caption(
                         caption=caption_text,
                         reply_markup=markup,
@@ -8137,28 +8106,32 @@ async def render_series_direct(client: Client, message: Message, series_doc: dic
             except Exception:
                 pass
 
-    if poster:
-        try:
-            sent_p = await (message.reply_photo(
-                photo=poster,
-                caption=caption_text,
-                reply_markup=markup,
-                parse_mode=enums.ParseMode.HTML
-            ) if message else client.send_photo(
-                chat_id=chat_id,
-                photo=poster,
-                caption=caption_text,
-                reply_markup=markup,
-                parse_mode=enums.ParseMode.HTML
-            ))
-            if sent_p:
-                BUTTON_OWNERS[f"{sent_p.chat.id}-{sent_p.id}"] = real_user_id
-                logger.info(f"[SERIES OWNER REGISTER] key={sent_p.chat.id}-{sent_p.id} owner={real_user_id}")
-                schedule_filter_message_delete(client, sent_p.chat.id, sent_p.id, 600)
-                asyncio.create_task(apply_pm_styled_reply_markup(client, sent_p.chat.id, sent_p.id, markup))
+    if posters_to_try:
+        sent_p = None
+        for p_cand in posters_to_try:
+            try:
+                sent_p = await (message.reply_photo(
+                    photo=p_cand,
+                    caption=caption_text,
+                    reply_markup=markup,
+                    parse_mode=enums.ParseMode.HTML
+                ) if message else client.send_photo(
+                    chat_id=chat_id,
+                    photo=p_cand,
+                    caption=caption_text,
+                    reply_markup=markup,
+                    parse_mode=enums.ParseMode.HTML
+                ))
+                if sent_p:
+                    break
+            except Exception as pe:
+                logger.warning(f"[SERIES PHOTO ERROR for {p_cand}] {pe}")
+        if sent_p:
+            BUTTON_OWNERS[f"{sent_p.chat.id}-{sent_p.id}"] = real_user_id
+            logger.info(f"[SERIES OWNER REGISTER] key={sent_p.chat.id}-{sent_p.id} owner={real_user_id}")
+            schedule_filter_message_delete(client, sent_p.chat.id, sent_p.id, 600)
+            asyncio.create_task(apply_pm_styled_reply_markup(client, sent_p.chat.id, sent_p.id, markup))
             return True
-        except Exception as pe:
-            logger.warning(f"[SERIES PHOTO ERROR] {pe}")
 
     sent_t = await (message.reply_text(
         text=caption_text,
