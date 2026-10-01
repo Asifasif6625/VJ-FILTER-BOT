@@ -210,7 +210,7 @@ MAX_SEASONS = 15
 
 # ─── Auto S Add Language & Quality Mapping ──────────────────────────────────
 AUTO_LANGUAGE_MAP = {
-    "malayalam": "Malayalam", "mal": "Malayalam", "ml": "Malayalam",
+    "malayalam": "Malayalam", "malayala": "Malayalam", "mal": "Malayalam", "ml": "Malayalam",
     "english": "English", "eng": "English", "en": "English",
     "hindi": "Hindi", "hin": "Hindi", "hi": "Hindi",
     "tamil": "Tamil", "tam": "Tamil", "ta": "Tamil",
@@ -431,7 +431,7 @@ def _build_ms_batch_keyboard() -> InlineKeyboardMarkup:
 
 
 
-def parse_series_filename(filename: str, series_title: str, target_season: int = None, caption: str = "", original_language: str = None, target_aliases: list = None) -> dict:
+def parse_series_filename(filename: str, series_title: str, target_season: int = None, caption: str = "", original_language: str = None, target_aliases: list = None, target_year: str | int = None) -> dict:
     """
     Parse a media filename to extract series metadata strictly using match_automatic_series_file.
     Returns dict:
@@ -440,6 +440,7 @@ def parse_series_filename(filename: str, series_title: str, target_season: int =
          "matched": bool,
          "series": series_title,
          "series_name": str,
+         "year": int,
          "season": int,
          "episode": int,
          "language": str,
@@ -451,6 +452,7 @@ def parse_series_filename(filename: str, series_title: str, target_season: int =
     from utils import match_automatic_series_file
     return match_automatic_series_file(
         target_series_name=series_title,
+        target_year=target_year,
         filename=filename,
         caption=caption,
         target_season=target_season,
@@ -535,14 +537,22 @@ async def get_movie_candidates(chat_id: int | str, title: str, year: str | int =
     return await loop.run_in_executor(None, _fetch_movie_candidates_sync, title, year, limit)
 
 
-async def scan_sdatabase_for_series(chat_id: int | str, title: str, season: int = None, series_id: str = None, client: Client = None, original_language: str = None) -> dict:
+async def scan_sdatabase_for_series(chat_id: int | str, title: str, season: int = None, series_id: str = None, client: Client = None, original_language: str = None, year: str | int = None) -> dict:
     """
     Scan the stored file database for files matching the given Series and Season.
     If season is None (Skip Season mode), automatically scans and detects all available seasons.
     Returns structured results with valid files, organized hierarchy, and accurate statistics.
     """
-    from database.series_db import check_episode_exists
+    from database.series_db import check_episode_exists, get_series
     from utils import is_video_file, is_subtitle_file
+
+    if not year and series_id:
+        try:
+            sdoc = await get_series(series_id)
+            if sdoc and sdoc.get("year"):
+                year = sdoc.get("year")
+        except Exception:
+            pass
 
     clean_title = clean_series_title(title)
     docs = await get_movie_candidates(chat_id, title, limit=500)
@@ -564,7 +574,7 @@ async def scan_sdatabase_for_series(chat_id: int | str, title: str, season: int 
             continue
         fname = doc.get("file_name", "")
         cap = doc.get("caption", "") or ""
-        parsed = parse_series_filename(fname, clean_title, season, caption=cap, original_language=original_language)
+        parsed = parse_series_filename(fname, clean_title, season, caption=cap, original_language=original_language, target_year=year)
 
         status = parsed.get("status")
         if status == "invalid":
