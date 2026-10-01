@@ -666,72 +666,33 @@ async def scan_sdatabase_for_series(chat_id: int | str, title: str, season: int 
     }
 
 
-def parse_movie_filename(filename: str, movie_title: str, movie_year: str = None, imdb_id: str = None, tmdb_id: str = None, known_conflicts: set = None, caption: str = "", original_language: str = None) -> dict:
+def parse_movie_filename(filename: str, movie_title: str, movie_year: str = None, imdb_id: str = None, tmdb_id: str = None, known_conflicts: set = None, caption: str = "", original_language: str = None, target_aliases: list = None) -> dict:
     """
-    Validates whether a candidate file belongs to requested movie using strict identity matching.
+    Parse a media filename to extract movie metadata strictly using match_automatic_movie_file.
+    Returns dict:
+      {
+         "status": "matched" | "invalid",
+         "matched": bool,
+         "title": movie_title,
+         "movie_name": str,
+         "year": int,
+         "language": str,
+         "quality": str,
+         "remaining_text": str,
+         "reason": str,
+      }
     """
-    if not filename:
-        return {"status": "invalid", "reason": "empty_filename"}
-
-    from utils import match_movie_identity, normalize_title_for_matching, extract_release_year
-
-    logger.info(
-        "[AUTO MOVIE MATCH DEBUG] "
-        f"requested_title={movie_title!r} "
-        f"requested_year={movie_year!r} "
-        f"filename={filename!r} "
-        f"caption={caption!r} "
-        f"imdb_id={imdb_id!r} "
-        f"tmdb_id={tmdb_id!r} "
-        f"original_language={original_language!r}"
-    )
-
-    file_doc = {"file_name": filename, "caption": caption}
-    is_match, reason = match_movie_identity(
-        file_doc,
-        requested_title=movie_title,
-        requested_year=movie_year,
+    from utils import match_automatic_movie_file
+    return match_automatic_movie_file(
+        target_movie_name=movie_title,
+        target_year=movie_year,
+        filename=filename,
+        caption=caption,
+        original_language=original_language,
+        target_aliases=target_aliases,
         imdb_id=imdb_id,
-        tmdb_id=tmdb_id,
-        known_conflicts=known_conflicts
+        tmdb_id=tmdb_id
     )
-
-    norm_req = normalize_title_for_matching(movie_title)
-    norm_fn = normalize_title_for_matching(filename)
-    f_yr = extract_release_year(filename, caption)
-
-    if not is_match:
-        logger.warning(
-            "[AUTO MOVIE MATCH REJECT] "
-            f"filename={filename!r} "
-            f"requested_title={movie_title!r} "
-            f"requested_year={movie_year!r} "
-            f"reason={reason}"
-        )
-        return {"status": "invalid", "reason": reason}
-
-    logger.info(
-        f"[AUTO MOVIE MATCH DEBUG] "
-        f"requested_normalized={norm_req!r} "
-        f"filename_normalized={norm_fn!r} "
-        f"requested_year={movie_year!r} "
-        f"filename_year={f_yr!r} "
-        f"result=MATCHED"
-    )
-
-    raw_name = str(filename)
-    detected_quality = extract_quality_from_filename(raw_name)
-
-    from plugins.pm_filter import resolve_file_language
-    detected_lang = resolve_file_language(raw_name, caption, metadata={"original_language": original_language}, default_fallback="English")
-
-    return {
-        "status": "matched",
-        "title": movie_title,
-        "language": detected_lang,
-        "quality": detected_quality,
-        "reason": reason,
-    }
 
 
 async def scan_sdatabase_for_movie(
