@@ -270,6 +270,325 @@ def normalize_title_for_matching(text: str) -> str:
     return " ".join(norm_words).strip()
 
 
+TMDB_LANGUAGE_CODE_MAP = {
+    "en": "English", "eng": "English", "english": "English",
+    "ml": "Malayalam", "mal": "Malayalam", "malayalam": "Malayalam",
+    "hi": "Hindi", "hin": "Hindi", "hindi": "Hindi",
+    "ta": "Tamil", "tam": "Tamil", "tamil": "Tamil",
+    "te": "Telugu", "tel": "Telugu", "telugu": "Telugu",
+    "kn": "Kannada", "kan": "Kannada", "kannada": "Kannada",
+    "bn": "Bengali", "ben": "Bengali", "bengali": "Bengali",
+    "mr": "Marathi", "mar": "Marathi", "marathi": "Marathi",
+    "pa": "Punjabi", "pun": "Punjabi", "punjabi": "Punjabi",
+    "gu": "Gujarati", "guj": "Gujarati", "gujarati": "Gujarati",
+    "ur": "Urdu", "urd": "Urdu", "urdu": "Urdu",
+    "or": "Odia", "ori": "Odia", "oriya": "Odia", "odia": "Odia",
+    "de": "German", "ger": "German", "german": "German",
+    "ko": "Korean", "kor": "Korean", "korean": "Korean",
+    "ja": "Japanese", "jap": "Japanese", "jpn": "Japanese", "japanese": "Japanese",
+    "es": "Spanish", "spa": "Spanish", "spanish": "Spanish",
+    "fr": "French", "fre": "French", "fra": "French", "french": "French",
+    "ar": "Arabic", "ara": "Arabic", "arabic": "Arabic",
+    "ru": "Russian", "rus": "Russian", "russian": "Russian",
+    "zh": "Chinese", "chi": "Chinese", "zho": "Chinese", "chinese": "Chinese", "cn": "Chinese",
+    "it": "Italian", "ita": "Italian", "italian": "Italian",
+    "pt": "Portuguese", "por": "Portuguese", "portuguese": "Portuguese",
+    "tr": "Turkish", "tur": "Turkish", "turkish": "Turkish",
+    "th": "Thai", "thai": "Thai",
+    "id": "Indonesian", "ind": "Indonesian", "indonesian": "Indonesian",
+    "ms": "Malay", "may": "Malay", "msa": "Malay", "malay": "Malay",
+    "vi": "Vietnamese", "vie": "Vietnamese", "vietnamese": "Vietnamese",
+    "fa": "Persian", "fas": "Persian", "per": "Persian", "persian": "Persian",
+    "pl": "Polish", "pol": "Polish", "polish": "Polish",
+    "nl": "Dutch", "dut": "Dutch", "nld": "Dutch", "dutch": "Dutch",
+    "sv": "Swedish", "swe": "Swedish", "swedish": "Swedish",
+    "no": "Norwegian", "nor": "Norwegian", "norwegian": "Norwegian",
+    "da": "Danish", "dan": "Danish", "danish": "Danish",
+    "fi": "Finnish", "fin": "Finnish", "finnish": "Finnish",
+    "he": "Hebrew", "heb": "Hebrew", "hebrew": "Hebrew",
+    "el": "Greek", "gre": "Greek", "ell": "Greek", "greek": "Greek",
+    "cs": "Czech", "cze": "Czech", "ces": "Czech", "czech": "Czech",
+    "hu": "Hungarian", "hun": "Hungarian", "hungarian": "Hungarian",
+    "ro": "Romanian", "rum": "Romanian", "ron": "Romanian", "romanian": "Romanian",
+    "uk": "Ukrainian", "ukr": "Ukrainian", "ukrainian": "Ukrainian",
+    "tl": "Tagalog", "tgl": "Tagalog", "tagalog": "Tagalog",
+}
+
+def normalize_language_name(lang_val: str | None) -> str | None:
+    """
+    Normalizes any language string or ISO code (e.g. 'en', 'ml', 'Korean', 'hi')
+    into its standardized full English language name (e.g. 'English', 'Malayalam', 'Korean', 'Hindi').
+    """
+    if not lang_val:
+        return None
+    cleaned = str(lang_val).strip().lower()
+    cleaned = re.sub(r"[^a-z0-9]", "", cleaned)
+    if not cleaned:
+        return None
+    if cleaned in TMDB_LANGUAGE_CODE_MAP:
+        return TMDB_LANGUAGE_CODE_MAP[cleaned]
+    return str(lang_val).strip().title()
+
+
+def extract_tmdb_posters_from_html(html_content: str, primary_poster: str = None) -> list[str]:
+    """
+    Extracts all unique, valid TMDB poster image URLs (w500) from TMDB HTML webpage.
+    Preserves primary_poster as the first element if provided.
+    """
+    posters = []
+    seen_filenames = set()
+
+    if primary_poster and str(primary_poster).strip() and str(primary_poster).strip().upper() != "N/A":
+        clean_p = str(primary_poster).strip()
+        if clean_p.startswith("//"):
+            clean_p = "https:" + clean_p
+        posters.append(clean_p)
+        m_fn = re.search(r'([a-zA-Z0-9_-]+\.(?:jpg|jpeg|png|webp))', clean_p, re.I)
+        if m_fn:
+            seen_filenames.add(m_fn.group(1).lower())
+
+    if not html_content:
+        return posters
+
+    # Pattern 1: Fully qualified or protocol-relative TMDB image paths
+    pattern1 = r'(?:https?:)?//(?:image|media)\.themoviedb\.org/t/p/[^"\'\s<>]+/([a-zA-Z0-9_-]+\.(?:jpg|jpeg|png|webp))'
+    matches = list(re.findall(pattern1, html_content, re.IGNORECASE))
+    
+    # Pattern 2: Relative paths /t/p/...
+    pattern2 = r'/t/p/(?:w\d+|original|w\d+_and_h\d+[^/]*)/([a-zA-Z0-9_-]+\.(?:jpg|jpeg|png|webp))'
+    matches.extend(re.findall(pattern2, html_content, re.IGNORECASE))
+
+    for img_fn in matches:
+        fn_clean = img_fn.strip()
+        fn_lower = fn_clean.lower()
+        if any(skip in fn_lower for skip in ("avatar", "gravatar", "logo", "icon", "blank", "default", "backdrop")):
+            continue
+        if fn_lower in seen_filenames:
+            continue
+        seen_filenames.add(fn_lower)
+        poster_url = f"https://image.themoviedb.org/t/p/w500/{fn_clean}"
+        posters.append(poster_url)
+        if len(posters) >= 12:
+            break
+
+    return posters
+
+
+def get_random_filter_poster(filter_data: dict | None) -> str | None:
+    """
+    Randomly selects ONE valid poster from a Movie or Series filter document.
+    Priority:
+    1. If 'posters' array exists and contains non-empty valid poster entries, randomly pick one.
+    2. Fallback to single 'poster' field if present and valid.
+    3. Return None if no valid poster is available.
+    """
+    if not filter_data or not isinstance(filter_data, dict):
+        return None
+
+    posters = filter_data.get("posters")
+    if isinstance(posters, list) and posters:
+        valid_posters = []
+        for p in posters:
+            if isinstance(p, dict):
+                p_val = str(p.get("file_id") or p.get("url") or "").strip()
+            else:
+                p_val = str(p).strip()
+            if p_val and p_val.upper() != "N/A":
+                valid_posters.append(p_val)
+        if valid_posters:
+            import random
+            return random.choice(valid_posters)
+
+    single_poster = str(filter_data.get("poster") or "").strip()
+    if single_poster and single_poster.upper() != "N/A":
+        return single_poster
+
+    return None
+
+
+def normalize_series_identity_title(text: str) -> str:
+    """
+    Normalizes a series title for strict identity comparison.
+    Lowercases, unifies unicode, replaces punctuation (. _ - [ ] etc.) with spaces,
+    and collapses whitespace.
+    DOES NOT strip meaningful words like 'The', 'Real', 'Love', 'Ishq', 'Starts', 'Today', etc.
+    """
+    if not text:
+        return ""
+    import unicodedata
+    t = unicodedata.normalize("NFKD", str(text))
+    t = t.lower()
+    t = re.sub(r"[\._\-\+\[\]\(\)\{\}:;!?,/\\~|#*\"\'`]", " ", t)
+    t = re.sub(r"\s+", " ", t).strip()
+    return t
+
+
+def match_automatic_series_file(
+    target_series_name: str,
+    filename: str,
+    caption: str = "",
+    target_season: int = None,
+    original_language: str = None,
+    target_aliases: list = None
+) -> dict:
+    """
+    Strict authoritative Automatic Series file matcher.
+    Rule:
+      Filename structure is strictly: {EXACT SERIES NAME} {SxxEyy} {ANY OTHER DETAILS}
+      ONLY the text BEFORE the SxxEyy boundary represents the candidate series name.
+      Everything AFTER the SxxEyy boundary is file metadata (quality, language, etc.)
+      and MUST NOT be included in series-name comparison.
+    """
+    if not filename:
+        return {"matched": False, "status": "invalid", "reason": "empty_filename"}
+
+    from utils import is_video_file, is_subtitle_file
+    if not is_video_file(filename) or is_subtitle_file(filename):
+        return {"matched": False, "status": "invalid", "reason": "not_a_video_file"}
+
+    raw_name = str(filename).strip()
+    # Strip file extensions
+    name_no_ext = re.sub(
+        r"\.(mkv|mp4|avi|mov|wmv|flv|webm|m4v|ts|3gp|mpeg|mpg|vob|ogv|divx|m2ts|m2v|f4v)$",
+        "",
+        raw_name,
+        flags=re.IGNORECASE
+    ).strip()
+
+    # Remove usernames / URL links
+    cleaned_name = ' '.join(
+        filter(
+            lambda x: not x.startswith('@') and not x.startswith('http://') and not x.startswith('https://') and not x.startswith('www.') and not x.startswith('t.me/'),
+            name_no_ext.split()
+        )
+    )
+
+    # Search for Season/Episode marker boundary
+    # Pattern 1: Standard S01E01 / S1E1 / S01.E01 / S01-E01 / S01_E01 / S01 E01 / S1 E1
+    m1 = re.search(r"(?i)(?:^|[\s._\-\(\[\{])S(\d{1,3})\s*[\.\-_ ]?\s*E(\d{1,4})(?:[\s._\-\)\]\}]|$)", cleaned_name)
+    # Pattern 2: Cross notation 01x01 / 1x01
+    m2 = re.search(r"(?i)(?:^|[\s._\-\(\[\{])(\d{1,3})\s*x\s*(\d{1,4})(?:[\s._\-\)\]\}]|$)", cleaned_name)
+    # Pattern 3: Season 1 Episode 1 / Season 01 Ep 01 / Season 1 - 01
+    m3 = re.search(r"(?i)(?:^|[\s._\-\(\[\{])(?:Season|S)\s*(\d{1,3})\s*[\.\-_ ]?\s*(?:Episode|Ep|E)\s*(\d{1,4})(?:[\s._\-\)\]\}]|$)", cleaned_name)
+    # Pattern 4: Separate Season ... Episode
+    m4 = re.search(r"(?i)(?:^|[\s._\-\(\[\{])(?:Season|S)\s*(\d{1,3})\b.*?\b(?:Episode|Ep|E)\s*(\d{1,4})(?:[\s._\-\)\]\}]|$)", cleaned_name)
+    # Pattern 5: Standalone Episode: Ep 01 / Episode 01 / E01
+    m5 = re.search(r"(?i)(?:^|[\s._\-\(\[\{])(?:Episode|Ep|E)\s*(\d{1,4})(?:[\s._\-\)\]\}]|$)", cleaned_name)
+
+    boundary_start = -1
+    boundary_end = -1
+    season_val = 1
+    episode_val = None
+
+    if m1:
+        boundary_start = m1.start()
+        boundary_end = m1.end()
+        season_val = int(m1.group(1))
+        episode_val = int(m1.group(2))
+    elif m2:
+        boundary_start = m2.start()
+        boundary_end = m2.end()
+        season_val = int(m2.group(1))
+        episode_val = int(m2.group(2))
+    elif m3:
+        boundary_start = m3.start()
+        boundary_end = m3.end()
+        season_val = int(m3.group(1))
+        episode_val = int(m3.group(2))
+    elif m4:
+        boundary_start = m4.start()
+        boundary_end = m4.end()
+        season_val = int(m4.group(1))
+        episode_val = int(m4.group(2))
+    elif m5:
+        boundary_start = m5.start()
+        boundary_end = m5.end()
+        season_val = target_season if target_season is not None else 1
+        episode_val = int(m5.group(1))
+
+    if episode_val is None or episode_val <= 0 or boundary_start < 0:
+        return {
+            "matched": False,
+            "status": "invalid",
+            "series": target_series_name,
+            "reason": "missing_season_or_episode"
+        }
+
+    # Extract text strictly BEFORE SxxEyy marker
+    candidate_raw = cleaned_name[:boundary_start].strip()
+    remaining_text = cleaned_name[boundary_end:].strip()
+
+    norm_candidate = normalize_series_identity_title(candidate_raw)
+    norm_target = normalize_series_identity_title(target_series_name)
+
+    if not norm_candidate or not norm_target:
+        return {
+            "matched": False,
+            "status": "invalid",
+            "series_name": candidate_raw,
+            "season": season_val,
+            "episode": episode_val,
+            "reason": "empty_series_name"
+        }
+
+    valid_targets = {norm_target}
+    if target_aliases and isinstance(target_aliases, (list, set, tuple)):
+        for a in target_aliases:
+            na = normalize_series_identity_title(a)
+            if na:
+                valid_targets.add(na)
+
+    # EXACT comparison between candidate series name and target series name
+    if norm_candidate not in valid_targets:
+        return {
+            "matched": False,
+            "status": "invalid",
+            "series": target_series_name,
+            "series_name": candidate_raw,
+            "season": season_val,
+            "episode": episode_val,
+            "reason": f"series_name_mismatch: '{candidate_raw}' != '{target_series_name}'"
+        }
+
+    # Target season filter check if specified
+    if target_season is not None and int(season_val) != int(target_season):
+        return {
+            "matched": False,
+            "status": "other_season",
+            "series": target_series_name,
+            "series_name": candidate_raw,
+            "season": season_val,
+            "episode": episode_val,
+            "remaining_text": remaining_text,
+            "reason": f"season_{season_val}_not_target_{target_season}"
+        }
+
+    # Metadata extraction strictly from remaining_text / filename
+    from utils import extract_quality_from_filename
+    from plugins.pm_filter import resolve_file_language
+
+    detected_quality = extract_quality_from_filename(remaining_text or raw_name)
+    detected_lang = resolve_file_language(
+        remaining_text or raw_name,
+        caption=caption,
+        metadata={"original_language": original_language},
+        default_fallback="English"
+    )
+
+    return {
+        "matched": True,
+        "status": "matched",
+        "series": target_series_name,
+        "series_name": candidate_raw,
+        "season": season_val,
+        "episode": episode_val,
+        "quality": detected_quality,
+        "language": detected_lang,
+        "remaining_text": remaining_text,
+        "reason": "exact_identity_match"
+    }
+
+
 def extract_quality_from_filename(filename: str) -> str:
     """Extract resolution / quality tag from media filename."""
     if not filename:
@@ -694,6 +1013,8 @@ async def get_public_tmdb_poster(query, bulk=False, id=False, file=None):
 
         rating = None
         genres = []
+        orig_lang = None
+        posters = [best.get('poster')] if best.get('poster') else []
         if best.get('rel_url'):
             try:
                 detail_url = f"https://www.themoviedb.org{best['rel_url']}"
@@ -705,6 +1026,14 @@ async def get_public_tmdb_poster(query, bulk=False, id=False, file=None):
                     genres_match = re.search(r'<span class="genres">([^<]+(?:<a[^>]*>[^<]+</a>[^<]*)+)</span>', page)
                     if genres_match:
                         genres = [_html.unescape(g.strip()) for g in re.findall(r'<a[^>]*>([^<]+)</a>', genres_match.group(1))]
+                    lang_match = re.search(r'(?:<bdi>Original Language</bdi>|Original Language)[^<]*</(?:bdi|strong|span|p)>[\s:]*([A-Za-z]+)', page, re.I)
+                    if not lang_match:
+                        lang_match = re.search(r'<strong>\s*Original Language\s*</strong>[\s:]*([A-Za-z]+)', page, re.I)
+                    if not lang_match:
+                        lang_match = re.search(r'"original_language"\s*:\s*"([^"]+)"', page, re.I)
+                    if lang_match:
+                        orig_lang = normalize_language_name(lang_match.group(1).strip())
+                    posters = extract_tmdb_posters_from_html(page, primary_poster=best.get('poster'))
             except Exception:
                 pass
 
@@ -722,6 +1051,7 @@ async def get_public_tmdb_poster(query, bulk=False, id=False, file=None):
             'countries': None,
             'certificates': None,
             'languages': None,
+            'original_language': orig_lang,
             'director': None,
             'writer': None,
             'producer': None,
@@ -733,6 +1063,7 @@ async def get_public_tmdb_poster(query, bulk=False, id=False, file=None):
             'year': best.get('year'),
             'genres': ", ".join(genres) if genres else "Drama",
             'poster': best.get('poster'),
+            'posters': posters,
             'plot': best.get('overview') or "",
             'rating': rating or "7.5",
             'url': f"https://www.themoviedb.org{best.get('rel_url')}" if best.get('rel_url') else "https://www.themoviedb.org"
@@ -842,6 +1173,7 @@ async def get_imdb_public_metadata(url_or_id: str) -> dict | None:
     rating = ""
     genres = ""
     plot = ""
+    orig_lang = None
 
     if json_ld_obj:
         title = json_ld_obj.get("name")
@@ -877,6 +1209,18 @@ async def get_imdb_public_metadata(url_or_id: str) -> dict | None:
 
         plot = json_ld_obj.get("description") or ""
 
+        in_lang = json_ld_obj.get("inLanguage")
+        if isinstance(in_lang, str):
+            orig_lang = normalize_language_name(in_lang)
+        elif isinstance(in_lang, dict):
+            orig_lang = normalize_language_name(in_lang.get("name") or in_lang.get("alternateName") or in_lang.get("identifier"))
+        elif isinstance(in_lang, list) and in_lang:
+            first_l = in_lang[0]
+            if isinstance(first_l, str):
+                orig_lang = normalize_language_name(first_l)
+            elif isinstance(first_l, dict):
+                orig_lang = normalize_language_name(first_l.get("name") or first_l.get("alternateName"))
+
     # OpenGraph / Meta Tag fallbacks
     if not title:
         og_t_m = re.search(r'<meta[^>]*property=["\']og:title["\'][^>]*content=["\']([^"\']+)["\']', html_content, re.I) or re.search(r'<meta[^>]*content=["\']([^"\']+)["\'][^>]*property=["\']og:title["\']', html_content, re.I)
@@ -890,6 +1234,13 @@ async def get_imdb_public_metadata(url_or_id: str) -> dict | None:
             y_m = re.search(r"\(.*?((?:19|20)\d{2}).*?\)", page_t_m.group(1))
             if y_m:
                 year = y_m.group(1)
+
+    if not orig_lang:
+        lang_m = re.search(r'data-testid=["\']title-details-languages["\'][^>]*>(?:<[^>]+>)*\s*<a[^>]*>([^<]+)</a>', html_content, re.I)
+        if not lang_m:
+            lang_m = re.search(r'href=["\']/search/title/\?primary_language=([^"&]+)', html_content, re.I)
+        if lang_m:
+            orig_lang = normalize_language_name(lang_m.group(1).strip())
 
     if not poster:
         og_img_m = re.search(r'<meta[^>]*property=["\']og:image["\'][^>]*content=["\']([^"\']+)["\']', html_content, re.I) or re.search(r'<meta[^>]*content=["\']([^"\']+)["\'][^>]*property=["\']og:image["\']', html_content, re.I)
@@ -917,6 +1268,7 @@ async def get_imdb_public_metadata(url_or_id: str) -> dict | None:
             year = year or str(sugg.get("year") or "")
             kind = sugg.get("kind") or kind
             poster = poster or sugg.get("poster")
+            orig_lang = orig_lang or sugg.get("original_language")
 
     if not title:
         logger.warning(f"[PUBLIC IMDb] FAILED reason=NO_TITLE id={clean_tt}")
@@ -929,6 +1281,7 @@ async def get_imdb_public_metadata(url_or_id: str) -> dict | None:
         f"title={title}\n"
         f"year={clean_year}\n"
         f"kind={kind}\n"
+        f"original_language={orig_lang}\n"
         f"poster={bool(poster)}"
     )
 
@@ -938,7 +1291,9 @@ async def get_imdb_public_metadata(url_or_id: str) -> dict | None:
         "kind": kind,
         "imdb_id": clean_tt,
         "tmdb_id": None,
+        "original_language": orig_lang,
         "poster": poster,
+        "posters": [poster] if poster else [],
         "rating": rating,
         "genres": genres,
         "plot": _html.unescape(plot.strip()) if plot else "",
@@ -1057,6 +1412,7 @@ async def get_tmdb_public_metadata(url: str) -> dict | None:
     rating = ""
     genres = ""
     plot = ""
+    orig_lang = None
 
     if selected_obj:
         c_name = str(selected_obj.get("name", "")).strip()
@@ -1087,6 +1443,18 @@ async def get_tmdb_public_metadata(url: str) -> dict | None:
             genres = genre_val.strip()
 
         plot = selected_obj.get("description") or ""
+
+        in_lang = selected_obj.get("inLanguage")
+        if isinstance(in_lang, str):
+            orig_lang = normalize_language_name(in_lang)
+        elif isinstance(in_lang, dict):
+            orig_lang = normalize_language_name(in_lang.get("name") or in_lang.get("alternateName") or in_lang.get("identifier"))
+        elif isinstance(in_lang, list) and in_lang:
+            first_l = in_lang[0]
+            if isinstance(first_l, str):
+                orig_lang = normalize_language_name(first_l)
+            elif isinstance(first_l, dict):
+                orig_lang = normalize_language_name(first_l.get("name") or first_l.get("alternateName"))
 
     # OpenGraph / Meta title fallback
     if not title or title.lower() in REJECT_NAMES or title.lower().startswith("the movie database"):
@@ -1134,6 +1502,16 @@ async def get_tmdb_public_metadata(url: str) -> dict | None:
             if y_m:
                 year = y_m.group(1)
 
+    # HTML original language fallback
+    if not orig_lang:
+        lang_m = re.search(r'(?:<bdi>Original Language</bdi>|Original Language)[^<]*</(?:bdi|strong|span|p)>[\s:]*([A-Za-z]+)', html_content, re.I)
+        if not lang_m:
+            lang_m = re.search(r'<strong>\s*Original Language\s*</strong>[\s:]*([A-Za-z]+)', html_content, re.I)
+        if not lang_m:
+            lang_m = re.search(r'"original_language"\s*:\s*"([^"]+)"', html_content, re.I)
+        if lang_m:
+            orig_lang = normalize_language_name(lang_m.group(1).strip())
+
     if not poster:
         og_img_m = re.search(r'<meta[^>]*property=["\']og:image["\'][^>]*content=["\']([^"\']+)["\']', html_content, re.I) or re.search(r'<meta[^>]*content=["\']([^"\']+)["\'][^>]*property=["\']og:image["\']', html_content, re.I)
         if og_img_m:
@@ -1156,6 +1534,24 @@ async def get_tmdb_public_metadata(url: str) -> dict | None:
             poster = "https:" + poster
         poster = re.sub(r'/w\d+(_and_h\d+[^/]*)?/', '/w500/', poster)
 
+    posters = extract_tmdb_posters_from_html(html_content, primary_poster=poster)
+    if len(posters) < 3 and media_type and tmdb_id:
+        try:
+            gallery_url = f"https://www.themoviedb.org/{media_type}/{tmdb_id}/images/posters"
+            gallery_html = await asyncio.to_thread(_fetch_url_sync, gallery_url)
+            if gallery_html:
+                gallery_posters = extract_tmdb_posters_from_html(gallery_html)
+                for gp in gallery_posters:
+                    if gp not in posters:
+                        posters.append(gp)
+                    if len(posters) >= 12:
+                        break
+        except Exception as ge:
+            logger.debug(f"[PUBLIC TMDB] Gallery fetch error: {ge}")
+
+    if not poster and posters:
+        poster = posters[0]
+
     # Strict Validation
     if not title or title.strip().lower() in REJECT_NAMES or title.strip().lower().startswith("the movie database"):
         logger.warning(f"[PUBLIC TMDB] FAILED reason=INVALID_TITLE title={title} id={tmdb_id}")
@@ -1168,7 +1564,9 @@ async def get_tmdb_public_metadata(url: str) -> dict | None:
         f"title={title}\n"
         f"year={clean_year}\n"
         f"kind={kind}\n"
-        f"poster={bool(poster)}"
+        f"original_language={orig_lang}\n"
+        f"poster={bool(poster)}\n"
+        f"posters_count={len(posters)}"
     )
 
     return {
@@ -1177,7 +1575,9 @@ async def get_tmdb_public_metadata(url: str) -> dict | None:
         "kind": kind,
         "imdb_id": None,
         "tmdb_id": str(tmdb_id),
+        "original_language": orig_lang,
         "poster": poster,
+        "posters": posters,
         "rating": rating,
         "genres": genres,
         "plot": _html.unescape(plot.strip()) if plot else "",
@@ -1272,7 +1672,9 @@ async def get_imdb_metadata_direct(imdb_id: str):
             "kind": kind,
             "imdb_id": exact.get("id", imdb_id),
             "tmdb_id": None,
+            "original_language": None,
             "poster": poster,
+            "posters": [poster] if poster else [],
             "rating": "",
             "genres": "",
             "plot": "",
