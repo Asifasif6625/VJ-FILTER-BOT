@@ -45,11 +45,105 @@ def file_matches_year(media, caption, target_year: int) -> bool:
     return target_year in years_in_caption
 
 
+async def update_yindex_progress(session_id: str, bot=None, force: bool = False, status_override: str = None, reply_markup="KEEP"):
+    """
+    Authoritative progress updater for /yindex.
+    Reads live session counters and edits the single progress message with throttling.
+    """
+    sessions = getattr(temp, "YINDEX_SESSIONS", {})
+    session = sessions.get(session_id)
+    if not session:
+        return
+
+    now = time.monotonic()
+    last_update = session.get("last_progress_update", 0.0)
+    last_scanned = session.get("last_scanned_update", 0)
+    scanned_diff = session.get("scanned", 0) - last_scanned
+
+    # Throttled check unless forced
+    if not force:
+        if scanned_diff < 50 and (now - last_update) < 3.0:
+            return
+
+    target_year = session.get("year")
+    scanned = session.get("scanned", 0)
+    matching = session.get("matching", 0)
+    indexed = session.get("indexed", 0)
+    already_indexed = session.get("already_indexed", 0)
+    skipped = session.get("skipped", 0)
+    failed = session.get("failed", 0)
+    stop_requested = session.get("stop_requested", False)
+    is_running = session.get("is_running", False)
+
+    # Determine status & title
+    if status_override:
+        status_text = status_override
+        title_text = "📅 <b>Year Indexing Started</b>"
+        if "Stopped" in status_override or "🔴" in status_override:
+            title_text = "🛑 <b>Year Indexing Stopped</b>"
+        elif "Completed" in status_override or "✅" in status_override:
+            title_text = "✅ <b>Year Indexing Completed</b>"
+        elif "Failed" in status_override or "⚠️" in status_override:
+            title_text = "⚠️ <b>Year Indexing Failed</b>"
+    elif stop_requested and is_running:
+        title_text = "📅 <b>Year Indexing Started</b>"
+        status_text = "🟡 Stopping..."
+    elif stop_requested and not is_running:
+        title_text = "🛑 <b>Year Indexing Stopped</b>"
+        status_text = "🔴 Stopped by admin"
+    elif not is_running:
+        title_text = "✅ <b>Year Indexing Completed</b>"
+        status_text = "✅ Completed"
+    else:
+        title_text = "📅 <b>Year Indexing Started</b>"
+        status_text = "🟢 Indexing..."
+
+    text = (
+        f"{title_text}\n\n"
+        f"<b>Year:</b> <code>{target_year}</code>\n\n"
+        f"<b>Scanned:</b> <code>{scanned}</code>\n"
+        f"<b>Matching Files:</b> <code>{matching}</code>\n"
+        f"<b>Indexed:</b> <code>{indexed}</code>\n"
+        f"<b>Already Indexed:</b> <code>{already_indexed}</code>\n"
+        f"<b>Skipped:</b> <code>{skipped}</code>\n"
+        f"<b>Failed:</b> <code>{failed}</code>\n\n"
+        f"<b>Status:</b> {status_text}"
+    )
+
+    if reply_markup == "KEEP":
+        if is_running and not stop_requested:
+            markup = InlineKeyboardMarkup([[InlineKeyboardButton('🛑 STOP INDEXING', callback_data=f'yindex_stop:{session_id}')]])
+        else:
+            markup = None
+    else:
+        markup = reply_markup
+
+    progress_msg = session.get("progress_msg")
+    chat_id = session.get("progress_chat_id")
+    message_id = session.get("progress_message_id")
+
+    session["last_progress_update"] = now
+    session["last_scanned_update"] = scanned
+
+    try:
+        if progress_msg and hasattr(progress_msg, "edit_text"):
+            await progress_msg.edit_text(text, reply_markup=markup)
+        elif bot and chat_id and message_id:
+            await bot.edit_message_text(chat_id=chat_id, message_id=message_id, text=text, reply_markup=markup)
+    except MessageNotModified:
+        pass
+    except Exception as e:
+        logger.debug(f"[YINDEX UPDATE PROGRESS ERROR] session={session_id} error={e}")
+
+
 @Client.on_callback_query(filters.regex(r'^(yindex_stop|yindex_cancel)'))
 async def yindex_stop_callback(bot, query):
     user_id = query.from_user.id
     if user_id not in ADMINS:
-        return await query.answer("⚠️ You are not allowed to stop this indexing task.", show_alert=True)
+        try:
+            return await query.answer("⚠️ You are not allowed to stop this indexing task.", show_alert=True)
+        except Exception:
+            return
     
     raw_data = query.data
     if ":" in raw_data:
@@ -70,14 +164,45 @@ async def yindex_stop_callback(bot, query):
                 break
 
     if not session or not session.get("is_running"):
-        return await query.answer("ℹ️ This indexing task is no longer running.", show_alert=True)
+        try:
+            return await query.answer("ℹ️ This indexing task is no longer running.", show_alert=False)
+        except Exception:
+            return
 
     if session.get("admin_id") != user_id and user_id not in ADMINS:
-        return await query.answer("⚠️ You are not allowed to stop this indexing task.", show_alert=True)
+        try:
+            return await query.answer("⚠️ You are not allowed to stop this indexing task.", show_alert=True)
+        except Exception:
+            return
 
+    if session.get("stop_requested"):
+        logger.info(f"[YINDEX] STOP ALREADY REQUESTED session={session.get('session_id')}")
+        try:
+            return await query.answer("Stop already requested. Waiting for safe exit...", show_alert=False)
+        except Exception:
+            return
+
+    # Set cancellation flag BEFORE answering callback
     session["stop_requested"] = True
-    logger.info(f"[YINDEX] STOP REQUESTED session={session.get('session_id')}")
-    await query.answer("Stopping Year Indexing... 🛑", show_alert=True)
+    actual_session_id = session.get("session_id", session_id)
+    logger.info(f"[YINDEX] STOP REQUESTED session={actual_session_id}")
+
+    try:
+        await query.answer("Stopping Year Indexing... 🛑", show_alert=False)
+    except Exception as e:
+        logger.warning(f"[YINDEX] STOP CALLBACK ANSWER FAILED: {e}")
+
+    # Immediately edit message to show Stopping... and remove STOP button
+    try:
+        await update_yindex_progress(
+            actual_session_id,
+            bot=bot,
+            force=True,
+            status_override="🟡 Stopping...",
+            reply_markup=None
+        )
+    except Exception as e:
+        logger.warning(f"[YINDEX] STOP PROGRESS EDIT FAILED: {e}")
 
 
 @Client.on_message(filters.private & filters.command('yindex') & filters.user(ADMINS))
@@ -188,22 +313,29 @@ async def yindex_command(bot, message):
         "skipped": 0,
         "failed": 0,
         "created_at": time.time(),
+        "last_progress_update": time.monotonic(),
+        "last_scanned_update": 0,
     }
     temp.YINDEX_SESSIONS[session_id] = session
 
     # Initialize Start Indexing Progress Message
     stop_btn = InlineKeyboardMarkup([[InlineKeyboardButton('🛑 STOP INDEXING', callback_data=f'yindex_stop:{session_id}')]])
     progress_msg = await vj.reply_text(
-        f"📅 <b>Year Indexing Started</b>\n"
+        f"📅 <b>Year Indexing Started</b>\n\n"
         f"<b>Year:</b> <code>{target_year}</code>\n\n"
         f"<b>Scanned:</b> <code>0</code>\n"
         f"<b>Matching Files:</b> <code>0</code>\n"
         f"<b>Indexed:</b> <code>0</code>\n"
         f"<b>Already Indexed:</b> <code>0</code>\n"
         f"<b>Skipped:</b> <code>0</code>\n"
-        f"<b>Failed:</b> <code>0</code>",
+        f"<b>Failed:</b> <code>0</code>\n\n"
+        f"<b>Status:</b> 🟢 Indexing...",
         reply_markup=stop_btn
     )
+
+    session["progress_chat_id"] = progress_msg.chat.id
+    session["progress_message_id"] = progress_msg.id
+    session["progress_msg"] = progress_msg
 
     # Run Year Indexing
     await year_index_files_to_db(
@@ -218,7 +350,7 @@ async def yindex_command(bot, message):
 async def year_index_files_to_db(session: dict, chat, lst_msg_id: int, msg, bot, admin_id: int = None):
     """
     Scans the source channel and indexes only files matching the target year.
-    Supports safe cooperative STOP via session["stop_requested"].
+    Supports real-time throttled progress updates and safe cooperative STOP via session["stop_requested"].
     """
     if isinstance(session, int):
         # Backward compatibility if target_year passed as first arg
@@ -239,33 +371,45 @@ async def year_index_files_to_db(session: dict, chat, lst_msg_id: int, msg, bot,
             "skipped": 0,
             "failed": 0,
             "created_at": time.time(),
+            "last_progress_update": time.monotonic(),
+            "last_scanned_update": 0,
+            "progress_msg": msg,
+            "progress_chat_id": getattr(getattr(msg, "chat", None), "id", None),
+            "progress_message_id": getattr(msg, "id", None),
         }
         if not hasattr(temp, "YINDEX_SESSIONS") or not isinstance(temp.YINDEX_SESSIONS, dict):
             temp.YINDEX_SESSIONS = {}
         temp.YINDEX_SESSIONS[session_id] = session
-
-    session_id = session.get("session_id")
-    target_year = session.get("year")
-    admin_uid = session.get("admin_id")
+    else:
+        session_id = session.get("session_id")
+        target_year = session.get("year")
+        admin_uid = session.get("admin_id")
+        session["progress_msg"] = msg
+        session["progress_chat_id"] = getattr(getattr(msg, "chat", None), "id", None)
+        session["progress_message_id"] = getattr(msg, "id", None)
 
     logger.info(f"[YINDEX] START session={session_id} year={target_year} channel={chat}")
     set_wizard_session(admin_uid, "YINDEX", "YINDEX_RUNNING", {"session_id": session_id, "year": target_year, "chat_id": chat})
 
     batch_size = 200
     current = temp.CURRENT if getattr(temp, 'CURRENT', 1) > 0 else 1
-    last_update_time = time.time()
     interrupted_reason = None
     empty_batches_count = 0
     max_empty_batches = 2
-
-    stop_btn = InlineKeyboardMarkup([[InlineKeyboardButton('🛑 STOP INDEXING', callback_data=f'yindex_stop:{session_id}')]])
 
     try:
         while True:
             if session.get("stop_requested"):
                 break
 
-            batch_ids = list(range(current, current + batch_size))
+            if current > lst_msg_id:
+                break
+
+            batch_end = min(current + batch_size, lst_msg_id + 1)
+            batch_ids = list(range(current, batch_end))
+            if not batch_ids:
+                break
+
             messages = None
 
             # Bounded retry for fetching chunk of messages
@@ -279,14 +423,14 @@ async def year_index_files_to_db(session: dict, chat, lst_msg_id: int, msg, bot,
                     logger.warning(f"[YINDEX FLOODWAIT] session={session_id} Sleeping {e.value}s")
                     await asyncio.sleep(e.value)
                 except Exception as ge:
-                    logger.warning(f"[YINDEX GET_MESSAGES RETRY] session={session_id} Attempt {attempt + 1}/3 for batch {current}-{current + batch_size}: {ge}")
+                    logger.warning(f"[YINDEX GET_MESSAGES RETRY] session={session_id} Attempt {attempt + 1}/3 for batch {current}-{batch_end}: {ge}")
                     await asyncio.sleep(2 * (attempt + 1))
 
             if session.get("stop_requested"):
                 break
 
             if messages is None:
-                logger.error(f"[YINDEX] Failed to fetch batch {current}-{current + batch_size} after retries")
+                logger.error(f"[YINDEX] Failed to fetch batch {current}-{batch_end} after retries")
                 interrupted_reason = "Telegram network error fetching channel messages."
                 break
 
@@ -306,18 +450,22 @@ async def year_index_files_to_db(session: dict, chat, lst_msg_id: int, msg, bot,
 
                 if getattr(message, 'empty', False):
                     session["skipped"] += 1
+                    await update_yindex_progress(session_id, bot=bot)
                     continue
                 elif not message.media:
                     session["skipped"] += 1
+                    await update_yindex_progress(session_id, bot=bot)
                     continue
                 elif message.media not in [enums.MessageMediaType.VIDEO, enums.MessageMediaType.AUDIO, enums.MessageMediaType.DOCUMENT]:
                     session["skipped"] += 1
+                    await update_yindex_progress(session_id, bot=bot)
                     continue
 
                 media_type_attr = getattr(message.media, 'value', str(message.media))
                 media = getattr(message, str(media_type_attr), None)
                 if not media:
                     session["skipped"] += 1
+                    await update_yindex_progress(session_id, bot=bot)
                     continue
 
                 media.caption = message.caption
@@ -325,6 +473,7 @@ async def year_index_files_to_db(session: dict, chat, lst_msg_id: int, msg, bot,
                 # Check if file/caption matches the requested year
                 if not file_matches_year(media, message.caption, target_year):
                     session["skipped"] += 1
+                    await update_yindex_progress(session_id, bot=bot)
                     continue
 
                 if session.get("stop_requested"):
@@ -344,26 +493,8 @@ async def year_index_files_to_db(session: dict, chat, lst_msg_id: int, msg, bot,
                     logger.exception(f"[YINDEX SAVE ERROR] session={session_id} error={fe}")
                     session["failed"] += 1
 
-                # Periodic progress update
-                now = time.time()
-                if session["scanned"] % 30 == 0 or (now - last_update_time >= 5):
-                    last_update_time = now
-                    try:
-                        await msg.edit_text(
-                            f"📅 <b>Year Indexing Started</b>\n"
-                            f"<b>Year:</b> <code>{target_year}</code>\n\n"
-                            f"<b>Scanned:</b> <code>{session['scanned']}</code>\n"
-                            f"<b>Matching Files:</b> <code>{session['matching']}</code>\n"
-                            f"<b>Indexed:</b> <code>{session['indexed']}</code>\n"
-                            f"<b>Already Indexed:</b> <code>{session['already_indexed']}</code>\n"
-                            f"<b>Skipped:</b> <code>{session['skipped']}</code>\n"
-                            f"<b>Failed:</b> <code>{session['failed']}</code>",
-                            reply_markup=stop_btn
-                        )
-                    except MessageNotModified:
-                        pass
-                    except Exception as pe:
-                        logger.debug(f"[YINDEX PROGRESS EDIT ERROR] {pe}")
+                # Live throttled progress update
+                await update_yindex_progress(session_id, bot=bot)
 
             if session.get("stop_requested"):
                 break
@@ -378,58 +509,34 @@ async def year_index_files_to_db(session: dict, chat, lst_msg_id: int, msg, bot,
         session["is_running"] = False
         clear_wizard_session(admin_uid)
 
-    # Final summary update (STOP button removed)
+    # Final summary update (STOP button removed, final forced update)
     if session.get("stop_requested"):
         logger.info(f"[YINDEX] STOPPED session={session_id} scanned={session['scanned']} indexed={session['indexed']}")
-        try:
-            await msg.edit_text(
-                f"🛑 <b>Year Indexing Stopped</b>\n\n"
-                f"<b>Year:</b> <code>{target_year}</code>\n\n"
-                f"<b>Scanned:</b> <code>{session['scanned']}</code>\n"
-                f"<b>Matching Files:</b> <code>{session['matching']}</code>\n"
-                f"<b>Indexed:</b> <code>{session['indexed']}</code>\n"
-                f"<b>Already Indexed:</b> <code>{session['already_indexed']}</code>\n"
-                f"<b>Skipped:</b> <code>{session['skipped']}</code>\n"
-                f"<b>Failed:</b> <code>{session['failed']}</code>\n\n"
-                f"<b>Status:</b> Stopped by admin",
-                reply_markup=None
-            )
-        except Exception as e:
-            logger.error(f"[YINDEX FINAL EDIT ERROR] session={session_id} error={e}")
+        await update_yindex_progress(
+            session_id,
+            bot=bot,
+            force=True,
+            status_override="🔴 Stopped by admin",
+            reply_markup=None
+        )
     elif interrupted_reason:
         logger.error(f"[YINDEX] ERROR session={session_id} error={interrupted_reason}")
-        try:
-            await msg.edit_text(
-                f"⚠️ <b>Year Indexing Interrupted</b>\n\n"
-                f"<b>Year:</b> <code>{target_year}</code>\n\n"
-                f"<b>Scanned:</b> <code>{session['scanned']}</code>\n"
-                f"<b>Matching Files:</b> <code>{session['matching']}</code>\n"
-                f"<b>Indexed:</b> <code>{session['indexed']}</code>\n"
-                f"<b>Already Indexed:</b> <code>{session['already_indexed']}</code>\n"
-                f"<b>Skipped:</b> <code>{session['skipped']}</code>\n"
-                f"<b>Failed:</b> <code>{session['failed']}</code>\n\n"
-                f"<b>Status:</b> <code>{interrupted_reason}</code>",
-                reply_markup=None
-            )
-        except Exception as e:
-            logger.error(f"[YINDEX FINAL EDIT ERROR] session={session_id} error={e}")
+        await update_yindex_progress(
+            session_id,
+            bot=bot,
+            force=True,
+            status_override=f"<code>{interrupted_reason}</code>",
+            reply_markup=None
+        )
     else:
         logger.info(f"[YINDEX] COMPLETED session={session_id} scanned={session['scanned']} indexed={session['indexed']}")
-        try:
-            await msg.edit_text(
-                f"✅ <b>Year Indexing Completed</b>\n\n"
-                f"<b>Year:</b> <code>{target_year}</code>\n\n"
-                f"<b>Scanned:</b> <code>{session['scanned']}</code>\n"
-                f"<b>Matching Files:</b> <code>{session['matching']}</code>\n"
-                f"<b>Indexed:</b> <code>{session['indexed']}</code>\n"
-                f"<b>Already Indexed:</b> <code>{session['already_indexed']}</code>\n"
-                f"<b>Skipped:</b> <code>{session['skipped']}</code>\n"
-                f"<b>Failed:</b> <code>{session['failed']}</code>\n\n"
-                f"<b>Status:</b> Completed",
-                reply_markup=None
-            )
-        except Exception as e:
-            logger.error(f"[YINDEX FINAL EDIT ERROR] session={session_id} error={e}")
+        await update_yindex_progress(
+            session_id,
+            bot=bot,
+            force=True,
+            status_override="✅ Completed",
+            reply_markup=None
+        )
 
 
 @Client.on_callback_query(filters.regex(r'^index'))
