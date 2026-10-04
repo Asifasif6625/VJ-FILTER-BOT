@@ -2074,6 +2074,27 @@ def _extract_episode_number(text: str) -> int | None:
     return None
 
 
+def _extract_season_number(text: str) -> int | None:
+    if not text:
+        return None
+    clean_text = re.sub(r'\b(2160|1080|720|480|360|4k|8k)p?\b', '', text, flags=re.IGNORECASE)
+    patterns = [
+        r"\bS(\d{1,2})[\s\.\-_]?E\d{1,4}\b",          # S01E06, S1 E6, S01-E06, S01.E06
+        r"\b(?:Season|S)[\s\.\-_]?(\d{1,2})\b",        # Season 1, Season-01, S01, S1
+        r"\b(\d{1,2})\s*(?:st|nd|rd|th)?\s*season\b", # 1st season, 1 season
+    ]
+    for p in patterns:
+        match = re.search(p, clean_text, re.IGNORECASE)
+        if match:
+            try:
+                s_val = int(match.group(1))
+                if s_val > 0:
+                    return s_val
+            except Exception:
+                continue
+    return None
+
+
 # Reverse lookup: short_id → full_id (populated at runtime)
 _SERIES_ID_MAP: dict[str, str] = {}
 

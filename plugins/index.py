@@ -31,8 +31,9 @@ def extract_years_from_text(text: str) -> list[int]:
 def file_matches_year(media, caption, target_year: int) -> bool:
     """
     Check if a media file or its caption contains the requested target year.
-    Fast path: substring check before regex extraction.
+    Fast path: substring check before regex extraction with leading prefix marker stripping.
     """
+    from utils import strip_file_prefix_markers
     target_str = str(target_year)
     file_name = getattr(media, 'file_name', '') or ''
     has_in_filename = target_str in file_name
@@ -46,12 +47,14 @@ def file_matches_year(media, caption, target_year: int) -> bool:
         return False
 
     if has_in_filename:
-        years_in_filename = extract_years_from_text(file_name)
+        clean_file_name = strip_file_prefix_markers(file_name)
+        years_in_filename = extract_years_from_text(clean_file_name)
         if target_year in years_in_filename:
             return True
 
     if has_in_caption:
-        years_in_caption = extract_years_from_text(caption_text)
+        clean_caption_text = strip_file_prefix_markers(caption_text)
+        years_in_caption = extract_years_from_text(clean_caption_text)
         if target_year in years_in_caption:
             return True
 
