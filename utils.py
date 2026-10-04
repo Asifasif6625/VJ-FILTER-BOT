@@ -72,6 +72,7 @@ class temp(object):
     SERIES_PM_QUALITY_COOLDOWNS = {}
     YINDEX_RUNNING = {}
     YINDEX_CANCEL = {}
+    YINDEX_SESSIONS = {}
 
 
 def set_wizard_session(user_id: int, workflow: str, state: str, data: dict = None, chat_id: int = None):
@@ -1445,6 +1446,11 @@ async def get_imdb_public_metadata(url_or_id: str) -> dict | None:
         if isinstance(agg_rating, dict):
             rating = str(agg_rating.get("ratingValue") or "").strip()
 
+        if not rating or rating in ("0", "0.0", "0/10"):
+            im_r = re.search(r'data-testid=["\']hero-rating-bar__aggregate-rating__score["\'][^>]*>(?:<[^>]+>)*\s*([0-9.]+)', html_content) or re.search(r'["\']ratingValue["\']\s*:\s*["\']?([0-9.]+)["\']?', html_content)
+            if im_r and float(im_r.group(1)) > 0:
+                rating = str(round(float(im_r.group(1)), 1))
+
         genre_val = json_ld_obj.get("genre")
         if isinstance(genre_val, list):
             genres = ", ".join(str(g).strip() for g in genre_val if str(g).strip())
@@ -1683,6 +1689,15 @@ async def get_tmdb_public_metadata(url: str) -> dict | None:
         agg = selected_obj.get("aggregateRating")
         if isinstance(agg, dict):
             rating = str(agg.get("ratingValue") or "").strip()
+
+        if not rating or rating in ("0", "0.0", "0/10"):
+            pct_m = re.search(r'data-percent=["\']([0-9.]+)["\']', html_content)
+            if pct_m and float(pct_m.group(1)) > 0:
+                rating = str(round(float(pct_m.group(1)) / 10.0, 1))
+            else:
+                va_m = re.search(r'["\']vote_average["\']\s*:\s*([0-9.]+)', html_content) or re.search(r'["\']ratingValue["\']\s*:\s*["\']?([0-9.]+)["\']?', html_content)
+                if va_m and float(va_m.group(1)) > 0:
+                    rating = str(round(float(va_m.group(1)), 1))
 
         genre_val = selected_obj.get("genre")
         if isinstance(genre_val, list):
