@@ -31,18 +31,31 @@ def extract_years_from_text(text: str) -> list[int]:
 def file_matches_year(media, caption, target_year: int) -> bool:
     """
     Check if a media file or its caption contains the requested target year.
-    Year may appear anywhere in filename or caption (before/after SxxEyy, beginning/middle/end).
+    Fast path: substring check before regex extraction.
     """
+    target_str = str(target_year)
     file_name = getattr(media, 'file_name', '') or ''
-    years_in_filename = extract_years_from_text(file_name)
-    if target_year in years_in_filename:
-        return True
+    has_in_filename = target_str in file_name
     
     caption_text = ""
     if caption:
         caption_text = getattr(caption, 'html', None) or str(caption)
-    years_in_caption = extract_years_from_text(caption_text)
-    return target_year in years_in_caption
+    has_in_caption = target_str in caption_text if caption_text else False
+
+    if not has_in_filename and not has_in_caption:
+        return False
+
+    if has_in_filename:
+        years_in_filename = extract_years_from_text(file_name)
+        if target_year in years_in_filename:
+            return True
+
+    if has_in_caption:
+        years_in_caption = extract_years_from_text(caption_text)
+        if target_year in years_in_caption:
+            return True
+
+    return False
 
 
 async def update_yindex_progress(session_id: str, bot=None, force: bool = False, status_override: str = None, reply_markup="KEEP"):
@@ -397,42 +410,50 @@ async def year_index_files_to_db(session: dict, chat, lst_msg_id: int, msg, bot,
     empty_batches_count = 0
     max_empty_batches = 2
 
+    async def fetch_batch(b_ids):
+        if not b_ids:
+            return []
+        for attempt in range(3):
+            if session.get("stop_requested"):
+                return None
+            try:
+                return await bot.get_messages(chat, b_ids)
+            except FloodWait as e:
+                logger.warning(f"[YINDEX FLOODWAIT] session={session_id} Sleeping {e.value}s")
+                await asyncio.sleep(e.value)
+            except Exception as ge:
+                logger.warning(f"[YINDEX GET_MESSAGES RETRY] session={session_id} Attempt {attempt + 1}/3 for batch {b_ids[0]}-{b_ids[-1]}: {ge}")
+                await asyncio.sleep(2 * (attempt + 1))
+        return None
+
+    # Start fetching initial batch
+    initial_end = min(current + batch_size, lst_msg_id + 1)
+    initial_ids = list(range(current, initial_end))
+    prefetch_task = asyncio.create_task(fetch_batch(initial_ids)) if initial_ids else None
+
     try:
         while True:
-            if session.get("stop_requested"):
+            if session.get("stop_requested") or not prefetch_task:
                 break
 
-            if current > lst_msg_id:
-                break
-
-            batch_end = min(current + batch_size, lst_msg_id + 1)
-            batch_ids = list(range(current, batch_end))
-            if not batch_ids:
-                break
-
-            messages = None
-
-            # Bounded retry for fetching chunk of messages
-            for attempt in range(3):
-                if session.get("stop_requested"):
-                    break
-                try:
-                    messages = await bot.get_messages(chat, batch_ids)
-                    break
-                except FloodWait as e:
-                    logger.warning(f"[YINDEX FLOODWAIT] session={session_id} Sleeping {e.value}s")
-                    await asyncio.sleep(e.value)
-                except Exception as ge:
-                    logger.warning(f"[YINDEX GET_MESSAGES RETRY] session={session_id} Attempt {attempt + 1}/3 for batch {current}-{batch_end}: {ge}")
-                    await asyncio.sleep(2 * (attempt + 1))
+            messages = await prefetch_task
+            prefetch_task = None
 
             if session.get("stop_requested"):
                 break
 
             if messages is None:
-                logger.error(f"[YINDEX] Failed to fetch batch {current}-{batch_end} after retries")
+                logger.error(f"[YINDEX] Failed to fetch batch starting at {current} after retries")
                 interrupted_reason = "Telegram network error fetching channel messages."
                 break
+
+            # Schedule next batch prefetch immediately while current batch is processed in parallel
+            next_current = current + batch_size
+            if next_current <= lst_msg_id and not session.get("stop_requested"):
+                next_end = min(next_current + batch_size, lst_msg_id + 1)
+                next_ids = list(range(next_current, next_end))
+                if next_ids:
+                    prefetch_task = asyncio.create_task(fetch_batch(next_ids))
 
             # Check if entire batch is empty and we've reached or passed lst_msg_id
             if all(getattr(m, 'empty', True) for m in messages):
@@ -450,30 +471,25 @@ async def year_index_files_to_db(session: dict, chat, lst_msg_id: int, msg, bot,
 
                 if getattr(message, 'empty', False):
                     session["skipped"] += 1
-                    await update_yindex_progress(session_id, bot=bot)
                     continue
                 elif not message.media:
                     session["skipped"] += 1
-                    await update_yindex_progress(session_id, bot=bot)
                     continue
                 elif message.media not in [enums.MessageMediaType.VIDEO, enums.MessageMediaType.AUDIO, enums.MessageMediaType.DOCUMENT]:
                     session["skipped"] += 1
-                    await update_yindex_progress(session_id, bot=bot)
                     continue
 
                 media_type_attr = getattr(message.media, 'value', str(message.media))
                 media = getattr(message, str(media_type_attr), None)
                 if not media:
                     session["skipped"] += 1
-                    await update_yindex_progress(session_id, bot=bot)
                     continue
 
                 media.caption = message.caption
 
-                # Check if file/caption matches the requested year
+                # Check if file/caption matches the requested year (sub-microsecond fast path)
                 if not file_matches_year(media, message.caption, target_year):
                     session["skipped"] += 1
-                    await update_yindex_progress(session_id, bot=bot)
                     continue
 
                 if session.get("stop_requested"):
@@ -493,8 +509,11 @@ async def year_index_files_to_db(session: dict, chat, lst_msg_id: int, msg, bot,
                     logger.exception(f"[YINDEX SAVE ERROR] session={session_id} error={fe}")
                     session["failed"] += 1
 
-                # Live throttled progress update
+                # Live progress update when matching file is indexed
                 await update_yindex_progress(session_id, bot=bot)
+
+            # Live progress update per batch
+            await update_yindex_progress(session_id, bot=bot)
 
             if session.get("stop_requested"):
                 break
@@ -506,6 +525,8 @@ async def year_index_files_to_db(session: dict, chat, lst_msg_id: int, msg, bot,
         interrupted_reason = str(e)
 
     finally:
+        if prefetch_task and not prefetch_task.done():
+            prefetch_task.cancel()
         session["is_running"] = False
         clear_wizard_session(admin_uid)
 
