@@ -1791,10 +1791,15 @@ async def send_batch_files(
             fsize = get_size(raw_size) if raw_size else "Unknown Size"
             raw_lang = file_doc.get("language", "Unknown")
             lang = html.escape(str(raw_lang).strip())
+            ep_title_line = ""
+            if file_doc.get("is_series") or file_doc.get("episode"):
+                ep_t = file_doc.get("episode_title") or (f"Episode {int(file_doc.get('episode', 1)):02d}" if str(file_doc.get('episode', '')).isdigit() else "Episode 01")
+                ep_title_line = f"⇝ EP Title: {html.escape(str(ep_t).strip())}\n"
             cap = (
                 f"<i>⇝ File Name: {fname}\n"
                 f"⇝ Size: {fsize}\n"
                 f"⇝ Language: {lang}\n"
+                f"{ep_title_line}"
                 f"⇝ Total: {idx}/{total_files}\n\n"
                 f"❧ https://t.me/+5RSSPoQTypk3ZmE1</i>"
             )
@@ -1978,6 +1983,65 @@ async def send_series_files_to_user(client, user_id, files, query=None):
         except Exception as ex:
             log.warning(f"Failed to send metadata message: {ex}")
 
+    # Fetch series metadata to resolve tmdb_id / imdb_id
+    from database.series_db import get_series
+    from utils import prefetch_series_episode_titles
+    from plugins.series import _extract_episode_number, _extract_season_number
+
+    sdoc = None
+    if series_id:
+        try:
+            sdoc = await get_series(series_id)
+        except Exception:
+            pass
+    elif first_file.get("series_id"):
+        try:
+            sdoc = await get_series(first_file.get("series_id"))
+        except Exception:
+            pass
+    elif first_file.get("series_title"):
+        try:
+            from database.series_db import get_series_by_name
+            sdoc = await get_series_by_name(first_file.get("series_title"))
+        except Exception:
+            pass
+
+    tmdb_id = (sdoc.get("tmdb_id") if sdoc else None) or first_file.get("tmdb_id")
+    imdb_id = (sdoc.get("imdb_id") if sdoc else None) or first_file.get("imdb_id")
+    series_name = (sdoc.get("name") if sdoc else None) or first_file.get("series_title") or first_file.get("title") or ""
+
+    # Build pairs of (season, episode) for each file in delivery order
+    file_ep_info = []
+    for f in ordered_files:
+        s_val = f.get("season")
+        ep_val = f.get("episode")
+        fname = f.get("file_name", "")
+        if s_val is None or str(s_val).strip() in ("0", "None", ""):
+            s_val = _extract_season_number(fname) or (season if season else 1)
+        if ep_val is None or str(ep_val).strip() in ("0", "None", ""):
+            ep_val = _extract_episode_number(fname) or 1
+        try:
+            s_int = int(s_val)
+        except Exception:
+            s_int = 1
+        try:
+            ep_int = int(ep_val)
+        except Exception:
+            ep_int = 1
+        file_ep_info.append((s_int, ep_int))
+
+    # Prefetch episode titles before delivery
+    ep_titles_map = {}
+    try:
+        ep_titles_map = await prefetch_series_episode_titles(
+            series_name=series_name,
+            tmdb_id=tmdb_id,
+            imdb_id=imdb_id,
+            pairs=file_ep_info
+        )
+    except Exception as pfe:
+        log.warning(f"[SERIES DELIVERY] Episode title prefetch error: {pfe}")
+
     # 5. Caption builder
     def series_caption_builder(file_doc, idx, total_eps):
         fname = file_doc.get("file_name", "Unknown File")
@@ -1991,10 +2055,15 @@ async def send_series_files_to_user(client, user_id, files, query=None):
         raw_lang = file_doc.get("language", language or "Unknown")
         lang_str = html.escape(str(raw_lang).strip())
 
+        pair = file_ep_info[idx - 1] if (0 <= idx - 1 < len(file_ep_info)) else (1, idx)
+        ep_title = ep_titles_map.get(pair) or f"Episode {pair[1]:02d}"
+        ep_title_escaped = html.escape(str(ep_title).strip())
+
         f_caption = (
             f"<i>⇝ File Name: {file_name}\n"
             f"⇝ Size: {file_size}\n"
             f"⇝ Language: {lang_str}\n"
+            f"⇝ EP Title: {ep_title_escaped}\n"
             f"⇝ Total: {idx}/{total_eps}\n\n"
             f"❧ https://t.me/+5RSSPoQTypk3ZmE1</i>"
         )
