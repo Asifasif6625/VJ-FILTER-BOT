@@ -73,6 +73,7 @@ class temp(object):
     YINDEX_RUNNING = {}
     YINDEX_CANCEL = {}
     YINDEX_SESSIONS = {}
+    EPISODE_TITLES_CACHE = {}
 
 
 def set_wizard_session(user_id: int, workflow: str, state: str, data: dict = None, chat_id: int = None):
@@ -224,7 +225,9 @@ def extract_release_year(filename: str, caption: str = None) -> str | None:
     Avoids mistaking resolutions (1080, 720, 2160, 480), codecs (x264, x265),
     or audio channel configurations (5.1, 7.1) for release years.
     """
-    text = f"{filename or ''} {caption or ''}"
+    fn_clean = strip_file_prefix_markers(filename or "")
+    cap_clean = strip_file_prefix_markers(caption or "")
+    text = f"{fn_clean} {cap_clean}"
     if not text.strip():
         return None
 
@@ -409,6 +412,41 @@ def get_random_filter_poster(filter_data: dict | None) -> str | None:
     return None
 
 
+def strip_file_prefix_markers(text: str) -> str:
+    """
+    Strips recognized leading prefix markers from the beginning of a filename or caption.
+    Recognized leading markers:
+      - @username / @channel (e.g. @Rocky_links, @movie_channel)
+      - (MM) or [MM] or {MM} (case-insensitive)
+      - (MS) or [MS] or {MS} (case-insensitive)
+    
+    Rules:
+      - Removes ONLY leading markers from the beginning of the string.
+      - Can remove multiple leading markers in sequence (e.g. '@Rocky_links (MM) Love 2026.mkv').
+      - Preserves everything else in the filename/caption exactly.
+      - Never removes markers that appear in the middle of the string (e.g. 'Love (MM) 2026.mkv').
+    """
+    if not text:
+        return ""
+    
+    cleaned = str(text).strip()
+    prefix_pattern = re.compile(
+        r"^(?:"
+        r"@[a-zA-Z0-9_]+"                          # @username
+        r"|[\(\[\{]\s*M[MS]\s*[\)\]\}]"            # (MM), [MM], {MM}, (MS), [MS], {MS}
+        r")[\s\._\-\+]*",
+        flags=re.IGNORECASE
+    )
+    
+    while True:
+        m = prefix_pattern.match(cleaned)
+        if not m:
+            break
+        cleaned = cleaned[m.end():].lstrip(" ._+-")
+    
+    return cleaned.strip()
+
+
 def normalize_series_identity_title(text: str) -> str:
     """
     Normalizes a series title for strict identity comparison.
@@ -469,11 +507,14 @@ def match_automatic_series_file(
         flags=re.IGNORECASE
     ).strip()
 
-    # Remove usernames / URL links
+    # Strip recognized leading prefix markers (@username, (MM), [MM], (MS), [MS], etc.)
+    unprefixed_name = strip_file_prefix_markers(name_no_ext)
+
+    # Remove remaining standalone usernames / URL links
     cleaned_name = ' '.join(
         filter(
             lambda x: not x.startswith('@') and not x.startswith('http://') and not x.startswith('https://') and not x.startswith('www.') and not x.startswith('t.me/'),
-            name_no_ext.split()
+            unprefixed_name.split()
         )
     )
 
@@ -862,11 +903,14 @@ def match_automatic_movie_file(
         flags=re.IGNORECASE
     ).strip()
 
-    # 4. Clean usernames / URLs
+    # 3.5 Strip recognized leading prefix markers (@username, (MM), [MM], (MS), [MS], etc.)
+    unprefixed_name = strip_file_prefix_markers(name_no_ext)
+
+    # 4. Clean remaining usernames / URLs
     cleaned_name = ' '.join(
         filter(
             lambda x: not x.startswith('@') and not x.startswith('http://') and not x.startswith('https://') and not x.startswith('www.') and not x.startswith('t.me/'),
-            name_no_ext.split()
+            unprefixed_name.split()
         )
     )
 
@@ -1864,6 +1908,298 @@ async def get_public_movie_metadata(text: str) -> dict | None:
     else:
         logger.warning(f"[PUBLIC METADATA] Unrecognized URL or ID query={text_str}")
         return None
+
+
+def extract_single_episode_title_from_tmdb_html(html_content: str) -> str | None:
+    """
+    Extracts episode title from TMDB single episode HTML page.
+    """
+    if not html_content:
+        return None
+    import html as _html
+    import json as _json
+
+    # 1. JSON-LD
+    for m in re.finditer(r'<script[^>]*type=["\']application/ld\+json["\'][^>]*>(.*?)</script>', html_content, re.DOTALL | re.I):
+        try:
+            data = _json.loads(m.group(1))
+            if isinstance(data, dict):
+                if data.get("@type") in ("TVEpisode", "Episode") and data.get("name"):
+                    return _html.unescape(str(data["name"])).strip()
+        except Exception:
+            continue
+
+    # 2. OpenGraph og:title
+    og_m = re.search(r'<meta[^>]*property=["\']og:title["\'][^>]*content=["\']([^"\']+)["\']', html_content, re.I)
+    if og_m:
+        raw_og = _html.unescape(og_m.group(1)).strip()
+        clean = re.sub(r"\s*\(S\d+E\d+\).*$", "", raw_og, flags=re.I)
+        clean = re.sub(r"\s*[—–-]\s*The Movie Database.*$", "", clean, flags=re.I)
+        clean = re.sub(r"\s*[—–-]\s*TMDB.*$", "", clean, flags=re.I)
+        if clean.strip():
+            return clean.strip()
+
+    # 3. <title> tag
+    title_m = re.search(r'<title>(.*?)</title>', html_content, re.I | re.DOTALL)
+    if title_m:
+        raw_t = _html.unescape(title_m.group(1)).strip()
+        clean = re.sub(r"\s*\(S\d+E\d+\).*$", "", raw_t, flags=re.I)
+        clean = re.sub(r"\s*[—–-]\s*The Movie Database.*$", "", clean, flags=re.I)
+        clean = re.sub(r"\s*[—–-]\s*TMDB.*$", "", clean, flags=re.I)
+        if clean.strip():
+            return clean.strip()
+
+    return None
+
+
+async def get_tmdb_public_season_episodes(tv_id: str | int, season_number: int) -> dict[int, str]:
+    """
+    Publicly fetches all episode titles for a specific season from TMDB TV webpage.
+    Returns: {episode_number (int): episode_title (str)}
+    """
+    if not tv_id or str(tv_id).strip() in ("0", "None", "N/A", ""):
+        return {}
+    
+    clean_tv_id = str(tv_id).strip()
+    try:
+        s_num = int(season_number)
+    except (ValueError, TypeError):
+        s_num = 1
+
+    season_url = f"https://www.themoviedb.org/tv/{clean_tv_id}/season/{s_num}"
+    logger.info(f"[EPISODE TITLE] REQUEST TMDB SEASON tv_id={clean_tv_id} season={s_num} url={season_url}")
+
+    html_content = await asyncio.to_thread(_fetch_url_sync, season_url)
+    if not html_content:
+        try:
+            crawlers_ua = "Googlebot/2.1 (+http://www.google.com/bot.html)"
+            headers = {
+                "User-Agent": crawlers_ua,
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                "Accept-Language": "en-US,en;q=0.5",
+            }
+            timeout = aiohttp.ClientTimeout(total=8, connect=3, sock_read=5)
+            async with aiohttp.ClientSession(timeout=timeout, headers=headers) as session:
+                async with session.get(season_url) as resp:
+                    if resp.status == 200:
+                        html_content = await resp.text()
+        except Exception:
+            pass
+
+    if not html_content:
+        logger.warning(f"[EPISODE TITLE] FETCH FAILED tv_id={clean_tv_id} season={s_num} source=TMDB")
+        return {}
+
+    episodes = {}
+    import html as _html
+    import json as _json
+
+    # 1. Parse JSON-LD
+    for m in re.finditer(r'<script[^>]*type=["\']application/ld\+json["\'][^>]*>(.*?)</script>', html_content, re.DOTALL | re.I):
+        try:
+            data = _json.loads(m.group(1))
+            items = data if isinstance(data, list) else ([data] if isinstance(data, dict) else [])
+            for item in items:
+                if isinstance(item, dict):
+                    if item.get("@type") in ("TVEpisode", "Episode") or "episodeNumber" in item:
+                        ep_num = item.get("episodeNumber")
+                        name = item.get("name")
+                        if ep_num is not None and name:
+                            try:
+                                episodes[int(ep_num)] = _html.unescape(str(name)).strip()
+                            except ValueError:
+                                pass
+        except Exception:
+            continue
+
+    # 2. Extract from Episode link anchors
+    ep_pattern = re.compile(
+        rf'/tv/{clean_tv_id}/season/{s_num}/episode/(\d+)[^>]*>(?:<[^>]+>)*\s*([^<]+?)\s*<',
+        re.IGNORECASE
+    )
+    for m in ep_pattern.finditer(html_content):
+        ep_num_str = m.group(1)
+        title_str = _html.unescape(m.group(2)).strip()
+        if ep_num_str.isdigit() and title_str and not title_str.lower().startswith("episode") and int(ep_num_str) not in episodes:
+            episodes[int(ep_num_str)] = title_str
+
+    # 3. Check card headers / h3 / h4: <h3><a href=".../episode/1">Winter Is Coming</a></h3>
+    ep_h_pattern = re.compile(
+        rf'<h[2345][^>]*>\s*<a[^>]*href=["\'][^"\']*/episode/(\d+)["\'][^>]*>\s*([^<]+?)\s*</a>',
+        re.IGNORECASE
+    )
+    for m in ep_h_pattern.finditer(html_content):
+        ep_num_str = m.group(1)
+        title_str = _html.unescape(m.group(2)).strip()
+        if ep_num_str.isdigit() and title_str and int(ep_num_str) not in episodes:
+            episodes[int(ep_num_str)] = title_str
+
+    if not hasattr(temp, "EPISODE_TITLES_CACHE"):
+        temp.EPISODE_TITLES_CACHE = {}
+
+    for ep_n, ep_t in episodes.items():
+        cache_k = f"tmdb:{clean_tv_id}:{s_num}:{ep_n}"
+        temp.EPISODE_TITLES_CACHE[cache_k] = ep_t
+        logger.info(f"[EPISODE TITLE] SUCCESS source=TMDB season={s_num} episode={ep_n} title={ep_t}")
+
+    return episodes
+
+
+async def get_tmdb_public_episode_metadata(tv_id: str | int, season_number: int, episode_number: int) -> dict:
+    """
+    Publicly fetches metadata for a specific episode from TMDB TV webpage.
+    Returns: {"episode_title": str, "season": int, "episode": int}
+    """
+    clean_tv_id = str(tv_id).strip()
+    try:
+        s_num = int(season_number)
+    except (ValueError, TypeError):
+        s_num = 1
+    try:
+        ep_num = int(episode_number)
+    except (ValueError, TypeError):
+        ep_num = 1
+
+    cache_k = f"tmdb:{clean_tv_id}:{s_num}:{ep_num}"
+    cached = getattr(temp, "EPISODE_TITLES_CACHE", {}).get(cache_k)
+    if cached:
+        return {"episode_title": cached, "season": s_num, "episode": ep_num}
+
+    # Fetch season episodes first (efficiently fills entire season cache in one go)
+    season_eps = await get_tmdb_public_season_episodes(clean_tv_id, s_num)
+    if ep_num in season_eps:
+        return {"episode_title": season_eps[ep_num], "season": s_num, "episode": ep_num}
+
+    # If season page didn't have it, try direct episode page
+    ep_url = f"https://www.themoviedb.org/tv/{clean_tv_id}/season/{s_num}/episode/{ep_num}"
+    logger.info(f"[EPISODE TITLE] REQUEST TMDB SINGLE EPISODE url={ep_url}")
+    html_content = await asyncio.to_thread(_fetch_url_sync, ep_url)
+    if html_content:
+        ep_title = extract_single_episode_title_from_tmdb_html(html_content)
+        if ep_title:
+            if not hasattr(temp, "EPISODE_TITLES_CACHE"):
+                temp.EPISODE_TITLES_CACHE = {}
+            temp.EPISODE_TITLES_CACHE[cache_k] = ep_title
+            logger.info(f"[EPISODE TITLE] SUCCESS source=TMDB season={s_num} episode={ep_num} title={ep_title}")
+            return {"episode_title": ep_title, "season": s_num, "episode": ep_num}
+
+    return {"episode_title": f"Episode {ep_num:02d}", "season": s_num, "episode": ep_num}
+
+
+async def get_imdb_public_episode_metadata(imdb_id: str, season_number: int, episode_number: int) -> dict | None:
+    """
+    Public fallback to retrieve episode title from IMDb.
+    """
+    if not imdb_id or not str(imdb_id).startswith("tt"):
+        return None
+    try:
+        s_num = int(season_number)
+        ep_num = int(episode_number)
+    except (ValueError, TypeError):
+        return None
+
+    cache_k = f"imdb:{imdb_id}:{s_num}:{ep_num}"
+    cached = getattr(temp, "EPISODE_TITLES_CACHE", {}).get(cache_k)
+    if cached:
+        return {"episode_title": cached, "season": s_num, "episode": ep_num}
+
+    imdb_url = f"https://www.imdb.com/title/{imdb_id}/episodes/?season={s_num}"
+    logger.info(f"[EPISODE TITLE] REQUEST IMDB SEASON url={imdb_url}")
+    html_content = await asyncio.to_thread(_fetch_url_sync, imdb_url)
+    if not html_content:
+        return None
+
+    import html as _html
+    title_m = re.search(
+        rf'S{s_num},\s*Ep{ep_num}.*?<a[^>]*href=["\']/title/[^"\']+["\'][^>]*>(.*?)</a>',
+        html_content,
+        re.DOTALL | re.IGNORECASE
+    )
+    if title_m:
+        ep_t = _html.unescape(title_m.group(1)).strip()
+        if ep_t and not ep_t.lower().startswith("episode"):
+            if not hasattr(temp, "EPISODE_TITLES_CACHE"):
+                temp.EPISODE_TITLES_CACHE = {}
+            temp.EPISODE_TITLES_CACHE[cache_k] = ep_t
+            logger.info(f"[EPISODE TITLE] SUCCESS source=IMDb season={s_num} episode={ep_num} title={ep_t}")
+            return {"episode_title": ep_t, "season": s_num, "episode": ep_num}
+
+    return None
+
+
+async def get_public_episode_title(series_name: str = "", tmdb_id: str = None, imdb_id: str = None, season: int = 1, episode: int = 1) -> str:
+    """
+    Resolves authoritative episode title using priority:
+    1. TMDB public webpage data
+    2. IMDb public data
+    3. Fallback: 'Episode 01'
+    """
+    try:
+        s_num = int(season)
+    except Exception:
+        s_num = 1
+    try:
+        ep_num = int(episode)
+    except Exception:
+        ep_num = 1
+
+    default_fallback = f"Episode {ep_num:02d}"
+
+    # Check cache first
+    if tmdb_id:
+        cache_k = f"tmdb:{tmdb_id}:{s_num}:{ep_num}"
+        if cache_k in getattr(temp, "EPISODE_TITLES_CACHE", {}):
+            return temp.EPISODE_TITLES_CACHE[cache_k]
+    if imdb_id:
+        cache_k = f"imdb:{imdb_id}:{s_num}:{ep_num}"
+        if cache_k in getattr(temp, "EPISODE_TITLES_CACHE", {}):
+            return temp.EPISODE_TITLES_CACHE[cache_k]
+
+    # 1. Primary: TMDB
+    if tmdb_id and str(tmdb_id).strip() not in ("0", "None", "N/A", ""):
+        try:
+            res = await get_tmdb_public_episode_metadata(tmdb_id, s_num, ep_num)
+            if res and res.get("episode_title") and not res["episode_title"].startswith("Episode "):
+                return res["episode_title"]
+        except Exception as e:
+            logger.warning(f"[EPISODE TITLE] TMDB error: {e}")
+
+    # 2. Fallback: IMDb
+    if imdb_id and str(imdb_id).startswith("tt"):
+        try:
+            logger.info(f"[EPISODE TITLE] FALLBACK source=IMDb season={s_num} episode={ep_num}")
+            res = await get_imdb_public_episode_metadata(imdb_id, s_num, ep_num)
+            if res and res.get("episode_title") and not res["episode_title"].startswith("Episode "):
+                return res["episode_title"]
+        except Exception as e:
+            logger.warning(f"[EPISODE TITLE] IMDb error: {e}")
+
+    logger.info(f"[EPISODE TITLE] DEFAULT season={s_num} episode={ep_num}")
+    return default_fallback
+
+
+async def prefetch_series_episode_titles(series_name: str = "", tmdb_id: str = None, imdb_id: str = None, pairs: list = None) -> dict[tuple[int, int], str]:
+    """
+    Prefetches all unique (season, episode) titles concurrently/in-batch before sending files.
+    Returns: {(season, episode): "Episode Title"}
+    """
+    if not pairs:
+        return {}
+
+    unique_pairs = list(dict.fromkeys(pairs))
+    seasons_needed = list(set(s for s, ep in unique_pairs))
+
+    # Fetch seasons from TMDB concurrently
+    if tmdb_id and str(tmdb_id).strip() not in ("0", "None", "N/A", ""):
+        tasks = [get_tmdb_public_season_episodes(tmdb_id, s) for s in seasons_needed]
+        await asyncio.gather(*tasks, return_exceptions=True)
+
+    results = {}
+    for s, ep in unique_pairs:
+        t = await get_public_episode_title(series_name, tmdb_id=tmdb_id, imdb_id=imdb_id, season=s, episode=ep)
+        results[(s, ep)] = t
+
+    return results
 
 
 async def get_tmdb_by_url(url_or_path):
