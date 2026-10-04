@@ -45,21 +45,39 @@ def file_matches_year(media, caption, target_year: int) -> bool:
     return target_year in years_in_caption
 
 
-@Client.on_callback_query(filters.regex(r'^yindex_cancel'))
-async def yindex_cancel_callback(bot, query):
+@Client.on_callback_query(filters.regex(r'^(yindex_stop|yindex_cancel)'))
+async def yindex_stop_callback(bot, query):
     user_id = query.from_user.id
     if user_id not in ADMINS:
-        return await query.answer("Unauthorized.", show_alert=True)
+        return await query.answer("⚠️ You are not allowed to stop this indexing task.", show_alert=True)
     
-    parts = query.data.split("#")
-    target_admin = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else user_id
-    if user_id != target_admin and user_id not in ADMINS:
-        return await query.answer("You cannot cancel this operation.", show_alert=True)
+    raw_data = query.data
+    if ":" in raw_data:
+        session_id = raw_data.split(":", 1)[1].strip()
+    elif "#" in raw_data:
+        session_id = raw_data.split("#", 1)[1].strip()
+    else:
+        session_id = ""
+
+    sessions = getattr(temp, "YINDEX_SESSIONS", {})
+    session = sessions.get(session_id)
     
-    if not hasattr(temp, "YINDEX_CANCEL") or not isinstance(temp.YINDEX_CANCEL, dict):
-        temp.YINDEX_CANCEL = {}
-    temp.YINDEX_CANCEL[target_admin] = True
-    await query.answer("Cancelling Year Indexing...", show_alert=True)
+    # Fallback to search by admin_id if legacy session_id passed
+    if not session and session_id.isdigit():
+        for s in sessions.values():
+            if s.get("admin_id") == int(session_id) and s.get("is_running"):
+                session = s
+                break
+
+    if not session or not session.get("is_running"):
+        return await query.answer("ℹ️ This indexing task is no longer running.", show_alert=True)
+
+    if session.get("admin_id") != user_id and user_id not in ADMINS:
+        return await query.answer("⚠️ You are not allowed to stop this indexing task.", show_alert=True)
+
+    session["stop_requested"] = True
+    logger.info(f"[YINDEX] STOP REQUESTED session={session.get('session_id')}")
+    await query.answer("Stopping Year Indexing... 🛑", show_alert=True)
 
 
 @Client.on_message(filters.private & filters.command('yindex') & filters.user(ADMINS))
@@ -84,10 +102,18 @@ async def yindex_command(bot, message):
     target_year = int(year_str)
 
     # 2. Prevent duplicate concurrent yindex jobs from the same admin
-    if not hasattr(temp, "YINDEX_RUNNING") or not isinstance(temp.YINDEX_RUNNING, dict):
-        temp.YINDEX_RUNNING = {}
-    if temp.YINDEX_RUNNING.get(user_id):
-        return await message.reply("⚠️ You already have an active Year Indexing process running. Please wait for it to complete or cancel it.")
+    if not hasattr(temp, "YINDEX_SESSIONS") or not isinstance(temp.YINDEX_SESSIONS, dict):
+        temp.YINDEX_SESSIONS = {}
+    
+    active_sessions = [
+        s for s in temp.YINDEX_SESSIONS.values()
+        if s.get("admin_id") == user_id and s.get("is_running")
+    ]
+    if active_sessions:
+        return await message.reply(
+            "⚠️ A Year Indexing task is already running.\n"
+            "Please stop the current task before starting another one."
+        )
 
     # 3. Prompt admin for source channel / forwarded message
     try:
@@ -146,60 +172,97 @@ async def yindex_command(bot, message):
         except Exception as e:
             return await vj.reply(f"❌ Make sure I am an admin in the database channel.\nError: {e}")
 
-    # Initialize Progress Message
-    cancel_btn = InlineKeyboardMarkup([[InlineKeyboardButton('Cancel', callback_data=f'yindex_cancel#{user_id}')]])
+    # Generate unique session ID
+    session_id = f"{user_id}_{int(time.time())}"
+    session = {
+        "session_id": session_id,
+        "admin_id": user_id,
+        "year": target_year,
+        "chat_id": resolved_chat_id,
+        "stop_requested": False,
+        "is_running": True,
+        "scanned": 0,
+        "matching": 0,
+        "indexed": 0,
+        "already_indexed": 0,
+        "skipped": 0,
+        "failed": 0,
+        "created_at": time.time(),
+    }
+    temp.YINDEX_SESSIONS[session_id] = session
+
+    # Initialize Start Indexing Progress Message
+    stop_btn = InlineKeyboardMarkup([[InlineKeyboardButton('🛑 STOP INDEXING', callback_data=f'yindex_stop:{session_id}')]])
     progress_msg = await vj.reply_text(
-        f"📅 **Year Indexing Starting...**\n\n"
-        f"**Year:** <code>{target_year}</code>\n"
-        f"**Channel:** <code>{resolved_chat_id}</code>\n"
-        f"**Status:** Initializing scan...",
-        reply_markup=cancel_btn
+        f"📅 <b>Year Indexing Started</b>\n"
+        f"<b>Year:</b> <code>{target_year}</code>\n\n"
+        f"<b>Scanned:</b> <code>0</code>\n"
+        f"<b>Matching Files:</b> <code>0</code>\n"
+        f"<b>Indexed:</b> <code>0</code>\n"
+        f"<b>Already Indexed:</b> <code>0</code>\n"
+        f"<b>Skipped:</b> <code>0</code>\n"
+        f"<b>Failed:</b> <code>0</code>",
+        reply_markup=stop_btn
     )
 
     # Run Year Indexing
     await year_index_files_to_db(
-        target_year=target_year,
+        session=session,
         chat=resolved_chat_id,
         lst_msg_id=last_msg_id or 1000000,
         msg=progress_msg,
-        bot=bot,
-        admin_id=user_id
+        bot=bot
     )
 
 
-async def year_index_files_to_db(target_year: int, chat, lst_msg_id: int, msg, bot, admin_id: int):
+async def year_index_files_to_db(session: dict, chat, lst_msg_id: int, msg, bot, admin_id: int = None):
     """
     Scans the source channel and indexes only files matching the target year.
-    Uses chunked streaming, bounded retries, duplicate checking, and periodic progress updates.
+    Supports safe cooperative STOP via session["stop_requested"].
     """
-    if not hasattr(temp, "YINDEX_RUNNING") or not isinstance(temp.YINDEX_RUNNING, dict):
-        temp.YINDEX_RUNNING = {}
-    if not hasattr(temp, "YINDEX_CANCEL") or not isinstance(temp.YINDEX_CANCEL, dict):
-        temp.YINDEX_CANCEL = {}
+    if isinstance(session, int):
+        # Backward compatibility if target_year passed as first arg
+        target_year = session
+        admin_uid = admin_id or 0
+        session_id = f"{admin_uid}_{int(time.time())}"
+        session = {
+            "session_id": session_id,
+            "admin_id": admin_uid,
+            "year": target_year,
+            "chat_id": chat,
+            "stop_requested": False,
+            "is_running": True,
+            "scanned": 0,
+            "matching": 0,
+            "indexed": 0,
+            "already_indexed": 0,
+            "skipped": 0,
+            "failed": 0,
+            "created_at": time.time(),
+        }
+        if not hasattr(temp, "YINDEX_SESSIONS") or not isinstance(temp.YINDEX_SESSIONS, dict):
+            temp.YINDEX_SESSIONS = {}
+        temp.YINDEX_SESSIONS[session_id] = session
 
-    temp.YINDEX_RUNNING[admin_id] = True
-    temp.YINDEX_CANCEL[admin_id] = False
-    set_wizard_session(admin_id, "YINDEX", "YINDEX_RUNNING", {"year": target_year, "chat_id": chat})
+    session_id = session.get("session_id")
+    target_year = session.get("year")
+    admin_uid = session.get("admin_id")
 
-    scanned = 0
-    matching = 0
-    indexed = 0
-    already_indexed = 0
-    skipped = 0
-    failed = 0
+    logger.info(f"[YINDEX] START session={session_id} year={target_year} channel={chat}")
+    set_wizard_session(admin_uid, "YINDEX", "YINDEX_RUNNING", {"session_id": session_id, "year": target_year, "chat_id": chat})
 
     batch_size = 200
     current = temp.CURRENT if getattr(temp, 'CURRENT', 1) > 0 else 1
     last_update_time = time.time()
-    is_cancelled = False
     interrupted_reason = None
     empty_batches_count = 0
     max_empty_batches = 2
 
+    stop_btn = InlineKeyboardMarkup([[InlineKeyboardButton('🛑 STOP INDEXING', callback_data=f'yindex_stop:{session_id}')]])
+
     try:
         while True:
-            if temp.YINDEX_CANCEL.get(admin_id, False):
-                is_cancelled = True
+            if session.get("stop_requested"):
                 break
 
             batch_ids = list(range(current, current + batch_size))
@@ -207,15 +270,20 @@ async def year_index_files_to_db(target_year: int, chat, lst_msg_id: int, msg, b
 
             # Bounded retry for fetching chunk of messages
             for attempt in range(3):
+                if session.get("stop_requested"):
+                    break
                 try:
                     messages = await bot.get_messages(chat, batch_ids)
                     break
                 except FloodWait as e:
-                    logger.warning(f"[YINDEX FLOODWAIT] Sleeping {e.value}s")
+                    logger.warning(f"[YINDEX FLOODWAIT] session={session_id} Sleeping {e.value}s")
                     await asyncio.sleep(e.value)
                 except Exception as ge:
-                    logger.warning(f"[YINDEX GET_MESSAGES RETRY] Attempt {attempt + 1}/3 for batch {current}-{current + batch_size}: {ge}")
+                    logger.warning(f"[YINDEX GET_MESSAGES RETRY] session={session_id} Attempt {attempt + 1}/3 for batch {current}-{current + batch_size}: {ge}")
                     await asyncio.sleep(2 * (attempt + 1))
+
+            if session.get("stop_requested"):
+                break
 
             if messages is None:
                 logger.error(f"[YINDEX] Failed to fetch batch {current}-{current + batch_size} after retries")
@@ -231,129 +299,137 @@ async def year_index_files_to_db(target_year: int, chat, lst_msg_id: int, msg, b
                 empty_batches_count = 0
 
             for message in messages:
-                if temp.YINDEX_CANCEL.get(admin_id, False):
-                    is_cancelled = True
+                if session.get("stop_requested"):
                     break
 
-                scanned += 1
+                session["scanned"] += 1
 
                 if getattr(message, 'empty', False):
-                    skipped += 1
+                    session["skipped"] += 1
                     continue
                 elif not message.media:
-                    skipped += 1
+                    session["skipped"] += 1
                     continue
                 elif message.media not in [enums.MessageMediaType.VIDEO, enums.MessageMediaType.AUDIO, enums.MessageMediaType.DOCUMENT]:
-                    skipped += 1
+                    session["skipped"] += 1
                     continue
 
                 media_type_attr = getattr(message.media, 'value', str(message.media))
                 media = getattr(message, str(media_type_attr), None)
                 if not media:
-                    skipped += 1
+                    session["skipped"] += 1
                     continue
 
                 media.caption = message.caption
 
                 # Check if file/caption matches the requested year
                 if not file_matches_year(media, message.caption, target_year):
-                    skipped += 1
+                    session["skipped"] += 1
                     continue
 
-                matching += 1
+                if session.get("stop_requested"):
+                    break
+
+                session["matching"] += 1
 
                 try:
                     aynav, vnay = await save_file(media)
                     if aynav:
-                        indexed += 1
+                        session["indexed"] += 1
                     elif vnay == 0:
-                        already_indexed += 1
+                        session["already_indexed"] += 1
                     else:
-                        failed += 1
+                        session["failed"] += 1
                 except Exception as fe:
-                    logger.exception(f"[YINDEX SAVE ERROR] {fe}")
-                    failed += 1
+                    logger.exception(f"[YINDEX SAVE ERROR] session={session_id} error={fe}")
+                    session["failed"] += 1
 
                 # Periodic progress update
                 now = time.time()
-                if scanned % 30 == 0 or (now - last_update_time >= 5):
+                if session["scanned"] % 30 == 0 or (now - last_update_time >= 5):
                     last_update_time = now
-                    reply_markup = InlineKeyboardMarkup([[InlineKeyboardButton('Cancel', callback_data=f'yindex_cancel#{admin_id}')]])
                     try:
                         await msg.edit_text(
-                            f"📅 **Year Indexing...**\n\n"
-                            f"**Year:** <code>{target_year}</code>\n\n"
-                            f"**Scanned:** <code>{scanned}</code>\n"
-                            f"**Matching:** <code>{matching}</code>\n"
-                            f"**Indexed:** <code>{indexed}</code>\n"
-                            f"**Already Indexed:** <code>{already_indexed}</code>\n"
-                            f"**Failed:** <code>{failed}</code>",
-                            reply_markup=reply_markup
+                            f"📅 <b>Year Indexing Started</b>\n"
+                            f"<b>Year:</b> <code>{target_year}</code>\n\n"
+                            f"<b>Scanned:</b> <code>{session['scanned']}</code>\n"
+                            f"<b>Matching Files:</b> <code>{session['matching']}</code>\n"
+                            f"<b>Indexed:</b> <code>{session['indexed']}</code>\n"
+                            f"<b>Already Indexed:</b> <code>{session['already_indexed']}</code>\n"
+                            f"<b>Skipped:</b> <code>{session['skipped']}</code>\n"
+                            f"<b>Failed:</b> <code>{session['failed']}</code>",
+                            reply_markup=stop_btn
                         )
                     except MessageNotModified:
                         pass
                     except Exception as pe:
                         logger.debug(f"[YINDEX PROGRESS EDIT ERROR] {pe}")
 
-            if is_cancelled:
+            if session.get("stop_requested"):
                 break
 
             current += batch_size
 
     except Exception as e:
-        logger.exception(f"[YINDEX FATAL ERROR] {e}")
+        logger.exception(f"[YINDEX FATAL ERROR] session={session_id} error={e}")
         interrupted_reason = str(e)
 
     finally:
-        temp.YINDEX_RUNNING[admin_id] = False
-        temp.YINDEX_CANCEL.pop(admin_id, None)
-        clear_wizard_session(admin_id)
+        session["is_running"] = False
+        clear_wizard_session(admin_uid)
 
-    # Final summary update
-    if is_cancelled:
+    # Final summary update (STOP button removed)
+    if session.get("stop_requested"):
+        logger.info(f"[YINDEX] STOPPED session={session_id} scanned={session['scanned']} indexed={session['indexed']}")
         try:
             await msg.edit_text(
-                f"⚠️ **Year Indexing Interrupted**\n\n"
-                f"**Year:** <code>{target_year}</code>\n\n"
-                f"**Scanned:** <code>{scanned}</code>\n"
-                f"**Matching Files:** <code>{matching}</code>\n"
-                f"**Indexed:** <code>{indexed}</code>\n"
-                f"**Already Indexed:** <code>{already_indexed}</code>\n"
-                f"**Skipped:** <code>{skipped}</code>\n"
-                f"**Failed:** <code>{failed}</code>\n\n"
-                f"**Reason:** Cancelled by admin."
+                f"🛑 <b>Year Indexing Stopped</b>\n\n"
+                f"<b>Year:</b> <code>{target_year}</code>\n\n"
+                f"<b>Scanned:</b> <code>{session['scanned']}</code>\n"
+                f"<b>Matching Files:</b> <code>{session['matching']}</code>\n"
+                f"<b>Indexed:</b> <code>{session['indexed']}</code>\n"
+                f"<b>Already Indexed:</b> <code>{session['already_indexed']}</code>\n"
+                f"<b>Skipped:</b> <code>{session['skipped']}</code>\n"
+                f"<b>Failed:</b> <code>{session['failed']}</code>\n\n"
+                f"<b>Status:</b> Stopped by admin",
+                reply_markup=None
             )
         except Exception as e:
-            logger.error(f"[YINDEX FINAL EDIT ERROR] {e}")
+            logger.error(f"[YINDEX FINAL EDIT ERROR] session={session_id} error={e}")
     elif interrupted_reason:
+        logger.error(f"[YINDEX] ERROR session={session_id} error={interrupted_reason}")
         try:
             await msg.edit_text(
-                f"⚠️ **Year Indexing Interrupted**\n\n"
-                f"**Year:** <code>{target_year}</code>\n\n"
-                f"**Scanned:** <code>{scanned}</code>\n"
-                f"**Matching Files:** <code>{matching}</code>\n"
-                f"**Indexed:** <code>{indexed}</code>\n"
-                f"**Already Indexed:** <code>{already_indexed}</code>\n"
-                f"**Skipped:** <code>{skipped}</code>\n"
-                f"**Failed:** <code>{failed}</code>\n\n"
-                f"**Reason:** <code>{interrupted_reason}</code>"
+                f"⚠️ <b>Year Indexing Interrupted</b>\n\n"
+                f"<b>Year:</b> <code>{target_year}</code>\n\n"
+                f"<b>Scanned:</b> <code>{session['scanned']}</code>\n"
+                f"<b>Matching Files:</b> <code>{session['matching']}</code>\n"
+                f"<b>Indexed:</b> <code>{session['indexed']}</code>\n"
+                f"<b>Already Indexed:</b> <code>{session['already_indexed']}</code>\n"
+                f"<b>Skipped:</b> <code>{session['skipped']}</code>\n"
+                f"<b>Failed:</b> <code>{session['failed']}</code>\n\n"
+                f"<b>Status:</b> <code>{interrupted_reason}</code>",
+                reply_markup=None
             )
         except Exception as e:
-            logger.error(f"[YINDEX FINAL EDIT ERROR] {e}")
+            logger.error(f"[YINDEX FINAL EDIT ERROR] session={session_id} error={e}")
     else:
+        logger.info(f"[YINDEX] COMPLETED session={session_id} scanned={session['scanned']} indexed={session['indexed']}")
         try:
             await msg.edit_text(
-                f"✅ **Year Indexing Completed**\n\n"
-                f"**Year:** <code>{target_year}</code>\n\n"
-                f"**Scanned:** <code>{scanned}</code>\n"
-                f"**Matching Files:** <code>{matching}</code>\n"
-                f"**Indexed:** <code>{indexed}</code>\n"
-                f"**Already Indexed:** <code>{already_indexed}</code>\n"
-                f"**Skipped:** <code>{skipped}</code>\n"
-                f"**Failed:** <code>{failed}</code>"
+                f"✅ <b>Year Indexing Completed</b>\n\n"
+                f"<b>Year:</b> <code>{target_year}</code>\n\n"
+                f"<b>Scanned:</b> <code>{session['scanned']}</code>\n"
+                f"<b>Matching Files:</b> <code>{session['matching']}</code>\n"
+                f"<b>Indexed:</b> <code>{session['indexed']}</code>\n"
+                f"<b>Already Indexed:</b> <code>{session['already_indexed']}</code>\n"
+                f"<b>Skipped:</b> <code>{session['skipped']}</code>\n"
+                f"<b>Failed:</b> <code>{session['failed']}</code>\n\n"
+                f"<b>Status:</b> Completed",
+                reply_markup=None
             )
         except Exception as e:
-            logger.error(f"[YINDEX FINAL EDIT ERROR] {e}")
+            logger.error(f"[YINDEX FINAL EDIT ERROR] session={session_id} error={e}")
 
 
 @Client.on_callback_query(filters.regex(r'^index'))

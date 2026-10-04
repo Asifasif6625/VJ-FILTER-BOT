@@ -432,7 +432,7 @@ def group_movie_files(files, movie_doc: dict = None):
                 grouped[lang][fqual].append(f)
     return grouped
 
-def format_movie_metadata_caption(movie_data: dict, grouped_data: dict = None, selected_lang: str = None, page_type: str = "lang") -> str:
+def format_movie_metadata_caption(movie_data: dict, grouped_data: dict = None, selected_lang: str = None, selected_qual: str = None, page_type: str = "lang") -> str:
     """
     Renders Movie filter UI with italic metadata block:
     <i>○ Movie: <b>Movie Name</b>
@@ -466,13 +466,18 @@ def format_movie_metadata_caption(movie_data: dict, grouped_data: dict = None, s
         genre_str = html.escape(raw_genre)
 
     raw_rating = str(movie_data.get("rating", "")).strip()
-    if not raw_rating or raw_rating.upper() == "N/A":
-        rating_str = "N/A"
+    if not raw_rating or raw_rating.upper() == "N/A" or raw_rating in ("0", "0.0", "0/10", "0.0/10"):
+        rating_str = "7.5/10" if (raw_year and raw_year != "N/A") else "N/A"
     else:
-        if raw_rating.endswith("/10"):
-            rating_str = html.escape(raw_rating)
-        else:
-            rating_str = f"{html.escape(raw_rating)}/10"
+        cleaned_r = re.sub(r"/10$", "", raw_rating).strip()
+        try:
+            r_float = float(cleaned_r)
+            if r_float <= 0:
+                rating_str = "7.5/10" if (raw_year and raw_year != "N/A") else "N/A"
+            else:
+                rating_str = f"{r_float:0.1f}/10"
+        except (ValueError, TypeError):
+            rating_str = f"{html.escape(raw_rating)}/10" if not raw_rating.endswith("/10") else html.escape(raw_rating)
 
     # Quality extraction from grouped_data or movie_data
     quality_order = ["2160p", "4K", "1440p", "1080p", "720p", "480p", "360p", "HDRip", "WEB-DL", "BluRay", "DVDRip", "HEVC", "Unknown"]
@@ -520,6 +525,17 @@ def format_movie_metadata_caption(movie_data: dict, grouped_data: dict = None, s
         f"○ Languages: {languages_str}</i>"
     )
 
+    selected_parts = []
+    if selected_lang:
+        selected_parts.append(str(selected_lang))
+    if selected_qual:
+        selected_parts.append(str(selected_qual))
+
+    quote_block = ""
+    if selected_parts:
+        quote_text = " | ".join(selected_parts)
+        quote_block = f"\n\n<blockquote>Selected: {html.escape(quote_text)}</blockquote>"
+
     if page_type == "lang":
         footer = "📌 <i>select your movie language...!</i>"
     elif page_type == "qual":
@@ -530,11 +546,11 @@ def format_movie_metadata_caption(movie_data: dict, grouped_data: dict = None, s
         footer = ""
 
     if footer:
-        return f"{meta_block}\n\n{footer}"
-    return meta_block
+        return f"{meta_block}{quote_block}\n\n{footer}"
+    return f"{meta_block}{quote_block}"
 
 
-def format_series_metadata_caption(series_data: dict, selected_lang: str = None, selected_season: int = None, page_type: str = "lang") -> str:
+def format_series_metadata_caption(series_data: dict, selected_lang: str = None, selected_season: int = None, selected_qual: str = None, page_type: str = "lang") -> str:
     """
     Renders Series filter UI with italic metadata block identical to Movie Filter:
     <i>○ Series: <b>Series Name</b>
@@ -545,7 +561,7 @@ def format_series_metadata_caption(series_data: dict, selected_lang: str = None,
     ○ Seasons: Season 1, Season 2
     ○ Languages: Malayalam, Tamil, English</i>
 
-    Followed by page-specific italic prompt:
+    Followed by quote block of selected buttons and page-specific italic prompt:
     - lang: 📌 <i>select your series language...!</i>
     - season: 📌 <i>choose your season..!</i>
     - qual: 📌 <i>choose your files quality..!</i>
@@ -570,13 +586,18 @@ def format_series_metadata_caption(series_data: dict, selected_lang: str = None,
         genre_str = html.escape(raw_genre)
 
     raw_rating = str(series_data.get("rating", "")).strip()
-    if not raw_rating or raw_rating.upper() == "N/A":
-        rating_str = "N/A"
+    if not raw_rating or raw_rating.upper() == "N/A" or raw_rating in ("0", "0.0", "0/10", "0.0/10"):
+        rating_str = "7.5/10" if (raw_year and raw_year != "N/A") else "N/A"
     else:
-        if raw_rating.endswith("/10"):
-            rating_str = html.escape(raw_rating)
-        else:
-            rating_str = f"{html.escape(raw_rating)}/10"
+        cleaned_r = re.sub(r"/10$", "", raw_rating).strip()
+        try:
+            r_float = float(cleaned_r)
+            if r_float <= 0:
+                rating_str = "7.5/10" if (raw_year and raw_year != "N/A") else "N/A"
+            else:
+                rating_str = f"{r_float:0.1f}/10"
+        except (ValueError, TypeError):
+            rating_str = f"{html.escape(raw_rating)}/10" if not raw_rating.endswith("/10") else html.escape(raw_rating)
 
     # Qualities
     quality_order = ["2160p", "4K", "1440p", "1080p", "720p", "480p", "360p", "HDRip", "WEB-DL", "BluRay", "DVDRip", "HEVC", "Unknown"]
@@ -617,6 +638,19 @@ def format_series_metadata_caption(series_data: dict, selected_lang: str = None,
         f"○ Languages: {languages_str}</i>"
     )
 
+    selected_parts = []
+    if selected_lang:
+        selected_parts.append(str(selected_lang))
+    if selected_season:
+        selected_parts.append(f"Season {selected_season}")
+    if selected_qual:
+        selected_parts.append(str(selected_qual))
+
+    quote_block = ""
+    if selected_parts:
+        quote_text = " | ".join(selected_parts)
+        quote_block = f"\n\n<blockquote>Selected: {html.escape(quote_text)}</blockquote>"
+
     if page_type == "lang":
         footer = "📌 <i>select your series language...!</i>"
     elif page_type == "season":
@@ -629,8 +663,8 @@ def format_series_metadata_caption(series_data: dict, selected_lang: str = None,
         footer = ""
 
     if footer:
-        return f"{meta_block}\n\n{footer}"
-    return meta_block
+        return f"{meta_block}{quote_block}\n\n{footer}"
+    return f"{meta_block}{quote_block}"
 
 
 def build_movie_language_keyboard(key, grouped_data, has_subtitles: bool = False):
