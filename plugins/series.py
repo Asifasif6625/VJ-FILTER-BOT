@@ -8394,46 +8394,19 @@ async def ser_lang_callback(client: Client, query: CallbackQuery):
     if not seasons_sorted:
         seasons_sorted = [1]
 
-    if len(seasons_sorted) > 1:
-        # Multiple seasons exist -> Show Season selection
-        buttons = []
-        for i in range(0, len(seasons_sorted), 2):
-            row = []
-            for s in seasons_sorted[i:i+2]:
-                row.append(make_styled_button(f"📅 Season {s}", callback_data=f"ser_season#{series_id}#{lang}#{s}", style="primary"))
-            buttons.append(row)
+    # Always show Season selection buttons (even if single season)
+    buttons = []
+    for i in range(0, len(seasons_sorted), 2):
+        row = []
+        for s in seasons_sorted[i:i+2]:
+            row.append(make_styled_button(to_series_font(f"Season {s}"), callback_data=f"ser_season#{series_id}#{lang}#{s}", style="primary"))
+        buttons.append(row)
 
-        buttons.append([
-            make_styled_button("⬅️ Language", callback_data=f"ser_back#{series_id}#{lang}", style="success")
-        ])
+    buttons.append([
+        make_styled_button(to_series_font("Language"), callback_data=f"ser_back#{series_id}#{lang}", style="success")
+    ])
 
-        cap = format_series_metadata_caption(series, selected_lang=lang, page_type="season")
-    else:
-        # Single season -> Show Qualities directly
-        s = seasons_sorted[0]
-        qual_vals = await sfiles_col.distinct("quality", {
-            "series_id": _sid_query(series_id),
-            "language": lang,
-            "season": _num_query(s)
-        })
-        qualities = [q for q in qual_vals if q]
-        if not qualities:
-            qualities = await list_season_qualities(series_id, lang, s)
-        if not qualities:
-            qualities = series.get("qualities") or ["480p", "720p", "1080p"]
-
-        buttons = []
-        for i in range(0, len(qualities), 2):
-            row = []
-            for q in qualities[i:i+2]:
-                row.append(make_styled_button(f"⚡ {q}", callback_data=f"ser_qual#{series_id}#{lang}#{s}#{q}", style="danger"))
-            buttons.append(row)
-
-        buttons.append([
-            make_styled_button("⬅️ Language", callback_data=f"ser_back#{series_id}#{lang}", style="success")
-        ])
-
-        cap = format_series_metadata_caption(series, selected_lang=lang, selected_season=s, page_type="qual")
+    cap = format_series_metadata_caption(series, selected_lang=lang, page_type="season")
 
     logger.info(f"[SERIES CALLBACK RENDER] action=language buttons={len(buttons)}")
     markup = InlineKeyboardMarkup(buttons)
@@ -8493,12 +8466,12 @@ async def ser_season_callback(client: Client, query: CallbackQuery):
     for i in range(0, len(qualities), 2):
         row = []
         for q in qualities[i:i+2]:
-            row.append(make_styled_button(f"⚡ {q}", callback_data=f"ser_qual#{series_id}#{lang}#{season}#{q}", style="danger"))
+            row.append(make_styled_button(to_series_font(q), callback_data=f"ser_qual#{series_id}#{lang}#{season}#{q}", style="danger"))
         buttons.append(row)
 
     buttons.append([
-        make_styled_button("⬅️ Season", callback_data=f"ser_lang#{series_id}#{lang}", style="primary"),
-        make_styled_button("⬅️ Language", callback_data=f"ser_back#{series_id}#{lang}", style="success")
+        make_styled_button(to_series_font("Season"), callback_data=f"ser_lang#{series_id}#{lang}", style="primary"),
+        make_styled_button(to_series_font("Language"), callback_data=f"ser_back#{series_id}#{lang}", style="success")
     ])
 
     cap = format_series_metadata_caption(series, selected_lang=lang, selected_season=season, page_type="qual")
