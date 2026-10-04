@@ -70,6 +70,8 @@ class temp(object):
     SETTINGS = {}
     IMDB_CAP = {}
     SERIES_PM_QUALITY_COOLDOWNS = {}
+    YINDEX_RUNNING = {}
+    YINDEX_CANCEL = {}
 
 
 def set_wizard_session(user_id: int, workflow: str, state: str, data: dict = None, chat_id: int = None):
@@ -1128,21 +1130,31 @@ def _fetch_url_sync(url):
     import ssl
     import urllib.request
     import urllib.error
-    headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-        'Accept-Language': 'en-US,en;q=0.5'
-    }
-    try:
-        ctx = ssl.create_default_context()
-        ctx.check_hostname = False
-        ctx.verify_mode = ssl.CERT_NONE
-        req = urllib.request.Request(url, headers=headers)
-        with urllib.request.urlopen(req, context=ctx, timeout=15) as resp:
-            return resp.read().decode('utf-8', errors='ignore')
-    except Exception as e:
-        logger.warning(f"_fetch_url_sync error for {url}: {e}")
-        return None
+    crawlers = [
+        "Googlebot/2.1 (+http://www.google.com/bot.html)",
+        "facebookexternalhit/1.1 (+http://www.facebook.com/externalhit_uatext.php)",
+        "Twitterbot/1.0",
+        "TelegramBot (like TwitterBot)",
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+    ]
+    ctx = ssl.create_default_context()
+    ctx.check_hostname = False
+    ctx.verify_mode = ssl.CERT_NONE
+    for ua in crawlers:
+        headers = {
+            'User-Agent': ua,
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+            'Accept-Language': 'en-US,en;q=0.5',
+            'Connection': 'close',
+        }
+        try:
+            req = urllib.request.Request(url, headers=headers)
+            with urllib.request.urlopen(req, context=ctx, timeout=12) as resp:
+                if resp.status == 200:
+                    return resp.read().decode('utf-8', errors='ignore')
+        except Exception:
+            continue
+    return None
 
 async def get_public_tmdb_poster(query, bulk=False, id=False, file=None):
     """
@@ -1174,57 +1186,53 @@ async def get_public_tmdb_poster(query, bulk=False, id=False, file=None):
         url = f"https://www.themoviedb.org/search?query={urllib.parse.quote(clean_title)}"
 
         html_text = await asyncio.to_thread(_fetch_url_sync, url)
-        if not html_text:
-            return None
-
-        cards = re.findall(r'<div[^>]+class="[^"]*(?:comp:media-card|card v4)[^"]*"[^>]*>(.*?)(?=<div[^>]+class="[^"]*(?:comp:media-card|card v4)[^"]*"|<div class="pagination"|<footer>|$)', html_text, re.DOTALL)
-        if not cards:
-            return None
-
         candidates = []
-        for card in cards:
-            title_match = re.search(r'<h2[^>]*>(?:<span[^>]*>)?([^<]+)', card)
-            title = _html.unescape(title_match.group(1).strip()) if title_match else None
+        if html_text:
+            cards = re.findall(r'<div[^>]+class="[^"]*(?:comp:media-card|card v4)[^"]*"[^>]*>(.*?)(?=<div[^>]+class="[^"]*(?:comp:media-card|card v4)[^"]*"|<div class="pagination"|<footer>|$)', html_text, re.DOTALL)
+            for card in cards:
+                title_match = re.search(r'<h2[^>]*>(?:<span[^>]*>)?([^<]+)', card)
+                title = _html.unescape(title_match.group(1).strip()) if title_match else None
 
-            href_match = re.search(r'href="(/[^"]+)"', card)
-            rel_url = href_match.group(1) if href_match else ""
+                href_match = re.search(r'href="(/[^"]+)"', card)
+                rel_url = href_match.group(1) if href_match else ""
 
-            kind = "movie"
-            if "/tv/" in rel_url or 'data-media-type="tv"' in card:
-                kind = "tv series"
-            elif "/movie/" in rel_url or 'data-media-type="movie"' in card:
                 kind = "movie"
+                if "/tv/" in rel_url or 'data-media-type="tv"' in card:
+                    kind = "tv series"
+                elif "/movie/" in rel_url or 'data-media-type="movie"' in card:
+                    kind = "movie"
 
-            date_match = re.search(r'<span class="release_date[^"]*">([^<]+)</span>', card)
-            release_date = date_match.group(1).strip() if date_match else None
-            card_year = None
-            if release_date:
-                cy_match = re.search(r'\b(19\d\d|20\d\d)\b', release_date)
-                if cy_match:
-                    card_year = cy_match.group(1)
+                date_match = re.search(r'<span class="release_date[^"]*">([^<]+)</span>', card)
+                release_date = date_match.group(1).strip() if date_match else None
+                card_year = None
+                if release_date:
+                    cy_match = re.search(r'\b(19\d\d|20\d\d)\b', release_date)
+                    if cy_match:
+                        card_year = cy_match.group(1)
 
-            poster_match = re.search(r'(?:src|data-src)="([^"]+/(?:image|media)\.themoviedb\.org/t/p/[^"]+)"', card)
-            poster = None
-            if poster_match:
-                raw_poster = poster_match.group(1)
-                poster = re.sub(r'/w\d+(_and_h\d+[^/]*)?/', '/w500/', raw_poster)
-                if poster.startswith('//'):
-                    poster = 'https:' + poster
+                poster_match = re.search(r'(?:src|data-src)="([^"]+/(?:image|media)\.themoviedb\.org/t/p/[^"]+)"', card)
+                poster = None
+                if poster_match:
+                    raw_poster = poster_match.group(1)
+                    poster = re.sub(r'/w\d+(_and_h\d+[^/]*)?/', '/w500/', raw_poster)
+                    if poster.startswith('//'):
+                        poster = 'https:' + poster
 
-            overview_match = re.search(r'<p>([^<]+)</p>', card)
-            overview = _html.unescape(overview_match.group(1).strip()) if overview_match else ""
+                overview_match = re.search(r'<p>([^<]+)</p>', card)
+                overview = _html.unescape(overview_match.group(1).strip()) if overview_match else ""
 
-            if title:
-                item = {
-                    'title': title,
-                    'year': card_year or year,
-                    'release_date': release_date or str(card_year or "N/A"),
-                    'poster': poster,
-                    'overview': overview,
-                    'kind': kind,
-                    'rel_url': rel_url
-                }
-                candidates.append(item)
+                if title:
+                    item = {
+                        'title': title,
+                        'year': card_year or year,
+                        'release_date': release_date or str(card_year or "N/A"),
+                        'poster': poster,
+                        'overview': overview,
+                        'kind': kind,
+                        'rel_url': rel_url,
+                        'tmdb_id': None,
+                    }
+                    candidates.append(item)
 
         if not candidates:
             return None
@@ -1248,8 +1256,9 @@ async def get_public_tmdb_poster(query, bulk=False, id=False, file=None):
 
         rating = None
         genres = []
-        orig_lang = None
+        orig_lang = normalize_language_name(best.get('original_language')) if best.get('original_language') else None
         posters = [best.get('poster')] if best.get('poster') else []
+
         if best.get('rel_url'):
             try:
                 detail_url = f"https://www.themoviedb.org{best['rel_url']}"
@@ -1555,30 +1564,34 @@ async def get_tmdb_public_metadata(url: str) -> dict | None:
     clean_url = f"https://www.themoviedb.org/{media_type}/{tmdb_id}"
     logger.info(f"[PUBLIC TMDB] START id={tmdb_id} type={media_type} url={clean_url}")
 
-    headers = {
-        "User-Agent": (
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-            "AppleWebKit/537.36 (KHTML, like Gecko) "
-            "Chrome/120.0.0.0 Safari/537.36"
-        ),
-        "Accept-Language": "en-US,en;q=0.9",
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-    }
-    timeout = aiohttp.ClientTimeout(total=10, connect=4, sock_read=6)
+    # 1. Fetch public HTML webpage directly using crawler user-agents
+    html_content = await asyncio.to_thread(_fetch_url_sync, clean_url)
+    if not html_content:
+        try:
+            crawlers_ua = "Googlebot/2.1 (+http://www.google.com/bot.html)"
+            headers = {
+                "User-Agent": crawlers_ua,
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                "Accept-Language": "en-US,en;q=0.5",
+            }
+            timeout = aiohttp.ClientTimeout(total=10, connect=4, sock_read=6)
+            async with aiohttp.ClientSession(timeout=timeout, headers=headers) as session:
+                async with session.get(clean_url) as resp:
+                    if resp.status == 200:
+                        html_content = await resp.text()
+        except Exception:
+            pass
 
-    try:
-        async with aiohttp.ClientSession(timeout=timeout, headers=headers) as session:
-            async with session.get(clean_url) as resp:
-                logger.info(f"[PUBLIC TMDB] HTTP status={resp.status}")
-                if resp.status != 200:
-                    logger.warning(f"[PUBLIC TMDB] FAILED reason=HTTP_{resp.status} id={tmdb_id}")
-                    return None
-                html_content = await resp.text()
-    except asyncio.TimeoutError:
-        logger.error(f"[PUBLIC TMDB] FAILED reason=TIMEOUT id={tmdb_id}")
-        return None
-    except Exception as e:
-        logger.exception(f"[PUBLIC TMDB] FAILED reason=ERROR id={tmdb_id}: {e}")
+    # 2. If public HTML could not be fetched, log warning and fallback to slug
+    if not html_content:
+        logger.warning(f"[PUBLIC TMDB] Failed to fetch public webpage for id={tmdb_id}")
+        if raw_slug:
+            slug_clean = re.sub(r"-\b((?:19|20)\d{2})\b", "", raw_slug).replace("-", " ").strip().title()
+            if slug_clean:
+                sugg = await get_imdb_metadata_direct(slug_clean)
+                if sugg and sugg.get("title"):
+                    sugg["tmdb_id"] = str(tmdb_id)
+                    return sugg
         return None
 
     soup = BeautifulSoup(html_content, "html.parser") if BeautifulSoup else None
