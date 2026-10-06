@@ -74,6 +74,13 @@ class temp(object):
     YINDEX_CANCEL = {}
     YINDEX_SESSIONS = {}
     EPISODE_TITLES_CACHE = {}
+    MOVIE_GROUPS = {}
+    MOVIE_SEARCH_SESSIONS = {}
+    ACTIVE_MOVIE_DELIVERIES = set()
+    MOVIE_DELIVERY_SESSIONS = {}
+    SERIES_GROUPS = {}
+    ACTIVE_SERIES_DELIVERIES = set()
+    SERIES_DELIVERY_SESSIONS = {}
 
 
 def set_wizard_session(user_id: int, workflow: str, state: str, data: dict = None, chat_id: int = None):
