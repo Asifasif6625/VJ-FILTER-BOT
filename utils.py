@@ -447,6 +447,156 @@ def strip_file_prefix_markers(text: str) -> str:
     return cleaned.strip()
 
 
+def get_filter_button_filename_text(file_name: str) -> str:
+    """
+    Returns a clean shortened display filename for normal movie/series filter buttons.
+    Priority:
+    1. If a valid standalone year (1900-2099) exists: show everything from the start up to and including the year.
+    2. If NO year but a recognized quality marker exists: show everything before the quality marker.
+    3. If NEITHER year nor quality: show everything before the file extension.
+    """
+    if not file_name:
+        return ""
+    
+    raw = str(file_name).strip()
+    
+    # 1. Strip leading prefix markers (@username, (MM), [MM], (MS), [MS])
+    raw = strip_file_prefix_markers(raw)
+    
+    # 2. Strip only the final actual file extension
+    raw = re.sub(
+        r"\.(mkv|mp4|avi|mov|wmv|flv|webm|m4v|ts|3gp|mpeg|mpg|vob|ogv|divx|m2ts|m2v|f4v|srt|sub|zip|rar)$",
+        "",
+        raw,
+        flags=re.IGNORECASE
+    ).strip()
+    
+    if not raw:
+        return str(file_name).strip()
+
+    # Priority 1: Standalone year 1900-2099
+    year_iter = list(re.finditer(r"(?<![0-9a-zA-Z])(19\d{2}|20\d{2})(?![0-9a-zA-Z])", raw))
+    if year_iter:
+        for ym in year_iter:
+            y_start = ym.start()
+            y_end = ym.end()
+            # Avoid matching if followed by 'p' or 'i' (e.g. 1080p, 2160p)
+            if y_end < len(raw) and raw[y_end].lower() in ('p', 'i', 'k'):
+                continue
+            # Avoid matching if preceded by 'x' (e.g. 1920x1080)
+            if y_start > 0 and raw[y_start - 1].lower() == 'x':
+                continue
+            
+            prefix_part = raw[:y_end]
+            cleaned = re.sub(r'[\._]', ' ', prefix_part)
+            cleaned = re.sub(r'\s+', ' ', cleaned).strip()
+            cleaned = re.sub(r'[\-\:\+]+$', '', cleaned).strip()
+            if cleaned:
+                return cleaned
+
+    # Priority 2: Recognized quality marker (when no year is present)
+    qual_pattern = re.compile(
+        r"(?i)(?:^|[\s\._\-\(\[\{])("
+        r"2160p|4k|uhd|1440p|2k|1080p|1080i|fhd|720p|576p|576i|480p|480i|360p|240p|hd|"
+        r"web[\s\._\-]?dl|web[\s\._\-]?rip|web[\s\._\-]?hd|bluray|bdrip|brrip|hdrip|hdtv|dvdrip|dvd|camrip|hdcam|cam|"
+        r"hevc|x264|x265|h264|h265|avc|10bit|8bit"
+        r")(?:[\s\._\-\)\]\}]|$)"
+    )
+    qm = qual_pattern.search(raw)
+    if qm:
+        prefix_part = raw[:qm.start(1)].strip()
+        cleaned = re.sub(r'[\._]', ' ', prefix_part)
+        cleaned = re.sub(r'\s+', ' ', cleaned).strip()
+        cleaned = re.sub(r'[\-\:\+]+$', '', cleaned).strip()
+        if cleaned:
+            return cleaned
+
+    # Priority 3: Neither year nor quality
+    cleaned = re.sub(r'[\._]', ' ', raw)
+    cleaned = re.sub(r'\s+', ' ', cleaned).strip()
+    cleaned = re.sub(r'[\-\:\+]+$', '', cleaned).strip()
+    return cleaned or raw
+
+
+def get_series_filter_button_text(file_name: str, file_size=None) -> str:
+    """
+    Returns formatted button label for normal series filter file buttons:
+    Format: (FILE SIZE) [SxxEyy] SERIES/EPISODE NAME
+    Example: (300 MB) [S01E03] Killadi
+
+    If SxxEyy cannot be detected, falls back to: [FILE SIZE] CLEAN_FILENAME
+    """
+    if not file_name:
+        return ""
+
+    raw = str(file_name).strip()
+    # 1. Format size string
+    if file_size is not None:
+        if isinstance(file_size, (int, float)):
+            sz_str = get_size(file_size)
+        else:
+            sz_str = str(file_size).strip()
+    else:
+        sz_str = ""
+
+    # 2. Strip leading prefix markers (@username, (MM), [MM], (MS), [MS])
+    clean_unprefixed = strip_file_prefix_markers(raw)
+
+    # 3. Strip file extensions
+    name_no_ext = re.sub(
+        r"\.(mkv|mp4|avi|mov|wmv|flv|webm|m4v|ts|3gp|mpeg|mpg|vob|ogv|divx|m2ts|m2v|f4v|srt|sub|zip|rar)$",
+        "",
+        clean_unprefixed,
+        flags=re.IGNORECASE
+    ).strip()
+
+    # 4. Extract Season & Episode (SxxEyy)
+    patterns = [
+        re.compile(r"(?i)(?:^|[\s._\-\(\[\{])S(\d{1,2})\s*[\.\-_ ]?\s*E(\d{1,4})(?:[\s._\-\)\]\}]|$)"),
+        re.compile(r"(?i)(?:^|[\s._\-\(\[\{])(\d{1,2})\s*x\s*(\d{1,4})(?:[\s._\-\)\]\}]|$)"),
+        re.compile(r"(?i)(?:^|[\s._\-\(\[\{])(?:Season|S)\s*(\d{1,2})\s*[\.\-_ ]?\s*(?:Episode|Ep|E)\s*(\d{1,4})(?:[\s._\-\)\]\}]|$)"),
+    ]
+
+    m_se = None
+    s_val = None
+    ep_val = None
+    for p in patterns:
+        m = p.search(name_no_ext)
+        if m:
+            try:
+                s_val = int(m.group(1))
+                ep_val = int(m.group(2))
+                m_se = m
+                break
+            except Exception:
+                pass
+
+    # Fallback if no valid SxxEyy found
+    if not m_se or s_val is None or ep_val is None or s_val <= 0 or ep_val <= 0:
+        short_fn = get_filter_button_filename_text(file_name)
+        if sz_str:
+            return f"[{sz_str}] {short_fn}"
+        return short_fn
+
+    s_tag = f"S{s_val:02d}E{ep_val:02d}"
+
+    # 5. Extract series display name before SxxEyy
+    cand_prefix = name_no_ext[:m_se.start()].strip(" ._+-")
+    if cand_prefix:
+        cleaned_title = get_filter_button_filename_text(cand_prefix)
+    else:
+        # If filename started with SxxEyy, check remaining part
+        cand_suffix = name_no_ext[m_se.end():].strip(" ._+-")
+        cleaned_title = get_filter_button_filename_text(cand_suffix)
+
+    if not cleaned_title:
+        cleaned_title = "Series"
+
+    if sz_str:
+        return f"({sz_str}) [{s_tag}] {cleaned_title}"
+    return f"[{s_tag}] {cleaned_title}"
+
+
 def normalize_series_identity_title(text: str) -> str:
     """
     Normalizes a series title for strict identity comparison.
@@ -3145,7 +3295,7 @@ async def get_cap(settings, remaining_seconds, files, query, total_results, sear
             cap = IMDB_CAP
             cap+="<b>\n\n<u>🍿 Your Movie Files 👇</u></b>\n\n"
             for file in files:
-                cap += f"<b>📁 <a href='https://telegram.me/{temp.U_NAME}?start=files_{file['file_id']}'>[{get_size(file['file_size'])}] {' '.join(filter(lambda x: not x.startswith('[') and not x.startswith('@') and not x.startswith('www.'), file['file_name'].split()))}\n\n</a></b>"
+                cap += f"<b>📁 <a href='https://telegram.me/{temp.U_NAME}?start=files_{file['file_id']}'>[{get_size(file['file_size'])}] {get_filter_button_filename_text(file['file_name'])}\n\n</a></b>"
         else:
             imdb = await get_poster(search, file=(files[0])["file_name"]) if settings["imdb"] else None
             if imdb:
@@ -3183,17 +3333,17 @@ async def get_cap(settings, remaining_seconds, files, query, total_results, sear
                 )
                 cap+="<b>\n\n<u>🍿 Your Movie Files 👇</u></b>\n\n"
                 for file in files:
-                    cap += f"<b>📁 <a href='https://telegram.me/{temp.U_NAME}?start=files_{file['file_id']}'>[{get_size(file['file_size'])}] {' '.join(filter(lambda x: not x.startswith('[') and not x.startswith('@') and not x.startswith('www.'), file['file_name'].split()))}\n\n</a></b>"
+                    cap += f"<b>📁 <a href='https://telegram.me/{temp.U_NAME}?start=files_{file['file_id']}'>[{get_size(file['file_size'])}] {get_filter_button_filename_text(file['file_name'])}\n\n</a></b>"
             else:
                 cap = f"<b>Tʜᴇ Rᴇꜱᴜʟᴛꜱ Fᴏʀ ☞ {search}\n\nRᴇǫᴜᴇsᴛᴇᴅ Bʏ ☞ {query.from_user.mention}\n\nʀᴇsᴜʟᴛ sʜᴏᴡ ɪɴ ☞ {remaining_seconds} sᴇᴄᴏɴᴅs\n\nᴘᴏᴡᴇʀᴇᴅ ʙʏ ☞ : {query.message.chat.title}\n\n⚠️ ᴀꜰᴛᴇʀ 5 ᴍɪɴᴜᴛᴇꜱ ᴛʜɪꜱ ᴍᴇꜱꜱᴀɢᴇ ᴡɪʟʟ ʙᴇ ᴀᴜᴛᴏᴍᴀᴛɪᴄᴀʟʟʏ ᴅᴇʟᴇᴛᴇᴅ 🗑️\n\n</b>"
                 cap+="<b><u>🍿 Your Movie Files 👇</u></b>\n\n"
                 for file in files:
-                    cap += f"<b>📁 <a href='https://telegram.me/{temp.U_NAME}?start=files_{file['file_id']}'>[{get_size(file['file_size'])}] {' '.join(filter(lambda x: not x.startswith('[') and not x.startswith('@') and not x.startswith('www.'), file['file_name'].split()))}\n\n</a></b>"
+                    cap += f"<b>📁 <a href='https://telegram.me/{temp.U_NAME}?start=files_{file['file_id']}'>[{get_size(file['file_size'])}] {get_filter_button_filename_text(file['file_name'])}\n\n</a></b>"
     else:
         cap = f"<b>Tʜᴇ Rᴇꜱᴜʟᴛꜱ Fᴏʀ ☞ {search}\n\nRᴇǫᴜᴇsᴛᴇᴅ Bʏ ☞ {query.from_user.mention}\n\nʀᴇsᴜʟᴛ sʜᴏᴡ ɪɴ ☞ {remaining_seconds} sᴇᴄᴏɴᴅs\n\nᴘᴏᴡᴇʀᴇᴅ ʙʏ ☞ : {query.message.chat.title} \n\n⚠️ ᴀꜰᴛᴇʀ 5 ᴍɪɴᴜᴛᴇꜱ ᴛʜɪꜱ ᴍᴇꜱꜱᴀɢᴇ ᴡɪʟʟ ʙᴇ ᴀᴜᴛᴏᴍᴀᴛɪᴄᴀʟʟʏ ᴅᴇʟᴇᴛᴇᴅ 🗑️\n\n</b>"
         cap+="<b><u>🍿 Your Movie Files 👇</u></b>\n\n"
         for file in files:
-            cap += f"<b>📁 <a href='https://telegram.me/{temp.U_NAME}?start=files_{file['file_id']}'>[{get_size(file['file_size'])}] {' '.join(filter(lambda x: not x.startswith('[') and not x.startswith('@') and not x.startswith('www.'), file['file_name'].split()))}\n\n</a></b>"
+            cap += f"<b>📁 <a href='https://telegram.me/{temp.U_NAME}?start=files_{file['file_id']}'>[{get_size(file['file_size'])}] {get_filter_button_filename_text(file['file_name'])}\n\n</a></b>"
     return cap
 
 
