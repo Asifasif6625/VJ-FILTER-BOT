@@ -4358,21 +4358,6 @@ async def cb_norm_get_all_file(client: Client, query: CallbackQuery):
     except Exception:
         pass
 
-    # 2. Send the exact sticker and keep it visible for ONLY 2 seconds
-    try:
-        sticker_msg = await client.send_sticker(
-            chat_id=user_id,
-            sticker="CAACAgIAAxkBAAER_8VqxXSfQ8NwUz3f6IgFpuZM7PKBmQAC7hQAAuNVUEk4S4qtAhNhvD0E"
-        )
-        if sticker_msg:
-            await asyncio.sleep(2)
-            try:
-                await sticker_msg.delete()
-            except Exception:
-                pass
-    except Exception as se:
-        logger.warning(f"[NORMAL STICKER ERROR] {se}")
-
     import time, uuid
     session_id = f"normdel_{user_id}_{uuid.uuid4().hex[:6]}"
     if not hasattr(temp, "NORMAL_DELIVERY_SESSIONS"):
@@ -4535,13 +4520,37 @@ async def execute_normal_group_file_delivery(client: Client, user_id: int, group
         sess = getattr(temp, "NORMAL_DELIVERY_SESSIONS", {}).get(session_id, {})
         if not sess.get("cancelled"):
             try:
-                await ctrl_msg.edit_text(
-                    text="<i>✅ All files have been successfully sent!</i>",
-                    reply_markup=None,
-                    parse_mode=enums.ParseMode.HTML
-                )
+                await ctrl_msg.delete()
             except Exception:
                 pass
+
+            try:
+                end_sticker = await client.send_sticker(
+                    chat_id=user_id,
+                    sticker="CAACAgIAAxkBAAER_8lqxYFDIjBkA2DUBdmTmr_sY9S51QAC-xUAAgNTSEmVucQqtvZ0Wz0E"
+                )
+                if end_sticker:
+                    schedule_filter_message_delete(client, user_id, end_sticker.id, delay=600)
+            except Exception as se:
+                logger.warning(f"[NORMAL END STICKER ERROR] {se}")
+
+            quote_notice = (
+                "<blockquote>"
+                "<b><u>❗️❗️❗️IMPORTANT❗️️❗️❗️</u></b>\n\n"
+                "ᴛʜɪs ᴍᴇssᴀɢᴇ ᴡɪʟʟ ʙᴇ ᴅᴇʟᴇᴛᴇᴅ ɪɴ <b><u>10 mins</u> 🫥 <i></b>(ᴅᴜᴇ ᴛᴏ ᴄᴏᴘʏʀɪɢʜᴛ ɪssᴜᴇs)</i>.\n\n"
+                "<b><i>ᴘʟᴇᴀsᴇ ғᴏʀᴡᴀʀᴅ ᴛʜɪs ᴍᴇssᴀɢᴇ ᴛᴏ ʏᴏᴜʀ sᴀᴠᴇᴅ ᴍᴇssᴀɢᴇs ᴏʀ ᴀɴʏ ᴘʀɪᴠᴀᴛᴇ ᴄʜᴀᴛ.</i></b>"
+                "</blockquote>"
+            )
+            try:
+                notice_msg = await client.send_message(
+                    chat_id=user_id,
+                    text=quote_notice,
+                    parse_mode=enums.ParseMode.HTML
+                )
+                if notice_msg:
+                    schedule_filter_message_delete(client, user_id, notice_msg.id, delay=600)
+            except Exception as ne:
+                logger.warning(f"[NORMAL END NOTICE ERROR] {ne}")
 
     finally:
         getattr(temp, "ACTIVE_NORMAL_DELIVERIES", set()).discard(user_id)
