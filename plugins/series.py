@@ -98,6 +98,7 @@ from utils import (
     start_cleanup_schedulers,
     safe_delete_message,
     safe_delete_messages,
+    get_filter_button_filename_text,
 )
 
 import os
@@ -1038,10 +1039,10 @@ def _build_auto_movie_file_keyboard(session_id, lang, qual, files, page=0, pre="
     buttons = []
     for f in current_page_files:
         f_size = get_size(f.get("file_size", 0))
-        cleaned_fn = ' '.join(filter(lambda x: not x.startswith('[') and not x.startswith('@') and not x.startswith('www.') and not x.startswith('t.me'), f.get("file_name", "").split()))
+        disp_fn = get_filter_button_filename_text(f.get("file_name", ""))
         buttons.append([
             InlineKeyboardButton(
-                f"📥 [{f_size}] {cleaned_fn[:45]}",
+                f"📥 [{f_size}] {disp_fn}",
                 callback_data=f"{pre}#{f['file_id']}"
             )
         ])
