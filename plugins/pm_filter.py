@@ -4137,49 +4137,29 @@ async def render_normal_grouped_results(client: Client, message: Message, query_
         requester_name = reply_msg.from_user.mention if getattr(reply_msg.from_user, "mention", None) else (reply_msg.from_user.first_name or "User")
 
     caption_text = (
-        f"ᯤ Search quary: {query_text}\n"
+        f"<b><i>"
+        f"ᯤ Search quary: {html.escape(query_text)}\n"
         f"ᯤ Requester: {requester_name}\n"
         f"ᯤ Total list: {len(groups)}"
+        f"</i></b>"
     )
 
-    from database.series_db import get_series_thumbnail
     from utils import schedule_filter_message_delete
-    thumb = await get_series_thumbnail()
-    if not thumb:
-        try:
-            imdb_data = await get_poster(query_text)
-            if imdb_data and imdb_data.get("poster"):
-                thumb = imdb_data.get("poster")
-        except Exception:
-            pass
 
     if reply_msg:
         try:
-            if reply_msg.photo or reply_msg.caption:
-                await reply_msg.edit_caption(caption=caption_text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
-                schedule_filter_message_delete(client, reply_msg.chat.id, reply_msg.id, delay=1200)
-                BUTTON_OWNERS[f"{reply_msg.chat.id}-{reply_msg.id}"] = real_user_id
-                return True
-            else:
+            if not getattr(reply_msg, "photo", None):
                 await reply_msg.edit_text(text=caption_text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
                 schedule_filter_message_delete(client, reply_msg.chat.id, reply_msg.id, delay=1200)
                 BUTTON_OWNERS[f"{reply_msg.chat.id}-{reply_msg.id}"] = real_user_id
                 return True
+            else:
+                await reply_msg.delete()
         except Exception:
             try:
                 await reply_msg.delete()
             except Exception:
                 pass
-
-    if thumb:
-        try:
-            sent_sug = await (message.reply_photo(photo=thumb, caption=caption_text, reply_markup=markup, parse_mode=enums.ParseMode.HTML) if message else client.send_photo(chat_id=chat_id, photo=thumb, caption=caption_text, reply_markup=markup, parse_mode=enums.ParseMode.HTML))
-            if sent_sug:
-                schedule_filter_message_delete(client, sent_sug.chat.id, sent_sug.id, delay=1200)
-                BUTTON_OWNERS[f"{sent_sug.chat.id}-{sent_sug.id}"] = real_user_id
-            return True
-        except Exception as pe:
-            logger.warning(f"[NORMAL GROUP THUMB ERROR] {pe}")
 
     sent_sug_t = await (message.reply_text(text=caption_text, reply_markup=markup, parse_mode=enums.ParseMode.HTML) if message else client.send_message(chat_id=chat_id, text=caption_text, reply_markup=markup, parse_mode=enums.ParseMode.HTML))
     if sent_sug_t:
