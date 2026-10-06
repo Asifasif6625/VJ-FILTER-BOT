@@ -4117,23 +4117,52 @@ async def render_normal_grouped_results(client: Client, message: Message, query_
         "user_id": real_user_id
     }
 
+    for g in groups:
+        g["user_id"] = real_user_id
+        gid = g.get("group_id")
+        if gid:
+            temp.NORMAL_FILTER_GROUPS[gid] = g
+            try:
+                from database.series_db import save_temp_request
+                asyncio.create_task(save_temp_request(gid, g))
+            except Exception:
+                pass
+
     markup = build_normal_group_keyboard(groups=groups, page=page, session_id=session_id, bot_username=bot_username)
-    caption_text = "<b>Choose the series/movie you want to view:</b>"
+    
+    requester_name = "User"
+    if message and message.from_user:
+        requester_name = message.from_user.mention if getattr(message.from_user, "mention", None) else (message.from_user.first_name or "User")
+    elif reply_msg and reply_msg.from_user:
+        requester_name = reply_msg.from_user.mention if getattr(reply_msg.from_user, "mention", None) else (reply_msg.from_user.first_name or "User")
+
+    caption_text = (
+        f"ᯤ Search quary: {query_text}\n"
+        f"ᯤ Requester: {requester_name}\n"
+        f"ᯤ Total list: {len(groups)}"
+    )
 
     from database.series_db import get_series_thumbnail
     from utils import schedule_filter_message_delete
     thumb = await get_series_thumbnail()
+    if not thumb:
+        try:
+            imdb_data = await get_poster(query_text)
+            if imdb_data and imdb_data.get("poster"):
+                thumb = imdb_data.get("poster")
+        except Exception:
+            pass
 
     if reply_msg:
         try:
             if reply_msg.photo or reply_msg.caption:
                 await reply_msg.edit_caption(caption=caption_text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
-                schedule_filter_message_delete(client, reply_msg.chat.id, reply_msg.id, 600)
+                schedule_filter_message_delete(client, reply_msg.chat.id, reply_msg.id, delay=1200)
                 BUTTON_OWNERS[f"{reply_msg.chat.id}-{reply_msg.id}"] = real_user_id
                 return True
             else:
                 await reply_msg.edit_text(text=caption_text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
-                schedule_filter_message_delete(client, reply_msg.chat.id, reply_msg.id, 600)
+                schedule_filter_message_delete(client, reply_msg.chat.id, reply_msg.id, delay=1200)
                 BUTTON_OWNERS[f"{reply_msg.chat.id}-{reply_msg.id}"] = real_user_id
                 return True
         except Exception:
@@ -4146,7 +4175,7 @@ async def render_normal_grouped_results(client: Client, message: Message, query_
         try:
             sent_sug = await (message.reply_photo(photo=thumb, caption=caption_text, reply_markup=markup, parse_mode=enums.ParseMode.HTML) if message else client.send_photo(chat_id=chat_id, photo=thumb, caption=caption_text, reply_markup=markup, parse_mode=enums.ParseMode.HTML))
             if sent_sug:
-                schedule_filter_message_delete(client, sent_sug.chat.id, sent_sug.id, 600)
+                schedule_filter_message_delete(client, sent_sug.chat.id, sent_sug.id, delay=1200)
                 BUTTON_OWNERS[f"{sent_sug.chat.id}-{sent_sug.id}"] = real_user_id
             return True
         except Exception as pe:
@@ -4154,7 +4183,7 @@ async def render_normal_grouped_results(client: Client, message: Message, query_
 
     sent_sug_t = await (message.reply_text(text=caption_text, reply_markup=markup, parse_mode=enums.ParseMode.HTML) if message else client.send_message(chat_id=chat_id, text=caption_text, reply_markup=markup, parse_mode=enums.ParseMode.HTML))
     if sent_sug_t:
-        schedule_filter_message_delete(client, sent_sug_t.chat.id, sent_sug_t.id, 600)
+        schedule_filter_message_delete(client, sent_sug_t.chat.id, sent_sug_t.id, delay=1200)
         BUTTON_OWNERS[f"{sent_sug_t.chat.id}-{sent_sug_t.id}"] = real_user_id
     return True
 
@@ -4171,6 +4200,10 @@ async def cb_normal_group_page(client: Client, query: CallbackQuery):
     if not sess:
         return await query.answer("⚠️ Search session expired. Please search again.", show_alert=True)
 
+    owner_id = sess.get("user_id")
+    if owner_id and query.from_user.id != owner_id:
+        return await query.answer("⚠️ This search session belongs to another user!", show_alert=True)
+
     groups = sess.get("groups", [])
     bot_username = temp.U_NAME if (hasattr(temp, "U_NAME") and temp.U_NAME) else getattr(getattr(client, "me", None), "username", "Bot")
     if bot_username:
@@ -4179,6 +4212,7 @@ async def cb_normal_group_page(client: Client, query: CallbackQuery):
     markup = build_normal_group_keyboard(groups=groups, page=target_page, session_id=session_id, bot_username=bot_username)
     try:
         await query.message.edit_reply_markup(reply_markup=markup)
+        schedule_filter_message_delete(client, query.message.chat.id, query.message.id, delay=1200)
     except MessageNotModified:
         pass
     await query.answer()
@@ -4187,6 +4221,7 @@ async def cb_normal_group_page(client: Client, query: CallbackQuery):
 async def process_normal_filter_deeplink(client: Client, message: Message, norm_group_id: str) -> bool:
     """
     Handles /start norm_{group_id} in PM.
+    - Searcher-only access verification.
     - 5-second countdown timer.
     - Normal Details message.
     - 'Get All File' and 'Disclaimer' buttons.
@@ -4200,7 +4235,34 @@ async def process_normal_filter_deeplink(client: Client, message: Message, norm_
         await message.reply_text("<b>❌ Requested filter files were not found or have expired.</b>")
         return False
 
-    # 1. 5-Second Countdown Timer Loading Message
+    # 1. Access Control: Searcher Only Check
+    clicked_user_id = message.from_user.id if message.from_user else 0
+    req_user_id = group_data.get("user_id") or group_data.get("requester_user_id")
+    if req_user_id and clicked_user_id and clicked_user_id != req_user_id:
+        try:
+            unauth_sticker = await message.reply_sticker(
+                sticker="CAACAgUAAxkBAAER_8dqxXfvlg-A--CYLwSri-jYZR6gvwACTwcAAlx3UVf4uOtL0Swhdz0E"
+            )
+            if unauth_sticker:
+                from utils import schedule_filter_message_delete
+                schedule_filter_message_delete(client, unauth_sticker.chat.id, unauth_sticker.id, delay=5)
+        except Exception as se:
+            logger.warning(f"[UNAUTHORIZED STICKER ERROR] {se}")
+
+        unauth_text = (
+            "Perform the search yourself; do not simply click on a button generated by someone else's search.😁\n\n"
+            "സ്വന്തം ആയി സെർച്ച് ചെയ്യുക. മറ്റുള്ളവർ സേർച്ച് ചയ്തു കിട്ടിയ ബട്ടൺ ക്ലിക്ക് ചയ്തു വരണ്ട .😁"
+        )
+        try:
+            unauth_msg = await message.reply_text(unauth_text)
+            if unauth_msg:
+                from utils import schedule_filter_message_delete
+                schedule_filter_message_delete(client, unauth_msg.chat.id, unauth_msg.id, delay=60)
+        except Exception:
+            pass
+        return False
+
+    # 2. 5-Second Countdown Timer Loading Message
     loading_msg = await message.reply_text("get details & files.. timer 5 second")
     for sec in [4, 3, 2, 1, 0]:
         await asyncio.sleep(1)
@@ -4213,7 +4275,7 @@ async def process_normal_filter_deeplink(client: Client, message: Message, norm_
     except Exception:
         pass
 
-    # 2. Normal Filter Details Message
+    # 3. Normal Filter Details Message
     title = group_data.get("title", "Files")
     year = group_data.get("year", "N/A")
     year_str = str(year).strip() if year and str(year).upper() != "N/A" else "N/A"
@@ -4271,6 +4333,15 @@ async def cb_norm_get_all_file(client: Client, query: CallbackQuery):
     group_id = parts[1]
     user_id = query.from_user.id
 
+    group_data = getattr(temp, "NORMAL_FILTER_GROUPS", {}).get(group_id)
+    if not group_data:
+        from database.series_db import get_temp_request
+        group_data = await get_temp_request(group_id)
+
+    req_user_id = group_data.get("user_id") if group_data else None
+    if req_user_id and user_id != req_user_id:
+        return await query.answer("⚠️ This search session belongs to another user!", show_alert=True)
+
     if not hasattr(temp, "ACTIVE_NORMAL_DELIVERIES"):
         temp.ACTIVE_NORMAL_DELIVERIES = set()
 
@@ -4279,6 +4350,27 @@ async def cb_norm_get_all_file(client: Client, query: CallbackQuery):
 
     temp.ACTIVE_NORMAL_DELIVERIES.add(user_id)
     await query.answer()
+
+    # 1. Delete details message containing the Get All button
+    try:
+        await query.message.delete()
+    except Exception:
+        pass
+
+    # 2. Send the exact sticker and keep it visible for ONLY 2 seconds
+    try:
+        sticker_msg = await client.send_sticker(
+            chat_id=user_id,
+            sticker="CAACAgIAAxkBAAER_8VqxXSfQ8NwUz3f6IgFpuZM7PKBmQAC7hQAAuNVUEk4S4qtAhNhvD0E"
+        )
+        if sticker_msg:
+            await asyncio.sleep(2)
+            try:
+                await sticker_msg.delete()
+            except Exception:
+                pass
+    except Exception as se:
+        logger.warning(f"[NORMAL STICKER ERROR] {se}")
 
     import time, uuid
     session_id = f"normdel_{user_id}_{uuid.uuid4().hex[:6]}"
@@ -4303,7 +4395,8 @@ async def cb_norm_get_all_file(client: Client, query: CallbackQuery):
         "<i>Click the stop button shown below to stop incoming files.\n\n"
         "വരുന്ന ഫിലെസ് നിർത്താനായി താഴെ കാണുന്ന സ്റ്റോപ്പ് ബട്ടൺ ക്ലിക്ക് ചെയ്യുക.</i>"
     )
-    ctrl_msg = await query.message.reply_text(
+    ctrl_msg = await client.send_message(
+        chat_id=user_id,
         text=ctrl_text,
         reply_markup=InlineKeyboardMarkup([[stop_btn]]),
         parse_mode=enums.ParseMode.HTML
@@ -4351,6 +4444,7 @@ async def cb_norm_stop_files(client: Client, query: CallbackQuery):
 async def execute_normal_group_file_delivery(client: Client, user_id: int, group_id: str, session_id: str, ctrl_msg: Message):
     """
     Delivers each file in the selected Normal/Legacy group sequentially with custom formatted captions.
+    Each file message automatically deletes after 600 seconds (10 minutes).
     Stops immediately if user clicks the Stop Files button.
     """
     try:
@@ -4398,7 +4492,7 @@ async def execute_normal_group_file_delivery(client: Client, user_id: int, group
         else:
             sorted_files = files
 
-        from utils import get_size
+        from utils import get_size, schedule_filter_message_delete
 
         for idx, f in enumerate(sorted_files, 1):
             sess = getattr(temp, "NORMAL_DELIVERY_SESSIONS", {}).get(session_id, {})
@@ -4421,12 +4515,14 @@ async def execute_normal_group_file_delivery(client: Client, user_id: int, group
             fid = f.get("file_id")
             if fid:
                 try:
-                    await client.send_cached_media(
+                    sent_f = await client.send_cached_media(
                         chat_id=user_id,
                         file_id=fid,
                         caption=caption,
                         parse_mode=enums.ParseMode.HTML
                     )
+                    if sent_f and getattr(sent_f, "id", None):
+                        schedule_filter_message_delete(client, user_id, sent_f.id, delay=600)
                 except Exception as e:
                     logger.error(f"[NORMAL FILE DELIVERY ERROR] file_id={fid}: {e}")
 
