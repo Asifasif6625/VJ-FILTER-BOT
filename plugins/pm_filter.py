@@ -3924,6 +3924,13 @@ async def auto_filter(client, name, msg, reply_msg=None, ai_search=True, spoll=F
             await msg.message.delete()
         except:
             pass
+        try:
+            from plugins.series import process_unified_filter_search
+            is_handled = await process_unified_filter_search(client, message, search)
+            if is_handled:
+                return
+        except Exception as e:
+            logger.error(f"[SPOLL UNIFIED FILTER SEARCH ERROR] {e}")
     pre = 'filep' if settings['file_secure'] else 'file'
     key = f"{message.chat.id}-{message.id}"
     req = msg.from_user.id if (hasattr(msg, 'from_user') and msg.from_user) else (message.from_user.id if (message and message.from_user) else 0)

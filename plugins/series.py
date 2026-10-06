@@ -8144,61 +8144,275 @@ async def render_series_direct(client: Client, message: Message, series_doc: dic
     return True
 
 
+async def build_grouped_series_results(query: str, chat_id: int | str = 0) -> list[dict]:
+    """
+    Finds and groups all matching series records and files by (normalized_title, year, season).
+    Generates button labels: 'જ⁀➴S01 Title (Year)' with v2/v3 suffixes when duplicate groups exist.
+    """
+    from database.series_db import search_series, sfiles_col, _sid_query, save_temp_request
+    from database.ia_filterdb import get_search_results
+    from utils import normalize_series_identity_title, get_filter_button_filename_text, strip_file_prefix_markers
+    from plugins.series import clean_series_title, parse_series_filename
+
+    clean_q = clean_series_title(str(query or "")).strip()
+    if not clean_q:
+        return []
+
+    # 1. Fetch Series matching query from series_col
+    matched_series = await search_series(clean_q)
+
+    # 2. Fetch raw files from ia_filterdb (limit to 60 candidates)
+    raw_files, _, _ = await get_search_results(chat_id, clean_q, max_results=60, offset=0, filter=True)
+
+    # Structure: identity_key -> list of groups
+    # identity_key: (norm_title, year, season)
+    identity_groups = {}
+
+    for sdoc in matched_series:
+        sid = str(sdoc["_id"])
+        s_title = sdoc.get("name") or sdoc.get("title") or "Series"
+        s_year = str(sdoc.get("year", "N/A")).strip()
+        if not s_year:
+            s_year = "N/A"
+        norm_title = normalize_series_identity_title(s_title)
+
+        # Get all distinct seasons in sfiles_col for this series
+        seasons = await sfiles_col.distinct("season", {"series_id": _sid_query(sid)})
+        if not seasons:
+            doc_seasons = sdoc.get("seasons", [1])
+            if isinstance(doc_seasons, int):
+                seasons = list(range(1, doc_seasons + 1))
+            elif isinstance(doc_seasons, list):
+                seasons = doc_seasons
+            else:
+                seasons = [1]
+
+        valid_seasons = sorted(list(set([int(s) for s in seasons if str(s).isdigit() and int(s) > 0])))
+        if not valid_seasons:
+            valid_seasons = [1]
+
+        for season in valid_seasons:
+            id_key = (norm_title, s_year, int(season))
+            if id_key not in identity_groups:
+                identity_groups[id_key] = []
+
+            # Fetch files for this season
+            s_files = await sfiles_col.find({
+                "series_id": _sid_query(sid),
+                "season": season
+            }).to_list(length=500)
+
+            gid = f"ser_{sid}_s{int(season)}"
+            group_entry = {
+                "group_id": gid,
+                "doc_id": sid,
+                "type": "series",
+                "title": s_title,
+                "name": s_title,
+                "year": s_year,
+                "season": int(season),
+                "languages": sdoc.get("languages") or ["Malayalam"],
+                "release_date": sdoc.get("release_date") or sdoc.get("released") or "N/A",
+                "rating": sdoc.get("rating") or "0",
+                "votes": sdoc.get("votes") or sdoc.get("vote_count") or "0",
+                "poster": sdoc.get("poster") or "",
+                "file_ids": [f["file_id"] for f in s_files if "file_id" in f],
+                "files": s_files,
+                "coming_soon": bool(sdoc.get("coming_soon") or sdoc.get("status") == "coming_soon" or not s_files),
+                "is_series": True
+            }
+            identity_groups[id_key].append(group_entry)
+            if not hasattr(temp, "SERIES_GROUPS"):
+                temp.SERIES_GROUPS = {}
+            temp.SERIES_GROUPS[gid] = group_entry
+
+    # Process ia_filterdb files that are series files
+    series_pattern = re.compile(r"(?i)(?:^|[\s._\-\(\[\{])(S\d{1,2}|Season\s*\d{1,2}|E\d{1,4}|Episode\s*\d{1,4})(?:[\s._\-\)\]\}]|$)")
+    unassigned_files = {}
+
+    all_s_file_ids = set()
+    for g_list in identity_groups.values():
+        for g in g_list:
+            all_s_file_ids.update(g.get("file_ids", []))
+
+    for f in (raw_files or []):
+        fid = f.get("file_id")
+        if not fid or fid in all_s_file_ids:
+            continue
+        fname = f.get("file_name", "")
+        if not series_pattern.search(fname):
+            continue
+
+        clean_name = strip_file_prefix_markers(fname)
+        year_m = re.search(r"(?<!\d)(19\d\d|20\d\d)(?!\d)", clean_name)
+        f_year = year_m.group(1) if year_m else "N/A"
+
+        # Season extraction
+        s_match = re.search(r"(?i)\b(?:s|season\s*)(\d{1,2})\b", clean_name)
+        f_season = int(s_match.group(1)) if s_match else 1
+
+        # Title before season/episode
+        short_title = re.split(r"(?i)(?:s\d{1,2}|season\s*\d{1,2})", clean_name)[0].strip(" ._+-")
+        if not short_title:
+            short_title = get_filter_button_filename_text(fname)
+        if f_year != "N/A" and short_title.endswith(f_year):
+            f_title = short_title[:-len(f_year)].strip(" ._+-")
+        else:
+            f_title = short_title
+        if not f_title:
+            f_title = clean_name
+
+        norm_title = normalize_series_identity_title(f_title)
+        id_key = (norm_title, f_year, int(f_season))
+
+        if id_key not in unassigned_files:
+            unassigned_files[id_key] = {"title": f_title, "year": f_year, "season": int(f_season), "files": []}
+        unassigned_files[id_key]["files"].append(f)
+
+    for id_key, data in unassigned_files.items():
+        if id_key not in identity_groups:
+            identity_groups[id_key] = []
+        if not identity_groups[id_key]:
+            import uuid
+            dyn_id = f"dyn_ser_{uuid.uuid4().hex[:10]}"
+            group_entry = {
+                "group_id": dyn_id,
+                "doc_id": dyn_id,
+                "type": "series",
+                "title": data["title"],
+                "name": data["title"],
+                "year": data["year"],
+                "season": int(data["season"]),
+                "languages": ["Malayalam"],
+                "release_date": "N/A",
+                "rating": "0",
+                "votes": "0",
+                "poster": "",
+                "file_ids": [x["file_id"] for x in data["files"]],
+                "files": data["files"],
+                "coming_soon": False,
+                "is_series": True
+            }
+            identity_groups[id_key].append(group_entry)
+            if not hasattr(temp, "SERIES_GROUPS"):
+                temp.SERIES_GROUPS = {}
+            temp.SERIES_GROUPS[dyn_id] = group_entry
+            try:
+                asyncio.create_task(save_temp_request(dyn_id, group_entry))
+            except Exception:
+                pass
+
+    # Generate button labels with v2, v3 suffixes where appropriate
+    final_groups = []
+    for id_key, g_list in identity_groups.items():
+        total_in_group = len(g_list)
+        for idx, g in enumerate(g_list, 1):
+            base_title = g["title"]
+            season_num = int(g.get("season", 1))
+            year_str = f" ({g['year']})" if g["year"] and str(g["year"]).upper() != "N/A" else ""
+            if total_in_group > 1 and idx > 1:
+                v_suffix = f" v{idx}"
+            else:
+                v_suffix = ""
+            g["button_label"] = f"જ⁀➴S{season_num:02d} {base_title}{year_str}{v_suffix}"
+            final_groups.append(g)
+
+    return final_groups
+
+
+def build_movie_group_keyboard(movie_groups: list[dict], page: int = 0, session_id: str = "", bot_username: str = "Bot", series_list: list = None, key: str = "", series_groups: list = None) -> InlineKeyboardMarkup:
+    """
+    Builds unified keyboard for grouped movie and series search results.
+    - Max 5 group buttons per page.
+    - Pagination controls when > 5 group buttons exist.
+    - No 'Send All' button.
+    """
+    all_groups = []
+    if movie_groups:
+        all_groups.extend(movie_groups)
+    if series_groups:
+        all_groups.extend(series_groups)
+
+    page_size = 5
+    total_groups = len(all_groups)
+    total_pages = max(1, math.ceil(total_groups / page_size)) if total_groups > 0 else 1
+    page = max(0, min(page, total_pages - 1))
+
+    start_idx = page * page_size
+    end_idx = start_idx + page_size
+    current_page_groups = all_groups[start_idx:end_idx]
+
+    rows = []
+    for g in current_page_groups:
+        gid = g.get("group_id", "")
+        if g.get("is_series") or g.get("type") == "series":
+            start_url = f"https://t.me/{bot_username}?start=series_{gid}"
+        else:
+            start_url = f"https://t.me/{bot_username}?start=movie_{gid}"
+        rows.append([
+            InlineKeyboardButton(
+                text=g.get("button_label", f"🎬 {g.get('title', 'Content')}"),
+                url=start_url
+            )
+        ])
+
+    if total_pages > 1:
+        pag_row = []
+        if page > 0:
+            pag_row.append(InlineKeyboardButton("⬅ Prev", callback_data=f"mg_page#{session_id}#{page-1}"))
+        pag_row.append(InlineKeyboardButton(f"{page+1}/{total_pages}", callback_data="pages"))
+        if page < total_pages - 1:
+            pag_row.append(InlineKeyboardButton("Next ➜", callback_data=f"mg_page#{session_id}#{page+1}"))
+        rows.append(pag_row)
+
+    return InlineKeyboardMarkup(rows)
+
+
 async def process_unified_filter_search(client: Client, message: Message, query_text: str, reply_msg: Message = None) -> bool:
     """
-    Unified filter search across Super Movies and Series.
-    - If 1 filter matches: opens that filter directly.
-    - If multiple filters match (e.g. Aadu 2015, Aadu 2017, Aadu 3): presents unified suggestion list with buttons.
-    - If 0 match: returns False.
+    Unified grouped filter search for Movies and Series.
+    - Groups movie records/files strictly into movie result buttons.
+    - Groups series records/files strictly into season-based series result buttons.
+    - Displays maximum 5 group buttons per page with pagination.
+    - Deep-links each group to Private Chat details flow.
     """
     q = str(query_text or "").strip()
     if not q:
         return False
 
-    from database.series_db import search_super_movies, search_series, get_series_thumbnail, normalize_movie_search_title
+    from database.series_db import get_series_thumbnail
     from utils import schedule_filter_message_delete
 
+    chat_id = message.chat.id if message and message.chat else (reply_msg.chat.id if reply_msg else 0)
     clean_q = clean_series_title(q)
-    super_movies = await search_super_movies(q)
-    series_list = await search_series(clean_q)
 
-    # Filter out super movies with 0 files (unless marked Coming Soon)
-    valid_movies = [m for m in super_movies if m.get("file_ids") or m.get("coming_soon") or m.get("status") == "coming_soon"]
-    valid_series = series_list
+    movie_groups = await build_grouped_movie_results(q, chat_id=chat_id)
+    series_groups = await build_grouped_series_results(clean_q, chat_id=chat_id)
 
-    total_matches = len(valid_movies) + len(valid_series)
+    total_matches = len(movie_groups) + len(series_groups)
 
     logger.info(
         f"[UNIFIED FILTER SEARCH]\n"
         f"query={q}\n"
-        f"super_movies={len(valid_movies)}\n"
-        f"series={len(valid_series)}\n"
+        f"movie_groups={len(movie_groups)}\n"
+        f"series_groups={len(series_groups)}\n"
         f"total={total_matches}"
     )
 
     if total_matches == 0:
         return False
 
-    # Check if exact year was specified in query
-    has_year = bool(re.search(r"\b(19\d\d|20\d\d)\b", q))
-    if total_matches == 1 or (has_year and not reply_msg and total_matches > 0):
-        if valid_movies:
-            return await render_super_movie_direct(client, message, valid_movies[0], reply_msg)
-        elif valid_series:
-            return await render_series_direct(client, message, valid_series[0], reply_msg)
-
-    # total_matches > 1: Show Unified Suggestion List
     from plugins.pm_filter import BUTTON_OWNERS
     if reply_msg and reply_msg.chat:
-        chat_id = reply_msg.chat.id
+        msg_chat_id = reply_msg.chat.id
         msg_id = reply_msg.id
     elif message and message.chat:
-        chat_id = message.chat.id
+        msg_chat_id = message.chat.id
         msg_id = message.id
     else:
-        chat_id = 0
+        msg_chat_id = 0
         msg_id = 0
-    key = f"{chat_id}-{msg_id}"
+    key = f"{msg_chat_id}-{msg_id}"
 
     real_user_id = None
     if message and message.from_user and not message.from_user.is_bot:
@@ -8214,23 +8428,33 @@ async def process_unified_filter_search(client: Client, message: Message, query_
 
     BUTTON_OWNERS[key] = real_user_id
 
-    rows = []
-    for m in valid_movies:
-        title = m.get("title", "")
-        year = str(m.get("year", "")).strip()
-        year_str = f" ({year})" if year and year != "N/A" else ""
-        btn_text = f"🎬 {title}{year_str}"
-        rows.append([InlineKeyboardButton(btn_text, callback_data=f"sug_mov#{str(m['_id'])}#{key}")])
+    bot_username = temp.U_NAME if (hasattr(temp, "U_NAME") and temp.U_NAME) else getattr(getattr(client, "me", None), "username", "Bot")
+    if bot_username:
+        bot_username = str(bot_username).lstrip("@")
 
-    for s in valid_series:
-        name = s.get("name", "")
-        year = str(s.get("year", "")).strip()
-        year_str = f" ({year})" if year and year != "N/A" else ""
-        btn_text = f"📺 {name}{year_str}"
-        rows.append([InlineKeyboardButton(btn_text, callback_data=f"sug_ser#{str(s['_id'])}#{key}")])
+    import uuid
+    session_id = f"mgs_{uuid.uuid4().hex[:8]}"
+    if not hasattr(temp, "MOVIE_SEARCH_SESSIONS"):
+        temp.MOVIE_SEARCH_SESSIONS = {}
+    temp.MOVIE_SEARCH_SESSIONS[session_id] = {
+        "groups": movie_groups,
+        "series_groups": series_groups,
+        "key": key,
+        "query": q,
+        "chat_id": msg_chat_id,
+        "user_id": real_user_id
+    }
 
-    markup = InlineKeyboardMarkup(rows)
-    caption_text = "<b>Choose the series/movie you want to view</b>"
+    markup = build_movie_group_keyboard(
+        movie_groups=movie_groups,
+        series_groups=series_groups,
+        page=0,
+        session_id=session_id,
+        bot_username=bot_username,
+        key=key
+    )
+
+    caption_text = "<b>Choose the series/movie you want to view:</b>" if (movie_groups and series_groups) else ("<b>Choose the series you want to view:</b>" if series_groups else "<b>Choose the movie you want to view:</b>")
 
     thumb = await get_series_thumbnail()
 
@@ -8267,6 +8491,41 @@ async def process_unified_filter_search(client: Client, message: Message, query_
         schedule_filter_message_delete(client, sent_sug_t.chat.id, sent_sug_t.id, 600)
         BUTTON_OWNERS[f"{sent_sug_t.chat.id}-{sent_sug_t.id}"] = real_user_id
     return True
+
+
+@Client.on_callback_query(filters.regex(r"^mg_page#"), group=-15)
+async def cb_movie_group_page(client: Client, query: CallbackQuery):
+    parts = query.data.split("#")
+    if len(parts) < 3:
+        return await query.answer("⚠️ Invalid page.", show_alert=True)
+    session_id = parts[1]
+    target_page = int(parts[2])
+
+    sess = getattr(temp, "MOVIE_SEARCH_SESSIONS", {}).get(session_id)
+    if not sess:
+        return await query.answer("⚠️ Search session expired. Please search again.", show_alert=True)
+
+    movie_groups = sess.get("groups", [])
+    series_groups = sess.get("series_groups", [])
+    key = sess.get("key", "")
+
+    bot_username = temp.U_NAME if (hasattr(temp, "U_NAME") and temp.U_NAME) else getattr(getattr(client, "me", None), "username", "Bot")
+    if bot_username:
+        bot_username = str(bot_username).lstrip("@")
+
+    markup = build_movie_group_keyboard(
+        movie_groups=movie_groups,
+        series_groups=series_groups,
+        page=target_page,
+        session_id=session_id,
+        bot_username=bot_username,
+        key=key
+    )
+    try:
+        await query.message.edit_reply_markup(reply_markup=markup)
+    except MessageNotModified:
+        pass
+    await query.answer()
 
 
 @Client.on_callback_query(filters.regex(r"^sug_mov#"), group=-15)
@@ -8327,50 +8586,655 @@ async def process_series_search(client: Client, message: Message, query_text: st
 
 async def process_series_deeplink(client: Client, message: Message, series_key: str) -> bool:
     """
-    Handles /start series_{series_id/series_key} deep link in PM.
-    Directly renders the Series filter language selection UI.
+    Handles /start series_{group_id} deep link in PM.
+    - 5-second countdown timer.
+    - Series details message.
+    - 'Get All File' and 'Disclaimer' buttons.
     """
-    from database.series_db import get_series, get_series_by_key, series_col
+    from database.series_db import get_series, get_series_by_key, series_col, get_temp_request
     from bson import ObjectId
 
-    series_doc = await get_series(series_key)
-    if not series_doc:
-        series_doc = await get_series_by_key(series_key)
-    if not series_doc and ObjectId.is_valid(str(series_key).strip()):
-        try:
-            doc = await series_col.find_one({"_id": ObjectId(str(series_key).strip()), "status": {"$ne": "deleted"}})
-            if doc:
-                series_doc = doc
-        except Exception:
-            pass
-    if not series_doc or series_doc.get("status") == "deleted":
+    group_data = getattr(temp, "SERIES_GROUPS", {}).get(series_key)
+    if not group_data:
+        # Check if series_key is formatted like ser_{id}_s{season}
+        raw_key = series_key
+        target_season = 1
+        if str(series_key).startswith("ser_") and "_s" in str(series_key):
+            try:
+                parts = series_key.split("_s")
+                raw_key = parts[0][4:]
+                target_season = int(parts[1])
+            except Exception:
+                raw_key = series_key
+
+        sdoc = await get_series(raw_key)
+        if not sdoc:
+            sdoc = await get_series_by_key(raw_key)
+        if not sdoc and ObjectId.is_valid(str(raw_key).strip()):
+            try:
+                sdoc = await series_col.find_one({"_id": ObjectId(str(raw_key).strip()), "status": {"$ne": "deleted"}})
+            except Exception:
+                pass
+
+        if sdoc:
+            from database.series_db import sfiles_col, _sid_query
+            sid = str(sdoc["_id"])
+            s_files = await sfiles_col.find({
+                "series_id": _sid_query(sid),
+                "season": target_season
+            }).to_list(length=500)
+
+            group_data = {
+                "group_id": series_key,
+                "doc_id": sid,
+                "type": "series",
+                "title": sdoc.get("name") or sdoc.get("title") or "Series",
+                "name": sdoc.get("name") or sdoc.get("title") or "Series",
+                "year": str(sdoc.get("year", "N/A")).strip() or "N/A",
+                "season": target_season,
+                "languages": sdoc.get("languages") or ["Malayalam"],
+                "release_date": sdoc.get("release_date") or sdoc.get("released") or "N/A",
+                "rating": sdoc.get("rating") or "0",
+                "votes": sdoc.get("votes") or sdoc.get("vote_count") or "0",
+                "poster": sdoc.get("poster") or "",
+                "file_ids": [f["file_id"] for f in s_files if "file_id" in f],
+                "files": s_files,
+                "coming_soon": bool(sdoc.get("coming_soon") or sdoc.get("status") == "coming_soon" or not s_files),
+                "is_series": True
+            }
+
+    if not group_data:
+        group_data = await get_temp_request(series_key)
+
+    if not group_data or group_data.get("status") == "deleted":
         await message.reply_text("<b>❌ Requested series filter was not found or has been removed.</b>")
         return False
-    u_id = message.from_user.id if message.from_user else (message.chat.id if message.chat else 0)
-    return await render_series_direct(client, message, series_doc, reply_msg=None, user_id=u_id)
+
+    # 1. 5-Second Countdown Timer Loading Message
+    loading_msg = await message.reply_text("get details & files.. timer 5 second")
+    for sec in [4, 3, 2, 1, 0]:
+        await asyncio.sleep(1)
+        try:
+            await loading_msg.edit_text(f"get details & files.. timer {sec} second")
+        except Exception:
+            pass
+    try:
+        await loading_msg.delete()
+    except Exception:
+        pass
+
+    # 2. Series Details Message
+    series_name = group_data.get("name") or group_data.get("title") or "Series"
+    raw_year = group_data.get("year", "N/A")
+    year_str = str(raw_year).strip() if raw_year and str(raw_year).upper() != "N/A" else "N/A"
+
+    langs = group_data.get("languages") or ["Malayalam"]
+    if isinstance(langs, list):
+        lang_str = ", ".join([str(l).strip() for l in langs if l]) or "Malayalam"
+    else:
+        lang_str = str(langs or "Malayalam").strip()
+
+    raw_rel = group_data.get("release_date") or group_data.get("released") or "N/A"
+    rel_str = str(raw_rel).strip() if raw_rel and str(raw_rel).upper() != "N/A" else "N/A"
+
+    raw_rating = str(group_data.get("rating") or "0").strip()
+    if raw_rating in ("", "None", "N/A", "0.0"):
+        raw_rating = "0"
+    raw_votes = str(group_data.get("votes") or group_data.get("vote_count") or "0").strip()
+    if raw_votes in ("", "None", "N/A"):
+        raw_votes = "0"
+
+    details_caption = (
+        f"<i>\n"
+        f"☁︎ File Name: {html.escape(series_name)}\n"
+        f"☁︎ Year: {html.escape(year_str)}\n"
+        f"☁︎ Languages: {html.escape(lang_str)}\n"
+        f"☁︎ Release Date: {html.escape(rel_str)}\n"
+        f"☁︎ Rating: {html.escape(raw_rating)}/10 ({html.escape(raw_votes)} votes)\n\n"
+        f"</i>"
+    )
+
+    is_cs = bool(group_data.get("coming_soon") or group_data.get("status") == "coming_soon" or not group_data.get("file_ids"))
+
+    if is_cs:
+        buttons = [
+            [InlineKeyboardButton("⏳ Coming Soon!", callback_data="serg_cs")],
+            [InlineKeyboardButton("⚠ Disclaimer", callback_data="serg_disc")]
+        ]
+    else:
+        buttons = [
+            [InlineKeyboardButton("⌯⌲ Get All File", callback_data=f"serg_getall#{series_key}")],
+            [InlineKeyboardButton("⚠ Disclaimer", callback_data="serg_disc")]
+        ]
+
+    markup = InlineKeyboardMarkup(buttons)
+    poster = group_data.get("poster")
+    from utils import get_random_filter_poster
+    if not poster:
+        poster = get_random_filter_poster(group_data)
+
+    if poster and str(poster).strip() and str(poster).strip().upper() != "N/A" and str(poster).startswith("http"):
+        try:
+            await message.reply_photo(
+                photo=poster,
+                caption=details_caption,
+                reply_markup=markup,
+                parse_mode=enums.ParseMode.HTML
+            )
+            return True
+        except Exception as pe:
+            logger.warning(f"[SERIES DETAILS POSTER SEND ERROR] {pe}")
+
+    await message.reply_text(
+        text=details_caption,
+        reply_markup=markup,
+        parse_mode=enums.ParseMode.HTML
+    )
+    return True
+
+
+@Client.on_callback_query(filters.regex(r"^serg_disc"), group=-15)
+async def cb_serg_disclaimer(client: Client, query: CallbackQuery):
+    await query.answer(
+        "Since these files and details are generated automatically, there is a possibility of errors.",
+        show_alert=True
+    )
+
+
+@Client.on_callback_query(filters.regex(r"^serg_cs"), group=-15)
+async def cb_serg_coming_soon(client: Client, query: CallbackQuery):
+    await query.answer("File only get after OTT release", show_alert=True)
+
+
+@Client.on_callback_query(filters.regex(r"^serg_getall#"), group=-15)
+async def cb_serg_get_all_file(client: Client, query: CallbackQuery):
+    parts = query.data.split("#")
+    if len(parts) < 2:
+        return await query.answer("⚠️ Invalid request.", show_alert=True)
+    group_id = parts[1]
+    user_id = query.from_user.id
+
+    if not hasattr(temp, "ACTIVE_SERIES_DELIVERIES"):
+        temp.ACTIVE_SERIES_DELIVERIES = set()
+
+    if user_id in temp.ACTIVE_SERIES_DELIVERIES:
+        return await query.answer("File delivery is already in progress!", show_alert=True)
+
+    temp.ACTIVE_SERIES_DELIVERIES.add(user_id)
+    await query.answer()
+
+    import time, uuid
+    session_id = f"sdel_{user_id}_{uuid.uuid4().hex[:6]}"
+    if not hasattr(temp, "SERIES_DELIVERY_SESSIONS"):
+        temp.SERIES_DELIVERY_SESSIONS = {}
+
+    temp.SERIES_DELIVERY_SESSIONS[session_id] = {
+        "cancelled": False,
+        "user_id": user_id,
+        "group_id": group_id
+    }
+
+    stop_btn = InlineKeyboardButton("🛑 Stop Files", callback_data=f"serg_stop#{session_id}")
+    try:
+        import inspect
+        if "style" in inspect.signature(InlineKeyboardButton.__init__).parameters:
+            stop_btn = InlineKeyboardButton("🛑 Stop Files", callback_data=f"serg_stop#{session_id}", style="danger")
+    except Exception:
+        pass
+
+    ctrl_text = (
+        "<i>Click the stop button shown below to stop incoming files.\n\n"
+        "വരുന്ന ഫിലെസ് നിർത്താനായി താഴെ കാണുന്ന സ്റ്റോപ്പ് ബട്ടൺ ക്ലിക്ക് ചെയ്യുക.</i>"
+    )
+    ctrl_msg = await query.message.reply_text(
+        text=ctrl_text,
+        reply_markup=InlineKeyboardMarkup([[stop_btn]]),
+        parse_mode=enums.ParseMode.HTML
+    )
+
+    temp.SERIES_DELIVERY_SESSIONS[session_id]["ctrl_msg_id"] = ctrl_msg.id
+    temp.SERIES_DELIVERY_SESSIONS[session_id]["chat_id"] = ctrl_msg.chat.id
+
+    asyncio.create_task(
+        execute_series_group_file_delivery(
+            client=client,
+            user_id=user_id,
+            group_id=group_id,
+            session_id=session_id,
+            ctrl_msg=ctrl_msg
+        )
+    )
+
+
+@Client.on_callback_query(filters.regex(r"^serg_stop#"), group=-15)
+async def cb_serg_stop_files(client: Client, query: CallbackQuery):
+    parts = query.data.split("#")
+    if len(parts) < 2:
+        return await query.answer()
+    session_id = parts[1]
+    user_id = query.from_user.id
+
+    sess = getattr(temp, "SERIES_DELIVERY_SESSIONS", {}).get(session_id)
+    if sess:
+        sess["cancelled"] = True
+
+    getattr(temp, "ACTIVE_SERIES_DELIVERIES", set()).discard(user_id)
+    await query.answer("🛑 Stopping file delivery...", show_alert=False)
+
+    try:
+        await query.message.edit_text(
+            text="<i>🛑 File delivery stopped.\n\nഫയൽ അയക്കുന്നത് നിർത്തിയിരിക്കുന്നു.</i>",
+            reply_markup=None,
+            parse_mode=enums.ParseMode.HTML
+        )
+    except Exception:
+        pass
+
+
+async def execute_series_group_file_delivery(client: Client, user_id: int, group_id: str, session_id: str, ctrl_msg: Message):
+    """
+    Delivers all episode files belonging to the selected Series season group sequentially with custom formatted captions.
+    Sorts episodes numerically (S01E01, S01E02, ...).
+    Stops immediately if user clicks the Stop Files button.
+    """
+    try:
+        bot_username = temp.U_NAME if (hasattr(temp, "U_NAME") and temp.U_NAME) else getattr(getattr(client, "me", None), "username", "Bot")
+        if bot_username:
+            bot_username = str(bot_username).lstrip("@")
+
+        group_data = getattr(temp, "SERIES_GROUPS", {}).get(group_id)
+        if not group_data:
+            from database.series_db import get_temp_request
+            group_data = await get_temp_request(group_id)
+
+        if not group_data:
+            await ctrl_msg.reply_text("❌ Series files not found or expired.")
+            return
+
+        files = group_data.get("files", [])
+        if not files and group_data.get("file_ids"):
+            from database.ia_filterdb import get_bulk_file_details
+            fmap = await get_bulk_file_details(group_data["file_ids"])
+            files = [fmap[fid] for fid in group_data["file_ids"] if fid in fmap]
+
+        if not files and group_data.get("doc_id"):
+            from database.series_db import sfiles_col, _sid_query
+            sid = group_data["doc_id"]
+            season = group_data.get("season", 1)
+            files = await sfiles_col.find({
+                "series_id": _sid_query(sid),
+                "season": season
+            }).to_list(length=500)
+
+        total_files = len(files)
+        if total_files == 0:
+            await ctrl_msg.reply_text("❌ No files available in this series group.")
+            return
+
+        # Sort files strictly numerically by episode number
+        def _get_ep_sort_key(f):
+            if isinstance(f, dict):
+                ep_val = f.get("episode")
+                if ep_val is not None:
+                    try:
+                        return (int(ep_val), 0)
+                    except Exception:
+                        pass
+                fname = f.get("file_name", "")
+                from plugins.series import _extract_episode_number
+                ep_num = _extract_episode_number(fname)
+                if ep_num is not None:
+                    return (int(ep_num), 0)
+            return (9999, str(f))
+
+        sorted_files = sorted(files, key=_get_ep_sort_key)
+        from utils import get_size
+
+        for idx, f in enumerate(sorted_files, 1):
+            sess = getattr(temp, "SERIES_DELIVERY_SESSIONS", {}).get(session_id, {})
+            if sess.get("cancelled"):
+                break
+
+            fname = f.get("file_name", "Series Episode")
+            fsize = f.get("file_size", 0)
+            fsize_str = get_size(fsize)
+
+            caption = (
+                f"<i>\n"
+                f"𖡡 File Name: {html.escape(str(fname))}\n"
+                f"𖡡 File Size: {html.escape(str(fsize_str))}\n"
+                f"𖡡 Total File: {idx}/{total_files}\n\n"
+                f"@{html.escape(str(bot_username))}\n"
+                f"</i>"
+            )
+
+            fid = f.get("file_id")
+            if fid:
+                try:
+                    await client.send_cached_media(
+                        chat_id=user_id,
+                        file_id=fid,
+                        caption=caption,
+                        parse_mode=enums.ParseMode.HTML
+                    )
+                except Exception as e:
+                    logger.error(f"[SERIES FILE DELIVERY ERROR] file_id={fid}: {e}")
+
+            await asyncio.sleep(0.6)
+
+            if sess.get("cancelled"):
+                break
+
+        sess = getattr(temp, "SERIES_DELIVERY_SESSIONS", {}).get(session_id, {})
+        if not sess.get("cancelled"):
+            try:
+                await ctrl_msg.edit_text(
+                    text="<i>✅ All episodes have been successfully sent!</i>",
+                    reply_markup=None,
+                    parse_mode=enums.ParseMode.HTML
+                )
+            except Exception:
+                pass
+
+    finally:
+        getattr(temp, "ACTIVE_SERIES_DELIVERIES", set()).discard(user_id)
+        if hasattr(temp, "SERIES_DELIVERY_SESSIONS"):
+            temp.SERIES_DELIVERY_SESSIONS.pop(session_id, None)
 
 
 async def process_movie_deeplink(client: Client, message: Message, movie_key: str) -> bool:
     """
-    Handles /start movie_{movie_id} deep link in PM.
-    Directly renders the Super Movie filter language selection UI.
+    Handles /start movie_{group_id} deep link in PM.
+    - 5-second countdown timer.
+    - Movie details message.
+    - 'Get All File' and 'Disclaimer' buttons.
     """
-    from database.series_db import get_super_movie, super_movies_col
+    from database.series_db import get_super_movie, super_movies_col, get_temp_request
     from bson import ObjectId
 
-    movie_doc = await get_super_movie(movie_key)
-    if not movie_doc and ObjectId.is_valid(str(movie_key).strip()):
+    group_data = getattr(temp, "MOVIE_GROUPS", {}).get(movie_key)
+    if not group_data:
+        group_data = await get_super_movie(movie_key)
+    if not group_data and ObjectId.is_valid(str(movie_key).strip()):
         try:
             doc = await super_movies_col.find_one({"_id": ObjectId(str(movie_key).strip()), "status": {"$ne": "deleted"}})
             if doc:
-                movie_doc = doc
+                group_data = doc
         except Exception:
             pass
-    if not movie_doc or movie_doc.get("status") == "deleted":
+    if not group_data:
+        group_data = await get_temp_request(movie_key)
+
+    if not group_data or group_data.get("status") == "deleted":
         await message.reply_text("<b>❌ Requested movie filter was not found or has been removed.</b>")
         return False
-    u_id = message.from_user.id if message.from_user else (message.chat.id if message.chat else 0)
-    return await render_super_movie_direct(client, message, movie_doc, reply_msg=None, user_id=u_id)
+
+    # 1. 5-Second Countdown Timer Loading Message
+    loading_msg = await message.reply_text("get details & files.. timer 5 second")
+    for sec in [4, 3, 2, 1, 0]:
+        await asyncio.sleep(1)
+        try:
+            await loading_msg.edit_text(f"get details & files.. timer {sec} second")
+        except Exception:
+            pass
+    try:
+        await loading_msg.delete()
+    except Exception:
+        pass
+
+    # 2. Movie Details Message
+    movie_name = group_data.get("title") or group_data.get("name") or "Movie"
+    raw_year = group_data.get("year", "N/A")
+    year_str = str(raw_year).strip() if raw_year and str(raw_year).upper() != "N/A" else "N/A"
+
+    langs = group_data.get("languages") or ["Malayalam"]
+    if isinstance(langs, list):
+        lang_str = ", ".join([str(l).strip() for l in langs if l]) or "Malayalam"
+    else:
+        lang_str = str(langs or "Malayalam").strip()
+
+    raw_rel = group_data.get("release_date") or group_data.get("released") or "N/A"
+    rel_str = str(raw_rel).strip() if raw_rel and str(raw_rel).upper() != "N/A" else "N/A"
+
+    raw_rating = str(group_data.get("rating") or "0").strip()
+    if raw_rating in ("", "None", "N/A", "0.0"):
+        raw_rating = "0"
+    raw_votes = str(group_data.get("votes") or group_data.get("vote_count") or "0").strip()
+    if raw_votes in ("", "None", "N/A"):
+        raw_votes = "0"
+
+    details_caption = (
+        f"<i>\n"
+        f"☁︎ File Name: {html.escape(movie_name)}\n"
+        f"☁︎ Year: {html.escape(year_str)}\n"
+        f"☁︎ Languages: {html.escape(lang_str)}\n"
+        f"☁︎ Release Date: {html.escape(rel_str)}\n"
+        f"☁︎ Rating: {html.escape(raw_rating)}/10 ({html.escape(raw_votes)} votes)\n\n"
+        f"🗣 Click below button get all files....\n"
+        f"</i>"
+    )
+
+    is_cs = bool(group_data.get("coming_soon") or group_data.get("status") == "coming_soon" or not group_data.get("file_ids"))
+
+    if is_cs:
+        buttons = [
+            [InlineKeyboardButton("⏳ Coming Soon!", callback_data="mg_cs")],
+            [InlineKeyboardButton("⚠ Disclaimer", callback_data="mg_disc")]
+        ]
+    else:
+        buttons = [
+            [InlineKeyboardButton("⌯⌲ Get All File", callback_data=f"mg_getall#{movie_key}")],
+            [InlineKeyboardButton("⚠ Disclaimer", callback_data="mg_disc")]
+        ]
+
+    markup = InlineKeyboardMarkup(buttons)
+    poster = group_data.get("poster")
+    from utils import get_random_filter_poster
+    if not poster:
+        poster = get_random_filter_poster(group_data)
+
+    if poster and str(poster).strip() and str(poster).strip().upper() != "N/A" and str(poster).startswith("http"):
+        try:
+            await message.reply_photo(
+                photo=poster,
+                caption=details_caption,
+                reply_markup=markup,
+                parse_mode=enums.ParseMode.HTML
+            )
+            return True
+        except Exception as pe:
+            logger.warning(f"[MOVIE DETAILS POSTER SEND ERROR] {pe}")
+
+    await message.reply_text(
+        text=details_caption,
+        reply_markup=markup,
+        parse_mode=enums.ParseMode.HTML
+    )
+    return True
+
+
+@Client.on_callback_query(filters.regex(r"^mg_disc"), group=-15)
+async def cb_mg_disclaimer(client: Client, query: CallbackQuery):
+    await query.answer(
+        "Since these files and details are generated automatically, there is a possibility of errors.",
+        show_alert=True
+    )
+
+
+@Client.on_callback_query(filters.regex(r"^mg_cs"), group=-15)
+async def cb_mg_coming_soon(client: Client, query: CallbackQuery):
+    await query.answer("File only get after OTT release", show_alert=True)
+
+
+@Client.on_callback_query(filters.regex(r"^mg_getall#"), group=-15)
+async def cb_mg_get_all_file(client: Client, query: CallbackQuery):
+    parts = query.data.split("#")
+    if len(parts) < 2:
+        return await query.answer("⚠️ Invalid request.", show_alert=True)
+    group_id = parts[1]
+    user_id = query.from_user.id
+
+    if not hasattr(temp, "ACTIVE_MOVIE_DELIVERIES"):
+        temp.ACTIVE_MOVIE_DELIVERIES = set()
+
+    if user_id in temp.ACTIVE_MOVIE_DELIVERIES:
+        return await query.answer("File delivery is already in progress!", show_alert=True)
+
+    temp.ACTIVE_MOVIE_DELIVERIES.add(user_id)
+    await query.answer()
+
+    import time, uuid
+    session_id = f"mgdel_{user_id}_{uuid.uuid4().hex[:6]}"
+    if not hasattr(temp, "MOVIE_DELIVERY_SESSIONS"):
+        temp.MOVIE_DELIVERY_SESSIONS = {}
+
+    temp.MOVIE_DELIVERY_SESSIONS[session_id] = {
+        "cancelled": False,
+        "user_id": user_id,
+        "group_id": group_id
+    }
+
+    stop_btn = InlineKeyboardButton("🛑 Stop Files", callback_data=f"mg_stop#{session_id}")
+    try:
+        import inspect
+        if "style" in inspect.signature(InlineKeyboardButton.__init__).parameters:
+            stop_btn = InlineKeyboardButton("🛑 Stop Files", callback_data=f"mg_stop#{session_id}", style="danger")
+    except Exception:
+        pass
+
+    ctrl_text = (
+        "<i>Click the stop button shown below to stop incoming files.\n\n"
+        "വരുന്ന ഫിലെസ് നിർത്താനായി താഴെ കാണുന്ന സ്റ്റോപ്പ് ബട്ടൺ ക്ലിക്ക് ചെയ്യുക.</i>"
+    )
+    ctrl_msg = await query.message.reply_text(
+        text=ctrl_text,
+        reply_markup=InlineKeyboardMarkup([[stop_btn]]),
+        parse_mode=enums.ParseMode.HTML
+    )
+
+    temp.MOVIE_DELIVERY_SESSIONS[session_id]["ctrl_msg_id"] = ctrl_msg.id
+    temp.MOVIE_DELIVERY_SESSIONS[session_id]["chat_id"] = ctrl_msg.chat.id
+
+    asyncio.create_task(
+        execute_movie_group_file_delivery(
+            client=client,
+            user_id=user_id,
+            group_id=group_id,
+            session_id=session_id,
+            ctrl_msg=ctrl_msg
+        )
+    )
+
+
+@Client.on_callback_query(filters.regex(r"^mg_stop#"), group=-15)
+async def cb_mg_stop_files(client: Client, query: CallbackQuery):
+    parts = query.data.split("#")
+    if len(parts) < 2:
+        return await query.answer()
+    session_id = parts[1]
+    user_id = query.from_user.id
+
+    sess = getattr(temp, "MOVIE_DELIVERY_SESSIONS", {}).get(session_id)
+    if sess:
+        sess["cancelled"] = True
+
+    getattr(temp, "ACTIVE_MOVIE_DELIVERIES", set()).discard(user_id)
+    await query.answer("🛑 Stopping file delivery...", show_alert=False)
+
+    try:
+        await query.message.edit_text(
+            text="<i>🛑 File delivery stopped.\n\nഫയൽ അയക്കുന്നത് നിർത്തിയിരിക്കുന്നു.</i>",
+            reply_markup=None,
+            parse_mode=enums.ParseMode.HTML
+        )
+    except Exception:
+        pass
+
+
+async def execute_movie_group_file_delivery(client: Client, user_id: int, group_id: str, session_id: str, ctrl_msg: Message):
+    """
+    Delivers each file in the selected movie group sequentially with custom formatted captions.
+    Stops immediately if user clicks the Stop Files button.
+    """
+    try:
+        bot_username = temp.U_NAME if (hasattr(temp, "U_NAME") and temp.U_NAME) else getattr(getattr(client, "me", None), "username", "Bot")
+        if bot_username:
+            bot_username = str(bot_username).lstrip("@")
+
+        group_data = getattr(temp, "MOVIE_GROUPS", {}).get(group_id)
+        if not group_data:
+            from database.series_db import get_super_movie, get_temp_request
+            group_data = await get_super_movie(group_id)
+            if not group_data:
+                group_data = await get_temp_request(group_id)
+
+        if not group_data:
+            await ctrl_msg.reply_text("❌ Movie files not found or expired.")
+            return
+
+        files = group_data.get("files", [])
+        if not files and group_data.get("file_ids"):
+            from database.ia_filterdb import get_bulk_file_details
+            fmap = await get_bulk_file_details(group_data["file_ids"])
+            files = [fmap[fid] for fid in group_data["file_ids"] if fid in fmap]
+
+        total_files = len(files)
+        if total_files == 0:
+            await ctrl_msg.reply_text("❌ No files available in this group.")
+            return
+
+        from utils import get_size
+
+        for idx, f in enumerate(files, 1):
+            sess = getattr(temp, "MOVIE_DELIVERY_SESSIONS", {}).get(session_id, {})
+            if sess.get("cancelled"):
+                break
+
+            fname = f.get("file_name", "Movie File")
+            fsize = f.get("file_size", 0)
+            fsize_str = get_size(fsize)
+
+            caption = (
+                f"<i>\n"
+                f"𖡡 File Name: {html.escape(str(fname))}\n"
+                f"𖡡 File Size: {html.escape(str(fsize_str))}\n"
+                f"𖡡 Total File: {idx}/{total_files}\n\n"
+                f"@{html.escape(str(bot_username))}\n"
+                f"</i>"
+            )
+
+            fid = f.get("file_id")
+            if fid:
+                try:
+                    await client.send_cached_media(
+                        chat_id=user_id,
+                        file_id=fid,
+                        caption=caption,
+                        parse_mode=enums.ParseMode.HTML
+                    )
+                except Exception as e:
+                    logger.error(f"[MOVIE FILE DELIVERY ERROR] file_id={fid}: {e}")
+
+            await asyncio.sleep(0.6)
+
+            if sess.get("cancelled"):
+                break
+
+        sess = getattr(temp, "MOVIE_DELIVERY_SESSIONS", {}).get(session_id, {})
+        if not sess.get("cancelled"):
+            try:
+                await ctrl_msg.edit_text(
+                    text="<i>✅ All files have been successfully sent!</i>",
+                    reply_markup=None,
+                    parse_mode=enums.ParseMode.HTML
+                )
+            except Exception:
+                pass
+
+    finally:
+        getattr(temp, "ACTIVE_MOVIE_DELIVERIES", set()).discard(user_id)
+        if hasattr(temp, "MOVIE_DELIVERY_SESSIONS"):
+            temp.MOVIE_DELIVERY_SESSIONS.pop(session_id, None)
 
 
 # ─── SERIES FILTER NAVIGATION CALLBACKS (Language -> Season (if multiple) -> Quality -> Delivery) ───
