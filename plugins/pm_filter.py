@@ -3869,18 +3869,19 @@ async def auto_filter(client, name, msg, reply_msg=None, ai_search=True, spoll=F
             search = re.sub(r"(?i)\b(pl(i|e)*?(s|z+|ease|se|ese|(e+)s(e)?)|((send|snd|giv(e)?|gib)(\sme)?)|movie(s)?|new|latest|bro|bruh|broh|helo|that|find|dubbed|link|venum|iruka|pannunga|pannungga|anuppunga|anupunga|anuppungga|anupungga|film|undo|kitti|kitty|tharu|kittumo|kittum|movie|any(one)|with\ssubtitle(s)?|upload|full|print|file)\b", " ", search)
             search = re.sub(r"\s+", " ", search).strip()
 
-            # -- 1. Check Unified Movie & Series Filter Search --
+            # -- 1. Check Unified Movie & Series Filter Search (SUPER FILTERS ONLY) --
             try:
                 from plugins.series import process_unified_filter_search
                 is_handled = await process_unified_filter_search(client, message, search if search else name, reply_msg)
                 if is_handled:
+                    logger.info(f"[SUPER FILTER ROUTE] query={search if search else name} handled=True")
                     return
             except Exception as e:
-                logger.error(f"[UNIFIED FILTER SEARCH ROUTING ERROR] {e}")
+                logger.error(f"[SUPER FILTER SEARCH ROUTING ERROR] query={search if search else name} error={e}")
 
-            # -- 3. Normal Movie Filter (ia_filterdb) --
-            page_limit = int(MAX_B_TN) if MAX_B_TN else 5
-            files, offset, total_results = await get_search_results(message.chat.id, search, max_results=page_limit, offset=0, filter=True)
+            # -- 2. Normal / Legacy Filter (ia_filterdb) --
+            logger.info(f"[NORMAL FILTER ROUTE] query={search} chat_id={message.chat.id}")
+            files, offset, total_results = await get_search_results(message.chat.id, search, max_results=100, offset=0, filter=True)
             logger.info(
                 f"[FILE SEARCH]\n"
                 f"query={search}\n"
@@ -3890,7 +3891,7 @@ async def auto_filter(client, name, msg, reply_msg=None, ai_search=True, spoll=F
 
             if not files:
                 logger.info(f"[SEARCH ROUTE] type=no_result query={search}")
-                # -- 4. Route to Spell Check / Suggestions --
+                # -- 3. Route to Spell Check / Suggestions --
                 if settings.get("spell_check", True):
                     return await advantage_spell_chok(client, search if search else name, message, reply_msg, True)
 
@@ -3911,6 +3912,8 @@ async def auto_filter(client, name, msg, reply_msg=None, ai_search=True, spoll=F
                 if message and getattr(message, "chat", None):
                     schedule_filter_message_delete(client, message.chat.id, message.id, delay=50)
                 return
+
+            return await render_normal_grouped_results(client, message, search, files, reply_msg=reply_msg, page=0)
         else:
             return
     else:
@@ -3922,138 +3925,531 @@ async def auto_filter(client, name, msg, reply_msg=None, ai_search=True, spoll=F
         settings = await get_settings(message.chat.id)
         try:
             await msg.message.delete()
-        except:
+        except Exception:
             pass
         try:
             from plugins.series import process_unified_filter_search
             is_handled = await process_unified_filter_search(client, message, search)
             if is_handled:
+                logger.info(f"[SUPER FILTER ROUTE - SPOLL] query={search} handled=True")
                 return
         except Exception as e:
-            logger.error(f"[SPOLL UNIFIED FILTER SEARCH ERROR] {e}")
-    pre = 'filep' if settings['file_secure'] else 'file'
-    key = f"{message.chat.id}-{message.id}"
-    req = msg.from_user.id if (hasattr(msg, 'from_user') and msg.from_user) else (message.from_user.id if (message and message.from_user) else 0)
-    if not req and message.chat.type == enums.ChatType.PRIVATE:
-        req = message.chat.id
-    BUTTON_OWNERS[key] = req
-    FRESH[key] = search
-    BUTTONS[key] = search
-    temp.GETALL[key] = files
-    if req:
-        temp.SHORT[req] = message.chat.id
+            logger.error(f"[SPOLL SUPER FILTER SEARCH ERROR] query={search} error={e}")
 
-    btn = [
-        [
-            InlineKeyboardButton(
-                text=get_series_filter_button_text(filevj['file_name'], filevj['file_size']),
-                callback_data=f"{pre}#{filevj['file_id']}"
-            ),
-        ]
-        for filevj in files
-    ]
-    btn.insert(0, [
-        InlineKeyboardButton("🔹 𝐒𝐞𝐧𝐝 𝐀𝐥𝐥 🔹", callback_data=f"sendfiles#{key}")
-    ])
-    if offset != "":
-        req_id = message.from_user.id if (hasattr(message, "from_user") and message.from_user) else 0
-        btn.append(
-            [InlineKeyboardButton("𝐏𝐀𝐆𝐄", callback_data="pages"), InlineKeyboardButton(text=f"1/{math.ceil(int(total_results)/int(MAX_B_TN))}", callback_data="pages"), InlineKeyboardButton(text="𝐍𝐄𝐗𝐓 ➪", callback_data=f"next_{req_id}_{key}_{offset}")]
-        )
-    else:
-        btn.append(
-            [InlineKeyboardButton(text="𝐍𝐎 𝐌𝐎𝐑𝐄 𝐏𝐀𝐆𝐄𝐒 𝐀𝐕𝐀𝐈𝐋𝐀𝐁𝐋𝐄", callback_data="pages")]
-        )
-
-    imdb = None
-    if settings.get("imdb", True):
-        try:
-            first_fname = (files[0]).get('file_name') if files else None
-            imdb = await get_poster(search, file=first_fname)
-        except Exception as ie:
-            logger.warning(f"[MOVIE FILTER IMDb fetch failed for '{search}']: {ie}")
-            imdb = None
-
-    cur_time = datetime.now(pytz.timezone('Asia/Kolkata')).time()
-    time_difference = timedelta(hours=cur_time.hour, minutes=cur_time.minute, seconds=(cur_time.second+(cur_time.microsecond/1000000))) - timedelta(hours=curr_time.hour, minutes=curr_time.minute, seconds=(curr_time.second+(curr_time.microsecond/1000000)))
-    remaining_seconds = "{:.2f}".format(time_difference.total_seconds())
-
-    TEMPLATE = script.IMDB_TEMPLATE_TXT
-    if imdb:
-        try:
-            cap = TEMPLATE.format(
-                qurey=search,
-                title=imdb.get('title', search),
-                votes=imdb.get('votes', ''),
-                aka=imdb.get("aka", ''),
-                seasons=imdb.get("seasons", ''),
-                box_office=imdb.get('box_office', ''),
-                localized_title=imdb.get('localized_title', ''),
-                kind=imdb.get('kind', ''),
-                imdb_id=imdb.get("imdb_id", ''),
-                cast=imdb.get("cast", ''),
-                runtime=imdb.get("runtime", ''),
-                countries=imdb.get("countries", ''),
-                certificates=imdb.get("certificates", ''),
-                languages=imdb.get("languages", ''),
-                director=imdb.get("director", ''),
-                writer=imdb.get("writer", ''),
-                producer=imdb.get("producer", ''),
-                composer=imdb.get("composer", ''),
-                cinematographer=imdb.get("cinematographer", ''),
-                music_team=imdb.get("music_team", ''),
-                distributors=imdb.get("distributors", ''),
-                release_date=imdb.get('release_date', ''),
-                year=imdb.get('year', ''),
-                genres=imdb.get('genres', ''),
-                poster=imdb.get('poster', ''),
-                plot=imdb.get('plot', ''),
-                rating=imdb.get('rating', ''),
-                url=imdb.get('url', ''),
-                **locals()
-            )
-            if hasattr(message, "from_user") and message.from_user:
-                temp.IMDB_CAP[message.from_user.id] = cap
-        except Exception:
-            cap = f"<b>🎬 {search.title()}\n\n📁 Select File to Download:</b>"
-    else:
-        cap = f"<b>Tʜᴇ Rᴇꜱᴜʟᴛꜱ Fᴏʀ ☞ {search}\n\nRᴇǫᴜᴇsᴛᴇᴅ Bʏ ☞ {message.from_user.mention if (hasattr(message, 'from_user') and message.from_user) else 'User'}\n\nʀᴇsᴜʟᴛ sʜᴏᴡ ɪɴ ☞ {remaining_seconds} sᴇᴄᴏɴᴅs\n\nᴘᴏᴡᴇʀᴇᴅ ʙʏ ☞ : {message.chat.title if message.chat else ''} \n\n⚠️ ᴀꜰᴛᴇʀ 5 ʜᴏᴜʀꜱ ᴛʜɪꜱ ᴍᴇꜱꜱᴀɢᴇ ᴡɪʟʟ ʙᴇ ᴀᴜᴛᴏᴍᴀᴛɪᴄᴀʟʟʏ ᴅᴇʟᴇᴛᴇᴅ 🗑️\n\n</b>"
-
-    reply_markup = InlineKeyboardMarkup(btn)
-    sent_res = None
-    if imdb and imdb.get('poster'):
-        try:
-            sent_res = await safe_reply_photo(message, photo=imdb.get('poster'), caption=cap, reply_markup=reply_markup)
-            if reply_msg:
-                await safe_delete_message(client, reply_msg.chat.id, reply_msg.id)
-        except (MediaEmpty, PhotoInvalidDimensions, WebpageMediaEmpty):
-            poster_alt = (imdb.get('poster') or '').replace('.jpg', "._V1_UX360.jpg")
-            try:
-                sent_res = await safe_reply_photo(message, photo=poster_alt, caption=cap, reply_markup=reply_markup)
-                if reply_msg:
-                    await safe_delete_message(client, reply_msg.chat.id, reply_msg.id)
-            except Exception:
-                sent_res = None
-        except Exception as e:
-            logger.warning(f"[AUTO FILTER PHOTO SEND FALLBACK] {e}")
-            sent_res = None
-
-        if not sent_res:
-            if reply_msg:
-                sent_res = await safe_edit_text(reply_msg, text=cap, reply_markup=reply_markup)
-            else:
-                sent_res = await safe_reply_text(message, text=cap, reply_markup=reply_markup)
-    else:
-        if reply_msg:
-            sent_res = await safe_edit_text(reply_msg, text=cap, reply_markup=reply_markup, disable_web_page_preview=True)
+        files, offset, total_results = await get_search_results(message.chat.id, search, max_results=100, offset=0, filter=True)
+        if files:
+            return await render_normal_grouped_results(client, message, search, files, reply_msg=None, page=0)
         else:
-            sent_res = await safe_reply_text(message, text=cap, reply_markup=reply_markup, disable_web_page_preview=True)
+            return
 
-    if settings.get('auto_delete', True):
-        if sent_res and getattr(sent_res, "chat", None):
-            schedule_filter_message_delete(client, sent_res.chat.id, sent_res.id, delay=18000)
-        if message and getattr(message, "chat", None):
-            schedule_filter_message_delete(client, message.chat.id, message.id, delay=18000)
+
+def build_normal_filter_groups(files: list[dict]) -> list[dict]:
+    """
+    Groups raw normal/legacy files into Movie groups and Series season groups.
+    Assigns:
+    - Normal Movie: 'ജ⁀➴ {Title} ({Year})' (with v2, v3 suffixes for separate filter groups)
+    - Normal Series: 'જ⁀➴S01 {Title} ({Year})' (with v2, v3 suffixes for separate filter groups)
+    """
+    from utils import normalize_series_identity_title, get_filter_button_filename_text, strip_file_prefix_markers
+
+    series_pattern = re.compile(r"(?i)(?:^|[\s._\-\(\[\{])(S\d{1,2}(?:E\d{1,4})?|Season\s*\d{1,2}|E\d{1,4}|Episode\s*\d{1,4})(?:[\s._\-\)\]\}]|$)")
+    
+    identity_map = {}
+
+    for f in files:
+        fname = f.get("file_name", "")
+        clean_name = strip_file_prefix_markers(fname)
+        year_m = re.search(r"(?<!\d)(19\d\d|20\d\d)(?!\d)", clean_name)
+        f_year = year_m.group(1) if year_m else "N/A"
+
+        is_ser = bool(series_pattern.search(clean_name))
+        if is_ser:
+            s_match = re.search(r"(?i)\b(?:s|season\s*)(\d{1,2})", clean_name)
+            f_season = int(s_match.group(1)) if s_match else 1
+            cand_prefix = re.split(r"(?i)(?:s\d{1,2}|season\s*\d{1,2})", clean_name)[0].strip(" ._+-")
+            if cand_prefix:
+                cand_title = get_filter_button_filename_text(cand_prefix)
+            else:
+                cand_title = get_filter_button_filename_text(fname)
+
+            if f_year != "N/A" and cand_title.endswith(f_year):
+                f_title = cand_title[:-len(f_year)].strip(" ._+-")
+            else:
+                f_title = cand_title
+            if not f_title:
+                f_title = clean_name
+        else:
+            f_season = None
+            cand_title = get_filter_button_filename_text(fname)
+            if f_year != "N/A" and cand_title.endswith(f_year):
+                f_title = cand_title[:-len(f_year)].strip(" ._+-")
+            else:
+                f_title = cand_title
+            if not f_title:
+                f_title = clean_name
+
+        norm_title = normalize_series_identity_title(f_title)
+        id_key = (norm_title, f_year, f_season, is_ser)
+
+        if id_key not in identity_map:
+            import uuid
+            gid = f"n_{uuid.uuid4().hex[:10]}"
+            identity_map[id_key] = [{
+                "group_id": gid,
+                "title": f_title,
+                "year": f_year,
+                "season": f_season,
+                "is_series": is_ser,
+                "files": [f],
+                "file_ids": [f.get("file_id")] if f.get("file_id") else []
+            }]
+        else:
+            g = identity_map[id_key][0]
+            g["files"].append(f)
+            if f.get("file_id") and f["file_id"] not in g["file_ids"]:
+                g["file_ids"].append(f["file_id"])
+
+    final_groups = []
+    for id_key, g_list in identity_map.items():
+        total = len(g_list)
+        for idx, g in enumerate(g_list, 1):
+            title = g["title"]
+            year = g["year"]
+            year_str = f" ({year})" if year and str(year).upper() != "N/A" else ""
+            v_suffix = f" v{idx}" if total > 1 and idx > 1 else ""
+
+            if g["is_series"]:
+                season_num = g.get("season", 1) or 1
+                g["button_label"] = f"જ⁀➴S{season_num:02d} {title}{year_str}{v_suffix}"
+            else:
+                g["button_label"] = f"ജ⁀➴ {title}{year_str}{v_suffix}"
+
+            gid = g["group_id"]
+            if not hasattr(temp, "NORMAL_FILTER_GROUPS"):
+                temp.NORMAL_FILTER_GROUPS = {}
+            temp.NORMAL_FILTER_GROUPS[gid] = g
+            try:
+                from database.series_db import save_temp_request
+                asyncio.create_task(save_temp_request(gid, g))
+            except Exception:
+                pass
+            final_groups.append(g)
+
+    return final_groups
+
+
+def build_normal_group_keyboard(groups: list[dict], page: int = 0, session_id: str = "", bot_username: str = "Bot") -> InlineKeyboardMarkup:
+    page_size = 5
+    total_groups = len(groups)
+    total_pages = max(1, math.ceil(total_groups / page_size)) if total_groups > 0 else 1
+    page = max(0, min(page, total_pages - 1))
+
+    start_idx = page * page_size
+    end_idx = start_idx + page_size
+    current_page_groups = groups[start_idx:end_idx]
+
+    rows = []
+    for g in current_page_groups:
+        gid = g.get("group_id", "")
+        start_url = f"https://t.me/{bot_username}?start=norm_{gid}"
+        rows.append([
+            InlineKeyboardButton(
+                text=g.get("button_label", "📁 View Files"),
+                url=start_url
+            )
+        ])
+
+    if total_pages > 1:
+        pag_row = []
+        if page > 0:
+            pag_row.append(InlineKeyboardButton("⬅ Prev", callback_data=f"norm_page#{session_id}#{page-1}"))
+        pag_row.append(InlineKeyboardButton(f"{page+1}/{total_pages}", callback_data="pages"))
+        if page < total_pages - 1:
+            pag_row.append(InlineKeyboardButton("Next ➜", callback_data=f"norm_page#{session_id}#{page+1}"))
+        rows.append(pag_row)
+
+    return InlineKeyboardMarkup(rows)
+
+
+async def render_normal_grouped_results(client: Client, message: Message, query_text: str, files: list[dict], reply_msg: Message = None, page: int = 0) -> bool:
+    """
+    Authoritative renderer for NORMAL/LEGACY Movie & Series filter search results.
+    - Used by both Group Chat and PM Search.
+    - Max 5 buttons per page.
+    - No Send All button.
+    - Deep links to PM 5-second timer details flow.
+    """
+    groups = build_normal_filter_groups(files)
+    if not groups:
+        return False
+
+    chat_id = message.chat.id if message and message.chat else (reply_msg.chat.id if reply_msg else 0)
+    msg_id = message.id if message else (reply_msg.id if reply_msg else 0)
+    key = f"{chat_id}-{msg_id}"
+
+    real_user_id = None
+    if message and message.from_user and not message.from_user.is_bot:
+        real_user_id = message.from_user.id
+    elif message and message.reply_to_message and message.reply_to_message.from_user:
+        real_user_id = message.reply_to_message.from_user.id
+    elif reply_msg and reply_msg.reply_to_message and reply_msg.reply_to_message.from_user:
+        real_user_id = reply_msg.reply_to_message.from_user.id
+    elif reply_msg and reply_msg.from_user and not reply_msg.from_user.is_bot:
+        real_user_id = reply_msg.from_user.id
+    elif chat_id > 0:
+        real_user_id = chat_id
+
+    BUTTON_OWNERS[key] = real_user_id
+
+    bot_username = temp.U_NAME if (hasattr(temp, "U_NAME") and temp.U_NAME) else getattr(getattr(client, "me", None), "username", "Bot")
+    if bot_username:
+        bot_username = str(bot_username).lstrip("@")
+
+    import uuid
+    session_id = f"ns_{uuid.uuid4().hex[:8]}"
+    if not hasattr(temp, "NORMAL_SEARCH_SESSIONS"):
+        temp.NORMAL_SEARCH_SESSIONS = {}
+    temp.NORMAL_SEARCH_SESSIONS[session_id] = {
+        "groups": groups,
+        "key": key,
+        "query": query_text,
+        "chat_id": chat_id,
+        "user_id": real_user_id
+    }
+
+    markup = build_normal_group_keyboard(groups=groups, page=page, session_id=session_id, bot_username=bot_username)
+    caption_text = "<b>Choose the series/movie you want to view:</b>"
+
+    from database.series_db import get_series_thumbnail
+    from utils import schedule_filter_message_delete
+    thumb = await get_series_thumbnail()
+
+    if reply_msg:
+        try:
+            if reply_msg.photo or reply_msg.caption:
+                await reply_msg.edit_caption(caption=caption_text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
+                schedule_filter_message_delete(client, reply_msg.chat.id, reply_msg.id, 600)
+                BUTTON_OWNERS[f"{reply_msg.chat.id}-{reply_msg.id}"] = real_user_id
+                return True
+            else:
+                await reply_msg.edit_text(text=caption_text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
+                schedule_filter_message_delete(client, reply_msg.chat.id, reply_msg.id, 600)
+                BUTTON_OWNERS[f"{reply_msg.chat.id}-{reply_msg.id}"] = real_user_id
+                return True
+        except Exception:
+            try:
+                await reply_msg.delete()
+            except Exception:
+                pass
+
+    if thumb:
+        try:
+            sent_sug = await (message.reply_photo(photo=thumb, caption=caption_text, reply_markup=markup, parse_mode=enums.ParseMode.HTML) if message else client.send_photo(chat_id=chat_id, photo=thumb, caption=caption_text, reply_markup=markup, parse_mode=enums.ParseMode.HTML))
+            if sent_sug:
+                schedule_filter_message_delete(client, sent_sug.chat.id, sent_sug.id, 600)
+                BUTTON_OWNERS[f"{sent_sug.chat.id}-{sent_sug.id}"] = real_user_id
+            return True
+        except Exception as pe:
+            logger.warning(f"[NORMAL GROUP THUMB ERROR] {pe}")
+
+    sent_sug_t = await (message.reply_text(text=caption_text, reply_markup=markup, parse_mode=enums.ParseMode.HTML) if message else client.send_message(chat_id=chat_id, text=caption_text, reply_markup=markup, parse_mode=enums.ParseMode.HTML))
+    if sent_sug_t:
+        schedule_filter_message_delete(client, sent_sug_t.chat.id, sent_sug_t.id, 600)
+        BUTTON_OWNERS[f"{sent_sug_t.chat.id}-{sent_sug_t.id}"] = real_user_id
+    return True
+
+
+@Client.on_callback_query(filters.regex(r"^norm_page#"), group=-15)
+async def cb_normal_group_page(client: Client, query: CallbackQuery):
+    parts = query.data.split("#")
+    if len(parts) < 3:
+        return await query.answer("⚠️ Invalid page.", show_alert=True)
+    session_id = parts[1]
+    target_page = int(parts[2])
+
+    sess = getattr(temp, "NORMAL_SEARCH_SESSIONS", {}).get(session_id)
+    if not sess:
+        return await query.answer("⚠️ Search session expired. Please search again.", show_alert=True)
+
+    groups = sess.get("groups", [])
+    bot_username = temp.U_NAME if (hasattr(temp, "U_NAME") and temp.U_NAME) else getattr(getattr(client, "me", None), "username", "Bot")
+    if bot_username:
+        bot_username = str(bot_username).lstrip("@")
+
+    markup = build_normal_group_keyboard(groups=groups, page=target_page, session_id=session_id, bot_username=bot_username)
+    try:
+        await query.message.edit_reply_markup(reply_markup=markup)
+    except MessageNotModified:
+        pass
+    await query.answer()
+
+
+async def process_normal_filter_deeplink(client: Client, message: Message, norm_group_id: str) -> bool:
+    """
+    Handles /start norm_{group_id} in PM.
+    - 5-second countdown timer.
+    - Normal Details message.
+    - 'Get All File' and 'Disclaimer' buttons.
+    """
+    from database.series_db import get_temp_request
+    group_data = getattr(temp, "NORMAL_FILTER_GROUPS", {}).get(norm_group_id)
+    if not group_data:
+        group_data = await get_temp_request(norm_group_id)
+
+    if not group_data:
+        await message.reply_text("<b>❌ Requested filter files were not found or have expired.</b>")
+        return False
+
+    # 1. 5-Second Countdown Timer Loading Message
+    loading_msg = await message.reply_text("get details & files.. timer 5 second")
+    for sec in [4, 3, 2, 1, 0]:
+        await asyncio.sleep(1)
+        try:
+            await loading_msg.edit_text(f"get details & files.. timer {sec} second")
+        except Exception:
+            pass
+    try:
+        await loading_msg.delete()
+    except Exception:
+        pass
+
+    # 2. Normal Filter Details Message
+    title = group_data.get("title", "Files")
+    year = group_data.get("year", "N/A")
+    year_str = str(year).strip() if year and str(year).upper() != "N/A" else "N/A"
+
+    details_caption = (
+        f"<i>\n"
+        f"☁︎ File Name: {html.escape(title)}\n"
+        f"☁︎ Year: {html.escape(year_str)}\n"
+        f"☁︎ Languages: Malayalam\n"
+        f"☁︎ Release Date: N/A\n"
+        f"☁︎ Rating: 0/10 (0 votes)\n\n"
+        f"</i>"
+    )
+
+    markup = InlineKeyboardMarkup([
+        [InlineKeyboardButton("⌯⌲ Get All File", callback_data=f"norm_getall#{norm_group_id}")],
+        [InlineKeyboardButton("⚠ Disclaimer", callback_data="norm_disc")]
+    ])
+
+    from utils import get_random_filter_poster
+    poster = get_random_filter_poster(group_data)
+    if poster and str(poster).startswith("http"):
+        try:
+            await message.reply_photo(
+                photo=poster,
+                caption=details_caption,
+                reply_markup=markup,
+                parse_mode=enums.ParseMode.HTML
+            )
+            return True
+        except Exception as pe:
+            logger.warning(f"[NORMAL DETAILS POSTER ERROR] {pe}")
+
+    await message.reply_text(
+        text=details_caption,
+        reply_markup=markup,
+        parse_mode=enums.ParseMode.HTML
+    )
+    return True
+
+
+@Client.on_callback_query(filters.regex(r"^norm_disc"), group=-15)
+async def cb_norm_disclaimer(client: Client, query: CallbackQuery):
+    await query.answer(
+        "Since these files and details are generated automatically, there is a possibility of errors.",
+        show_alert=True
+    )
+
+
+@Client.on_callback_query(filters.regex(r"^norm_getall#"), group=-15)
+async def cb_norm_get_all_file(client: Client, query: CallbackQuery):
+    parts = query.data.split("#")
+    if len(parts) < 2:
+        return await query.answer("⚠️ Invalid request.", show_alert=True)
+    group_id = parts[1]
+    user_id = query.from_user.id
+
+    if not hasattr(temp, "ACTIVE_NORMAL_DELIVERIES"):
+        temp.ACTIVE_NORMAL_DELIVERIES = set()
+
+    if user_id in temp.ACTIVE_NORMAL_DELIVERIES:
+        return await query.answer("File delivery is already in progress!", show_alert=True)
+
+    temp.ACTIVE_NORMAL_DELIVERIES.add(user_id)
+    await query.answer()
+
+    import time, uuid
+    session_id = f"normdel_{user_id}_{uuid.uuid4().hex[:6]}"
+    if not hasattr(temp, "NORMAL_DELIVERY_SESSIONS"):
+        temp.NORMAL_DELIVERY_SESSIONS = {}
+
+    temp.NORMAL_DELIVERY_SESSIONS[session_id] = {
+        "cancelled": False,
+        "user_id": user_id,
+        "group_id": group_id
+    }
+
+    stop_btn = InlineKeyboardButton("🛑 Stop Files", callback_data=f"norm_stop#{session_id}")
+    try:
+        import inspect
+        if "style" in inspect.signature(InlineKeyboardButton.__init__).parameters:
+            stop_btn = InlineKeyboardButton("🛑 Stop Files", callback_data=f"norm_stop#{session_id}", style="danger")
+    except Exception:
+        pass
+
+    ctrl_text = (
+        "<i>Click the stop button shown below to stop incoming files.\n\n"
+        "വരുന്ന ഫിലെസ് നിർത്താനായി താഴെ കാണുന്ന സ്റ്റോപ്പ് ബട്ടൺ ക്ലിക്ക് ചെയ്യുക.</i>"
+    )
+    ctrl_msg = await query.message.reply_text(
+        text=ctrl_text,
+        reply_markup=InlineKeyboardMarkup([[stop_btn]]),
+        parse_mode=enums.ParseMode.HTML
+    )
+
+    temp.NORMAL_DELIVERY_SESSIONS[session_id]["ctrl_msg_id"] = ctrl_msg.id
+    temp.NORMAL_DELIVERY_SESSIONS[session_id]["chat_id"] = ctrl_msg.chat.id
+
+    asyncio.create_task(
+        execute_normal_group_file_delivery(
+            client=client,
+            user_id=user_id,
+            group_id=group_id,
+            session_id=session_id,
+            ctrl_msg=ctrl_msg
+        )
+    )
+
+
+@Client.on_callback_query(filters.regex(r"^norm_stop#"), group=-15)
+async def cb_norm_stop_files(client: Client, query: CallbackQuery):
+    parts = query.data.split("#")
+    if len(parts) < 2:
+        return await query.answer()
+    session_id = parts[1]
+    user_id = query.from_user.id
+
+    sess = getattr(temp, "NORMAL_DELIVERY_SESSIONS", {}).get(session_id)
+    if sess:
+        sess["cancelled"] = True
+
+    getattr(temp, "ACTIVE_NORMAL_DELIVERIES", set()).discard(user_id)
+    await query.answer("🛑 Stopping file delivery...", show_alert=False)
+
+    try:
+        await query.message.edit_text(
+            text="<i>🛑 File delivery stopped.\n\nഫയൽ അയക്കുന്നത് നിർത്തിയിരിക്കുന്നു.</i>",
+            reply_markup=None,
+            parse_mode=enums.ParseMode.HTML
+        )
+    except Exception:
+        pass
+
+
+async def execute_normal_group_file_delivery(client: Client, user_id: int, group_id: str, session_id: str, ctrl_msg: Message):
+    """
+    Delivers each file in the selected Normal/Legacy group sequentially with custom formatted captions.
+    Stops immediately if user clicks the Stop Files button.
+    """
+    try:
+        bot_username = temp.U_NAME if (hasattr(temp, "U_NAME") and temp.U_NAME) else getattr(getattr(client, "me", None), "username", "Bot")
+        if bot_username:
+            bot_username = str(bot_username).lstrip("@")
+
+        group_data = getattr(temp, "NORMAL_FILTER_GROUPS", {}).get(group_id)
+        if not group_data:
+            from database.series_db import get_temp_request
+            group_data = await get_temp_request(group_id)
+
+        if not group_data:
+            await ctrl_msg.reply_text("❌ Files not found or expired.")
+            return
+
+        files = group_data.get("files", [])
+        if not files and group_data.get("file_ids"):
+            from database.ia_filterdb import get_bulk_file_details
+            fmap = await get_bulk_file_details(group_data["file_ids"])
+            files = [fmap[fid] for fid in group_data["file_ids"] if fid in fmap]
+
+        total_files = len(files)
+        if total_files == 0:
+            await ctrl_msg.reply_text("❌ No files available in this group.")
+            return
+
+        # If series, sort numerically
+        if group_data.get("is_series"):
+            def _get_ep_sort_key(f):
+                if isinstance(f, dict):
+                    ep_val = f.get("episode")
+                    if ep_val is not None:
+                        try:
+                            return (int(ep_val), 0)
+                        except Exception:
+                            pass
+                    fname = f.get("file_name", "")
+                    from plugins.series import _extract_episode_number
+                    ep_num = _extract_episode_number(fname)
+                    if ep_num is not None:
+                        return (int(ep_num), 0)
+                return (9999, str(f))
+            sorted_files = sorted(files, key=_get_ep_sort_key)
+        else:
+            sorted_files = files
+
+        from utils import get_size
+
+        for idx, f in enumerate(sorted_files, 1):
+            sess = getattr(temp, "NORMAL_DELIVERY_SESSIONS", {}).get(session_id, {})
+            if sess.get("cancelled"):
+                break
+
+            fname = f.get("file_name", "File")
+            fsize = f.get("file_size", 0)
+            fsize_str = get_size(fsize)
+
+            caption = (
+                f"<i>\n"
+                f"𖡡 File Name: {html.escape(str(fname))}\n"
+                f"𖡡 File Size: {html.escape(str(fsize_str))}\n"
+                f"𖡡 Total File: {idx}/{total_files}\n\n"
+                f"@{html.escape(str(bot_username))}\n"
+                f"</i>"
+            )
+
+            fid = f.get("file_id")
+            if fid:
+                try:
+                    await client.send_cached_media(
+                        chat_id=user_id,
+                        file_id=fid,
+                        caption=caption,
+                        parse_mode=enums.ParseMode.HTML
+                    )
+                except Exception as e:
+                    logger.error(f"[NORMAL FILE DELIVERY ERROR] file_id={fid}: {e}")
+
+            await asyncio.sleep(0.6)
+
+            if sess.get("cancelled"):
+                break
+
+        sess = getattr(temp, "NORMAL_DELIVERY_SESSIONS", {}).get(session_id, {})
+        if not sess.get("cancelled"):
+            try:
+                await ctrl_msg.edit_text(
+                    text="<i>✅ All files have been successfully sent!</i>",
+                    reply_markup=None,
+                    parse_mode=enums.ParseMode.HTML
+                )
+            except Exception:
+                pass
+
+    finally:
+        getattr(temp, "ACTIVE_NORMAL_DELIVERIES", set()).discard(user_id)
+        if hasattr(temp, "NORMAL_DELIVERY_SESSIONS"):
+            temp.NORMAL_DELIVERY_SESSIONS.pop(session_id, None)
 
 async def advantage_spell_chok(client, name, msg, reply_msg, vj_search):
     mv_id = msg.id

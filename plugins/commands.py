@@ -319,6 +319,12 @@ async def start(client, message):
     # --- END SERIES & MOVIE REQUEST DEEP LINK FLOW ---
 
     # --- SERIES & MOVIE DEEP LINK PM FLOW ---
+    if data.startswith("norm_"):
+        norm_key = data.split("_", 1)[1]
+        from plugins.pm_filter import process_normal_filter_deeplink
+        await process_normal_filter_deeplink(client, message, norm_key)
+        return
+
     if data.startswith("series_"):
         series_key = data.split("_", 1)[1]
         from plugins.series import process_series_deeplink
