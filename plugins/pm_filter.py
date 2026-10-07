@@ -4222,74 +4222,26 @@ async def cb_normal_group_select(client: Client, query: CallbackQuery):
         )
         return await query.answer(unauth_text, show_alert=True)
 
-    await query.answer("Opening...", show_alert=False)
+    bot_username = temp.U_NAME if (hasattr(temp, "U_NAME") and temp.U_NAME) else getattr(getattr(client, "me", None), "username", None)
+    if bot_username:
+        bot_username = str(bot_username).lstrip("@")
+    else:
+        bot_username = "Bot"
 
-    target_chat_id = clicked_user_id
+    start_url = f"https://t.me/{bot_username}?start=norm_{norm_group_id}"
 
-    # 2. 5-Second Loading Sticker
+    # If in private chat, process directly
+    if query.message.chat.type == enums.ChatType.PRIVATE:
+        await query.answer("🚀 Opening files...")
+        await process_normal_filter_deeplink(client, query.message, norm_group_id)
+        return
+
+    # If in group, answer with url to open bot PM and automatically send ?start command (exact same feature as super movie filter)
     try:
-        loading_sticker = await client.send_sticker(
-            chat_id=target_chat_id,
-            sticker="CAACAgIAAxkBAAER_8VqxXSfQ8NwUz3f6IgFpuZM7PKBmQAC7hQAAuNVUEk4S4qtAhNhvD0E"
-        )
-        if loading_sticker:
-            await asyncio.sleep(5)
-            try:
-                await loading_sticker.delete()
-            except Exception:
-                pass
-    except Exception as se:
-        logger.warning(f"[NORMAL LOADING STICKER ERROR] {se}")
-        return await query.answer("⚠️ Please start the bot in private chat (PM) first!", show_alert=True)
-
-    # 3. Normal Filter Details Message
-    title = group_data.get("title", "Files")
-    year = group_data.get("year", "N/A")
-    year_str = str(year).strip() if year and str(year).upper() != "N/A" else "N/A"
-
-    details_caption = (
-        f"<i>\n"
-        f"☁︎ File Name: {html.escape(title)}\n"
-        f"☁︎ Year: {html.escape(year_str)}\n"
-        f"☁︎ Languages: Malayalam\n"
-        f"☁︎ Release Date: N/A\n"
-        f"☁︎ Rating: 0/10 (0 votes)\n\n"
-        f"</i>"
-    )
-
-    markup = InlineKeyboardMarkup([
-        [InlineKeyboardButton("⌯⌲ Get All File", callback_data=f"norm_getall#{norm_group_id}")],
-        [InlineKeyboardButton("⚠ Disclaimer", callback_data="norm_disc")]
-    ])
-
-    from utils import get_random_filter_poster, schedule_filter_message_delete
-    poster = get_random_filter_poster(group_data)
-    sent_det = None
-    if poster and str(poster).startswith("http"):
-        try:
-            sent_det = await client.send_photo(
-                chat_id=target_chat_id,
-                photo=poster,
-                caption=details_caption,
-                reply_markup=markup,
-                parse_mode=enums.ParseMode.HTML
-            )
-        except Exception as pe:
-            logger.warning(f"[NORMAL DETAILS POSTER ERROR] {pe}")
-
-    if not sent_det:
-        try:
-            sent_det = await client.send_message(
-                chat_id=target_chat_id,
-                text=details_caption,
-                reply_markup=markup,
-                parse_mode=enums.ParseMode.HTML
-            )
-        except Exception as me:
-            logger.warning(f"[NORMAL DETAILS MSG ERROR] {me}")
-
-    if sent_det:
-        schedule_filter_message_delete(client, sent_det.chat.id, sent_det.id, delay=1200)
+        return await query.answer(url=start_url)
+    except Exception as e:
+        logger.error(f"[NORMAL CALLBACK ANSWER URL ERROR] {e}")
+        return await query.answer("⚠️ Could not redirect. Please check PM.", show_alert=True)
 
 
 async def process_normal_filter_deeplink(client: Client, message: Message, norm_group_id: str) -> bool:
