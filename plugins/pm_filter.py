@@ -4314,18 +4314,62 @@ async def process_normal_filter_deeplink(client: Client, message: Message, norm_
     except Exception as te:
         logger.warning(f"[NORMAL COUNTDOWN TIMER ERROR] {te}")
 
-    # 3. Normal Filter Details Message
+    # 3. Normal Filter Details Message & Dynamic IMDb / TMDb Metadata Fetch
     title = group_data.get("title", "Files")
     year = group_data.get("year", "N/A")
     year_str = str(year).strip() if year and str(year).upper() != "N/A" else "N/A"
+
+    # Default fallbacks
+    lang_str = "N/A"
+    rel_date_str = "N/A"
+    rating_str = "N/A"
+    poster = None
+
+    # Fetch live IMDb / TMDb metadata
+    try:
+        from utils import get_poster
+        search_query_imdb = f"{title} {year_str}" if year_str != "N/A" else title
+        imdb_data = await asyncio.wait_for(get_poster(search_query_imdb), timeout=4)
+        if imdb_data and isinstance(imdb_data, dict):
+            # Languages
+            raw_langs = imdb_data.get("languages")
+            if isinstance(raw_langs, list) and raw_langs:
+                lang_str = ", ".join(str(l).strip() for l in raw_langs if l)
+            elif isinstance(raw_langs, str) and raw_langs.strip() and raw_langs.upper() != "NONE":
+                lang_str = raw_langs.strip()
+
+            # Release Date
+            raw_rel = imdb_data.get("release_date") or imdb_data.get("year")
+            if raw_rel and str(raw_rel).strip() and str(raw_rel).upper() != "NONE":
+                rel_date_str = str(raw_rel).strip()
+
+            # Rating & Votes
+            raw_rating = imdb_data.get("rating")
+            raw_votes = imdb_data.get("votes")
+            if raw_rating and str(raw_rating).strip() and str(raw_rating).upper() != "NONE":
+                rating_val = str(raw_rating).strip()
+                votes_val = str(raw_votes).strip() if raw_votes and str(raw_votes).upper() != "NONE" else "0"
+                rating_str = f"{rating_val}/10 ({votes_val} votes)"
+
+            # Poster
+            raw_poster = imdb_data.get("poster")
+            if raw_poster and str(raw_poster).startswith("http"):
+                poster = raw_poster
+    except Exception as e:
+        logger.warning(f"[NORMAL DETAILS METADATA FETCH ERROR] {e}")
+
+    # Fallback to local poster if not retrieved from IMDb
+    if not poster:
+        from utils import get_random_filter_poster
+        poster = get_random_filter_poster(group_data)
 
     details_caption = (
         f"<i>\n"
         f"☁︎ File Name: {html.escape(title)}\n"
         f"☁︎ Year: {html.escape(year_str)}\n"
-        f"☁︎ Languages: Malayalam\n"
-        f"☁︎ Release Date: N/A\n"
-        f"☁︎ Rating: 0/10 (0 votes)\n\n"
+        f"☁︎ Languages: {html.escape(lang_str)}\n"
+        f"☁︎ Release Date: {html.escape(rel_date_str)}\n"
+        f"☁︎ Rating: {html.escape(rating_str)}\n\n"
         f"</i>"
     )
 
@@ -4334,8 +4378,6 @@ async def process_normal_filter_deeplink(client: Client, message: Message, norm_
         [InlineKeyboardButton("⚠ Disclaimer", callback_data="norm_disc")]
     ])
 
-    from utils import get_random_filter_poster
-    poster = get_random_filter_poster(group_data)
     if poster and str(poster).startswith("http"):
         try:
             await message.reply_photo(

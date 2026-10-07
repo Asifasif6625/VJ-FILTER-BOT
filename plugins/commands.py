@@ -319,6 +319,20 @@ async def start(client, message):
     # --- END SERIES & MOVIE REQUEST DEEP LINK FLOW ---
 
     # --- SERIES & MOVIE DEEP LINK PM FLOW ---
+    if data.startswith("getme_"):
+        search_query = data.split("getme_", 1)[1].replace("_", " ").strip()
+        if search_query:
+            from database.ia_filterdb import get_search_results
+            from plugins.pm_filter import render_normal_grouped_results
+            import html
+            files, _, _ = await get_search_results(message.chat.id, search_query.lower(), max_results=100, offset=0, filter=True)
+            if files:
+                rendered = await render_normal_grouped_results(client=client, message=message, query_text=search_query, files=files)
+                if rendered:
+                    return
+            await message.reply_text(f"<b>No files found for '<i>{html.escape(search_query)}</i>'</b>", parse_mode=enums.ParseMode.HTML)
+        return
+
     if data.startswith("norm_"):
         norm_key = data.split("_", 1)[1]
         from plugins.pm_filter import process_normal_filter_deeplink
