@@ -4051,10 +4051,11 @@ def build_normal_group_keyboard(groups: list[dict], page: int = 0, session_id: s
     rows = []
     for g in current_page_groups:
         gid = g.get("group_id", "")
+        start_url = f"https://t.me/{bot_username}?start=norm_{gid}"
         rows.append([
             InlineKeyboardButton(
                 text=g.get("button_label", "📁 View Files"),
-                callback_data=f"norm_grp#{gid}"
+                url=start_url
             )
         ])
 
