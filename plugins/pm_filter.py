@@ -4375,6 +4375,43 @@ async def cb_norm_get_all_file(client: Client, query: CallbackQuery):
     if user_id in temp.ACTIVE_NORMAL_DELIVERIES:
         return await query.answer("File delivery is already in progress!", show_alert=True)
 
+    # 1. Force Sub (Join Request) Check
+    from info import AUTH_CHANNEL, REQUEST_TO_JOIN_MODE
+    from utils import is_subscribed, get_fsub_invite_link
+    import time, uuid
+
+    if AUTH_CHANNEL and not await is_subscribed(client, user_id):
+        invite_link = await get_fsub_invite_link(client, AUTH_CHANNEL, creates_join_request=REQUEST_TO_JOIN_MODE)
+        if invite_link:
+            btn_text = "📢 Send Join Request" if REQUEST_TO_JOIN_MODE else "📢 Join Channel"
+            fsub_markup = InlineKeyboardMarkup([[InlineKeyboardButton(btn_text, url=invite_link)]])
+            fsub_text = (
+                "📢 <b>Join Request Required</b>\n\n"
+                "ഫയലുകൾ ലഭിക്കുന്നതിന് താഴെ കാണുന്ന ബട്ടൺ ക്ലിക്ക് ചെയ്ത് ഞങ്ങളുടെ ചാനലിലേക്ക് Join Request അയക്കുക.\n\n"
+                "<i>Please send a join request to our channel to receive the files.</i>"
+            ) if REQUEST_TO_JOIN_MODE else (
+                "📢 <b>Channel Subscription Required</b>\n\n"
+                "ഫയലുകൾ ലഭിക്കുന്നതിന് താഴെ കാണുന്ന ബട്ടൺ ക്ലിക്ക് ചെയ്ത് ഞങ്ങളുടെ ചാനലിൽ Join ചെയ്യുക.\n\n"
+                "<i>Please join our channel to receive the files.</i>"
+            )
+            fsub_msg = await client.send_message(
+                chat_id=user_id,
+                text=fsub_text,
+                reply_markup=fsub_markup,
+                parse_mode=enums.ParseMode.HTML
+            )
+            if not hasattr(temp, "PENDING_NORMAL_FSUB"):
+                temp.PENDING_NORMAL_FSUB = {}
+            temp.PENDING_NORMAL_FSUB[user_id] = {
+                "group_id": group_id,
+                "details_msg_id": query.message.id if query.message else None,
+                "details_chat_id": query.message.chat.id if query.message else user_id,
+                "fsub_msg_id": fsub_msg.id if fsub_msg else None,
+                "fsub_chat_id": fsub_msg.chat.id if fsub_msg else user_id,
+                "timestamp": time.time()
+            }
+            return await query.answer("📢 Please send join request first!", show_alert=False)
+
     temp.ACTIVE_NORMAL_DELIVERIES.add(user_id)
     await query.answer()
 
@@ -4384,7 +4421,6 @@ async def cb_norm_get_all_file(client: Client, query: CallbackQuery):
     except Exception:
         pass
 
-    import time, uuid
     session_id = f"normdel_{user_id}_{uuid.uuid4().hex[:6]}"
     if not hasattr(temp, "NORMAL_DELIVERY_SESSIONS"):
         temp.NORMAL_DELIVERY_SESSIONS = {}
@@ -4426,6 +4462,91 @@ async def cb_norm_get_all_file(client: Client, query: CallbackQuery):
             ctrl_msg=ctrl_msg
         )
     )
+
+
+async def trigger_normal_fsub_approved_delivery(client: Client, user_id: int, pending_norm: dict):
+    """
+    Called automatically when a user sends a Join Request to AUTH_CHANNEL.
+    Deletes both the Get All File (details) message and the Join Request message,
+    then begins delivering the requested normal filter files.
+    """
+    group_id = pending_norm.get("group_id")
+    if not group_id:
+        return
+
+    if not hasattr(temp, "ACTIVE_NORMAL_DELIVERIES"):
+        temp.ACTIVE_NORMAL_DELIVERIES = set()
+
+    if user_id in temp.ACTIVE_NORMAL_DELIVERIES:
+        return
+
+    temp.ACTIVE_NORMAL_DELIVERIES.add(user_id)
+
+    # 1. Delete details message (Get All File msg)
+    det_msg_id = pending_norm.get("details_msg_id")
+    det_chat_id = pending_norm.get("details_chat_id", user_id)
+    if det_msg_id:
+        try:
+            await client.delete_messages(chat_id=det_chat_id, message_ids=det_msg_id)
+        except Exception as de:
+            logger.warning(f"[NORMAL FSUB DELETE DET MSG ERROR] {de}")
+
+    # 2. Delete join request message
+    fsub_msg_id = pending_norm.get("fsub_msg_id")
+    fsub_chat_id = pending_norm.get("fsub_chat_id", user_id)
+    if fsub_msg_id:
+        try:
+            await client.delete_messages(chat_id=fsub_chat_id, message_ids=fsub_msg_id)
+        except Exception as fe:
+            logger.warning(f"[NORMAL FSUB DELETE FSUB MSG ERROR] {fe}")
+
+    # 3. Send Stop Files control message and deliver files
+    import uuid
+    session_id = f"normdel_{user_id}_{uuid.uuid4().hex[:6]}"
+    if not hasattr(temp, "NORMAL_DELIVERY_SESSIONS"):
+        temp.NORMAL_DELIVERY_SESSIONS = {}
+
+    temp.NORMAL_DELIVERY_SESSIONS[session_id] = {
+        "cancelled": False,
+        "user_id": user_id,
+        "group_id": group_id
+    }
+
+    stop_btn = InlineKeyboardButton("🛑 Stop Files", callback_data=f"norm_stop#{session_id}")
+    try:
+        import inspect
+        if "style" in inspect.signature(InlineKeyboardButton.__init__).parameters:
+            stop_btn = InlineKeyboardButton("🛑 Stop Files", callback_data=f"norm_stop#{session_id}", style="danger")
+    except Exception:
+        pass
+
+    ctrl_text = (
+        "<i>Click the stop button shown below to stop incoming files.\n\n"
+        "വരുന്ന ഫിലെസ് നിർത്താനായി താഴെ കാണുന്ന സ്റ്റോപ്പ് ബട്ടൺ ക്ലിക്ക് ചെയ്യുക.</i>"
+    )
+    try:
+        ctrl_msg = await client.send_message(
+            chat_id=user_id,
+            text=ctrl_text,
+            reply_markup=InlineKeyboardMarkup([[stop_btn]]),
+            parse_mode=enums.ParseMode.HTML
+        )
+
+        temp.NORMAL_DELIVERY_SESSIONS[session_id]["ctrl_msg_id"] = ctrl_msg.id
+        temp.NORMAL_DELIVERY_SESSIONS[session_id]["chat_id"] = ctrl_msg.chat.id
+
+        asyncio.create_task(
+            execute_normal_group_file_delivery(
+                client=client,
+                user_id=user_id,
+                group_id=group_id,
+                session_id=session_id,
+                ctrl_msg=ctrl_msg
+            )
+        )
+    except Exception as ce:
+        logger.error(f"[NORMAL FSUB START DELIVERY ERROR] {ce}")
+        getattr(temp, "ACTIVE_NORMAL_DELIVERIES", set()).discard(user_id)
 
 
 @Client.on_callback_query(filters.regex(r"^norm_stop#"), group=-15)
