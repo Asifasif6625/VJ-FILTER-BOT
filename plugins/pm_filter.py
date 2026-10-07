@@ -4020,9 +4020,9 @@ def build_normal_filter_groups(files: list[dict]) -> list[dict]:
 
             if g["is_series"]:
                 season_num = g.get("season", 1) or 1
-                g["button_label"] = f"જ⁀➴S{season_num:02d} {title}{year_str}{v_suffix}"
+                g["button_label"] = f"🪶 S{season_num:02d} {title}{year_str}{v_suffix}"
             else:
-                g["button_label"] = f"ജ⁀➴ {title}{year_str}{v_suffix}"
+                g["button_label"] = f"🪶 {title}{year_str}{v_suffix}"
 
             gid = g["group_id"]
             if not hasattr(temp, "NORMAL_FILTER_GROUPS"):
@@ -4076,7 +4076,7 @@ async def render_normal_grouped_results(client: Client, message: Message, query_
     - Used by both Group Chat and PM Search.
     - Max 5 buttons per page.
     - No Send All button.
-    - Deep links to PM 5-second timer details flow.
+    - Deep links to PM 3-second timer details flow.
     """
     groups = build_normal_filter_groups(files)
     if not groups:
@@ -4233,7 +4233,7 @@ async def cb_normal_group_select(client: Client, query: CallbackQuery):
     # If in private chat, process directly
     if query.message.chat.type == enums.ChatType.PRIVATE:
         await query.answer("🚀 Opening files...")
-        await process_normal_filter_deeplink(client, query.message, norm_group_id)
+        await process_normal_filter_deeplink(client, query.message, norm_group_id, user_id=clicked_user_id)
         return
 
     # If in group, answer with url to open bot PM and automatically send ?start command (exact same feature as super movie filter)
@@ -4244,11 +4244,11 @@ async def cb_normal_group_select(client: Client, query: CallbackQuery):
         return await query.answer("⚠️ Could not redirect. Please check PM.", show_alert=True)
 
 
-async def process_normal_filter_deeplink(client: Client, message: Message, norm_group_id: str) -> bool:
+async def process_normal_filter_deeplink(client: Client, message: Message, norm_group_id: str, user_id: int = None) -> bool:
     """
     Handles /start norm_{group_id} in PM.
     - Searcher-only access verification.
-    - 5-second countdown timer.
+    - 3-second countdown text timer (3 to 0).
     - Normal Details message.
     - 'Get All File' and 'Disclaimer' buttons.
     """
@@ -4262,7 +4262,15 @@ async def process_normal_filter_deeplink(client: Client, message: Message, norm_
         return False
 
     # 1. Access Control: Searcher Only Check
-    clicked_user_id = message.from_user.id if message.from_user else 0
+    if user_id:
+        clicked_user_id = user_id
+    elif message and message.from_user and not message.from_user.is_bot:
+        clicked_user_id = message.from_user.id
+    elif message and message.chat and message.chat.type == enums.ChatType.PRIVATE:
+        clicked_user_id = message.chat.id
+    else:
+        clicked_user_id = message.from_user.id if message and message.from_user else 0
+
     req_user_id = group_data.get("user_id") or group_data.get("requester_user_id")
     if req_user_id and clicked_user_id and clicked_user_id != req_user_id:
         try:
@@ -4288,19 +4296,23 @@ async def process_normal_filter_deeplink(client: Client, message: Message, norm_
             pass
         return False
 
-    # 2. 5-Second Loading Sticker
+    # 2. 3-Second Countdown Text Timer (3 to 0)
     try:
-        loading_sticker = await message.reply_sticker(
-            sticker="CAACAgIAAxkBAAER_8VqxXSfQ8NwUz3f6IgFpuZM7PKBmQAC7hQAAuNVUEk4S4qtAhNhvD0E"
-        )
-        if loading_sticker:
-            await asyncio.sleep(5)
+        timer_msg = await message.reply_text("get details & files.. timer 3 second")
+        if timer_msg:
+            for s in [2, 1, 0]:
+                await asyncio.sleep(1)
+                try:
+                    await timer_msg.edit_text(f"get details & files.. timer {s} second")
+                except Exception:
+                    pass
+            await asyncio.sleep(0.5)
             try:
-                await loading_sticker.delete()
+                await timer_msg.delete()
             except Exception:
                 pass
-    except Exception as se:
-        logger.warning(f"[NORMAL LOADING STICKER ERROR] {se}")
+    except Exception as te:
+        logger.warning(f"[NORMAL COUNTDOWN TIMER ERROR] {te}")
 
     # 3. Normal Filter Details Message
     title = group_data.get("title", "Files")
