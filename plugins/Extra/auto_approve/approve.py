@@ -29,6 +29,15 @@ async def auto_approve(client, message: ChatJoinRequest):
         await join_db().add_user(user_id=ap_user_id, first_name=first_name, username=username, date=date)
         logger.info(f"[JOIN REQUEST] Tracked join request for user_id={ap_user_id} in auth_channel={auth_ch}")
 
+        # Check for pending normal filter delivery request
+        pending_norm = getattr(temp, "PENDING_NORMAL_FSUB", {}).pop(ap_user_id, None)
+        if pending_norm:
+            try:
+                from plugins.pm_filter import trigger_normal_fsub_approved_delivery
+                asyncio.create_task(trigger_normal_fsub_approved_delivery(client, ap_user_id, pending_norm))
+            except Exception as pe:
+                logger.error(f"[NORMAL FSUB TRIGGER ERROR] {pe}")
+
     if AUTO_APPROVE_MODE == True:
         if not await db.is_user_exist(ap_user_id):
             await db.add_user(ap_user_id, first_name)
