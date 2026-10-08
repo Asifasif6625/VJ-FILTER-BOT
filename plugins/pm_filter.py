@@ -3886,8 +3886,9 @@ async def auto_filter(client, name, msg, reply_msg=None, ai_search=True, spoll=F
                 return
 
             # 2. In PM: Main Bot redirects to Child Bot
-            child_username = getattr(temp, "CHILD_U_NAME", None) or os.environ.get("CHILD_USERNAME", "Bot")
-            child_link = f"https://t.me/{str(child_username).lstrip('@')}?start=getme_{search.replace(' ', '_')}"
+            from utils import get_child_bot_username
+            child_username = get_child_bot_username()
+            child_link = f"https://t.me/{child_username}?start=getme_{search.replace(' ', '_')}"
             redirect_text = (
                 "<b>🌟 This title is available on our Normal Filter Bot!</b>\n\n"
                 "<i>ഈ മൂവി / സീരീസ് നോർമൽ ഫിൽട്ടർ ബോട്ടിൽ ലഭ്യമാണ്. താഴെ കാണുന്ന ബട്ടൺ ക്ലിക്ക് ചെയ്യുക.</i>"
@@ -3920,8 +3921,9 @@ async def auto_filter(client, name, msg, reply_msg=None, ai_search=True, spoll=F
         if message.chat.type in [enums.ChatType.GROUP, enums.ChatType.SUPERGROUP]:
             return
 
-        child_username = getattr(temp, "CHILD_U_NAME", None) or os.environ.get("CHILD_USERNAME", "Bot")
-        child_link = f"https://t.me/{str(child_username).lstrip('@')}?start=getme_{search.replace(' ', '_')}"
+        from utils import get_child_bot_username
+        child_username = get_child_bot_username()
+        child_link = f"https://t.me/{child_username}?start=getme_{search.replace(' ', '_')}"
         redirect_text = (
             "<b>🌟 This title is available on our Normal Filter Bot!</b>\n\n"
             "<i>ഈ മൂവി / സീരീസ് നോർമൽ ഫിൽട്ടർ ബോട്ടിൽ ലഭ്യമാണ്. താഴെ കാണുന്ന ബട്ടൺ ക്ലിക്ക് ചെയ്യുക.</i>"
@@ -5211,3 +5213,246 @@ async def global_filters(client, message, text=False):
                 break
     else:
         return False
+
+
+# ─── Child Bot (Normal / Legacy Filter) Handlers & Registration ───────────────
+
+async def child_start_handler(client: Client, message: Message):
+    if not await db.is_user_exist(message.from_user.id):
+        await db.add_user(message.from_user.id, message.from_user.first_name)
+
+    if len(message.command) > 1:
+        data = message.command[1]
+
+        # 1. Normal Filter Deeplink Flow (/start norm_...)
+        if data.startswith("norm_"):
+            norm_key = data.split("_", 1)[1]
+            await process_normal_filter_deeplink(client, message, norm_key, user_id=message.from_user.id)
+            return
+
+        # 2. Getme Normal Search Deeplink (/start getme_...)
+        if data.startswith("getme_"):
+            search_query = data.split("getme_", 1)[1].replace("_", " ").strip()
+            if search_query:
+                files, _, _ = await get_search_results(message.chat.id, search_query.lower(), max_results=100, offset=0, filter=True)
+                if files:
+                    rendered = await render_normal_grouped_results(client=client, message=message, query_text=search_query, files=files)
+                    if rendered:
+                        return
+                await message.reply_text(f"<b>No files found in database for '<i>{html.escape(search_query)}</i>'</b>", parse_mode=enums.ParseMode.HTML)
+            return
+
+    # Plain /start welcome message
+    mention = message.from_user.mention if message.from_user else "User"
+    welcome_text = (
+        f"<b>👋 Hello {mention},</b>\n\n"
+        "Welcome to the <b>Normal Filter Bot</b>.\n\n"
+        "Search for any movie or series name in this chat or in connected groups to find available files."
+    )
+    await message.reply_text(welcome_text, parse_mode=enums.ParseMode.HTML)
+
+
+async def child_about_handler(client: Client, message: Message):
+    about_text = (
+        "<b>🤖 Normal Filter Bot</b>\n\n"
+        "This bot is dedicated to <b>Normal / Legacy Movie & Series Filter</b> searches with instant file delivery.\n\n"
+        "<b>Powered by:</b> @KingVJ01"
+    )
+    await message.reply_text(about_text, parse_mode=enums.ParseMode.HTML)
+
+
+async def child_help_handler(client: Client, message: Message):
+    help_text = (
+        "<b>📖 How to Search:</b>\n\n"
+        "1. Send the title of the movie or series in this chat or in connected groups.\n"
+        "2. Select your desired version from the file list buttons.\n"
+        "3. Open the bot and click <b>⌯⌲ Get All File</b> to receive your files."
+    )
+    await message.reply_text(help_text, parse_mode=enums.ParseMode.HTML)
+
+
+async def child_pm_broadcast(client: Client, message: Message):
+    from utils import broadcast_messages
+    b_msg = await client.ask(chat_id=message.from_user.id, text="Now Send Me Your Broadcast Message")
+    try:
+        users = await db.get_all_users()
+        sts = await message.reply_text('Broadcasting your messages...')
+        start_time = time.time()
+        total_users = await db.total_users_count()
+        done = 0
+        blocked = 0
+        deleted = 0
+        failed = 0
+        success = 0
+        async for user in users:
+            if 'id' in user:
+                pti, sh = await broadcast_messages(int(user['id']), b_msg)
+                if pti:
+                    success += 1
+                elif pti == False:
+                    if sh == "Blocked":
+                        blocked += 1
+                    elif sh == "Deleted":
+                        deleted += 1
+                    elif sh == "Error":
+                        failed += 1
+                done += 1
+                if not done % 20:
+                    await sts.edit(f"Broadcast in progress:\n\nTotal Users {total_users}\nCompleted: {done} / {total_users}\nSuccess: {success}\nBlocked: {blocked}\nDeleted: {deleted}")    
+            else:
+                done += 1
+                failed += 1
+                if not done % 20:
+                    await sts.edit(f"Broadcast in progress:\n\nTotal Users {total_users}\nCompleted: {done} / {total_users}\nSuccess: {success}\nBlocked: {blocked}\nDeleted: {deleted}")    
+    
+        time_taken = timedelta(seconds=int(time.time() - start_time))
+        await sts.edit(f"Broadcast Completed:\nCompleted in {time_taken} seconds.\n\nTotal Users: {total_users}\nCompleted: {done} / {total_users}\nSuccess: {success}\nBlocked: {blocked}\nDeleted: {deleted}")
+    except Exception as e:
+        logger.error(f"Child Broadcast Error: {e}")
+
+
+async def child_broadcast_group(client: Client, message: Message):
+    from utils import broadcast_messages_group
+    b_msg = await client.ask(chat_id=message.from_user.id, text="Now Send Me Your Broadcast Message")
+    groups = await db.get_all_chats()
+    sts = await message.reply_text('Broadcasting your messages To Groups...')
+    start_time = time.time()
+    total_groups = await db.total_chat_count()
+    done = 0
+    failed = 0
+    success = 0
+    async for group in groups:
+        pti, sh = await broadcast_messages_group(int(group['id']), b_msg)
+        if pti:
+            success += 1
+        elif sh == "Error":
+            failed += 1
+        done += 1
+        if not done % 20:
+            await sts.edit(f"Broadcast in progress:\n\nTotal Groups {total_groups}\nCompleted: {done} / {total_groups}\nSuccess: {success}")    
+    time_taken = timedelta(seconds=int(time.time() - start_time))
+    await sts.edit(f"Broadcast Completed:\nCompleted in {time_taken} seconds.\n\nTotal Groups {total_groups}\nCompleted: {done} / {total_groups}\nSuccess: {success}")
+
+
+def clean_child_search_query(text: str) -> str:
+    name = str(text or "").strip()
+    search = EMOJI_PATTERN.sub(" ", name)
+    search = re.sub(r"[\.\_\-\:\+\/\\\[\]\(\)\{\}\#\@\*\&]+", " ", search)
+    search = re.sub(r"(?i)\b(pl(i|e)*?(s|z+|ease|se|ese|(e+)s(e)?)|((send|snd|giv(e)?|gib)(\sme)?)|movie(s)?|new|latest|bro|bruh|broh|helo|that|find|dubbed|link|venum|iruka|pannunga|pannungga|anuppunga|anupunga|anuppungga|anupungga|film|undo|kitti|kitty|tharu|kittumo|kittum|movie|any(one)|with\ssubtitle(s)?|upload|full|print|file)\b", " ", search)
+    search = re.sub(r"\s+", " ", search).strip()
+    return search if search else name
+
+
+async def child_filter_message_handler(client: Client, message: Message):
+    if not message.text or message.text.startswith("/") or message.text.startswith("#"):
+        return
+
+    # Check banned users / chats
+    if message.from_user and message.from_user.id in getattr(temp, "BANNED_USERS", []):
+        return
+    if message.chat and message.chat.id in getattr(temp, "BANNED_CHATS", []):
+        return
+
+    search = clean_child_search_query(message.text)
+    if not search:
+        return
+
+    is_group = message.chat.type in [enums.ChatType.GROUP, enums.ChatType.SUPERGROUP]
+
+    # 1. Super Filter Check
+    try:
+        from plugins.series import is_super_filter_query
+        is_super = await is_super_filter_query(search)
+    except Exception as e:
+        logger.warning(f"[CHILD BOT SUPER CHECK ERROR] {e}")
+        is_super = False
+
+    if is_super:
+        if is_group:
+            # GROUP ROUTING: Child Bot MUST REMAIN COMPLETELY SILENT!
+            logger.info(f"[CHILD BOT GROUP SILENT] query={search} matches Super Filter. Remaining silent.")
+            return
+        else:
+            # PM ROUTING: Redirect user to Main Bot
+            main_bot_username = temp.U_NAME if (hasattr(temp, "U_NAME") and temp.U_NAME) else "Bot"
+            main_link = f"https://t.me/{str(main_bot_username).lstrip('@')}?start=getme_{search.replace(' ', '_')}"
+            redirect_text = (
+                "<b>🌟 This title is available on our Main Bot with full qualities & languages!</b>\n\n"
+                "<i>ഈ മൂവി / സീരീസ് ലഭിക്കുന്നതിനായി താഴെ കാണുന്ന ബട്ടൺ ക്ലിക്ക് ചെയ്തു മെയിൻ ബോട്ടിൽ സേർച്ച് ചെയ്യുക.</i>"
+            )
+            markup = InlineKeyboardMarkup([[InlineKeyboardButton("🚀 Search on Main Bot", url=main_link)]])
+            await message.reply_text(redirect_text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
+            return
+
+    # 2. Normal / Legacy Filter Search in Mongo DB
+    logger.info(f"[CHILD BOT NORMAL SEARCH] query={search} chat_id={message.chat.id}")
+    files, offset, total_results = await get_search_results(message.chat.id, search.lower(), max_results=100, offset=0, filter=True)
+
+    if not files:
+        if is_group:
+            msg_text = (
+                "<b>sᴏʀʀʏ ɴᴏ ꜰɪʟᴇs ᴡᴇʀᴇ ꜰᴏᴜɴᴅ ꜰᴏʀ ʏᴏᴜʀ ʀᴇǫᴜᴇꜱᴛ😕\n\n"
+                "ᴄʜᴇᴄᴋ ʏᴏᴜʀ sᴘᴇʟʟɪɴɢ ɪɴ ɢᴏᴏɢʟᴇ ᴀɴᴅ ᴛʀʏ ᴀɢᴀɪɴ 😃\n\n"
+                "<i>🕐 This message will be deleted in 50 seconds.</i></b>"
+            )
+            sent_msg = await message.reply_text(msg_text, parse_mode=enums.ParseMode.HTML)
+            if sent_msg:
+                schedule_filter_message_delete(client, sent_msg.chat.id, sent_msg.id, delay=50)
+                schedule_filter_message_delete(client, message.chat.id, message.id, delay=50)
+        else:
+            await message.reply_text(f"<b>No files found in database for '<i>{html.escape(search)}</i>'</b>", parse_mode=enums.ParseMode.HTML)
+        return
+
+    # Render Normal Filter Results with max 5 buttons per page and 20-min auto-delete
+    await render_normal_grouped_results(client=client, message=message, query_text=search, files=files, reply_msg=None, page=0)
+
+
+def register_normal_filter_handlers(child_bot: Client) -> int:
+    """
+    Explicitly registers all Normal/Legacy Filter message handlers, command handlers,
+    and callback query handlers directly onto the provided ChildBot Pyrogram Client.
+    Super Filter handlers are NEVER attached to ChildBot.
+    Returns the total number of registered handlers.
+    """
+    if not child_bot:
+        return 0
+
+    from pyrogram.handlers import MessageHandler, CallbackQueryHandler
+    from info import ADMINS
+
+    # Reset group 0 handlers to prevent duplicate accumulation
+    if hasattr(child_bot, "dispatcher") and hasattr(child_bot.dispatcher, "groups"):
+        child_bot.dispatcher.groups[0] = []
+
+    # 1. Commands
+    child_bot.add_handler(MessageHandler(child_start_handler, filters.command("start") & filters.incoming), group=0)
+    child_bot.add_handler(MessageHandler(child_about_handler, filters.command("about") & filters.incoming), group=0)
+    child_bot.add_handler(MessageHandler(child_help_handler, filters.command("help") & filters.incoming), group=0)
+    child_bot.add_handler(MessageHandler(child_pm_broadcast, filters.command("broadcast") & filters.user(ADMINS)), group=0)
+    child_bot.add_handler(MessageHandler(child_broadcast_group, filters.command("grp_broadcast") & filters.user(ADMINS)), group=0)
+
+    # 2. Normal Filter Search
+    child_bot.add_handler(
+        MessageHandler(
+            child_filter_message_handler,
+            filters.text & filters.incoming & ~filters.command(["start", "about", "help", "broadcast", "grp_broadcast", "edt", "edit", "quick_edit"])
+        ),
+        group=0
+    )
+
+    # 3. Callback Queries
+    child_bot.add_handler(CallbackQueryHandler(cb_normal_group_page, filters.regex(r"^norm_page#")), group=0)
+    child_bot.add_handler(CallbackQueryHandler(cb_normal_group_select, filters.regex(r"^norm_grp#")), group=0)
+    child_bot.add_handler(CallbackQueryHandler(cb_norm_disclaimer, filters.regex(r"^norm_disc")), group=0)
+    child_bot.add_handler(CallbackQueryHandler(cb_norm_get_all_file, filters.regex(r"^norm_getall#")), group=0)
+    child_bot.add_handler(CallbackQueryHandler(cb_norm_stop_files, filters.regex(r"^norm_stop#")), group=0)
+    child_bot.add_handler(CallbackQueryHandler(english_only_reason_alert, filters.regex(r"^english_only_reason$")), group=0)
+    child_bot.add_handler(CallbackQueryHandler(not_in_db_reason_alert, filters.regex(r"^not_in_db_reason$")), group=0)
+
+    count = 0
+    if hasattr(child_bot, "dispatcher") and hasattr(child_bot.dispatcher, "groups"):
+        count = len(child_bot.dispatcher.groups.get(0, []))
+
+    logger.info(f"[CHILD BOT] Successfully registered {count} Normal Filter handlers on ChildBot!")
+    return count
+
