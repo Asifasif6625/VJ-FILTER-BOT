@@ -328,8 +328,9 @@ async def start(client, message):
                 if is_handled:
                     return
             # If not Super Filter, redirect to Child Bot
-            child_username = getattr(temp, "CHILD_U_NAME", None) or os.environ.get("CHILD_USERNAME", "Bot")
-            child_link = f"https://t.me/{str(child_username).lstrip('@')}?start={data}"
+            from utils import get_child_bot_username
+            child_username = get_child_bot_username()
+            child_link = f"https://t.me/{child_username}?start={data}"
             redirect_text = (
                 "<b>🌟 This title is available on our Normal Filter Bot!</b>\n\n"
                 "<i>ഈ മൂവി / സീരീസ് നോർമൽ ഫിൽട്ടർ ബോട്ടിൽ ലഭ്യമാണ്. താഴെ കാണുന്ന ബട്ടൺ ക്ലിക്ക് ചെയ്യുക.</i>"
@@ -339,8 +340,9 @@ async def start(client, message):
         return
 
     if data.startswith("norm_"):
-        child_username = getattr(temp, "CHILD_U_NAME", None) or os.environ.get("CHILD_USERNAME", "Bot")
-        child_link = f"https://t.me/{str(child_username).lstrip('@')}?start={data}"
+        from utils import get_child_bot_username
+        child_username = get_child_bot_username()
+        child_link = f"https://t.me/{child_username}?start={data}"
         redirect_text = (
             "<b>🌟 This file selection belongs to our Normal Filter Bot!</b>\n\n"
             "<i>ഫയലുകൾ ലഭിക്കുന്നതിനായി താഴെ കാണുന്ന ബട്ടൺ ക്ലിക്ക് ചെയ്യുക.</i>"
