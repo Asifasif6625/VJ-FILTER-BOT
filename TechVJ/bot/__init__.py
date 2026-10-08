@@ -11,6 +11,10 @@ from typing import Union, Optional, AsyncGenerator
 from aiohttp import web
 
 
+multi_clients = {}
+work_loads = {}
+
+
 class TechVJXBot(Client):
 
     def __init__(self):
@@ -33,29 +37,6 @@ class TechVJXBot(Client):
         limit: int,
         offset: int = 0,
     ) -> Optional[AsyncGenerator["types.Message", None]]:
-        """Iterate through a chat sequentially.
-        This convenience method does the same as repeatedly calling :meth:`~pyrogram.Client.get_messages` in a loop, thus saving
-        you from the hassle of setting up boilerplate code. It is useful for getting the whole chat messages with a
-        single call.
-        Parameters:
-            chat_id (``int`` | ``str``):
-                Unique identifier (int) or username (str) of the target chat.
-                For your personal cloud (Saved Messages) you can simply use "me" or "self".
-                For a contact that exists in your Telegram address book you can use his phone number (str).
-                
-            limit (``int``):
-                Identifier of the last message to be returned.
-                
-            offset (``int``, *optional*):
-                Identifier of the first message to be returned.
-                Defaults to 0.
-        Returns:
-            ``Generator``: A generator yielding :obj:`~pyrogram.types.Message` objects.
-        Example:
-            .. code-block:: python
-                for message in app.iter_messages("pyrogram", 1, 15000):
-                    print(message.text)
-        """
         current = offset
         while True:
             new_diff = min(200, limit - current)
@@ -83,14 +64,15 @@ class TechVJChildBot(Client):
             plugins={"root": "child_plugins"},
             sleep_threshold=5,
         )
+        try:
+            from child_plugins import register_child_handlers
+            register_child_handlers(self)
+        except Exception as e:
+            pass
 
 # ChildBot instance initialized when BOT_TOKEN2 is present
 _bot_token2 = (environ.get('BOT_TOKEN2', globals().get('BOT_TOKEN2', '')) or "").strip().strip('"').strip("'")
 ChildBot = TechVJChildBot(bot_token=_bot_token2) if _bot_token2 else None
-
-
-multi_clients = {}
-work_loads = {}
 
 __all__ = [
     "TechVJBot",
