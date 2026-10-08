@@ -64,11 +64,6 @@ class TechVJChildBot(Client):
             plugins=None,
             sleep_threshold=5,
         )
-        try:
-            from child_plugins import register_child_handlers
-            register_child_handlers(self)
-        except Exception as e:
-            pass
 
 # ChildBot instance initialized when BOT_TOKEN2 is present
 _bot_token2 = (environ.get('BOT_TOKEN2', globals().get('BOT_TOKEN2', '')) or "").strip().strip('"').strip("'")
