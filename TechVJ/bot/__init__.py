@@ -70,9 +70,10 @@ TechVJBot = TechVJXBot()
 
 class TechVJChildBot(Client):
 
-    def __init__(self):
-        token2 = environ.get('BOT_TOKEN2', globals().get('BOT_TOKEN2', ''))
-        sess_name = environ.get('CHILD_SESSION', globals().get('CHILD_SESSION', 'TechVJChildBot'))
+    def __init__(self, bot_token=None):
+        raw_token = bot_token or environ.get('BOT_TOKEN2', globals().get('BOT_TOKEN2', '')) or ""
+        token2 = str(raw_token).strip().strip('"').strip("'")
+        sess_name = (environ.get('CHILD_SESSION', globals().get('CHILD_SESSION', 'TechVJChildBot')) or "TechVJChildBot").strip()
         super().__init__(
             name=sess_name,
             api_id=API_ID,
@@ -84,8 +85,9 @@ class TechVJChildBot(Client):
         )
 
 # ChildBot instance initialized when BOT_TOKEN2 is present
-_bot_token2 = environ.get('BOT_TOKEN2', globals().get('BOT_TOKEN2', ''))
-ChildBot = TechVJChildBot() if _bot_token2 else None
+_bot_token2 = (environ.get('BOT_TOKEN2', globals().get('BOT_TOKEN2', '')) or "").strip().strip('"').strip("'")
+ChildBot = TechVJChildBot(bot_token=_bot_token2) if _bot_token2 else None
+
 
 multi_clients = {}
 work_loads = {}
