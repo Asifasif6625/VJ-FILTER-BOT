@@ -3879,47 +3879,22 @@ async def auto_filter(client, name, msg, reply_msg=None, ai_search=True, spoll=F
             except Exception as e:
                 logger.error(f"[SUPER FILTER SEARCH ROUTING ERROR] query={search if search else name} error={e}")
 
-            from info import BOT_TOKEN2
-            # If Child Bot (BOT_TOKEN2) is active and this is a group chat, Main Bot yields normal filter handling to Child Bot
-            if BOT_TOKEN2 and message.chat.type in [enums.ChatType.GROUP, enums.ChatType.SUPERGROUP]:
-                logger.info(f"[MAIN BOT YIELD TO CHILD BOT] query={search} in group={message.chat.id}")
+            # If not a Super Filter:
+            # 1. In Group: Main Bot remains completely SILENT (Child Bot handles Normal Filter in group)
+            if message.chat.type in [enums.ChatType.GROUP, enums.ChatType.SUPERGROUP]:
+                logger.info(f"[MAIN BOT SILENT IN GROUP] query={search} is not Super Filter, letting Child Bot handle.")
                 return
 
-            # -- 2. Normal / Legacy Filter (ia_filterdb) --
-            logger.info(f"[NORMAL FILTER ROUTE] query={search} chat_id={message.chat.id}")
-            files, offset, total_results = await get_search_results(message.chat.id, search, max_results=100, offset=0, filter=True)
-            logger.info(
-                f"[FILE SEARCH]\n"
-                f"query={search}\n"
-                f"matches={len(files) if files else 0}"
+            # 2. In PM: Main Bot redirects to Child Bot
+            child_username = getattr(temp, "CHILD_U_NAME", None) or os.environ.get("CHILD_USERNAME", "Bot")
+            child_link = f"https://t.me/{str(child_username).lstrip('@')}?start=getme_{search.replace(' ', '_')}"
+            redirect_text = (
+                "<b>🌟 This title is available on our Normal Filter Bot!</b>\n\n"
+                "<i>ഈ മൂവി / സീരീസ് നോർമൽ ഫിൽട്ടർ ബോട്ടിൽ ലഭ്യമാണ്. താഴെ കാണുന്ന ബട്ടൺ ക്ലിക്ക് ചെയ്യുക.</i>"
             )
-            settings = await get_settings(message.chat.id)
-
-            if not files:
-                logger.info(f"[SEARCH ROUTE] type=no_result query={search}")
-                # -- 3. Route to Spell Check / Suggestions --
-                if settings.get("spell_check", True):
-                    return await advantage_spell_chok(client, search if search else name, message, reply_msg, True)
-
-                # If spell check disabled, show not found / reason
-                no_db_btn = InlineKeyboardMarkup([[InlineKeyboardButton(chr(0x1F9A8) + " Reason", callback_data="not_in_db_reason")]])
-                msg_text = (
-                    "<b>sᴏʀʀʏ ɴᴏ ꜰɪʟᴇs ᴡᴇʀᴇ ꜰᴏᴜɴᴅ ꜰᴏʀ ʏᴏᴜʀ ʀᴇǫᴜᴇꜱᴛ😕\n\n"
-                    "ᴄʜᴇᴄᴋ ʏᴏᴜʀ sᴘᴇʟʟɪɴɢ ɪɴ ɢᴏᴏɢʟᴇ ᴀɴᴅ ᴛʀʏ ᴀɢᴀɪɴ 😃\n\n"
-                    "<i>🕐 This message will be deleted in 50 seconds.</i></b>"
-                )
-                if reply_msg:
-                    msg_obj = await safe_edit_text(reply_msg, msg_text, reply_markup=no_db_btn)
-                else:
-                    msg_obj = await safe_reply_text(message, msg_text, reply_markup=no_db_btn)
-
-                if msg_obj and getattr(msg_obj, "chat", None):
-                    schedule_filter_message_delete(client, msg_obj.chat.id, msg_obj.id, delay=50)
-                if message and getattr(message, "chat", None):
-                    schedule_filter_message_delete(client, message.chat.id, message.id, delay=50)
-                return
-
-            return await render_normal_grouped_results(client, message, search, files, reply_msg=reply_msg, page=0)
+            markup = InlineKeyboardMarkup([[InlineKeyboardButton("🚀 Search on Normal Filter Bot", url=child_link)]])
+            await message.reply_text(redirect_text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
+            return
         else:
             return
     else:
@@ -3942,16 +3917,18 @@ async def auto_filter(client, name, msg, reply_msg=None, ai_search=True, spoll=F
         except Exception as e:
             logger.error(f"[SPOLL SUPER FILTER SEARCH ERROR] query={search} error={e}")
 
-        from info import BOT_TOKEN2
-        if BOT_TOKEN2 and message.chat.type in [enums.ChatType.GROUP, enums.ChatType.SUPERGROUP]:
-            logger.info(f"[MAIN BOT YIELD TO CHILD BOT - SPOLL] query={search} in group={message.chat.id}")
+        if message.chat.type in [enums.ChatType.GROUP, enums.ChatType.SUPERGROUP]:
             return
 
-        files, offset, total_results = await get_search_results(message.chat.id, search, max_results=100, offset=0, filter=True)
-        if files:
-            return await render_normal_grouped_results(client, message, search, files, reply_msg=None, page=0)
-        else:
-            return
+        child_username = getattr(temp, "CHILD_U_NAME", None) or os.environ.get("CHILD_USERNAME", "Bot")
+        child_link = f"https://t.me/{str(child_username).lstrip('@')}?start=getme_{search.replace(' ', '_')}"
+        redirect_text = (
+            "<b>🌟 This title is available on our Normal Filter Bot!</b>\n\n"
+            "<i>ഈ മൂവി / സീരീസ് നോർമൽ ഫിൽട്ടർ ബോട്ടിൽ ലഭ്യമാണ്. താഴെ കാണുന്ന ബട്ടൺ ക്ലിക്ക് ചെയ്യുക.</i>"
+        )
+        markup = InlineKeyboardMarkup([[InlineKeyboardButton("🚀 Search on Normal Filter Bot", url=child_link)]])
+        await message.reply_text(redirect_text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
+        return
 
 
 def build_normal_filter_groups(files: list[dict]) -> list[dict]:
@@ -4178,7 +4155,6 @@ async def render_normal_grouped_results(client: Client, message: Message, query_
     return True
 
 
-@Client.on_callback_query(filters.regex(r"^norm_page#"), group=-15)
 async def cb_normal_group_page(client: Client, query: CallbackQuery):
     parts = query.data.split("#")
     if len(parts) < 3:
@@ -4208,7 +4184,6 @@ async def cb_normal_group_page(client: Client, query: CallbackQuery):
     await query.answer()
 
 
-@Client.on_callback_query(filters.regex(r"^norm_grp#"), group=-15)
 async def cb_normal_group_select(client: Client, query: CallbackQuery):
     parts = query.data.split("#")
     if len(parts) < 2:
@@ -4405,7 +4380,6 @@ async def process_normal_filter_deeplink(client: Client, message: Message, norm_
     return True
 
 
-@Client.on_callback_query(filters.regex(r"^norm_disc"), group=-15)
 async def cb_norm_disclaimer(client: Client, query: CallbackQuery):
     await query.answer(
         "Since these files and details are generated automatically, there is a possibility of errors.",
@@ -4413,7 +4387,6 @@ async def cb_norm_disclaimer(client: Client, query: CallbackQuery):
     )
 
 
-@Client.on_callback_query(filters.regex(r"^norm_getall#"), group=-15)
 async def cb_norm_get_all_file(client: Client, query: CallbackQuery):
     parts = query.data.split("#")
     if len(parts) < 2:
@@ -4610,7 +4583,6 @@ async def trigger_normal_fsub_approved_delivery(client: Client, user_id: int, pe
         getattr(temp, "ACTIVE_NORMAL_DELIVERIES", set()).discard(user_id)
 
 
-@Client.on_callback_query(filters.regex(r"^norm_stop#"), group=-15)
 async def cb_norm_stop_files(client: Client, query: CallbackQuery):
     parts = query.data.split("#")
     if len(parts) < 2:
