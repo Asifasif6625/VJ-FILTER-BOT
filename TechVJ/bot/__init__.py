@@ -61,7 +61,7 @@ class TechVJChildBot(Client):
             api_hash=API_HASH,
             bot_token=token2,
             workers=100,
-            plugins={"root": "child_plugins"},
+            plugins=None,
             sleep_threshold=5,
         )
         try:
