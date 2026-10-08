@@ -54,6 +54,20 @@ async def start(client, message):
         )
         return
     data = message.command[1]
+
+    # ── Normal Filter Deeplink: /start norm_{group_id} ──────────────────────────
+    # Triggered when user clicks "Get All File" from a group (via query.answer(url=))
+    # Delegates to main bot's process_normal_filter_deeplink for file delivery.
+    if data.startswith("norm_"):
+        norm_key = data.split("_", 1)[1]
+        try:
+            from plugins.pm_filter import process_normal_filter_deeplink
+            await process_normal_filter_deeplink(client, message, norm_key, user_id=message.from_user.id)
+        except Exception as e:
+            logger.error(f"[CHILD BOT NORM DEEPLINK ERROR] {e}")
+            await message.reply_text("<b>❌ Could not load files. Please try again.</b>", parse_mode=enums.ParseMode.HTML)
+        return
+
     try:
         pre, file_id = data.split('_', 1)
     except:
