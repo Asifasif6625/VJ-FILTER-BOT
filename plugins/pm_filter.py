@@ -4268,11 +4268,8 @@ async def cb_normal_group_select(client: Client, query: CallbackQuery):
     )
 
     is_pm = bool(query.message.chat.type == enums.ChatType.PRIVATE)
-    if is_pm:
-        get_all_btn = InlineKeyboardButton("⌯⌲ Get All File", callback_data=f"norm_getall#{norm_group_id}")
-    else:
-        start_url = f"https://t.me/{bot_username}?start=norm_{norm_group_id}"
-        get_all_btn = InlineKeyboardButton("⌯⌲ Get All File", url=start_url)
+    # Always use callback_data — handler decides PM open vs inline delivery
+    get_all_btn = InlineKeyboardButton("⌯⌲ Get All File", callback_data=f"norm_getall#{norm_group_id}")
 
     back_data = f"norm_back#{session_id}#{page}" if session_id else f"norm_back#{norm_group_id}#0"
     markup = InlineKeyboardMarkup([
@@ -4351,19 +4348,48 @@ async def cb_norm_disclaimer(client: Client, query: CallbackQuery):
 
 @Client.on_callback_query(filters.regex(r"^norm_getall#"))
 async def cb_norm_get_all_file(client: Client, query: CallbackQuery):
+    """
+    'Get All File' button handler for Normal Filter.
+    - In GROUP: mirrors super movie filter quality button — calls query.answer(url=start_url)
+      so Telegram instantly opens the bot PM (no popup, no extra button).
+    - In PM: deletes details card and starts inline file delivery directly.
+    """
     parts = query.data.split("#")
     if len(parts) < 2:
         return await query.answer("⚠️ Invalid request.", show_alert=True)
     group_id = parts[1]
     user_id = query.from_user.id
+    is_pm = query.message.chat.type == enums.ChatType.PRIVATE
 
+    if not is_pm:
+        # GROUP: open bot PM instantly via query.answer(url=...) — same as super movie filter quality button
+        bot_username = temp.U_NAME if (hasattr(temp, "U_NAME") and temp.U_NAME) else getattr(getattr(client, "me", None), "username", None)
+        if bot_username:
+            bot_username = str(bot_username).lstrip("@")
+        else:
+            bot_username = "Bot"
+        start_url = f"https://t.me/{bot_username}?start=norm_{group_id}"
+        try:
+            return await query.answer(url=start_url)
+        except Exception as e:
+            logger.warning(f"[NORM GETALL GROUP URL] query.answer(url=) failed: {e}. Falling back to button.")
+            fb_msg = await query.message.reply_text(
+                "📩 Open bot to get your files:",
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("📂 Open Bot", url=start_url)]])
+            )
+            from utils import schedule_filter_message_delete
+            if fb_msg:
+                schedule_filter_message_delete(client, fb_msg.chat.id, fb_msg.id, 60)
+            return
+
+    # PM: delete details card and start inline delivery
     try:
         await query.message.delete()
     except Exception:
         pass
-
     await query.answer()
     await process_normal_filter_deeplink(client, query.message, group_id, user_id=user_id)
+
 
 
 async def process_normal_filter_deeplink(client: Client, message: Message, norm_group_id: str, user_id: int = None) -> bool:
