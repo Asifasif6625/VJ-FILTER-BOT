@@ -66,8 +66,8 @@ async def start():
             if not getattr(ChildBot, "is_connected", False):
                 print("### CONNECTING CHILD BOT ASYNC ###", flush=True)
                 await ChildBot.start()
-            from child_plugins import register_child_handlers
-            register_child_handlers(ChildBot)
+            from plugins.pm_filter import register_normal_filter_handlers
+            handler_count = register_normal_filter_handlers(ChildBot)
 
             child_me = await ChildBot.get_me()
             temp.CHILD_BOT = ChildBot
@@ -76,12 +76,10 @@ async def start():
             temp.CHILD_B_NAME = child_me.first_name
 
             # Inspect actual registered handlers
-            handler_count = 0
             handler_names = []
             if hasattr(ChildBot, "dispatcher") and hasattr(ChildBot.dispatcher, "groups"):
                 for g_id, g_handlers in ChildBot.dispatcher.groups.items():
                     for h in g_handlers:
-                        handler_count += 1
                         fn_name = getattr(getattr(h, "callback", None), "__name__", str(h))
                         handler_names.append(fn_name)
 
