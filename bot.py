@@ -66,13 +66,27 @@ async def start():
             if not getattr(ChildBot, "is_connected", False):
                 print("### CONNECTING CHILD BOT ASYNC ###", flush=True)
                 await ChildBot.start()
+            from child_plugins import register_child_handlers
+            register_child_handlers(ChildBot)
+
             child_me = await ChildBot.get_me()
             temp.CHILD_BOT = ChildBot
             temp.CHILD_ME = child_me.id
             temp.CHILD_U_NAME = child_me.username
             temp.CHILD_B_NAME = child_me.first_name
-            logging.info(f"CHILD BOT: Normal Filter handlers loaded successfully as @{child_me.username}")
-            print(f"### CHILD BOT RUNNING AS @{child_me.username} ###", flush=True)
+
+            # Inspect actual registered handlers
+            handler_count = 0
+            handler_names = []
+            if hasattr(ChildBot, "dispatcher") and hasattr(ChildBot.dispatcher, "groups"):
+                for g_id, g_handlers in ChildBot.dispatcher.groups.items():
+                    for h in g_handlers:
+                        handler_count += 1
+                        fn_name = getattr(getattr(h, "callback", None), "__name__", str(h))
+                        handler_names.append(fn_name)
+
+            logging.info(f"CHILD BOT NORMAL HANDLERS REGISTERED: {handler_count} on @{child_me.username} ({', '.join(handler_names)})")
+            print(f"### CHILD BOT RUNNING AS @{child_me.username} (NORMAL HANDLERS: {handler_count}) ###", flush=True)
         except Exception as ce:
             logging.error(f"Failed to initialize Child Bot: {ce}", exc_info=True)
             print(f"### FAILED TO INITIALIZE CHILD BOT: {ce} ###", flush=True)
