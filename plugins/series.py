@@ -4594,9 +4594,10 @@ def _log_wizard_prompt(user_id: int, workflow: str, state: str, message_id: int)
 async def wizard_text_handler(client: Client, message: Message):
     text = message.text.strip() if message.text else ""
 
-    # If it is any slash command (except /skip for wizards), allow normal command handlers to process it!
+    # Allow wizard control commands (/skip, /remove, /clear, /none, /cancel) to pass through to the wizard handler
     if text and text.startswith("/"):
-        if not text.lower().startswith("/skip"):
+        lower_cmd = text.lower().split()[0]
+        if lower_cmd not in ["/skip", "/remove", "/clear", "/none", "/cancel"]:
             return
 
     try:
@@ -5424,7 +5425,24 @@ async def wizard_text_handler(client: Client, message: Message):
     elif workflow == "MOVIE_EDIT_SECOND_NAME":
         movie_data = sess.get("data", {})
         movie_id = movie_data.get("movie_id")
-        new_sec = None if text.strip().lower() in ["/remove", "/clear", "/none", "none"] else text.strip()
+        raw_input = text.strip()
+
+        if not raw_input:
+            return await message.reply_text(
+                "❌ <b>Invalid Input.</b>\n\nPlease send a valid <b>Second Filter Name</b> (e.g. <code>Khalifa</code>), or send /remove to clear, or /cancel to abort:",
+                parse_mode=enums.ParseMode.HTML
+            )
+
+        if raw_input.lower() in ["/cancel", "cancel"]:
+            clear_wizard_session(uid)
+            from database.series_db import get_super_movie
+            movie = await get_super_movie(movie_id) if movie_id else None
+            if movie:
+                card_text, markup = _build_movie_edit_card_and_markup(movie)
+                return await message.reply_text("❌ <b>Action cancelled.</b>\n\n" + card_text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
+            return await message.reply_text("❌ <b>Action cancelled.</b>", parse_mode=enums.ParseMode.HTML)
+
+        new_sec = None if raw_input.lower() in ["/remove", "/clear", "/none", "none"] else raw_input
         if movie_id:
             from database.series_db import update_super_movie_second_name, get_super_movie
             await update_super_movie_second_name(movie_id, new_sec)
@@ -5432,17 +5450,38 @@ async def wizard_text_handler(client: Client, message: Message):
         movie = await get_super_movie(movie_id) if movie_id else None
         if movie:
             card_text, markup = _build_movie_edit_card_and_markup(movie)
+            status_msg = f"✅ <b>Second Filter Name saved:</b> <code>{html.escape(new_sec)}</code>" if new_sec else "✅ <b>Second Filter Name cleared!</b>"
             return await message.reply_text(
-                f"✅ <b>Second Filter Name {'updated' if new_sec else 'cleared'}!</b>\n\n" + card_text,
+                f"{status_msg}\n\n" + card_text,
                 reply_markup=markup,
                 parse_mode=enums.ParseMode.HTML
             )
-        return await message.reply_text(f"✅ <b>Second Filter Name {'updated' if new_sec else 'cleared'}!</b>", parse_mode=enums.ParseMode.HTML)
+        status_msg = f"✅ <b>Second Filter Name saved:</b> <code>{html.escape(new_sec)}</code>" if new_sec else "✅ <b>Second Filter Name cleared!</b>"
+        return await message.reply_text(status_msg, parse_mode=enums.ParseMode.HTML)
 
     elif workflow == "SERIES_EDIT_SECOND_NAME":
         wiz_data = sess.get("data", {})
         series_id = wiz_data.get("series_id")
-        new_sec = None if text.strip().lower() in ["/remove", "/clear", "/none", "none"] else text.strip()
+        raw_input = text.strip()
+
+        if not raw_input:
+            return await message.reply_text(
+                "❌ <b>Invalid Input.</b>\n\nPlease send a valid <b>Second Filter Name</b>, or send /remove to clear, or /cancel to abort:",
+                parse_mode=enums.ParseMode.HTML
+            )
+
+        if raw_input.lower() in ["/cancel", "cancel"]:
+            clear_wizard_session(uid)
+            from database.series_db import get_series
+            exact = await get_series(series_id) if series_id else None
+            wiz = temp.SERIES_WIZARD.get(uid) or wiz_data
+            return await message.reply_text(
+                _series_card(wiz) + "\n\n❌ <b>Action cancelled.</b>\n⚙️ <b>Series Configuration:</b>",
+                reply_markup=_config_menu_keyboard(series_id, True),
+                parse_mode=enums.ParseMode.HTML
+            )
+
+        new_sec = None if raw_input.lower() in ["/remove", "/clear", "/none", "none"] else raw_input
         if series_id:
             from database.series_db import update_series_second_name, get_series
             await update_series_second_name(series_id, new_sec)
@@ -5468,8 +5507,9 @@ async def wizard_text_handler(client: Client, message: Message):
                 }
         clear_wizard_session(uid)
         wiz = temp.SERIES_WIZARD.get(uid) or wiz_data
+        status_msg = f"✅ <b>Second Filter Name saved:</b> <code>{html.escape(new_sec)}</code>" if new_sec else "✅ <b>Second Filter Name cleared!</b>"
         return await message.reply_text(
-            _series_card(wiz) + f"\n\n✅ <b>Second Filter Name {'updated' if new_sec else 'cleared'}!</b>\n⚙️ <b>Series Configuration:</b>",
+            _series_card(wiz) + f"\n\n{status_msg}\n⚙️ <b>Series Configuration:</b>",
             reply_markup=_config_menu_keyboard(series_id, True),
             parse_mode=enums.ParseMode.HTML
         )
