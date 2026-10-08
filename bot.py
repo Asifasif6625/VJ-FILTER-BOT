@@ -57,6 +57,7 @@ async def start():
     temp.ME = me.id
     temp.U_NAME = me.username
     temp.B_NAME = me.first_name
+    logging.info("MAIN BOT: Super Filter handlers loaded.")
     if ChildBot:
         try:
             child_me = await ChildBot.get_me()
@@ -64,7 +65,7 @@ async def start():
             temp.CHILD_ME = child_me.id
             temp.CHILD_U_NAME = child_me.username
             temp.CHILD_B_NAME = child_me.first_name
-            logging.info(f"Child Bot initialized successfully as @{child_me.username}")
+            logging.info(f"CHILD BOT: Normal Filter handlers loaded successfully as @{child_me.username}")
         except Exception as ce:
             logging.warning(f"Failed to fetch Child Bot info: {ce}")
 
