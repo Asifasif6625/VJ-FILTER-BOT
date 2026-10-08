@@ -78,6 +78,7 @@ class temp(object):
     NORMAL_SEARCH_SESSIONS = {}
     ACTIVE_NORMAL_DELIVERIES = set()
     NORMAL_DELIVERY_SESSIONS = {}
+    LAST_SEARCH_CONTEXT = {}
 
 
 def set_wizard_session(user_id: int, workflow: str, state: str, data: dict = None, chat_id: int = None):
@@ -1187,17 +1188,20 @@ def match_automatic_movie_file(
     }
 
 
-def match_movie_identity(file_doc: dict, requested_title: str, requested_year: str | int = None, imdb_id: str = None, tmdb_id: str = None, known_conflicts: set = None) -> tuple[bool, str]:
+def match_movie_identity(file_doc: dict, requested_title: str, requested_year: str | int = None, imdb_id: str = None, tmdb_id: str = None, known_conflicts: set = None, target_aliases: list = None) -> tuple[bool, str]:
     """
     Strict identity matcher for Auto Movie Add / Super Movie Filter synchronization.
     Enforces BOTH Title and Release Year matching to prevent cross-contamination across sequels/different years.
     Returns: (is_match: bool, reason: str)
     """
-    if not isinstance(file_doc, dict):
+    if isinstance(file_doc, str):
+        file_name = file_doc
+        caption = ""
+    elif isinstance(file_doc, dict):
+        file_name = file_doc.get("file_name", "") or ""
+        caption = file_doc.get("caption", "") or ""
+    else:
         return False, "INVALID_FILE_DOC"
-
-    file_name = file_doc.get("file_name", "") or ""
-    caption = file_doc.get("caption", "") or ""
 
     res = match_automatic_movie_file(
         target_movie_name=requested_title,
@@ -1205,7 +1209,8 @@ def match_movie_identity(file_doc: dict, requested_title: str, requested_year: s
         filename=file_name,
         caption=caption,
         imdb_id=imdb_id,
-        tmdb_id=tmdb_id
+        tmdb_id=tmdb_id,
+        target_aliases=target_aliases
     )
 
     if res.get("matched"):
