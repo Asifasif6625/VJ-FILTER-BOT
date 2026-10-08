@@ -504,14 +504,16 @@ async def _get_search_candidates(collection, query: str, limit: int = 60) -> lis
         {"normalized_name": q_norm},
         {"search_aliases": q_norm},
         {"aliases": q_norm},
-        {"generated_aliases": q_norm}
+        {"generated_aliases": q_norm},
+        {"second_name": {"$regex": f"^{re.escape(raw_query)}$", "$options": "i"}}
     ]
     if clean_norm and clean_norm != q_norm:
         exact_conds.extend([
             {"normalized_name": clean_norm},
             {"search_aliases": clean_norm},
             {"aliases": clean_norm},
-            {"generated_aliases": clean_norm}
+            {"generated_aliases": clean_norm},
+            {"second_name": {"$regex": f"^{re.escape(clean_raw)}$", "$options": "i"}}
         ])
 
     try:
@@ -537,6 +539,7 @@ async def _get_search_candidates(collection, query: str, limit: int = 60) -> lis
         for w in words[:4]:
             token_conds.append({"normalized_name": {"$regex": re.escape(w), "$options": "i"}})
             token_conds.append({"search_aliases": {"$regex": f"^{re.escape(w)}", "$options": "i"}})
+            token_conds.append({"second_name": {"$regex": re.escape(w), "$options": "i"}})
 
         if token_conds:
             try:
@@ -1415,6 +1418,251 @@ async def update_super_movie(movie_id: str, fields: dict) -> bool:
         return False
 
 
+async def update_super_movie_second_name(movie_id: str, second_name: str | None) -> bool:
+    """
+    Set, update, or remove the Second Filter Name (Alias) for a Super Movie filter.
+    Preserves original title, file IDs, and other metadata.
+    """
+    try:
+        movie = await get_super_movie(movie_id)
+        if not movie:
+            return False
+        
+        sec = str(second_name or "").strip() if second_name else None
+        update_set = {
+            "second_name": sec if sec else None,
+            "updated_at": datetime.utcnow()
+        }
+        
+        cur_aliases = list(movie.get("aliases") or [])
+        if sec:
+            clean_sec = clean_series_title(sec)
+            if clean_sec not in cur_aliases:
+                cur_aliases.append(clean_sec)
+            if sec not in cur_aliases:
+                cur_aliases.append(sec)
+        elif not sec and movie.get("second_name"):
+            old_sec = movie.get("second_name")
+            cur_aliases = [a for a in cur_aliases if a != old_sec and a != clean_series_title(old_sec)]
+            
+        update_set["aliases"] = cur_aliases
+        cur_gen = list(movie.get("generated_aliases") or [])
+        update_set["search_aliases"] = list(dict.fromkeys(cur_aliases + cur_gen))
+        
+        res = await super_movies_col.update_one(
+            {"_id": ObjectId(movie_id)},
+            {"$set": update_set}
+        )
+        
+        # Verify DB Update immediately
+        fresh = await get_super_movie(movie_id)
+        if fresh and (fresh.get("second_name") == sec):
+            logger.info(
+                f"[SECOND FILTER NAME SAVED]\n"
+                f"filter_id={movie_id}\n"
+                f"primary_name={fresh.get('title')}\n"
+                f"second_filter_name={fresh.get('second_name')}"
+            )
+            return True
+        return res.modified_count > 0 or res.matched_count > 0
+    except Exception as e:
+        logger.error(f"[UPDATE SUPER MOVIE SECOND NAME ERROR] movie_id={movie_id}: {e}")
+        return False
+
+
+async def update_series_second_name(series_id: str, second_name: str | None) -> bool:
+    """
+    Set, update, or remove the Second Filter Name (Alias) for a Super Series filter.
+    Preserves original series name, seasons, and other metadata.
+    """
+    try:
+        series_doc = await get_series(series_id)
+        if not series_doc:
+            return False
+        
+        sec = str(second_name or "").strip() if second_name else None
+        update_set = {
+            "second_name": sec if sec else None,
+            "updated_at": datetime.utcnow()
+        }
+        
+        cur_aliases = list(series_doc.get("aliases") or [])
+        if sec:
+            clean_sec = clean_series_title(sec)
+            if clean_sec not in cur_aliases:
+                cur_aliases.append(clean_sec)
+            if sec not in cur_aliases:
+                cur_aliases.append(sec)
+        elif not sec and series_doc.get("second_name"):
+            old_sec = series_doc.get("second_name")
+            cur_aliases = [a for a in cur_aliases if a != old_sec and a != clean_series_title(old_sec)]
+            
+        update_set["aliases"] = cur_aliases
+        cur_gen = list(series_doc.get("generated_aliases") or [])
+        update_set["search_aliases"] = list(dict.fromkeys(cur_aliases + cur_gen))
+        
+        res = await series_col.update_one(
+            {"_id": ObjectId(series_id)},
+            {"$set": update_set}
+        )
+        
+        # Verify DB Update immediately
+        fresh = await get_series(series_id)
+        if fresh and (fresh.get("second_name") == sec):
+            logger.info(
+                f"[SECOND FILTER NAME SAVED]\n"
+                f"filter_id={series_id}\n"
+                f"primary_name={fresh.get('name')}\n"
+                f"second_filter_name={fresh.get('second_name')}"
+            )
+            return True
+        return res.modified_count > 0 or res.matched_count > 0
+    except Exception as e:
+        logger.error(f"[UPDATE SERIES SECOND NAME ERROR] series_id={series_id}: {e}")
+        return False
+
+
+async def resolve_series_episode_group_context(
+    series_id: str,
+    season: int,
+    episode: int,
+    filename: str,
+    caption: str = "",
+    detected_lang: str = None,
+    detected_qual: str = None,
+    original_language: str = None,
+    batch_files: list = None
+) -> tuple[str | None, str | None, bool]:
+    """
+    Authoritative Series Episode Group Continuity & Orphan Protection Resolver.
+    
+    Rules:
+    1. Identifies exact Series Name, Season, Episode.
+    2. Inspects filename/caption for explicit quality and explicit language.
+       If both are explicitly specified in the filename/caption, uses them.
+    3. If quality or language is missing, inspects existing established groups for the same Series + Season.
+    4. If there is an established reliable group continuity (e.g. S01E01, S01E02, S01E04 belong to Malayalam 1080p),
+       places this episode into that established group.
+    5. If multiple conflicting groups exist and the filename lacks explicit metadata to disambiguate:
+       - Does NOT blindly guess.
+       - Does NOT create an orphan quality or language group.
+       - Returns (None, None, False) to protect data integrity and keep unresolved safely.
+    """
+    from plugins.pm_filter import detect_file_languages
+    from plugins.series import extract_quality_from_filename
+
+    raw_qual = extract_quality_from_filename(filename)
+    has_exp_qual = bool(raw_qual and raw_qual != "Unknown")
+
+    exp_langs = detect_file_languages(filename, caption=caption, default=None)
+    has_exp_lang = bool(exp_langs and len(exp_langs) > 0)
+
+    # If both quality and language are explicitly present in the filename
+    if has_exp_qual and has_exp_lang:
+        return (exp_langs[0], raw_qual, True)
+
+    # Inspect existing episode records for this series + season
+    existing_records = []
+    if series_id:
+        try:
+            cursor = sfiles_col.find({"series_id": _sid_query(series_id), "season": int(season)})
+            async for doc in cursor:
+                existing_records.append(doc)
+        except Exception:
+            pass
+
+    # Incorporate batch_files if available (e.g. during bulk database scan)
+    if batch_files:
+        for bf in batch_files:
+            if bf.get("season") == int(season):
+                existing_records.append(bf)
+
+    # Group existing records by (language, quality)
+    groups = {}
+    for r in existing_records:
+        l = r.get("language")
+        q = r.get("quality")
+        ep = r.get("episode")
+        if not l or not q or q == "Unknown":
+            continue
+        grp_key = (l, q)
+        if grp_key not in groups:
+            groups[grp_key] = set()
+        if ep is not None:
+            try:
+                groups[grp_key].add(int(ep))
+            except (ValueError, TypeError):
+                pass
+
+    # Case 1: No established groups in database / batch yet
+    if not groups:
+        if has_exp_qual and has_exp_lang:
+            return (exp_langs[0], raw_qual, True)
+        elif has_exp_qual:
+            l_val = exp_langs[0] if has_exp_lang else (original_language or "English")
+            return (l_val, raw_qual, True)
+        elif has_exp_lang:
+            return (exp_langs[0], "Unknown", False)
+        else:
+            return (None, None, False)
+
+    # Case 2: Exactly ONE established group exists for this Season (e.g. Malayalam 1080p)
+    if len(groups) == 1:
+        (established_lang, established_qual), eps = list(groups.items())[0]
+
+        # If filename explicitly specified a different language or quality
+        if has_exp_lang and exp_langs[0] != established_lang:
+            if has_exp_qual:
+                return (exp_langs[0], raw_qual, True)
+            else:
+                return (exp_langs[0], "Unknown", False)
+
+        if has_exp_qual and raw_qual != established_qual:
+            target_l = exp_langs[0] if has_exp_lang else established_lang
+            return (target_l, raw_qual, True)
+
+        # Inherit group continuity
+        final_l = exp_langs[0] if has_exp_lang else established_lang
+        final_q = raw_qual if has_exp_qual else established_qual
+        return (final_l, final_q, True)
+
+    # Case 3: Multiple groups exist for this Season (e.g. Malayalam 1080p, Tamil 720p, etc.)
+    # 3a. Filename has explicit language (e.g. Tamil)
+    if has_exp_lang:
+        target_lang = exp_langs[0]
+        matching_groups = [(l, q, eps) for (l, q), eps in groups.items() if l == target_lang]
+        if len(matching_groups) == 1:
+            inherited_qual = raw_qual if has_exp_qual else matching_groups[0][1]
+            return (target_lang, inherited_qual, True)
+        elif len(matching_groups) > 1 and not has_exp_qual:
+            missing_in = [mg for mg in matching_groups if episode not in mg[2]]
+            if len(missing_in) == 1:
+                return (target_lang, missing_in[0][1], True)
+            return (target_lang, "Unknown", False)
+
+    # 3b. Filename has explicit quality (e.g. 1080p)
+    if has_exp_qual:
+        target_qual = raw_qual
+        matching_groups = [(l, q, eps) for (l, q), eps in groups.items() if q == target_qual]
+        if len(matching_groups) == 1:
+            inherited_lang = exp_langs[0] if has_exp_lang else matching_groups[0][0]
+            return (inherited_lang, target_qual, True)
+        elif len(matching_groups) > 1 and not has_exp_lang:
+            missing_in = [mg for mg in matching_groups if episode not in mg[2]]
+            if len(missing_in) == 1:
+                return (missing_in[0][0], target_qual, True)
+            return (None, target_qual, False)
+
+    # 3c. Neither language nor quality is explicit in filename
+    missing_in = [((l, q), eps) for (l, q), eps in groups.items() if episode not in eps]
+    if len(missing_in) == 1:
+        (res_l, res_q), _ = missing_in[0]
+        return (res_l, res_q, True)
+
+    # Orphan Protection: Ambiguous context -> do NOT guess and do NOT create orphan group
+    return (None, None, False)
+
+
 async def find_matching_super_movie(file_name: str, caption: str = "") -> dict | None:
     """
     Strict identity matcher for incoming movie file against existing Super Movie filters.
@@ -1462,6 +1710,12 @@ async def find_matching_super_movie(file_name: str, caption: str = "") -> dict |
         c_year = cand.get("year")
         c_imdb = cand.get("imdb_id")
         c_tmdb = cand.get("tmdb_id")
+        c_aliases = []
+        if cand.get("second_name"):
+            c_aliases.append(cand.get("second_name"))
+        if cand.get("aliases"):
+            c_aliases.extend(cand.get("aliases"))
+        c_aliases = list(dict.fromkeys(c_aliases))
 
         matched, reason = match_movie_identity(
             {"file_name": file_name, "caption": caption},
@@ -1469,7 +1723,8 @@ async def find_matching_super_movie(file_name: str, caption: str = "") -> dict |
             requested_year=c_year,
             imdb_id=c_imdb,
             tmdb_id=c_tmdb,
-            known_conflicts=known_years
+            known_conflicts=known_years,
+            target_aliases=c_aliases
         )
         if matched:
             return cand
@@ -1501,6 +1756,13 @@ async def resync_super_movie_filter(movie_id: str) -> dict | None:
     tmdb_id = movie.get("tmdb_id")
     old_fids = movie.get("file_ids") or []
 
+    movie_aliases = []
+    if movie.get("second_name"):
+        movie_aliases.append(movie.get("second_name"))
+    if movie.get("aliases"):
+        movie_aliases.extend(movie.get("aliases"))
+    movie_aliases = list(dict.fromkeys(movie_aliases))
+
     valid_fids = []
     removed_fids = []
     new_langs = set()
@@ -1517,7 +1779,8 @@ async def resync_super_movie_filter(movie_id: str) -> dict | None:
             requested_title=title,
             requested_year=year,
             imdb_id=imdb_id,
-            tmdb_id=tmdb_id
+            tmdb_id=tmdb_id,
+            target_aliases=movie_aliases
         )
         if is_match:
             valid_fids.append(fid)
@@ -1713,6 +1976,7 @@ async def sync_series_filter_for_files(file_docs, *, trigger="file_add"):
     Central helper to automatically synchronize incoming series files into matching Series Filter(s).
     Uses strict match_automatic_series_file: {SERIES NAME} {SxxEyy} {REMAINING METADATA}.
     Extracts Series Name, Season, Episode, Language, Quality and inserts into sfiles_col and updates series_col.
+    Applies group continuity and orphan protection.
     """
     if not file_docs:
         return
@@ -1740,13 +2004,20 @@ async def sync_series_filter_for_files(file_docs, *, trigger="file_add"):
                 if not series_name:
                     continue
 
+                s_aliases = []
+                if series_doc.get("second_name"):
+                    s_aliases.append(series_doc.get("second_name"))
+                if series_doc.get("aliases"):
+                    s_aliases.extend(series_doc.get("aliases"))
+                s_aliases = list(dict.fromkeys(s_aliases))
+
                 parsed = match_automatic_series_file(
                     target_series_name=series_name,
                     target_year=series_doc.get("year"),
                     filename=fname,
                     caption=caption,
                     original_language=series_doc.get("original_language"),
-                    target_aliases=series_doc.get("aliases")
+                    target_aliases=s_aliases
                 )
 
                 if not parsed.get("matched"):
@@ -1755,8 +2026,8 @@ async def sync_series_filter_for_files(file_docs, *, trigger="file_add"):
                 series_id = str(series_doc["_id"])
                 season = parsed["season"]
                 episode = parsed["episode"]
-                qual = parsed["quality"]
-                lang = parsed["language"]
+                detected_qual = parsed["quality"]
+                detected_lang = parsed["language"]
 
                 existing = await sfiles_col.find_one({
                     "series_id": _sid_query(series_id),
@@ -1764,6 +2035,33 @@ async def sync_series_filter_for_files(file_docs, *, trigger="file_add"):
                 })
                 if existing:
                     break
+
+                # Resolve group continuity & orphan protection
+                res_lang, res_qual, is_reliable = await resolve_series_episode_group_context(
+                    series_id=series_id,
+                    season=season,
+                    episode=episode,
+                    filename=fname,
+                    caption=caption,
+                    detected_lang=detected_lang,
+                    detected_qual=detected_qual,
+                    original_language=series_doc.get("original_language")
+                )
+
+                if not is_reliable:
+                    logger.info(
+                        f"[SERIES ORPHAN PROTECTION SKIP]\n"
+                        f"series_id={series_id}\n"
+                        f"title={series_name}\n"
+                        f"season={season}\n"
+                        f"episode={episode}\n"
+                        f"filename={fname}\n"
+                        f"reason=ambiguous_or_orphan_group"
+                    )
+                    continue
+
+                lang = res_lang
+                qual = res_qual
 
                 file_record = {
                     "series_id": series_id,
@@ -1819,6 +2117,13 @@ async def sync_existing_movie_filter(movie_id: str) -> dict:
     tmdb_id = movie.get("tmdb_id")
     clean_title = clean_series_title(title)
     
+    movie_aliases = []
+    if movie.get("second_name"):
+        movie_aliases.append(movie.get("second_name"))
+    if movie.get("aliases"):
+        movie_aliases.extend(movie.get("aliases"))
+    movie_aliases = list(dict.fromkeys(movie_aliases))
+    
     from database.ia_filterdb import col, sec_col, MULTIPLE_DATABASE, get_search_results, get_file_details
     from plugins.pm_filter import detect_file_languages
     from plugins.series import extract_quality_from_filename
@@ -1827,12 +2132,16 @@ async def sync_existing_movie_filter(movie_id: str) -> dict:
     candidate_docs = []
     seen_fids = set()
 
-    files, _, _ = await get_search_results(0, clean_title, max_results=500, offset=0, filter=True)
-    for f in (files or []):
-        fid = f.get("file_id")
-        if fid and fid not in seen_fids:
-            seen_fids.add(fid)
-            candidate_docs.append(f)
+    search_queries = [clean_title] + movie_aliases
+    for sq in list(dict.fromkeys(search_queries)):
+        if not sq:
+            continue
+        files, _, _ = await get_search_results(0, sq, max_results=500, offset=0, filter=True)
+        for f in (files or []):
+            fid = f.get("file_id")
+            if fid and fid not in seen_fids:
+                seen_fids.add(fid)
+                candidate_docs.append(f)
 
     existing_fids = movie.get("file_ids") or []
     for fid in existing_fids:
@@ -1870,7 +2179,8 @@ async def sync_existing_movie_filter(movie_id: str) -> dict:
             requested_year=year,
             imdb_id=imdb_id,
             tmdb_id=tmdb_id,
-            known_conflicts=known_conflicts
+            known_conflicts=known_conflicts,
+            target_aliases=movie_aliases
         )
 
         if is_match:
