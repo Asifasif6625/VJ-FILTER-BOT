@@ -322,21 +322,31 @@ async def start(client, message):
     if data.startswith("getme_"):
         search_query = data.split("getme_", 1)[1].replace("_", " ").strip()
         if search_query:
-            from database.ia_filterdb import get_search_results
-            from plugins.pm_filter import render_normal_grouped_results
-            import html
-            files, _, _ = await get_search_results(message.chat.id, search_query.lower(), max_results=100, offset=0, filter=True)
-            if files:
-                rendered = await render_normal_grouped_results(client=client, message=message, query_text=search_query, files=files)
-                if rendered:
+            from plugins.series import is_super_filter_query, process_unified_filter_search
+            if await is_super_filter_query(search_query):
+                is_handled = await process_unified_filter_search(client, message, search_query)
+                if is_handled:
                     return
-            await message.reply_text(f"<b>No files found for '<i>{html.escape(search_query)}</i>'</b>", parse_mode=enums.ParseMode.HTML)
+            # If not Super Filter, redirect to Child Bot
+            child_username = getattr(temp, "CHILD_U_NAME", None) or os.environ.get("CHILD_USERNAME", "Bot")
+            child_link = f"https://t.me/{str(child_username).lstrip('@')}?start={data}"
+            redirect_text = (
+                "<b>🌟 This title is available on our Normal Filter Bot!</b>\n\n"
+                "<i>ഈ മൂവി / സീരീസ് നോർമൽ ഫിൽട്ടർ ബോട്ടിൽ ലഭ്യമാണ്. താഴെ കാണുന്ന ബട്ടൺ ക്ലിക്ക് ചെയ്യുക.</i>"
+            )
+            markup = InlineKeyboardMarkup([[InlineKeyboardButton("🚀 Search on Normal Filter Bot", url=child_link)]])
+            await message.reply_text(redirect_text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
         return
 
     if data.startswith("norm_"):
-        norm_key = data.split("_", 1)[1]
-        from plugins.pm_filter import process_normal_filter_deeplink
-        await process_normal_filter_deeplink(client, message, norm_key)
+        child_username = getattr(temp, "CHILD_U_NAME", None) or os.environ.get("CHILD_USERNAME", "Bot")
+        child_link = f"https://t.me/{str(child_username).lstrip('@')}?start={data}"
+        redirect_text = (
+            "<b>🌟 This file selection belongs to our Normal Filter Bot!</b>\n\n"
+            "<i>ഫയലുകൾ ലഭിക്കുന്നതിനായി താഴെ കാണുന്ന ബട്ടൺ ക്ലിക്ക് ചെയ്യുക.</i>"
+        )
+        markup = InlineKeyboardMarkup([[InlineKeyboardButton("🚀 Open in Normal Filter Bot", url=child_link)]])
+        await message.reply_text(redirect_text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
         return
 
     if data.startswith("series_"):
