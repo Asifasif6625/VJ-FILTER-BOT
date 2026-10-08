@@ -2,6 +2,8 @@
 # Subscribe YouTube Channel For Amazing Bot @Tech_VJ
 # Ask Doubt on telegram @KingVJ01
 
+import os
+from os import environ
 from pyrogram import Client, types
 from info import *
 from utils import temp
@@ -66,5 +68,34 @@ class TechVJXBot(Client):
       
 TechVJBot = TechVJXBot()
 
+class TechVJChildBot(Client):
+
+    def __init__(self):
+        token2 = environ.get('BOT_TOKEN2', globals().get('BOT_TOKEN2', ''))
+        sess_name = environ.get('CHILD_SESSION', globals().get('CHILD_SESSION', 'TechVJChildBot'))
+        super().__init__(
+            name=sess_name,
+            api_id=API_ID,
+            api_hash=API_HASH,
+            bot_token=token2,
+            workers=100,
+            plugins={"root": "child_plugins"},
+            sleep_threshold=5,
+        )
+
+# ChildBot instance initialized when BOT_TOKEN2 is present
+_bot_token2 = environ.get('BOT_TOKEN2', globals().get('BOT_TOKEN2', ''))
+ChildBot = TechVJChildBot() if _bot_token2 else None
+
 multi_clients = {}
 work_loads = {}
+
+__all__ = [
+    "TechVJBot",
+    "ChildBot",
+    "TechVJXBot",
+    "TechVJChildBot",
+    "multi_clients",
+    "work_loads"
+]
+
