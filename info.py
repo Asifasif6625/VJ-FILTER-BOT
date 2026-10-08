@@ -11,15 +11,23 @@ from Script import script
 sys.dont_write_bytecode = True
 os.environ["PYTHONDONTWRITEBYTECODE"] = "1" 
 
+try:
+    from dotenv import load_dotenv
+    load_dotenv('config.env')
+    load_dotenv()
+except Exception:
+    pass
+
 id_pattern = re.compile(r'^.\d+$')
 
 # Bot information
-SESSION = environ.get('SESSION', 'TechVJBot')
+SESSION = environ.get('SESSION', 'TechVJBot').strip()
 API_ID = int(environ.get('API_ID', '6539456'))
-API_HASH = environ.get('API_HASH', '50d0f275e6d21c2709101a34d77e2bc2')
-BOT_TOKEN = environ.get('BOT_TOKEN', "")
-BOT_TOKEN2 = environ.get('BOT_TOKEN2', "")
-CHILD_SESSION = environ.get('CHILD_SESSION', 'TechVJChildBot')
+API_HASH = environ.get('API_HASH', '50d0f275e6d21c2709101a34d77e2bc2').strip()
+BOT_TOKEN = environ.get('BOT_TOKEN', "").strip().strip('"').strip("'")
+BOT_TOKEN2 = environ.get('BOT_TOKEN2', "").strip().strip('"').strip("'")
+CHILD_SESSION = environ.get('CHILD_SESSION', 'TechVJChildBot').strip()
+
 
 
 # This Pictures Is For Start Message Picture, You Can Add Multiple By Giving One Space Between Each.

@@ -36,7 +36,10 @@ print("### VJ BOT MOVIE SERIES FIX V6 ACTIVE ###", flush=True)
 TechVJBot.start()
 if ChildBot:
     print("### STARTING NORMAL FILTER CHILD BOT (BOT_TOKEN2) ###", flush=True)
-    ChildBot.start()
+    try:
+        ChildBot.start()
+    except Exception as ce:
+        print(f"### CHILD BOT SYNC START NOTICE: {ce} ###", flush=True)
 loop = asyncio.get_event_loop()
 
 
@@ -60,14 +63,20 @@ async def start():
     logging.info("MAIN BOT: Super Filter handlers loaded.")
     if ChildBot:
         try:
+            if not getattr(ChildBot, "is_connected", False):
+                print("### CONNECTING CHILD BOT ASYNC ###", flush=True)
+                await ChildBot.start()
             child_me = await ChildBot.get_me()
             temp.CHILD_BOT = ChildBot
             temp.CHILD_ME = child_me.id
             temp.CHILD_U_NAME = child_me.username
             temp.CHILD_B_NAME = child_me.first_name
             logging.info(f"CHILD BOT: Normal Filter handlers loaded successfully as @{child_me.username}")
+            print(f"### CHILD BOT RUNNING AS @{child_me.username} ###", flush=True)
         except Exception as ce:
-            logging.warning(f"Failed to fetch Child Bot info: {ce}")
+            logging.error(f"Failed to initialize Child Bot: {ce}", exc_info=True)
+            print(f"### FAILED TO INITIALIZE CHILD BOT: {ce} ###", flush=True)
+
 
     try:
         from plugins.series import start_cleanup_schedulers
