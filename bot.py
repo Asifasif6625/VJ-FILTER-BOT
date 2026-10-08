@@ -28,12 +28,15 @@ from aiohttp import web
 from plugins import web_server
 from plugins.clone import restart_bots
 
-from TechVJ.bot import TechVJBot
+from TechVJ.bot import TechVJBot, ChildBot
 from TechVJ.util.keepalive import ping_server
 from TechVJ.bot.clients import initialize_clients
 
 print("### VJ BOT MOVIE SERIES FIX V6 ACTIVE ###", flush=True)
 TechVJBot.start()
+if ChildBot:
+    print("### STARTING NORMAL FILTER CHILD BOT (BOT_TOKEN2) ###", flush=True)
+    ChildBot.start()
 loop = asyncio.get_event_loop()
 
 
@@ -54,6 +57,17 @@ async def start():
     temp.ME = me.id
     temp.U_NAME = me.username
     temp.B_NAME = me.first_name
+    if ChildBot:
+        try:
+            child_me = await ChildBot.get_me()
+            temp.CHILD_BOT = ChildBot
+            temp.CHILD_ME = child_me.id
+            temp.CHILD_U_NAME = child_me.username
+            temp.CHILD_B_NAME = child_me.first_name
+            logging.info(f"Child Bot initialized successfully as @{child_me.username}")
+        except Exception as ce:
+            logging.warning(f"Failed to fetch Child Bot info: {ce}")
+
     try:
         from plugins.series import start_cleanup_schedulers
         start_cleanup_schedulers(TechVJBot)

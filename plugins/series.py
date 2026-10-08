@@ -8144,6 +8144,21 @@ async def render_series_direct(client: Client, message: Message, series_doc: dic
     return True
 
 
+async def is_super_filter_query(query_text: str) -> bool:
+    """
+    Checks if query_text matches any valid Super Movie or Super Series in database.
+    """
+    q = str(query_text or "").strip()
+    if not q:
+        return False
+    from database.series_db import search_super_movies, search_series
+    clean_q = clean_series_title(q)
+    super_movies = await search_super_movies(q)
+    series_list = await search_series(clean_q)
+    valid_movies = [m for m in super_movies if m.get("file_ids") or m.get("coming_soon") or m.get("status") == "coming_soon"]
+    return (len(valid_movies) + len(series_list)) > 0
+
+
 async def process_unified_filter_search(client: Client, message: Message, query_text: str, reply_msg: Message = None) -> bool:
     """
     Unified filter search for SUPER MOVIES and SUPER SERIES ONLY.

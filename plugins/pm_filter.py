@@ -3879,6 +3879,12 @@ async def auto_filter(client, name, msg, reply_msg=None, ai_search=True, spoll=F
             except Exception as e:
                 logger.error(f"[SUPER FILTER SEARCH ROUTING ERROR] query={search if search else name} error={e}")
 
+            from info import BOT_TOKEN2
+            # If Child Bot (BOT_TOKEN2) is active and this is a group chat, Main Bot yields normal filter handling to Child Bot
+            if BOT_TOKEN2 and message.chat.type in [enums.ChatType.GROUP, enums.ChatType.SUPERGROUP]:
+                logger.info(f"[MAIN BOT YIELD TO CHILD BOT] query={search} in group={message.chat.id}")
+                return
+
             # -- 2. Normal / Legacy Filter (ia_filterdb) --
             logger.info(f"[NORMAL FILTER ROUTE] query={search} chat_id={message.chat.id}")
             files, offset, total_results = await get_search_results(message.chat.id, search, max_results=100, offset=0, filter=True)
@@ -3935,6 +3941,11 @@ async def auto_filter(client, name, msg, reply_msg=None, ai_search=True, spoll=F
                 return
         except Exception as e:
             logger.error(f"[SPOLL SUPER FILTER SEARCH ERROR] query={search} error={e}")
+
+        from info import BOT_TOKEN2
+        if BOT_TOKEN2 and message.chat.type in [enums.ChatType.GROUP, enums.ChatType.SUPERGROUP]:
+            logger.info(f"[MAIN BOT YIELD TO CHILD BOT - SPOLL] query={search} in group={message.chat.id}")
+            return
 
         files, offset, total_results = await get_search_results(message.chat.id, search, max_results=100, offset=0, filter=True)
         if files:
@@ -4296,23 +4307,19 @@ async def process_normal_filter_deeplink(client: Client, message: Message, norm_
             pass
         return False
 
-    # 2. 3-Second Countdown Text Timer (3 to 0)
+    # 2. 5-Second Loading Sticker Indicator
     try:
-        timer_msg = await message.reply_text("get details & files.. timer 3 second")
-        if timer_msg:
-            for s in [2, 1, 0]:
-                await asyncio.sleep(1)
-                try:
-                    await timer_msg.edit_text(f"get details & files.. timer {s} second")
-                except Exception:
-                    pass
-            await asyncio.sleep(0.5)
+        loading_sticker = await message.reply_sticker(
+            sticker="CAACAgIAAxkBAAER_8VqxXSfQ8NwUz3f6IgFpuZM7PKBmQAC7hQAAuNVUEk4S4qtAhNhvD0E"
+        )
+        if loading_sticker:
+            await asyncio.sleep(5)
             try:
-                await timer_msg.delete()
+                await loading_sticker.delete()
             except Exception:
                 pass
     except Exception as te:
-        logger.warning(f"[NORMAL COUNTDOWN TIMER ERROR] {te}")
+        logger.warning(f"[NORMAL LOADING STICKER ERROR] {te}")
 
     # 3. Normal Filter Details Message & Dynamic IMDb / TMDb Metadata Fetch
     title = group_data.get("title", "Files")
