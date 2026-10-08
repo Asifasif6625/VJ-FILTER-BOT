@@ -547,13 +547,20 @@ async def scan_sdatabase_for_series(chat_id: int | str, title: str, season: int 
     from database.series_db import check_episode_exists, get_series
     from utils import is_video_file, is_subtitle_file
 
-    if not year and series_id:
+    s_aliases = []
+    if series_id:
         try:
             sdoc = await get_series(series_id)
-            if sdoc and sdoc.get("year"):
-                year = sdoc.get("year")
+            if sdoc:
+                if not year and sdoc.get("year"):
+                    year = sdoc.get("year")
+                if sdoc.get("second_name"):
+                    s_aliases.append(sdoc.get("second_name"))
+                if sdoc.get("aliases"):
+                    s_aliases.extend(sdoc.get("aliases"))
         except Exception:
             pass
+    s_aliases = list(dict.fromkeys(s_aliases))
 
     clean_title = clean_series_title(title)
     docs = await get_movie_candidates(chat_id, title, limit=500)
@@ -575,7 +582,7 @@ async def scan_sdatabase_for_series(chat_id: int | str, title: str, season: int 
             continue
         fname = doc.get("file_name", "")
         cap = doc.get("caption", "") or ""
-        parsed = parse_series_filename(fname, clean_title, season, caption=cap, original_language=original_language, target_year=year)
+        parsed = parse_series_filename(fname, clean_title, season, caption=cap, original_language=original_language, target_aliases=s_aliases, target_year=year)
 
         status = parsed.get("status")
         if status == "invalid":
@@ -588,11 +595,33 @@ async def scan_sdatabase_for_series(chat_id: int | str, title: str, season: int 
             continue
 
         # Status is matched
-        total_matched += 1
-        lang = parsed["language"]
         s_val = parsed["season"]
         ep = parsed["episode"]
-        qual = parsed["quality"]
+        raw_qual = parsed["quality"]
+        raw_lang = parsed["language"]
+
+        # Resolve group continuity & orphan protection
+        from database.series_db import resolve_series_episode_group_context
+        res_lang, res_qual, is_reliable = await resolve_series_episode_group_context(
+            series_id=series_id,
+            season=s_val,
+            episode=ep,
+            filename=fname,
+            caption=cap,
+            detected_lang=raw_lang,
+            detected_qual=raw_qual,
+            original_language=original_language,
+            batch_files=all_matching_files
+        )
+
+        if not is_reliable:
+            total_invalid += 1
+            logger.info(f"[AUTO S ADD SCAN] filename={fname} match=False reason=ambiguous_or_orphan_group")
+            continue
+
+        total_matched += 1
+        lang = res_lang
+        qual = res_qual
 
         file_entry = {
             "language": lang,
@@ -2201,6 +2230,9 @@ def _series_card(series: dict, remaining_seconds: str = None) -> str:
     desc  = series.get("description", "")
     
     card = f"📺 <b>{to_series_font(name)}</b>\n\n"
+    sec_name = series.get("second_name")
+    if sec_name:
+        card += f"🏷 <b>{to_series_font('Second Name')}:</b> {sec_name}\n"
     if year and year != "N/A":
         card += f"📅 <b>{to_series_font('Year')}:</b> {year}\n"
     if genre and genre != "N/A":
@@ -2427,6 +2459,7 @@ def _config_menu_keyboard(series_id: str = None, from_viewseries: bool = False) 
                 InlineKeyboardButton("📢 Announcement", callback_data=f"edser#ano#{series_id}")
             ],
             [
+                InlineKeyboardButton("🏷 Second Filter Name", callback_data=f"sw#edit#second_name#{series_id}"),
                 InlineKeyboardButton("🗑 Delete Series", callback_data=f"edser#delete#{series_id}")
             ]
         ]
@@ -4114,6 +4147,31 @@ async def cb_movie_management(client: Client, query: CallbackQuery):
             parse_mode=enums.ParseMode.HTML
         )
 
+    if data.startswith("emov#second_name#"):
+        movie_id = data.split("#")[2]
+        movie = await get_super_movie(movie_id)
+        if not movie:
+            return await query.answer("❌ Movie not found.", show_alert=True)
+        title = movie.get("title", "Movie")
+        cur_sec = movie.get("second_name") or "None"
+        from utils import set_wizard_session
+        set_wizard_session(
+            uid,
+            workflow="MOVIE_EDIT_SECOND_NAME",
+            state="WAIT_SECOND_NAME",
+            data={"movie_id": movie_id, "title": title},
+            chat_id=query.message.chat.id
+        )
+        return await query.message.edit_text(
+            f"🏷 <b>Edit Second Filter Name (Alias)</b>\n\n"
+            f"🎬 <b>Movie:</b> <code>{html.escape(title)}</code>\n"
+            f"<b>Current Second Name:</b> <code>{html.escape(cur_sec)}</code>\n\n"
+            "📝 Please send the new <b>Second Filter Name / Alias</b> for this movie:\n"
+            "<i>(Send /remove to clear, or click Cancel)</i>",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data=f"emovie_select#{movie_id}")]]),
+            parse_mode=enums.ParseMode.HTML
+        )
+
     if data.startswith("emov#edit_poster#"):
         movie_id = data.split("#")[2]
         from utils import set_wizard_session
@@ -4151,8 +4209,28 @@ async def cb_movie_management(client: Client, query: CallbackQuery):
         return await query.answer("❌ Movie not found. Please refresh /viewmovies.", show_alert=True)
 
     title = movie.get("title", "Movie")
+    logger.info(
+        f"[VIEW FILTER CLICK]\n"
+        f"type=movie\n"
+        f"filter_id={movie_id}\n"
+        f"user_id={uid}\n\n"
+        f"[VIEW FILTER OPEN]\n"
+        f"type=movie\n"
+        f"filter_id={movie_id}\n"
+        f"name={title}"
+    )
+
+    card_text, markup = _build_movie_edit_card_and_markup(movie)
+    await query.message.edit_text(card_text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
+
+
+def _build_movie_edit_card_and_markup(movie: dict) -> tuple[str, InlineKeyboardMarkup]:
+    movie_id = str(movie.get("_id", ""))
+    title = movie.get("title", "Movie")
     year = str(movie.get("year", ""))
     year_str = f" ({year})" if year and year != "N/A" else ""
+    sec_name = movie.get("second_name")
+    sec_str = f"\n🏷 <b>Second Name:</b> <code>{html.escape(sec_name)}</code>" if sec_name else ""
     rating = str(movie.get("rating", ""))
     rating_str = f"\n⭐ <b>Rating:</b> {rating}/10" if rating else ""
     genre = movie.get("genre", "")
@@ -4165,20 +4243,10 @@ async def cb_movie_management(client: Client, query: CallbackQuery):
     tot_subs = len(movie.get("subtitles") or [])
     sub_info_str = f"\n📝 <b>Subtitles:</b> {tot_subs} attached" if tot_subs else ""
 
-    logger.info(
-        f"[VIEW FILTER CLICK]\n"
-        f"type=movie\n"
-        f"filter_id={movie_id}\n"
-        f"user_id={uid}\n\n"
-        f"[VIEW FILTER OPEN]\n"
-        f"type=movie\n"
-        f"filter_id={movie_id}\n"
-        f"name={title}"
-    )
-
     card_text = (
         f"🎬 <b>Movie Filter Configuration</b>\n\n"
         f"🎬 <b>Title:</b> <code>{html.escape(title)}{year_str}</code>"
+        f"{sec_str}"
         f"{rating_str}"
         f"{genre_str}\n"
         f"🌐 <b>Languages:</b> <code>{html.escape(lang_str)}</code>\n"
@@ -4194,19 +4262,155 @@ async def cb_movie_management(client: Client, query: CallbackQuery):
             InlineKeyboardButton("📢 Announcement", callback_data=f"emov#ano#{movie_id}")
         ],
         [
-            InlineKeyboardButton("🖼 Edit Poster", callback_data=f"emov#edit_poster#{movie_id}"),
-            InlineKeyboardButton("🗑 Delete Movie", callback_data=f"emov#del#{movie_id}")
+            InlineKeyboardButton("🏷 Second Filter Name", callback_data=f"emov#second_name#{movie_id}"),
+            InlineKeyboardButton("🖼 Edit Poster", callback_data=f"emov#edit_poster#{movie_id}")
         ],
         [
             InlineKeyboardButton("📝 Add Subtitle", callback_data=f"emov#add_sub#{movie_id}"),
             InlineKeyboardButton("📝 Manage Subtitles", callback_data=f"emov#man_sub#{movie_id}")
         ],
         [
+            InlineKeyboardButton("🗑 Delete Movie", callback_data=f"emov#del#{movie_id}"),
             InlineKeyboardButton("⬅️ Back", callback_data="emov#back")
         ]
     ])
+    return card_text, markup
 
-    await query.message.edit_text(card_text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
+
+@Client.on_message(filters.command(["edt", "edit", "quick_edit"]) & (filters.private | filters.group), group=1)
+async def cmd_quick_edit(client: Client, message: Message):
+    if not _is_admin(message.from_user.id):
+        return await message.reply_text("❌ You are not authorized to use this command.")
+
+    uid = message.from_user.id
+    chat_id = message.chat.id
+    from utils import temp
+    from database.series_db import (
+        get_super_movie, get_series, search_super_movies, search_series, super_movies_col, series_col
+    )
+    from bson import ObjectId
+
+    args = message.text.split(None, 1)
+    query_text = args[1].strip().strip('"').strip("'") if len(args) > 1 else None
+
+    target_type = None
+    target_id = None
+
+    if not query_text:
+        # Context lookup
+        ctx = temp.LAST_SEARCH_CONTEXT.get(uid) or temp.LAST_SEARCH_CONTEXT.get(chat_id)
+        if not ctx:
+            return await message.reply_text(
+                "⚠️ <b>No recent Super Filter search found.</b>\n\n"
+                "<i>Usage:</i> <code>/edt &lt;filter_name&gt;</code> or search/view a Super Filter first and send <code>/edt</code>.",
+                parse_mode=enums.ParseMode.HTML
+            )
+        target_type = ctx.get("type")
+        target_id = ctx.get("id")
+
+    if target_type == "movie" or (query_text and ObjectId.is_valid(query_text)):
+        if not target_id:
+            target_id = query_text
+        movie = await get_super_movie(target_id)
+        if movie:
+            card_text, markup = _build_movie_edit_card_and_markup(movie)
+            return await message.reply_text(card_text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
+
+    if target_type == "series" or (query_text and ObjectId.is_valid(query_text)):
+        if not target_id:
+            target_id = query_text
+        exact = await get_series(target_id)
+        if exact:
+            temp.SERIES_WIZARD[uid] = {
+                "mode": "edit",
+                "state": S_DONE,
+                "name": exact["name"],
+                "year": exact.get("year", ""),
+                "genre": exact.get("genre", ""),
+                "description": exact.get("description", ""),
+                "poster": exact.get("poster", ""),
+                "languages": exact.get("languages", []),
+                "seasons": exact.get("seasons", []),
+                "qualities": exact.get("qualities", []),
+                "series_id": str(exact["_id"]),
+                "second_name": exact.get("second_name"),
+                "season_modes": exact.get("season_modes", {}),
+                "batch_langs": [], "batch_seasons": [], "batch_qualities": [],
+                "batch_data": None,
+                "from_viewseries": True
+            }
+            wiz = temp.SERIES_WIZARD[uid]
+            return await message.reply_text(
+                _series_card(wiz) + "\n\n⚙️ <b>Edit Series Configuration</b>\nChoose an option to edit:",
+                reply_markup=_config_menu_keyboard(str(exact["_id"]), True),
+                parse_mode=enums.ParseMode.HTML
+            )
+
+    # If query_text is given as a string
+    clean_q = clean_series_title(query_text)
+    movies = await search_super_movies(query_text)
+    series_list = await search_series(clean_q)
+
+    valid_movies = [m for m in movies if m.get("status") != "deleted"]
+    valid_series = [s for s in series_list if s.get("status") != "deleted"]
+    total = len(valid_movies) + len(valid_series)
+
+    if total == 0:
+        return await message.reply_text(
+            f"❌ <b>No Super Filter found matching:</b> <code>{html.escape(query_text)}</code>",
+            parse_mode=enums.ParseMode.HTML
+        )
+
+    if total == 1:
+        if valid_movies:
+            movie = valid_movies[0]
+            card_text, markup = _build_movie_edit_card_and_markup(movie)
+            return await message.reply_text(card_text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
+        else:
+            exact = valid_series[0]
+            temp.SERIES_WIZARD[uid] = {
+                "mode": "edit",
+                "state": S_DONE,
+                "name": exact["name"],
+                "year": exact.get("year", ""),
+                "genre": exact.get("genre", ""),
+                "description": exact.get("description", ""),
+                "poster": exact.get("poster", ""),
+                "languages": exact.get("languages", []),
+                "seasons": exact.get("seasons", []),
+                "qualities": exact.get("qualities", []),
+                "series_id": str(exact["_id"]),
+                "second_name": exact.get("second_name"),
+                "season_modes": exact.get("season_modes", {}),
+                "batch_langs": [], "batch_seasons": [], "batch_qualities": [],
+                "batch_data": None,
+                "from_viewseries": True
+            }
+            wiz = temp.SERIES_WIZARD[uid]
+            return await message.reply_text(
+                _series_card(wiz) + "\n\n⚙️ <b>Edit Series Configuration</b>\nChoose an option to edit:",
+                reply_markup=_config_menu_keyboard(str(exact["_id"]), True),
+                parse_mode=enums.ParseMode.HTML
+            )
+
+    rows = []
+    for m in valid_movies[:10]:
+        t = m.get("title", "Movie")
+        y = str(m.get("year", "")).strip()
+        y_str = f" ({y})" if y and y != "N/A" else ""
+        rows.append([InlineKeyboardButton(f"🎬 {t}{y_str} (Edit)", callback_data=f"emovie_select#{str(m['_id'])}")])
+
+    for s in valid_series[:10]:
+        n = s.get("name", "Series")
+        y = str(s.get("year", "")).strip()
+        y_str = f" ({y})" if y and y != "N/A" else ""
+        rows.append([InlineKeyboardButton(f"📺 {n}{y_str} (Edit)", callback_data=f"edser#{str(s['_id'])}")])
+
+    return await message.reply_text(
+        f"🔍 <b>Select Super Filter to Edit:</b> ({total} matches)",
+        reply_markup=InlineKeyboardMarkup(rows),
+        parse_mode=enums.ParseMode.HTML
+    )
 
 
 
@@ -5214,6 +5418,59 @@ async def wizard_text_handler(client: Client, message: Message):
         clear_wizard_session(uid)
         return await message.reply_text(
             "✅ <b>Movie poster updated!</b>\nUse /viewmovies to inspect.",
+            parse_mode=enums.ParseMode.HTML
+        )
+
+    elif workflow == "MOVIE_EDIT_SECOND_NAME":
+        movie_data = sess.get("data", {})
+        movie_id = movie_data.get("movie_id")
+        new_sec = None if text.strip().lower() in ["/remove", "/clear", "/none", "none"] else text.strip()
+        if movie_id:
+            from database.series_db import update_super_movie_second_name, get_super_movie
+            await update_super_movie_second_name(movie_id, new_sec)
+        clear_wizard_session(uid)
+        movie = await get_super_movie(movie_id) if movie_id else None
+        if movie:
+            card_text, markup = _build_movie_edit_card_and_markup(movie)
+            return await message.reply_text(
+                f"✅ <b>Second Filter Name {'updated' if new_sec else 'cleared'}!</b>\n\n" + card_text,
+                reply_markup=markup,
+                parse_mode=enums.ParseMode.HTML
+            )
+        return await message.reply_text(f"✅ <b>Second Filter Name {'updated' if new_sec else 'cleared'}!</b>", parse_mode=enums.ParseMode.HTML)
+
+    elif workflow == "SERIES_EDIT_SECOND_NAME":
+        wiz_data = sess.get("data", {})
+        series_id = wiz_data.get("series_id")
+        new_sec = None if text.strip().lower() in ["/remove", "/clear", "/none", "none"] else text.strip()
+        if series_id:
+            from database.series_db import update_series_second_name, get_series
+            await update_series_second_name(series_id, new_sec)
+            exact = await get_series(series_id)
+            if exact:
+                temp.SERIES_WIZARD[uid] = {
+                    "mode": "edit",
+                    "state": S_DONE,
+                    "name": exact["name"],
+                    "year": exact.get("year", ""),
+                    "genre": exact.get("genre", ""),
+                    "description": exact.get("description", ""),
+                    "poster": exact.get("poster", ""),
+                    "languages": exact.get("languages", []),
+                    "seasons": exact.get("seasons", []),
+                    "qualities": exact.get("qualities", []),
+                    "series_id": str(exact["_id"]),
+                    "second_name": exact.get("second_name"),
+                    "season_modes": exact.get("season_modes", {}),
+                    "batch_langs": [], "batch_seasons": [], "batch_qualities": [],
+                    "batch_data": None,
+                    "from_viewseries": True
+                }
+        clear_wizard_session(uid)
+        wiz = temp.SERIES_WIZARD.get(uid) or wiz_data
+        return await message.reply_text(
+            _series_card(wiz) + f"\n\n✅ <b>Second Filter Name {'updated' if new_sec else 'cleared'}!</b>\n⚙️ <b>Series Configuration:</b>",
+            reply_markup=_config_menu_keyboard(series_id, True),
             parse_mode=enums.ParseMode.HTML
         )
 
@@ -6806,6 +7063,42 @@ async def series_wizard_callback(client: Client, query: CallbackQuery):
             parse_mode=enums.ParseMode.HTML
         )
 
+    elif data.startswith("sw#edit#second_name"):
+        wiz = temp.SERIES_WIZARD.get(uid)
+        series_id = None
+        if "#" in data:
+            parts = data.split("#")
+            if len(parts) >= 4:
+                series_id = parts[3]
+        if not series_id and wiz:
+            series_id = wiz.get("series_id")
+        if not series_id:
+            return await query.answer("Series ID not found.", show_alert=True)
+
+        from database.series_db import get_series
+        exact = await get_series(series_id)
+        if not exact:
+            return await query.answer("Series not found.", show_alert=True)
+        s_name = exact.get("name", "Series")
+        cur_sec = exact.get("second_name") or "None"
+
+        set_wizard_session(
+            uid,
+            workflow="SERIES_EDIT_SECOND_NAME",
+            state="WAIT_SECOND_NAME",
+            data={"series_id": series_id, "name": s_name},
+            chat_id=chat_id
+        )
+        return await query.message.edit_text(
+            f"🏷 <b>Edit Second Filter Name (Alias)</b>\n\n"
+            f"📺 <b>Series:</b> <code>{html.escape(s_name)}</code>\n"
+            f"<b>Current Second Name:</b> <code>{html.escape(cur_sec)}</code>\n\n"
+            "📝 Please send the new <b>Second Filter Name / Alias</b> for this series:\n"
+            "<i>(Send /remove to clear, or click Cancel)</i>",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="sw#edit#cancel")]]),
+            parse_mode=enums.ParseMode.HTML
+        )
+
     elif data == "sw#edit#cancel":
         wiz = temp.SERIES_WIZARD.get(uid)
         clear_wizard_session(uid)
@@ -7642,6 +7935,12 @@ async def render_super_movie_direct(client: Client, message: Message, movie: dic
         BUTTON_OWNERS[f"{message.chat.id}-{message.id}"] = real_user_id
 
     title = movie.get("title", "")
+    import time
+    if real_user_id:
+        temp.LAST_SEARCH_CONTEXT[real_user_id] = {"type": "movie", "id": str(movie_id), "title": title, "time": time.time()}
+    if chat_id:
+        temp.LAST_SEARCH_CONTEXT[chat_id] = {"type": "movie", "id": str(movie_id), "title": title, "time": time.time()}
+
     from utils import get_random_filter_poster
     posters_to_try = []
     if isinstance(movie.get("posters"), list) and movie.get("posters"):
@@ -7944,6 +8243,12 @@ async def render_series_direct(client: Client, message: Message, series_doc: dic
     if reply_msg and reply_msg.chat and reply_msg.id:
         BUTTON_OWNERS[f"{reply_msg.chat.id}-{reply_msg.id}"] = real_user_id
     logger.info(f"[SERIES OWNER REGISTER] key={key} owner={real_user_id}")
+
+    import time
+    if real_user_id:
+        temp.LAST_SEARCH_CONTEXT[real_user_id] = {"type": "series", "id": str(series_id), "title": name, "time": time.time()}
+    if chat_id:
+        temp.LAST_SEARCH_CONTEXT[chat_id] = {"type": "series", "id": str(series_id), "title": name, "time": time.time()}
 
     # Coming Soon Check
     if is_filter_coming_soon(series_doc) or (series_doc.get("coming_soon") and not langs):
