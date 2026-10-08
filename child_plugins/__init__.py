@@ -30,8 +30,14 @@ def register_child_handlers(app):
             child_cb_group,
             child_cb_disc,
             child_cb_getall,
-            child_cb_stop
+            child_cb_stop,
+            child_cb_english_reason,
+            child_cb_not_in_db_reason
         )
+
+        # Clear existing group 0 handlers to prevent duplicate accumulation on reload
+        if hasattr(app, "dispatcher") and hasattr(app.dispatcher, "groups"):
+            app.dispatcher.groups[0] = []
 
         # Register Command Handlers
         app.add_handler(MessageHandler(child_start_handler, filters.command("start") & filters.incoming), group=0)
@@ -55,6 +61,8 @@ def register_child_handlers(app):
         app.add_handler(CallbackQueryHandler(child_cb_disc, filters.regex(r"^norm_disc")), group=0)
         app.add_handler(CallbackQueryHandler(child_cb_getall, filters.regex(r"^norm_getall#")), group=0)
         app.add_handler(CallbackQueryHandler(child_cb_stop, filters.regex(r"^norm_stop#")), group=0)
+        app.add_handler(CallbackQueryHandler(child_cb_english_reason, filters.regex(r"^english_only_reason$")), group=0)
+        app.add_handler(CallbackQueryHandler(child_cb_not_in_db_reason, filters.regex(r"^not_in_db_reason$")), group=0)
 
         logger.info("[CHILD BOT] All Normal Filter handlers explicitly registered successfully!")
     except Exception as e:

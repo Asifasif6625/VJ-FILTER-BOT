@@ -50,7 +50,7 @@ def clean_search_query(text: str) -> str:
 
 @Client.on_message(filters.text & filters.incoming & ~filters.command(["start", "about", "help", "broadcast", "grp_broadcast"]))
 async def child_filter_message_handler(client: Client, message: Message):
-    if not message.text:
+    if not message.text or message.text.startswith("/") or message.text.startswith("#"):
         return
 
     # Check banned users / chats
@@ -133,3 +133,31 @@ async def child_cb_getall(client: Client, query: CallbackQuery):
 @Client.on_callback_query(filters.regex(r"^norm_stop#"))
 async def child_cb_stop(client: Client, query: CallbackQuery):
     await cb_norm_stop_files(client, query)
+
+@Client.on_callback_query(filters.regex(r"^english_only_reason$"))
+async def child_cb_english_reason(client: Client, query: CallbackQuery):
+    try:
+        await query.answer("⚠️ Send movie name in English.\nOther languages are not supported!", show_alert=True)
+    except Exception as e:
+        logger.warning(f"[CHILD ENGLISH ALERT ERROR] {e}")
+    try:
+        query.stop_propagation()
+    except Exception:
+        pass
+
+@Client.on_callback_query(filters.regex(r"^not_in_db_reason$"))
+async def child_cb_not_in_db_reason(client: Client, query: CallbackQuery):
+    alert_text = (
+        "➸ മൂവി Database ൽ കാണില്ല.\n"
+        "➸ സ്പെല്ലിംഗ് Google ൽ ചെക്ക് ചെയ്ത് അയക്കുക.\n"
+        "➸ മൂവിൻ്റെ കൂടെ റിലീസ് year ചേർക്കുക (Lift 2021).\n"
+        "➸ Theatre print കിട്ടില്ല 🙂 പോയി കാണുക."
+    )
+    try:
+        await query.answer(alert_text[:200], show_alert=True)
+    except Exception as e:
+        logger.warning(f"[CHILD NOT IN DB REASON ERROR] {e}")
+    try:
+        query.stop_propagation()
+    except Exception:
+        pass
