@@ -79,6 +79,40 @@ class temp(object):
     ACTIVE_NORMAL_DELIVERIES = set()
     NORMAL_DELIVERY_SESSIONS = {}
     LAST_SEARCH_CONTEXT = {}
+    CHILD_BOT = None
+    CHILD_ME = None
+    CHILD_U_NAME = None
+    CHILD_B_NAME = None
+
+
+def get_child_bot_username() -> str:
+    """Returns the username of the Child Bot (without @), falling back to env vars or temp."""
+    if hasattr(temp, "CHILD_U_NAME") and temp.CHILD_U_NAME:
+        return str(temp.CHILD_U_NAME).strip().lstrip("@")
+    if hasattr(temp, "CHILD_BOT") and getattr(temp.CHILD_BOT, "me", None):
+        u = getattr(temp.CHILD_BOT.me, "username", None)
+        if u:
+            return str(u).strip().lstrip("@")
+    for env_k in ["CHILD_USERNAME", "BOT_USERNAME2", "NORMAL_BOT_USERNAME", "CHILD_BOT_USERNAME"]:
+        val = os.environ.get(env_k)
+        if val:
+            return str(val).strip().lstrip("@")
+    return "Bot"
+
+
+def get_main_bot_username() -> str:
+    """Returns the username of the Main Bot (without @), falling back to env vars or temp."""
+    if hasattr(temp, "U_NAME") and temp.U_NAME:
+        return str(temp.U_NAME).strip().lstrip("@")
+    if hasattr(temp, "BOT") and getattr(temp.BOT, "me", None):
+        u = getattr(temp.BOT.me, "username", None)
+        if u:
+            return str(u).strip().lstrip("@")
+    for env_k in ["BOT_USERNAME", "MAIN_BOT_USERNAME"]:
+        val = os.environ.get(env_k)
+        if val:
+            return str(val).strip().lstrip("@")
+    return "Bot"
 
 
 def set_wizard_session(user_id: int, workflow: str, state: str, data: dict = None, chat_id: int = None):
