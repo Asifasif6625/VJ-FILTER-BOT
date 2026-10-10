@@ -4327,7 +4327,7 @@ async def cb_normal_group_page(client: Client, query: CallbackQuery):
     await query.answer()
 
 
-async def format_normal_filter_details_card(group_data: dict) -> str:
+async def format_normal_filter_details_card(group_data: dict) -> tuple:
     """Formats the IMDb / metadata details card for Normal Filter."""
     title = group_data.get("title", "Files")
     year = group_data.get("year", "N/A")
@@ -4336,12 +4336,14 @@ async def format_normal_filter_details_card(group_data: dict) -> str:
     lang_str = "N/A"
     rel_date_str = "N/A"
     rating_str = "N/A"
+    poster_url = None
 
     try:
         from utils import get_poster
         search_query_imdb = f"{title} {year_str}" if year_str != "N/A" else title
-        imdb_data = await asyncio.wait_for(get_poster(search_query_imdb), timeout=1.5)
+        imdb_data = await asyncio.wait_for(get_poster(search_query_imdb), timeout=3.0)
         if imdb_data and isinstance(imdb_data, dict):
+            poster_url = imdb_data.get("poster")
             raw_langs = imdb_data.get("languages")
             if isinstance(raw_langs, list) and raw_langs:
                 lang_str = ", ".join(str(l).strip() for l in raw_langs if l)
@@ -4361,6 +4363,9 @@ async def format_normal_filter_details_card(group_data: dict) -> str:
     except Exception as e:
         logger.debug(f"[NORMAL DETAILS METADATA FETCH ERROR] {e}")
 
+    if not poster_url and group_data.get("poster"):
+        poster_url = group_data.get("poster")
+
     details_caption = (
         f"<i>\n"
         f"☁︎ File Name: {html.escape(title)}\n"
@@ -4370,7 +4375,7 @@ async def format_normal_filter_details_card(group_data: dict) -> str:
         f"☁︎ Rating: {html.escape(rating_str)}\n\n"
         f"</i>"
     )
-    return details_caption
+    return details_caption, poster_url
 
 
 async def start_normal_file_delivery_in_pm(client: Client, user_id: int, norm_group_id: str, trigger_msg: Message = None) -> bool:
@@ -4494,7 +4499,7 @@ async def cb_normal_group_select(client: Client, query: CallbackQuery):
     else:
         bot_username = "Bot"
 
-    details_caption = await format_normal_filter_details_card(group_data)
+    details_caption, poster_url = await format_normal_filter_details_card(group_data)
     back_data = f"norm_back#{session_id}#{page}" if session_id else f"norm_back#{norm_group_id}#0"
 
     from plugins.series import make_styled_button
@@ -4507,17 +4512,69 @@ async def cb_normal_group_select(client: Client, query: CallbackQuery):
         [back_btn, disc_btn]
     ])
 
+    target_poster = poster_url
+    if not target_poster and hasattr(temp, "DEF_PHOTO") and temp.DEF_PHOTO:
+        target_poster = temp.DEF_PHOTO
+    elif not target_poster:
+        from info import PICS
+        if PICS and isinstance(PICS, list) and len(PICS) > 0:
+            target_poster = PICS[0]
+
     try:
         from utils import schedule_filter_message_delete
         if query.message:
-            if getattr(query.message, "photo", None) or getattr(query.message, "media", None):
-                try:
-                    await query.message.edit_caption(caption=details_caption, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
-                except Exception:
-                    await query.message.edit_reply_markup(reply_markup=markup)
+            chat_id = query.message.chat.id
+            if target_poster:
+                if getattr(query.message, "photo", None) or getattr(query.message, "caption", None):
+                    try:
+                        from pyrogram.types import InputMediaPhoto
+                        await query.message.edit_media(
+                            media=InputMediaPhoto(media=target_poster, caption=details_caption, parse_mode=enums.ParseMode.HTML),
+                            reply_markup=markup
+                        )
+                        schedule_filter_message_delete(client, chat_id, query.message.id, delay=1200)
+                    except Exception as me:
+                        logger.warning(f"[NORMAL SELECT EDIT MEDIA ERROR] {me}")
+                        try:
+                            await query.message.edit_caption(caption=details_caption, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
+                        except Exception:
+                            await query.message.edit_reply_markup(reply_markup=markup)
+                        schedule_filter_message_delete(client, chat_id, query.message.id, delay=1200)
+                else:
+                    # Original message was text: delete text msg and send photo
+                    try:
+                        await query.message.delete()
+                    except Exception:
+                        pass
+                    try:
+                        sent_msg = await client.send_photo(
+                            chat_id=chat_id,
+                            photo=target_poster,
+                            caption=details_caption,
+                            reply_markup=markup,
+                            parse_mode=enums.ParseMode.HTML
+                        )
+                        schedule_filter_message_delete(client, sent_msg.chat.id, sent_msg.id, delay=1200)
+                        BUTTON_OWNERS[f"{sent_msg.chat.id}-{sent_msg.id}"] = clicked_user_id
+                    except Exception as pe:
+                        logger.warning(f"[NORMAL SELECT SEND PHOTO FAILED] {pe}")
+                        sent_msg = await client.send_message(
+                            chat_id=chat_id,
+                            text=details_caption,
+                            reply_markup=markup,
+                            parse_mode=enums.ParseMode.HTML
+                        )
+                        schedule_filter_message_delete(client, sent_msg.chat.id, sent_msg.id, delay=1200)
+                        BUTTON_OWNERS[f"{sent_msg.chat.id}-{sent_msg.id}"] = clicked_user_id
             else:
-                await query.message.edit_text(text=details_caption, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
-            schedule_filter_message_delete(client, query.message.chat.id, query.message.id, delay=1200)
+                if getattr(query.message, "photo", None) or getattr(query.message, "caption", None):
+                    try:
+                        await query.message.edit_caption(caption=details_caption, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
+                    except Exception:
+                        await query.message.edit_reply_markup(reply_markup=markup)
+                else:
+                    await query.message.edit_text(text=details_caption, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
+                schedule_filter_message_delete(client, chat_id, query.message.id, delay=1200)
     except MessageNotModified:
         pass
     except Exception as ee:
@@ -4572,14 +4629,25 @@ async def cb_normal_group_back(client: Client, query: CallbackQuery):
     try:
         from utils import schedule_filter_message_delete
         if query.message:
-            if getattr(query.message, "photo", None) or getattr(query.message, "media", None):
+            chat_id = query.message.chat.id
+            if getattr(query.message, "photo", None) or getattr(query.message, "caption", None):
+                # Transitioning back from photo details card to text search list:
+                # delete photo and send text message to restore clean search list
                 try:
-                    await query.message.edit_caption(caption=caption_text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
+                    await query.message.delete()
                 except Exception:
-                    await query.message.edit_reply_markup(reply_markup=markup)
+                    pass
+                sent_msg = await client.send_message(
+                    chat_id=chat_id,
+                    text=caption_text,
+                    reply_markup=markup,
+                    parse_mode=enums.ParseMode.HTML
+                )
+                schedule_filter_message_delete(client, sent_msg.chat.id, sent_msg.id, delay=1200)
+                BUTTON_OWNERS[f"{sent_msg.chat.id}-{sent_msg.id}"] = clicked_user_id
             else:
                 await query.message.edit_text(text=caption_text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
-            schedule_filter_message_delete(client, query.message.chat.id, query.message.id, delay=1200)
+                schedule_filter_message_delete(client, chat_id, query.message.id, delay=1200)
     except MessageNotModified:
         pass
     except Exception as ee:
