@@ -449,37 +449,71 @@ def get_random_filter_poster(filter_data: dict | None) -> str | None:
 
 def strip_file_prefix_markers(text: str) -> str:
     """
-    Strips recognized leading prefix markers from the beginning of a filename or caption.
-    Recognized leading markers:
-      - @username / @channel (e.g. @Rocky_links, @movie_channel)
-      - (MM) or [MM] or {MM} (case-insensitive)
-      - (MS) or [MS] or {MS} (case-insensitive)
+    Authoritative prefix stripper:
+    Strips ALL leading prefix tags, channel names, usernames, urls, bracketed channel labels
+    (e.g. [MM], (MM), {MM}, @channelid, [Channel], (Channel), (Malayalam Movies), t.me/channel, etc.)
+    from the beginning of a filename, caption, or search string.
     
-    Rules:
-      - Removes ONLY leading markers from the beginning of the string.
-      - Can remove multiple leading markers in sequence (e.g. '@Rocky_links (MM) Love 2026.mkv').
-      - Preserves everything else in the filename/caption exactly.
-      - Never removes markers that appear in the middle of the string (e.g. 'Love (MM) 2026.mkv').
+    Preserves:
+    - The actual movie/series name
+    - Standalone release years (1900-2099)
+    - Season/Episode identifiers
     """
     if not text:
         return ""
     
     cleaned = str(text).strip()
-    prefix_pattern = re.compile(
-        r"^(?:"
-        r"@[a-zA-Z0-9_]+"                          # @username
-        r"|[\(\[\{]\s*M[MS]\s*[\)\]\}]"            # (MM), [MM], {MM}, (MS), [MS], {MS}
-        r")[\s\._\-\+]*",
-        flags=re.IGNORECASE
-    )
     
-    while True:
-        m = prefix_pattern.match(cleaned)
-        if not m:
+    url_pattern = re.compile(r"^(?:https?://\S+|www\.\S+|t\.me/\S+|telegram\.me/\S+)[\s\._\-\+:]*", re.IGNORECASE)
+    user_pattern = re.compile(r"^@[a-zA-Z0-9_]+[\s\._\-\+:]*", re.IGNORECASE)
+    bracket_pattern = re.compile(r"^([\[\(\{【『「〔《〈])(.*?)([\]\)\}】』」〕》〉])[\s\._\-\+:]*", re.IGNORECASE)
+    tag_pattern = re.compile(r"^(?:MM|MS|TG|VJ|HQ|HD|UHD|4K|FHD|WEB|WEBDL|HDRIP|DVDRIP|BRRIP|BLURAY|HEVC|X264|X265|D[\s\-_]*Z)[\s\._\-\+:]+", re.IGNORECASE)
+    symbol_pattern = re.compile(r"^[\s\._\-\+:~|•★⚡»>#=]+", re.IGNORECASE)
+
+    for _ in range(20):
+        old_len = len(cleaned)
+        
+        # Strip leading decorative symbols/separators
+        cleaned = symbol_pattern.sub("", cleaned).strip()
+
+        # Check and strip URL
+        m_url = url_pattern.match(cleaned)
+        if m_url:
+            cleaned = cleaned[m_url.end():].strip()
+            continue
+
+        # Check and strip @username / @channel
+        m_usr = user_pattern.match(cleaned)
+        if m_usr:
+            cleaned = cleaned[m_usr.end():].strip()
+            continue
+
+        # Check and strip tag abbreviations
+        m_tag = tag_pattern.match(cleaned)
+        if m_tag:
+            cleaned = cleaned[m_tag.end():].strip()
+            continue
+
+        # Check and strip bracket prefix
+        m_brk = bracket_pattern.match(cleaned)
+        if m_brk:
+            inner = m_brk.group(2).strip()
+            is_pure_year = bool(re.match(r"^(?:19\d\d|20\d\d)$", inner))
+            if not is_pure_year:
+                cleaned = cleaned[m_brk.end():].strip()
+                continue
+            else:
+                # If pure year bracket is at index 0, check if there's a title after it
+                rem = cleaned[m_brk.end():].strip()
+                if rem and not re.match(r"^\.(mkv|mp4|avi|mov|ts|webm|flv)$", rem, re.IGNORECASE):
+                    # Check if rem starts with another bracket/tag or title
+                    pass
+
+        if len(cleaned) == old_len:
             break
-        cleaned = cleaned[m.end():].lstrip(" ._+-")
-    
-    return cleaned.strip()
+
+    cleaned = symbol_pattern.sub("", cleaned).strip()
+    return cleaned
 
 
 def get_filter_button_filename_text(file_name: str) -> str:
