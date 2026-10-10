@@ -80,6 +80,11 @@ async def save_file(media):
 
 def clean_file_name(file_name):
     """Clean and format the file name."""
+    try:
+        from utils import strip_file_prefix_markers
+        file_name = strip_file_prefix_markers(file_name)
+    except Exception:
+        pass
     file_name = re.sub(r"(_|\-|\.|\+)", " ", str(file_name)) 
     unwanted_chars = ['[', ']', '(', ')', '{', '}']
     
