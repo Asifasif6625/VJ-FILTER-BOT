@@ -719,7 +719,7 @@ def format_series_metadata_caption(series_data: dict, selected_lang: str = None,
 
 
 def build_movie_language_keyboard(key, grouped_data, has_subtitles: bool = False):
-    from plugins.series import to_series_font, make_styled_button
+    from plugins.series import to_series_font, make_styled_button, format_super_language_button
     buttons = []
     langs = list(grouped_data.keys())
     preferred_order = ["Malayalam", "Tamil", "Hindi", "Telugu", "Kannada", "English", "Multi", "Dual Audio", "Multi Audio"]
@@ -728,7 +728,8 @@ def build_movie_language_keyboard(key, grouped_data, has_subtitles: bool = False
     for i in range(0, len(langs), 2):
         row = []
         for l in langs[i:i+2]:
-            row.append(make_styled_button(to_series_font(l), callback_data=f"movie_lang#{key}#{l}", style="success"))
+            text, style, icon_id = format_super_language_button(l)
+            row.append(make_styled_button(text, callback_data=f"movie_lang#{key}#{l}", style=style, icon_custom_emoji_id=icon_id))
         buttons.append(row)
         
     # Subtitles button is appended ONLY when has_subtitles is True
@@ -737,7 +738,7 @@ def build_movie_language_keyboard(key, grouped_data, has_subtitles: bool = False
     return InlineKeyboardMarkup(buttons)
 
 def build_movie_quality_keyboard(key, lang, qualities_dict):
-    from plugins.series import to_series_font, make_styled_button
+    from plugins.series import to_series_font, make_styled_button, format_super_quality_button
     buttons = []
     quality_order = ["2160p", "4K", "1440p", "1080p", "720p", "480p", "360p", "HDRip", "WEB-DL", "BluRay", "DVDRip", "HEVC", "Unknown"]
     qualities_sorted = sorted(list(qualities_dict.keys()), key=lambda x: (quality_order.index(x) if x in quality_order else 99, x))
@@ -745,7 +746,8 @@ def build_movie_quality_keyboard(key, lang, qualities_dict):
     for i in range(0, len(qualities_sorted), 2):
         row = []
         for q in qualities_sorted[i:i+2]:
-            row.append(make_styled_button(to_series_font(q), callback_data=f"movie_quality#{key}#{lang}#{q}", style="danger"))
+            text, style, icon_id = format_super_quality_button(q)
+            row.append(make_styled_button(text, callback_data=f"movie_quality#{key}#{lang}#{q}", style=style, icon_custom_emoji_id=icon_id))
         buttons.append(row)
     buttons.append([make_styled_button(f"⬅️  {to_series_font('Back')}", callback_data=f"movie_back#{key}#langs", style="success")])
     return InlineKeyboardMarkup(buttons)
