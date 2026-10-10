@@ -2577,7 +2577,8 @@ def _user_lang_keyboard(sid: str, langs: list[str]) -> InlineKeyboardMarkup:
     for i in range(0, len(langs), 2):
         row = []
         for l in langs[i:i+2]:
-            row.append(make_styled_button(to_series_font(l), callback_data=f"sr#{sid}#l#{l}", style="success"))
+            text, style, icon_id = format_super_language_button(l)
+            row.append(make_styled_button(text, callback_data=f"sr#{sid}#l#{l}", style=style, icon_custom_emoji_id=icon_id))
         rows.append(row)
     return InlineKeyboardMarkup(rows)
 
@@ -2587,8 +2588,8 @@ def _user_season_keyboard(sid: str, lang: str, seasons: list[int]) -> InlineKeyb
     for i in range(0, len(seasons), 3):
         row = []
         for s in seasons[i:i+3]:
-            label = f"{to_series_font('Season')} {s}" if s > 0 else to_series_font("Direct Episodes")
-            row.append(make_styled_button(label, callback_data=f"sr#{sid}#l#{lang}#s#{s}", style="primary"))
+            text, style, icon_id = format_super_season_button(s, is_direct=(s <= 0))
+            row.append(make_styled_button(text, callback_data=f"sr#{sid}#l#{lang}#s#{s}", style=style, icon_custom_emoji_id=icon_id))
         rows.append(row)
     rows.append([
         make_styled_button(f"⬅️  {to_series_font('Back')}", callback_data=f"sr#{sid}#home", style="success"),
@@ -2601,7 +2602,8 @@ async def _user_quality_keyboard(user_id: int, full_id: str, sid: str, lang: str
     for i in range(0, len(quals), 3):
         row = []
         for q in quals[i:i+3]:
-            row.append(make_styled_button(to_series_font(q), callback_data=f"sr#{sid}#l#{lang}#s#{season}#q#{q}", style="danger"))
+            text, style, icon_id = format_super_quality_button(q)
+            row.append(make_styled_button(text, callback_data=f"sr#{sid}#l#{lang}#s#{season}#q#{q}", style=style, icon_custom_emoji_id=icon_id))
         rows.append(row)
     rows.append([
         make_styled_button(f"⬅️  {to_series_font('Back')}", callback_data=f"sr#{sid}#home" if season == 0 else f"sr#{sid}#l#{lang}", style="success"),
@@ -2781,6 +2783,151 @@ async def cmd_get_announcement(client: Client, message: Message):
         )
 
 
+# ─── SUPER FILTER BUTTON EMOJI COMMANDS (/emojiset_l, /emojiset_s, /emojiset_q, /del_emoji) ─────────
+
+async def _handle_emojiset_command(client: Client, message: Message, target_type: str, type_name: str):
+    """
+    Handles setting custom emoji and fallback emoji for Super Filter buttons.
+    Validates admin authorization, parameter formats, custom emoji ID, and Telegram sticker availability.
+    """
+    uid = message.from_user.id if message.from_user else (message.sender_chat.id if message.sender_chat else 0)
+    if not _is_admin(uid):
+        return await message.reply_text("❌ <b>You are not authorized to use this command.</b>", parse_mode=enums.ParseMode.HTML)
+
+    cmd_suffix = "l" if target_type == "lang" else ("s" if target_type == "season" else "q")
+    args = message.text.split()
+    if len(args) < 3:
+        return await message.reply_text(
+            f"⚠️ <b>Invalid Command Format!</b>\n\n"
+            f"<b>Usage:</b>\n"
+            f"<code>/emojiset_{cmd_suffix} &lt;custom_emoji_id&gt; &lt;fallback_emoji&gt;</code>\n\n"
+            f"<b>Example:</b>\n"
+            f"<code>/emojiset_{cmd_suffix} 4926956800005112527 🔴</code>",
+            parse_mode=enums.ParseMode.HTML
+        )
+
+    raw_emoji_id = args[1].strip()
+    fallback_emoji = args[2].strip()
+
+    # 1. Validate numeric custom emoji ID
+    if not raw_emoji_id.isdigit() or int(raw_emoji_id) <= 0:
+        return await message.reply_text(
+            "❌ <b>Invalid Custom Emoji ID!</b>\n\n"
+            "Custom Emoji ID must be a valid positive number (e.g. <code>4926956800005112527</code>).",
+            parse_mode=enums.ParseMode.HTML
+        )
+
+    # 2. Validate fallback emoji
+    if not fallback_emoji or fallback_emoji.startswith("/"):
+        return await message.reply_text(
+            "❌ <b>Invalid Fallback Emoji!</b>\n\n"
+            "Please provide a valid fallback emoji (e.g. <code>🔴</code>, <code>🌐</code>, <code>📁</code>).",
+            parse_mode=enums.ParseMode.HTML
+        )
+
+    # 3. Validate custom emoji existence on Telegram
+    custom_emoji_id = str(raw_emoji_id)
+    try:
+        stickers = await client.get_custom_emoji_stickers([int(custom_emoji_id)])
+        if not stickers or len(stickers) == 0:
+            return await message.reply_text(
+                f"❌ <b>Custom Emoji Validation Failed:</b>\n\n"
+                f"Telegram could not find any custom emoji sticker for ID: <code>{custom_emoji_id}</code>.\n"
+                f"Please check the ID and try again.",
+                parse_mode=enums.ParseMode.HTML
+            )
+    except Exception as e:
+        err_msg = str(e)
+        logger.warning(f"[CUSTOM EMOJI VALIDATION] Query for {custom_emoji_id} returned: {err_msg}")
+        if "EMOJI_INVALID" in err_msg or "DOCUMENT_INVALID" in err_msg or "STICKER_INVALID" in err_msg or "400" in err_msg:
+            return await message.reply_text(
+                f"❌ <b>Custom Emoji Validation Failed:</b>\n\n"
+                f"Telegram rejected ID <code>{custom_emoji_id}</code>: <code>{html.escape(err_msg)}</code>",
+                parse_mode=enums.ParseMode.HTML
+            )
+
+    # 4. Save setting to MongoDB & memory cache
+    from database.series_db import set_super_button_emoji
+    await set_super_button_emoji(target_type, custom_emoji_id, fallback_emoji)
+
+    sample_preview = (
+        f"{fallback_emoji} ᴍᴀʟᴀʏᴀʟᴀᴍ" if target_type == "lang"
+        else (f"{fallback_emoji} sᴇᴀsᴏɴ 1" if target_type == "season"
+        else f"{fallback_emoji} 1080ᴘ")
+    )
+
+    logger.info(f"[SUPER EMOJI SET] type={target_type} id={custom_emoji_id} fallback={fallback_emoji} by user={uid}")
+
+    await message.reply_text(
+        f"✅ <b>Super Filter {type_name} Button Emoji Updated!</b>\n\n"
+        f"🆔 <b>Custom Emoji ID:</b> <code>{custom_emoji_id}</code>\n"
+        f"🎨 <b>Fallback Emoji:</b> {fallback_emoji}\n"
+        f"✨ <b>Entity Preview:</b> <tg-emoji emoji-id=\"{custom_emoji_id}\">{fallback_emoji}</tg-emoji>\n"
+        f"🔘 <b>Button Preview:</b> <code>{sample_preview}</code>",
+        parse_mode=enums.ParseMode.HTML
+    )
+
+
+@Client.on_message(filters.command("emojiset_l"), group=-1)
+async def cmd_emojiset_language(client: Client, message: Message):
+    """Set custom emoji for Super Filter Language buttons."""
+    await _handle_emojiset_command(client, message, target_type="lang", type_name="Language")
+
+
+@Client.on_message(filters.command("emojiset_s"), group=-1)
+async def cmd_emojiset_season(client: Client, message: Message):
+    """Set custom emoji for Super Filter Season buttons."""
+    await _handle_emojiset_command(client, message, target_type="season", type_name="Season")
+
+
+@Client.on_message(filters.command("emojiset_q"), group=-1)
+async def cmd_emojiset_quality(client: Client, message: Message):
+    """Set custom emoji for Super Filter Quality buttons."""
+    await _handle_emojiset_command(client, message, target_type="quality", type_name="Quality")
+
+
+@Client.on_message(filters.command(["del_emoji", "delete_emoji", "rem_emoji"]), group=-1)
+async def cmd_del_emoji(client: Client, message: Message):
+    """Remove all saved custom emoji settings for language, season, and quality buttons."""
+    uid = message.from_user.id if message.from_user else (message.sender_chat.id if message.sender_chat else 0)
+    if not _is_admin(uid):
+        return await message.reply_text("❌ <b>You are not authorized to use this command.</b>", parse_mode=enums.ParseMode.HTML)
+
+    from database.series_db import delete_all_super_button_emojis
+    deleted = await delete_all_super_button_emojis()
+    logger.info(f"[SUPER EMOJI DELETED] count={deleted} by user={uid}")
+
+    await message.reply_text(
+        "✅ <b>Super Filter Emoji Settings Deleted!</b>\n\n"
+        "Language, Season, and Quality buttons have been restored to their default appearance.",
+        parse_mode=enums.ParseMode.HTML
+    )
+
+
+@Client.on_message(filters.command(["get_emoji", "emojilist", "emoji_settings"]), group=-1)
+async def cmd_get_emoji(client: Client, message: Message):
+    """View current custom emoji configuration for Super Filter buttons."""
+    uid = message.from_user.id if message.from_user else (message.sender_chat.id if message.sender_chat else 0)
+    if not _is_admin(uid):
+        return await message.reply_text("❌ <b>You are not authorized to use this command.</b>", parse_mode=enums.ParseMode.HTML)
+
+    from database.series_db import get_all_super_button_emojis
+    emojis = await get_all_super_button_emojis()
+
+    lang_info = f"<code>{emojis.get('lang', {}).get('custom_emoji_id', '')}</code> ({emojis.get('lang', {}).get('fallback_emoji', '')})" if emojis.get('lang') else "<i>Default</i>"
+    season_info = f"<code>{emojis.get('season', {}).get('custom_emoji_id', '')}</code> ({emojis.get('season', {}).get('fallback_emoji', '')})" if emojis.get('season') else "<i>Default</i>"
+    qual_info = f"<code>{emojis.get('quality', {}).get('custom_emoji_id', '')}</code> ({emojis.get('quality', {}).get('fallback_emoji', '')})" if emojis.get('quality') else "<i>Default</i>"
+
+    await message.reply_text(
+        f"⚙️ <b>Super Filter Emoji Settings:</b>\n\n"
+        f"🌐 <b>Language:</b> {lang_info}\n"
+        f"📺 <b>Season:</b> {season_info}\n"
+        f"🎞 <b>Quality:</b> {qual_info}\n\n"
+        f"<i>Use /del_emoji to reset all settings.</i>",
+        parse_mode=enums.ParseMode.HTML
+    )
+
+
 @Client.on_message(filters.command(["sync_movies", "resync_movies"]), group=-1)
 async def cmd_sync_movies(client: Client, message: Message):
     uid = message.from_user.id if message.from_user else (message.sender_chat.id if message.sender_chat else 0)
@@ -2896,8 +3043,64 @@ async def cmd_sync_series(client: Client, message: Message):
     )
 
 
-def make_styled_button(text: str, callback_data: str = None, url: str = None, style: str = None) -> InlineKeyboardButton:
-    """Creates an InlineKeyboardButton with style support (success, danger, primary)."""
+# ─── Super Filter Button Emoji Formatters ──────────────────────────────────────
+
+def format_super_language_button(lang_name: str) -> tuple[str, str, str | None]:
+    """
+    Formats a Super Filter language button with custom/fallback emoji if configured.
+    Returns: (text, style, icon_custom_emoji_id)
+    """
+    font_text = to_series_font(lang_name)
+    emoji_cfg = getattr(temp, "SUPER_BUTTON_EMOJIS", {}).get("lang")
+    if emoji_cfg and (emoji_cfg.get("fallback_emoji") or emoji_cfg.get("custom_emoji_id")):
+        fb = emoji_cfg.get("fallback_emoji", "")
+        cid = emoji_cfg.get("custom_emoji_id")
+        text = f"{fb} {font_text}" if fb else font_text
+        return text, "success", cid
+    return font_text, "success", None
+
+
+def format_super_season_button(season_val: int | str, is_direct: bool = False) -> tuple[str, str, str | None]:
+    """
+    Formats a Super Filter season button with custom/fallback emoji if configured.
+    Returns: (text, style, icon_custom_emoji_id)
+    """
+    if is_direct or (isinstance(season_val, int) and season_val <= 0):
+        label = to_series_font("Direct Episodes")
+    else:
+        label = to_series_font(f"Season {season_val}")
+    emoji_cfg = getattr(temp, "SUPER_BUTTON_EMOJIS", {}).get("season")
+    if emoji_cfg and (emoji_cfg.get("fallback_emoji") or emoji_cfg.get("custom_emoji_id")):
+        fb = emoji_cfg.get("fallback_emoji", "")
+        cid = emoji_cfg.get("custom_emoji_id")
+        text = f"{fb} {label}" if fb else label
+        return text, "primary", cid
+    return label, "primary", None
+
+
+def format_super_quality_button(quality_name: str) -> tuple[str, str, str | None]:
+    """
+    Formats a Super Filter quality button with custom/fallback emoji if configured.
+    Returns: (text, style, icon_custom_emoji_id)
+    """
+    font_text = to_series_font(quality_name)
+    emoji_cfg = getattr(temp, "SUPER_BUTTON_EMOJIS", {}).get("quality")
+    if emoji_cfg and (emoji_cfg.get("fallback_emoji") or emoji_cfg.get("custom_emoji_id")):
+        fb = emoji_cfg.get("fallback_emoji", "")
+        cid = emoji_cfg.get("custom_emoji_id")
+        text = f"{fb} {font_text}" if fb else font_text
+        return text, "danger", cid
+    return font_text, "danger", None
+
+
+def make_styled_button(
+    text: str,
+    callback_data: str = None,
+    url: str = None,
+    style: str = None,
+    icon_custom_emoji_id: str = None
+) -> InlineKeyboardButton:
+    """Creates an InlineKeyboardButton with style support (success, danger, primary) and icon_custom_emoji_id."""
     btn = None
     try:
         if style:
@@ -2919,6 +3122,11 @@ def make_styled_button(text: str, callback_data: str = None, url: str = None, st
             setattr(btn, "style", style)
         except Exception:
             pass
+    if icon_custom_emoji_id and btn:
+        try:
+            setattr(btn, "icon_custom_emoji_id", str(icon_custom_emoji_id))
+        except Exception:
+            pass
     return btn
 
 
@@ -2930,7 +3138,7 @@ async def apply_pm_styled_reply_markup(
 ) -> bool:
     """
     Ensures that custom Telegram button styles (style='success', style='danger', style='primary')
-    are serialized and updated via the Telegram Bot API editMessageReplyMarkup endpoint.
+    and icon_custom_emoji_id are serialized and updated via the Telegram Bot API editMessageReplyMarkup endpoint.
     """
     import aiohttp
     import info
@@ -2960,7 +3168,7 @@ async def apply_pm_styled_reply_markup(
         for b in (row if isinstance(row, list) else [row]):
             if isinstance(b, dict):
                 b_dict = dict(b)
-                if b_dict.get("style"):
+                if b_dict.get("style") or b_dict.get("icon_custom_emoji_id"):
                     has_any_style = True
                 raw_row.append(b_dict)
             else:
@@ -2974,6 +3182,12 @@ async def apply_pm_styled_reply_markup(
                 if btn_style:
                     b_dict["style"] = str(btn_style)
                     has_any_style = True
+
+                btn_icon = getattr(b, "icon_custom_emoji_id", None)
+                if btn_icon:
+                    b_dict["icon_custom_emoji_id"] = str(btn_icon)
+                    has_any_style = True
+
                 raw_row.append(b_dict)
         raw_keyboard.append(raw_row)
 
@@ -8466,7 +8680,8 @@ async def render_series_direct(client: Client, message: Message, series_doc: dic
     for i in range(0, len(langs_sorted), 2):
         row = []
         for l in langs_sorted[i:i+2]:
-            row.append(make_styled_button(to_series_font(l), callback_data=f"ser_lang#{series_id}#{l}", style="success"))
+            text, style, icon_id = format_super_language_button(l)
+            row.append(make_styled_button(text, callback_data=f"ser_lang#{series_id}#{l}", style=style, icon_custom_emoji_id=icon_id))
         buttons.append(row)
 
     caption_text = format_series_metadata_caption(series_doc, page_type="lang")
@@ -8858,7 +9073,8 @@ async def ser_lang_callback(client: Client, query: CallbackQuery):
     for i in range(0, len(seasons_sorted), 2):
         row = []
         for s in seasons_sorted[i:i+2]:
-            row.append(make_styled_button(to_series_font(f"Season {s}"), callback_data=f"ser_season#{series_id}#{lang}#{s}", style="primary"))
+            text, style, icon_id = format_super_season_button(s)
+            row.append(make_styled_button(text, callback_data=f"ser_season#{series_id}#{lang}#{s}", style=style, icon_custom_emoji_id=icon_id))
         buttons.append(row)
 
     buttons.append([
@@ -8925,7 +9141,8 @@ async def ser_season_callback(client: Client, query: CallbackQuery):
     for i in range(0, len(qualities), 2):
         row = []
         for q in qualities[i:i+2]:
-            row.append(make_styled_button(to_series_font(q), callback_data=f"ser_qual#{series_id}#{lang}#{season}#{q}", style="danger"))
+            text, style, icon_id = format_super_quality_button(q)
+            row.append(make_styled_button(text, callback_data=f"ser_qual#{series_id}#{lang}#{season}#{q}", style=style, icon_custom_emoji_id=icon_id))
         buttons.append(row)
 
     buttons.append([
