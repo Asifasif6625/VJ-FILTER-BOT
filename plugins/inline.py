@@ -10,8 +10,10 @@ from pyrogram.types import (
     InlineKeyboardButton,
     InlineKeyboardMarkup,
     InlineQueryResultPhoto,
-    InlineQuery
+    InlineQuery,
+    MessageEntity
 )
+from pyrogram.enums import MessageEntityType
 from utils import is_subscribed, temp
 from info import AUTH_USERS, AUTH_CHANNEL, PICS
 from database.series_db import (
@@ -25,6 +27,186 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_POSTER = PICS[0] if PICS else "https://files.catbox.moe/zck4ym.jpg"
 PAGE_SIZE = 15
+CUSTOM_EMOJI_ID = 4926956800005112527
+
+
+def _utf16_len(text: str) -> int:
+    """Returns the UTF-16 code units length of text for Telegram entity offset calculation."""
+    return len(text.encode("utf-16-le")) // 2
+
+
+def build_movie_caption_and_entities(
+    title: str,
+    year: str,
+    genres: str,
+    rating: str,
+    quals: str,
+    langs: str
+) -> tuple[str, list[MessageEntity]]:
+    """
+    Builds the plain-text caption and explicit MessageEntity list for Super Movie Filter.
+    Format:
+    🔴 Movie: {title}
+    🔴 Year: {year}
+    🔴 Genres: {genres}
+    🔴 Rating: {rating}
+    🔴 Quality: {quals}
+    🔴 Languages: {langs}
+    """
+    lines_meta = [
+        ("Movie:", title, True),
+        ("Year:", year, False),
+        ("Genres:", genres, False),
+        ("Rating:", rating, False),
+        ("Quality:", quals, False),
+        ("Languages:", langs, False)
+    ]
+    
+    entities = []
+    caption_lines = []
+    current_utf16_offset = 0
+    emoji_str = "🔴"
+    emoji_utf16_len = _utf16_len(emoji_str)
+    
+    for idx, (label, val, is_val_bold) in enumerate(lines_meta):
+        line_text = f"{emoji_str} {label} {val}"
+        line_utf16_len = _utf16_len(line_text)
+        
+        # 1. Custom Emoji entity for 🔴
+        entities.append(
+            MessageEntity(
+                type=MessageEntityType.CUSTOM_EMOJI,
+                offset=current_utf16_offset,
+                length=emoji_utf16_len,
+                custom_emoji_id=CUSTOM_EMOJI_ID
+            )
+        )
+        
+        # 2. Bold entity for label (e.g. "Movie:")
+        label_offset = current_utf16_offset + _utf16_len(f"{emoji_str} ")
+        label_len = _utf16_len(label)
+        entities.append(
+            MessageEntity(
+                type=MessageEntityType.BOLD,
+                offset=label_offset,
+                length=label_len
+            )
+        )
+        
+        # 3. Bold entity for movie title
+        if is_val_bold and val:
+            val_offset = label_offset + label_len + _utf16_len(" ")
+            val_len = _utf16_len(val)
+            entities.append(
+                MessageEntity(
+                    type=MessageEntityType.BOLD,
+                    offset=val_offset,
+                    length=val_len
+                )
+            )
+            
+        caption_lines.append(line_text)
+        current_utf16_offset += line_utf16_len + (_utf16_len("\n") if idx < len(lines_meta) - 1 else 0)
+        
+    full_caption = "\n".join(caption_lines)
+    
+    # 4. Italic entity covering the whole metadata block
+    entities.append(
+        MessageEntity(
+            type=MessageEntityType.ITALIC,
+            offset=0,
+            length=_utf16_len(full_caption)
+        )
+    )
+    
+    return full_caption, entities
+
+
+def build_series_caption_and_entities(
+    name: str,
+    year: str,
+    genres: str,
+    rating: str,
+    seasons: str,
+    langs: str
+) -> tuple[str, list[MessageEntity]]:
+    """
+    Builds the plain-text caption and explicit MessageEntity list for Super Series Filter.
+    Format:
+    🔴 Series: {name}
+    🔴 Year: {year}
+    🔴 Genres: {genres}
+    🔴 Rating: {rating}
+    🔴 Seasons: {seasons}
+    🔴 Languages: {langs}
+    """
+    lines_meta = [
+        ("Series:", name, True),
+        ("Year:", year, False),
+        ("Genres:", genres, False),
+        ("Rating:", rating, False),
+        ("Seasons:", seasons, False),
+        ("Languages:", langs, False)
+    ]
+    
+    entities = []
+    caption_lines = []
+    current_utf16_offset = 0
+    emoji_str = "🔴"
+    emoji_utf16_len = _utf16_len(emoji_str)
+    
+    for idx, (label, val, is_val_bold) in enumerate(lines_meta):
+        line_text = f"{emoji_str} {label} {val}"
+        line_utf16_len = _utf16_len(line_text)
+        
+        # 1. Custom Emoji entity for 🔴
+        entities.append(
+            MessageEntity(
+                type=MessageEntityType.CUSTOM_EMOJI,
+                offset=current_utf16_offset,
+                length=emoji_utf16_len,
+                custom_emoji_id=CUSTOM_EMOJI_ID
+            )
+        )
+        
+        # 2. Bold entity for label (e.g. "Series:")
+        label_offset = current_utf16_offset + _utf16_len(f"{emoji_str} ")
+        label_len = _utf16_len(label)
+        entities.append(
+            MessageEntity(
+                type=MessageEntityType.BOLD,
+                offset=label_offset,
+                length=label_len
+            )
+        )
+        
+        # 3. Bold entity for series name
+        if is_val_bold and val:
+            val_offset = label_offset + label_len + _utf16_len(" ")
+            val_len = _utf16_len(val)
+            entities.append(
+                MessageEntity(
+                    type=MessageEntityType.BOLD,
+                    offset=val_offset,
+                    length=val_len
+                )
+            )
+            
+        caption_lines.append(line_text)
+        current_utf16_offset += line_utf16_len + (_utf16_len("\n") if idx < len(lines_meta) - 1 else 0)
+        
+    full_caption = "\n".join(caption_lines)
+    
+    # 4. Italic entity covering the whole metadata block
+    entities.append(
+        MessageEntity(
+            type=MessageEntityType.ITALIC,
+            offset=0,
+            length=_utf16_len(full_caption)
+        )
+    )
+    
+    return full_caption, entities
 
 
 async def inline_users(query: InlineQuery):
@@ -48,7 +230,7 @@ def _is_valid_url(url: str) -> bool:
 def _build_movie_inline_result(movie: dict, bot_username: str) -> InlineQueryResultPhoto:
     doc_id = str(movie.get("_id", ""))
     title = movie.get("title") or movie.get("name") or "Movie"
-    title_clean = html.escape(clean_series_title(title))
+    title_clean = clean_series_title(title)
     
     year = str(movie.get("year", "N/A")).strip()
     year_str = f" ({year})" if year and year != "N/A" else ""
@@ -61,15 +243,15 @@ def _build_movie_inline_result(movie: dict, bot_username: str) -> InlineQueryRes
         
     raw_genres = movie.get("genres") or movie.get("genre") or "N/A"
     genres = ", ".join(raw_genres) if isinstance(raw_genres, list) else str(raw_genres)
-    genres = html.escape(genres.strip() or "N/A")
+    genres = genres.strip() or "N/A"
     
     raw_langs = movie.get("languages") or []
     langs_str = ", ".join(raw_langs) if isinstance(raw_langs, list) else str(raw_langs)
-    langs_str = html.escape(langs_str.strip() or "N/A")
+    langs_str = langs_str.strip() or "N/A"
     
     raw_quals = movie.get("qualities") or []
     quals_str = ", ".join(raw_quals) if isinstance(raw_quals, list) else str(raw_quals)
-    quals_str = html.escape(quals_str.strip() or "N/A")
+    quals_str = quals_str.strip() or "N/A"
     
     poster = movie.get("poster")
     photo_url = poster if _is_valid_url(poster) else DEFAULT_POSTER
@@ -94,15 +276,14 @@ def _build_movie_inline_result(movie: dict, bot_username: str) -> InlineQueryRes
     if is_cs:
         card_desc = f"⏳ Coming Soon • {card_desc}"
         
-    CUSTOM_EMOJI = '<tg-emoji emoji-id="4926956800005112527">🔴</tg-emoji>'
-    # Sent Message Caption
-    caption = (
-        f"<i>{CUSTOM_EMOJI} <b>Movie:</b> <b>{title_clean}</b>\n"
-        f"{CUSTOM_EMOJI} <b>Year:</b> {year}\n"
-        f"{CUSTOM_EMOJI} <b>Genres:</b> {genres}\n"
-        f"{CUSTOM_EMOJI} <b>Rating:</b> {rating}\n"
-        f"{CUSTOM_EMOJI} <b>Quality:</b> {quals_str}\n"
-        f"{CUSTOM_EMOJI} <b>Languages:</b> {langs_str}</i>"
+    # Build plain text and exact caption_entities
+    caption_text, caption_entities = build_movie_caption_and_entities(
+        title=title_clean,
+        year=year,
+        genres=genres,
+        rating=rating,
+        quals=quals_str,
+        langs=langs_str
     )
     
     # 1-Click Action Button
@@ -120,8 +301,8 @@ def _build_movie_inline_result(movie: dict, bot_username: str) -> InlineQueryRes
         thumb_url=photo_url,
         title=card_title,
         description=card_desc,
-        caption=caption,
-        parse_mode=enums.ParseMode.HTML,
+        caption=caption_text,
+        caption_entities=caption_entities,
         reply_markup=InlineKeyboardMarkup(btn)
     )
 
@@ -129,7 +310,7 @@ def _build_movie_inline_result(movie: dict, bot_username: str) -> InlineQueryRes
 def _build_series_inline_result(series: dict, bot_username: str) -> InlineQueryResultPhoto:
     doc_id = str(series.get("_id", ""))
     name = series.get("name") or series.get("title") or "Series"
-    name_clean = html.escape(clean_series_title(name))
+    name_clean = clean_series_title(name)
     
     year = str(series.get("year", "N/A")).strip()
     year_str = f" ({year})" if year and year != "N/A" else ""
@@ -142,11 +323,11 @@ def _build_series_inline_result(series: dict, bot_username: str) -> InlineQueryR
         
     raw_genres = series.get("genre") or series.get("genres") or "N/A"
     genres = ", ".join(raw_genres) if isinstance(raw_genres, list) else str(raw_genres)
-    genres = html.escape(genres.strip() or "N/A")
+    genres = genres.strip() or "N/A"
     
     raw_langs = series.get("languages") or []
     langs_str = ", ".join(raw_langs) if isinstance(raw_langs, list) else str(raw_langs)
-    langs_str = html.escape(langs_str.strip() or "N/A")
+    langs_str = langs_str.strip() or "N/A"
     
     raw_seasons = series.get("seasons") or [1]
     if isinstance(raw_seasons, list):
@@ -157,7 +338,7 @@ def _build_series_inline_result(series: dict, bot_username: str) -> InlineQueryR
         
     raw_quals = series.get("qualities") or []
     quals_str = ", ".join(raw_quals) if isinstance(raw_quals, list) else str(raw_quals)
-    quals_str = html.escape(quals_str.strip() or "N/A")
+    quals_str = quals_str.strip() or "N/A"
     
     poster = series.get("poster")
     photo_url = poster if _is_valid_url(poster) else DEFAULT_POSTER
@@ -180,15 +361,14 @@ def _build_series_inline_result(series: dict, bot_username: str) -> InlineQueryR
     if is_cs:
         card_desc = f"⏳ Coming Soon • {card_desc}"
         
-    CUSTOM_EMOJI = '<tg-emoji emoji-id="4926956800005112527">🔴</tg-emoji>'
-    # Sent Message Caption
-    caption = (
-        f"<i>{CUSTOM_EMOJI} <b>Series:</b> <b>{name_clean}</b>\n"
-        f"{CUSTOM_EMOJI} <b>Year:</b> {year}\n"
-        f"{CUSTOM_EMOJI} <b>Genres:</b> {genres}\n"
-        f"{CUSTOM_EMOJI} <b>Rating:</b> {rating}\n"
-        f"{CUSTOM_EMOJI} <b>Seasons:</b> {seasons_str}\n"
-        f"{CUSTOM_EMOJI} <b>Languages:</b> {langs_str}</i>"
+    # Build plain text and exact caption_entities
+    caption_text, caption_entities = build_series_caption_and_entities(
+        name=name_clean,
+        year=year,
+        genres=genres,
+        rating=rating,
+        seasons=seasons_str,
+        langs=langs_str
     )
     
     # 1-Click Action Button
@@ -206,8 +386,8 @@ def _build_series_inline_result(series: dict, bot_username: str) -> InlineQueryR
         thumb_url=photo_url,
         title=card_title,
         description=card_desc,
-        caption=caption,
-        parse_mode=enums.ParseMode.HTML,
+        caption=caption_text,
+        caption_entities=caption_entities,
         reply_markup=InlineKeyboardMarkup(btn)
     )
 
