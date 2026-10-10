@@ -462,36 +462,46 @@ def parse_series_filename(filename: str, series_title: str, target_season: int =
     )
 
 
-def _fetch_movie_candidates_sync(title: str, year: str | int = None, limit: int = 500) -> list:
+def _fetch_movie_candidates_sync(title: str, year: str | int = None, limit: int = 2000) -> list:
     """
-    Synchronous bounded candidate search for movie files.
-    Runs inside background thread pool with explicit cursor closing and max_time_ms.
+    Synchronous candidate search for movie/series files.
+    Runs inside background thread pool.
+    Uses flexible regex tokens ignoring leading stopwords/articles like 'The'/'A'/'An'.
     """
     from database.ia_filterdb import col, sec_col, MULTIPLE_DATABASE
     clean_title = re.sub(r"[\._\-\+\[\]\(\)\{\}:;!?,/\\~|#*\"\'`]", " ", clean_series_title(title))
-    q_tokens = [w for w in clean_title.lower().split() if len(w) > 1]
-    if not q_tokens:
-        q_tokens = [clean_title.lower().strip()] if clean_title.strip() else ["a"]
+    raw_tokens = [w for w in clean_title.lower().split() if len(w) > 1]
+    
+    # Filter out common leading noise articles for broader candidate recall
+    stopwords = {"the", "a", "an", "of", "and", "in", "on", "at", "to", "for"}
+    meaningful_tokens = [t for t in raw_tokens if t not in stopwords]
+    if not meaningful_tokens:
+        meaningful_tokens = raw_tokens or ["a"]
 
-    year_str = str(year).strip() if (year and str(year).strip() not in ["N/A", "None", "0", ""]) else None
-    results = []
-    seen_ids = set()
+    # Build regex patterns:
+    # 1. Main token pattern (without stopwords): e.g. "walking.*dead" or "breaking.*bad"
+    tok_pat1 = ".*".join(re.escape(t) for t in meaningful_tokens[:3])
+    # 2. Raw token pattern: e.g. "the.*walking.*dead"
+    tok_pat2 = ".*".join(re.escape(t) for t in raw_tokens[:3])
 
-    logger.info(f"[AUTO MOVIE SCAN] DB QUERY START title={title} year={year_str}")
+    pats = [tok_pat1]
+    if tok_pat2 != tok_pat1:
+        pats.append(tok_pat2)
 
-    # Build targeted regex with title tokens
-    tok_pat = ".*".join(re.escape(t) for t in q_tokens[:3])
+    combined_regex = "|".join(f"(?:{p})" for p in pats)
     try:
-        reg = re.compile(tok_pat, re.IGNORECASE)
+        reg = re.compile(combined_regex, re.IGNORECASE)
     except Exception:
         reg = re.compile(re.escape(clean_title), re.IGNORECASE)
 
+    results = []
+    seen_ids = set()
+
     from utils import is_video_file, is_subtitle_file
 
-    # Execute on primary collection
     cursor = None
     try:
-        cursor = col.find({"file_name": reg}).max_time_ms(4000).limit(limit)
+        cursor = col.find({"file_name": reg}).limit(limit)
         for doc in cursor:
             if not is_video_file(doc) or is_subtitle_file(doc):
                 continue
@@ -500,7 +510,7 @@ def _fetch_movie_candidates_sync(title: str, year: str | int = None, limit: int 
                 seen_ids.add(fid)
                 results.append(doc)
     except Exception as e:
-        logger.error(f"[AUTO MOVIE SCAN] DB QUERY ERROR {e}")
+        logger.error(f"[AUTO S/M SCAN] DB QUERY ERROR {e}")
     finally:
         if cursor is not None:
             try:
@@ -508,11 +518,10 @@ def _fetch_movie_candidates_sync(title: str, year: str | int = None, limit: int 
             except Exception:
                 pass
 
-    # Execute on secondary collection if enabled and room remains
     if MULTIPLE_DATABASE and len(results) < limit:
         sec_cursor = None
         try:
-            sec_cursor = sec_col.find({"file_name": reg}).max_time_ms(4000).limit(limit - len(results))
+            sec_cursor = sec_col.find({"file_name": reg}).limit(limit - len(results))
             for doc in sec_cursor:
                 if not is_video_file(doc) or is_subtitle_file(doc):
                     continue
@@ -521,7 +530,7 @@ def _fetch_movie_candidates_sync(title: str, year: str | int = None, limit: int 
                     seen_ids.add(fid)
                     results.append(doc)
         except Exception as e:
-            logger.error(f"[AUTO MOVIE SCAN] DB QUERY SEC ERROR {e}")
+            logger.error(f"[AUTO S/M SCAN] DB QUERY SEC ERROR {e}")
         finally:
             if sec_cursor is not None:
                 try:
@@ -529,7 +538,7 @@ def _fetch_movie_candidates_sync(title: str, year: str | int = None, limit: int 
                 except Exception:
                     pass
 
-    logger.info(f"[AUTO MOVIE SCAN] DB QUERY DONE count={len(results)}")
+    logger.info(f"[AUTO S/M SCAN] DB QUERY DONE count={len(results)}")
     return results
 
 
@@ -623,7 +632,7 @@ async def scan_sdatabase_for_series(chat_id: int | str, title: str, season: int 
         )
 
         if not is_reliable or not res_lang:
-            res_lang = raw_lang or original_language or "Malayalam"
+            res_lang = raw_lang or original_language or "English"
         if not res_qual or res_qual == "Unknown":
             res_qual = raw_qual if (raw_qual and raw_qual != "Unknown") else "720p"
 
@@ -787,7 +796,7 @@ async def scan_sdatabase_for_movie(
 
     for doc in all_matching_files:
         fid = doc.get("file_id")
-        lang = doc.get("language") or norm_orig or "Malayalam"
+        lang = doc.get("language") or norm_orig or "English"
         qual = doc.get("quality", "Unknown")
 
         file_entry = {
@@ -895,7 +904,7 @@ def _group_auto_movie_files(res, orig_lang=None):
     match_list = res.get("all_matching_files") or res.get("valid_files") or []
     grouped = {}
     for f in match_list:
-        l = f.get("language") or norm_orig or "Malayalam"
+        l = f.get("language") or norm_orig or "English"
         q = f.get("quality") or "Unknown"
         if l not in grouped:
             grouped[l] = {}
@@ -1603,7 +1612,7 @@ async def fetch_auto_series_metadata(client: Client, chat_id: int | str, loading
             detected_seasons = [1]
         detected_langs = sorted(list({str(f["language"]) for f in all_files if f.get("language")}))
         if not detected_langs:
-            detected_langs = [s_orig_lang] if s_orig_lang else ["Malayalam"]
+            detected_langs = [s_orig_lang] if s_orig_lang else ["English"]
         detected_quals = sorted(list({str(f["quality"]) for f in all_files if f.get("quality")}))
         if not detected_quals:
             detected_quals = ["720p", "1080p"]
@@ -2816,7 +2825,7 @@ async def cmd_sync_series(client: Client, message: Message):
         elif s.get("languages") and len(s.get("languages")) > 0:
             s_orig_lang = s.get("languages")[0]
         else:
-            s_orig_lang = "Malayalam"
+            s_orig_lang = "English"
 
         res = await scan_sdatabase_for_series(message.chat.id, name, season=None, series_id=sid, client=client, original_language=s_orig_lang, year=s_year)
         new_files = res.get("valid_new_files") or []
@@ -8299,9 +8308,13 @@ async def render_series_direct(client: Client, message: Message, series_doc: dic
     if poster.upper() == "N/A":
         poster = ""
 
-    langs = series_doc.get("languages", [])
+    from database.series_db import list_series_languages
+    from utils import normalize_language_name
+    db_langs = await list_series_languages(series_id)
+    langs = db_langs if db_langs else series_doc.get("languages", [])
     if not langs:
-        langs = await list_series_languages(series_id)
+        orig = series_doc.get("original_language")
+        langs = [normalize_language_name(orig) or orig] if orig else ["English"]
 
     if reply_msg and reply_msg.chat:
         chat_id = reply_msg.chat.id
@@ -8958,6 +8971,33 @@ async def ser_qual_callback(client: Client, query: CallbackQuery):
         "season": _num_query(season),
         "quality": qual
     }).sort("episode", 1).to_list(length=300)
+
+    if not files:
+        import re
+        files = await sfiles_col.find({
+            "series_id": _sid_query(series_id),
+            "language": {"$regex": f"^{re.escape(str(lang))}$", "$options": "i"},
+            "season": _num_query(season),
+            "quality": qual
+        }).sort("episode", 1).to_list(length=300)
+
+    if not files:
+        files = await sfiles_col.find({
+            "series_id": _sid_query(series_id),
+            "season": _num_query(season),
+            "quality": qual
+        }).sort("episode", 1).to_list(length=300)
+
+    if not files:
+        files = await sfiles_col.find({
+            "series_id": _sid_query(series_id),
+            "season": _num_query(season)
+        }).sort("episode", 1).to_list(length=300)
+
+    if not files:
+        files = await sfiles_col.find({
+            "series_id": _sid_query(series_id)
+        }).sort("episode", 1).to_list(length=300)
 
     if not files:
         return await query.answer("⚠️ No episode files found for this quality.", show_alert=True)
