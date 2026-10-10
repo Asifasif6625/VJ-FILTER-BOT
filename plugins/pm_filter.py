@@ -3879,22 +3879,25 @@ async def auto_filter(client, name, msg, reply_msg=None, ai_search=True, spoll=F
             except Exception as e:
                 logger.error(f"[SUPER FILTER SEARCH ROUTING ERROR] query={search if search else name} error={e}")
 
-            # If not a Super Filter:
-            # 1. In Group: Main Bot remains completely SILENT (Child Bot handles Normal Filter in group)
-            if message.chat.type in [enums.ChatType.GROUP, enums.ChatType.SUPERGROUP]:
-                logger.info(f"[MAIN BOT SILENT IN GROUP] query={search} is not Super Filter, letting Child Bot handle.")
+            # If not a Super Filter: execute Normal/Legacy Filter Search directly on Main Bot
+            logger.info(f"[MAIN BOT NORMAL FILTER ROUTE] query='{search}' chat_id={message.chat.id}")
+            files, offset, total_results = await get_search_results(message.chat.id, search.lower(), max_results=100, offset=0, filter=True)
+            if not files:
+                if message.chat.type in [enums.ChatType.GROUP, enums.ChatType.SUPERGROUP]:
+                    msg_text = (
+                        "<b>sᴏʀʀʏ ɴᴏ ꜰɪʟᴇs ᴡᴇʀᴇ ꜰᴏᴜɴᴅ ꜰᴏʀ ʏᴏᴜʀ ʀᴇǫᴜᴇꜱᴛ😕\n\n"
+                        "ᴄʜᴇᴄᴋ ʏᴏᴜʀ sᴘᴇʟʟɪɴɢ ɪɴ ɢᴏᴏɢʟᴇ ᴀɴᴅ ᴛʀʏ ᴀɢᴀɪɴ 😃\n\n"
+                        "<i>🕐 This message will be deleted in 50 seconds.</i></b>"
+                    )
+                    sent_msg = await message.reply_text(msg_text, parse_mode=enums.ParseMode.HTML)
+                    if sent_msg:
+                        schedule_filter_message_delete(client, sent_msg.chat.id, sent_msg.id, delay=50)
+                        schedule_filter_message_delete(client, message.chat.id, message.id, delay=50)
+                else:
+                    await message.reply_text(f"<b>No files found in database for '<i>{html.escape(search)}</i>'</b>", parse_mode=enums.ParseMode.HTML)
                 return
 
-            # 2. In PM: Main Bot redirects to Child Bot
-            from utils import get_child_bot_username
-            child_username = get_child_bot_username()
-            child_link = f"https://t.me/{child_username}?start=getme_{search.replace(' ', '_')}"
-            redirect_text = (
-                "<b>🌟 This title is available on our Normal Filter Bot!</b>\n\n"
-                "<i>ഈ മൂവി / സീരീസ് നോർമൽ ഫിൽട്ടർ ബോട്ടിൽ ലഭ്യമാണ്. താഴെ കാണുന്ന ബട്ടൺ ക്ലിക്ക് ചെയ്യുക.</i>"
-            )
-            markup = InlineKeyboardMarkup([[InlineKeyboardButton("🚀 Search on Normal Filter Bot", url=child_link)]])
-            await message.reply_text(redirect_text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
+            await render_normal_grouped_results(client=client, message=message, query_text=search, files=files, reply_msg=reply_msg, page=0)
             return
         else:
             return
@@ -3918,18 +3921,23 @@ async def auto_filter(client, name, msg, reply_msg=None, ai_search=True, spoll=F
         except Exception as e:
             logger.error(f"[SPOLL SUPER FILTER SEARCH ERROR] query={search} error={e}")
 
-        if message.chat.type in [enums.ChatType.GROUP, enums.ChatType.SUPERGROUP]:
-            return
-
-        from utils import get_child_bot_username
-        child_username = get_child_bot_username()
-        child_link = f"https://t.me/{child_username}?start=getme_{search.replace(' ', '_')}"
-        redirect_text = (
-            "<b>🌟 This title is available on our Normal Filter Bot!</b>\n\n"
-            "<i>ഈ മൂവി / സീരീസ് നോർമൽ ഫിൽട്ടർ ബോട്ടിൽ ലഭ്യമാണ്. താഴെ കാണുന്ന ബട്ടൺ ക്ലിക്ക് ചെയ്യുക.</i>"
-        )
-        markup = InlineKeyboardMarkup([[InlineKeyboardButton("🚀 Search on Normal Filter Bot", url=child_link)]])
-        await message.reply_text(redirect_text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
+        if not files:
+            files, offset, total_results = await get_search_results(message.chat.id, search.lower(), max_results=100, offset=0, filter=True)
+        if files:
+            await render_normal_grouped_results(client=client, message=message, query_text=search, files=files, reply_msg=None, page=0)
+        else:
+            if message.chat.type in [enums.ChatType.GROUP, enums.ChatType.SUPERGROUP]:
+                msg_text = (
+                    "<b>sᴏʀʀʏ ɴᴏ ꜰɪʟᴇs ᴡᴇʀᴇ ꜰᴏᴜɴᴅ ꜰᴏʀ ʏᴏᴜʀ ʀᴇǫᴜᴇꜱᴛ😕\n\n"
+                    "ᴄʜᴇᴄᴋ ʏᴏᴜʀ sᴘᴇʟʟɪɴɢ ɪɴ ɢᴏᴏɢʟᴇ ᴀɴᴅ ᴛʀʏ ᴀɢᴀɪɴ 😃\n\n"
+                    "<i>🕐 This message will be deleted in 50 seconds.</i></b>"
+                )
+                sent_msg = await message.reply_text(msg_text, parse_mode=enums.ParseMode.HTML)
+                if sent_msg:
+                    schedule_filter_message_delete(client, sent_msg.chat.id, sent_msg.id, delay=50)
+                    schedule_filter_message_delete(client, message.chat.id, message.id, delay=50)
+            else:
+                await message.reply_text(f"<b>No files found in database for '<i>{html.escape(search)}</i>'</b>", parse_mode=enums.ParseMode.HTML)
         return
 
 
@@ -4065,7 +4073,6 @@ async def render_normal_grouped_results(client: Client, message: Message, query_
     Authoritative renderer for NORMAL/LEGACY Movie & Series filter search results.
     - Used by both Group Chat and PM Search.
     - Max 5 buttons per page.
-    - In group, clicking a button displays details with 'Get All File' and 'Back' buttons.
     """
     groups = build_normal_filter_groups(files)
     if not groups:
@@ -4089,9 +4096,14 @@ async def render_normal_grouped_results(client: Client, message: Message, query_
 
     BUTTON_OWNERS[key] = real_user_id
 
-    bot_username = temp.U_NAME if (hasattr(temp, "U_NAME") and temp.U_NAME) else getattr(getattr(client, "me", None), "username", "Bot")
+    bot_username = getattr(getattr(client, "me", None), "username", None)
+    if not bot_username:
+        from utils import get_child_bot_username
+        bot_username = get_child_bot_username()
     if bot_username:
         bot_username = str(bot_username).lstrip("@")
+    else:
+        bot_username = "Bot"
 
     import uuid
     session_id = f"ns_{uuid.uuid4().hex[:8]}"
@@ -4116,6 +4128,7 @@ async def render_normal_grouped_results(client: Client, message: Message, query_
             except Exception:
                 pass
 
+    logger.info(f"[CHILD BOT RENDER GROUPS] bot=@{bot_username} query='{query_text}' total_groups={len(groups)} page={page} session_id={session_id}")
     markup = build_normal_group_keyboard(groups=groups, page=page, session_id=session_id, bot_username=bot_username)
     
     requester_name = "User"
@@ -4178,12 +4191,19 @@ async def cb_normal_group_page(client: Client, query: CallbackQuery):
         return await query.answer(unauth_text, show_alert=True)
 
     groups = sess.get("groups", [])
-    bot_username = temp.U_NAME if (hasattr(temp, "U_NAME") and temp.U_NAME) else getattr(getattr(client, "me", None), "username", "Bot")
+    bot_username = getattr(getattr(client, "me", None), "username", None)
+    if not bot_username:
+        from utils import get_child_bot_username
+        bot_username = get_child_bot_username()
     if bot_username:
         bot_username = str(bot_username).lstrip("@")
+    else:
+        bot_username = "Bot"
 
+    logger.info(f"[CHILD BOT PAGINATION] bot=@{bot_username} session_id={session_id} target_page={target_page} total_groups={len(groups)} user_id={clicked_user_id}")
     markup = build_normal_group_keyboard(groups=groups, page=target_page, session_id=session_id, bot_username=bot_username)
     try:
+        from utils import schedule_filter_message_delete
         await query.message.edit_reply_markup(reply_markup=markup)
         schedule_filter_message_delete(client, query.message.chat.id, query.message.id, delay=1200)
     except MessageNotModified:
@@ -4191,40 +4211,8 @@ async def cb_normal_group_page(client: Client, query: CallbackQuery):
     await query.answer()
 
 
-@Client.on_callback_query(filters.regex(r"^norm_grp#"))
-async def cb_normal_group_select(client: Client, query: CallbackQuery):
-    parts = query.data.split("#")
-    if len(parts) < 2:
-        return await query.answer("⚠️ Invalid selection.", show_alert=True)
-    norm_group_id = parts[1]
-    session_id = parts[2] if len(parts) > 2 else ""
-    page = int(parts[3]) if len(parts) > 3 and parts[3].isdigit() else 0
-    clicked_user_id = query.from_user.id
-
-    group_data = getattr(temp, "NORMAL_FILTER_GROUPS", {}).get(norm_group_id)
-    if not group_data:
-        from database.series_db import get_temp_request
-        group_data = await get_temp_request(norm_group_id)
-
-    if not group_data:
-        return await query.answer("❌ Files not found or expired. Please search again.", show_alert=True)
-
-    # 1. Access Control: Searcher Only Check
-    req_user_id = group_data.get("user_id") or group_data.get("requester_user_id")
-    if req_user_id and clicked_user_id and clicked_user_id != req_user_id:
-        unauth_text = (
-            "Perform the search yourself; do not simply click on a button generated by someone else's search.😁\n\n"
-            "സ്വന്തം ആയി സെർച്ച് ചെയ്യുക. മറ്റുള്ളവർ സേർച്ച് ചയ്തു കിട്ടിയ ബട്ടൺ ക്ലിക്ക് ചയ്തു വരണ്ട ."
-        )
-        return await query.answer(unauth_text, show_alert=True)
-
-    bot_username = temp.U_NAME if (hasattr(temp, "U_NAME") and temp.U_NAME) else getattr(getattr(client, "me", None), "username", None)
-    if bot_username:
-        bot_username = str(bot_username).lstrip("@")
-    else:
-        bot_username = "Bot"
-
-    # Fetch Details
+async def format_normal_filter_details_card(group_data: dict) -> str:
+    """Formats the IMDb / metadata details card for Normal Filter."""
     title = group_data.get("title", "Files")
     year = group_data.get("year", "N/A")
     year_str = str(year).strip() if year and str(year).upper() != "N/A" else "N/A"
@@ -4266,11 +4254,137 @@ async def cb_normal_group_select(client: Client, query: CallbackQuery):
         f"☁︎ Rating: {html.escape(rating_str)}\n\n"
         f"</i>"
     )
+    return details_caption
+
+
+async def start_normal_file_delivery_in_pm(client: Client, user_id: int, norm_group_id: str, trigger_msg: Message = None) -> bool:
+    """
+    Initiates file delivery for a Normal Filter group in Child Bot PM.
+    - Prevents duplicate delivery.
+    - Sends 'Stop Files' control message.
+    - Spawns background delivery task via execute_normal_group_file_delivery.
+    """
+    if not hasattr(temp, "ACTIVE_NORMAL_DELIVERIES"):
+        temp.ACTIVE_NORMAL_DELIVERIES = set()
+
+    if user_id in temp.ACTIVE_NORMAL_DELIVERIES:
+        return False
+
+    temp.ACTIVE_NORMAL_DELIVERIES.add(user_id)
+
+    if trigger_msg:
+        try:
+            await trigger_msg.delete()
+        except Exception:
+            pass
+
+    import uuid
+    session_id = f"normdel_{user_id}_{uuid.uuid4().hex[:6]}"
+    if not hasattr(temp, "NORMAL_DELIVERY_SESSIONS"):
+        temp.NORMAL_DELIVERY_SESSIONS = {}
+
+    temp.NORMAL_DELIVERY_SESSIONS[session_id] = {
+        "cancelled": False,
+        "user_id": user_id,
+        "group_id": norm_group_id
+    }
+
+    stop_btn = InlineKeyboardButton("🛑 Stop Files", callback_data=f"norm_stop#{session_id}")
+    try:
+        import inspect
+        if "style" in inspect.signature(InlineKeyboardButton.__init__).parameters:
+            stop_btn = InlineKeyboardButton("🛑 Stop Files", callback_data=f"norm_stop#{session_id}", style="danger")
+    except Exception:
+        pass
+
+    ctrl_text = (
+        "<i>Click the stop button shown below to stop incoming files.\n\n"
+        "വരുന്ന ഫിലെസ് നിർത്താനായി താഴെ കാണുന്ന സ്റ്റോപ്പ് ബട്ടൺ ക്ലിക്ക് ചെയ്യുക.</i>"
+    )
+    ctrl_msg = await client.send_message(
+        chat_id=user_id,
+        text=ctrl_text,
+        reply_markup=InlineKeyboardMarkup([[stop_btn]]),
+        parse_mode=enums.ParseMode.HTML
+    )
+
+    temp.NORMAL_DELIVERY_SESSIONS[session_id]["ctrl_msg_id"] = ctrl_msg.id
+    temp.NORMAL_DELIVERY_SESSIONS[session_id]["chat_id"] = ctrl_msg.chat.id
+
+    asyncio.create_task(
+        execute_normal_group_file_delivery(
+            client=client,
+            user_id=user_id,
+            group_id=norm_group_id,
+            session_id=session_id,
+            ctrl_msg=ctrl_msg
+        )
+    )
+    return True
+
+
+@Client.on_callback_query(filters.regex(r"^norm_grp#"))
+async def cb_normal_group_select(client: Client, query: CallbackQuery):
+    parts = query.data.split("#")
+    if len(parts) < 2:
+        return await query.answer("⚠️ Invalid selection.", show_alert=True)
+    norm_group_id = parts[1]
+    session_id = parts[2] if len(parts) > 2 else ""
+    page = int(parts[3]) if len(parts) > 3 and parts[3].isdigit() else 0
+    clicked_user_id = query.from_user.id
+
+    group_data = getattr(temp, "NORMAL_FILTER_GROUPS", {}).get(norm_group_id)
+    if not group_data and not norm_group_id.startswith("n_"):
+        group_data = getattr(temp, "NORMAL_FILTER_GROUPS", {}).get(f"n_{norm_group_id}")
+    if not group_data:
+        from database.series_db import get_temp_request
+        group_data = await get_temp_request(norm_group_id)
+
+    if not group_data:
+        return await query.answer("❌ Files not found or expired. Please search again.", show_alert=True)
+
+    # 1. Access Control: Searcher Only Check
+    req_user_id = group_data.get("user_id") or group_data.get("requester_user_id")
+    if req_user_id and clicked_user_id and clicked_user_id != req_user_id:
+        unauth_text = (
+            "Perform the search yourself; do not simply click on a button generated by someone else's search.😁\n\n"
+            "സ്വന്തം ആയി സെർച്ച് ചെയ്യുക. മറ്റുള്ളവർ സേർച്ച് ചയ്തു കിട്ടിയ ബട്ടൺ ക്ലിക്ക് ചയ്തു വരണ്ട ."
+        )
+        return await query.answer(unauth_text, show_alert=True)
+
+    bot_username = getattr(getattr(client, "me", None), "username", None)
+    if not bot_username:
+        from utils import get_child_bot_username
+        bot_username = get_child_bot_username()
+    if bot_username:
+        bot_username = str(bot_username).lstrip("@")
+    else:
+        bot_username = "Bot"
 
     is_pm = bool(query.message.chat.type == enums.ChatType.PRIVATE)
-    # Always use callback_data — handler decides PM open vs inline delivery
-    get_all_btn = InlineKeyboardButton("⌯⌲ Get All File", callback_data=f"norm_getall#{norm_group_id}")
 
+    if not is_pm:
+        # Group chat: Open Bot PM via deep-link
+        start_url = f"https://t.me/{bot_username}?start=norm_{norm_group_id}"
+        logger.info(f"[GROUP BUTTON CLICKED] user_id={clicked_user_id} group_id={norm_group_id} opening Bot PM url={start_url}")
+        try:
+            return await query.answer(url=start_url)
+        except Exception as err:
+            logger.warning(f"[GROUP BUTTON QUERY ANSWER URL FAILED] {err}. Sending fallback button in group.")
+            from utils import schedule_filter_message_delete
+            open_btn = InlineKeyboardButton("📂 Open in Bot", url=start_url)
+            fb_msg = await query.message.reply_text(
+                "<b>⚠️ Click below to open Bot and view files:</b>\n\n"
+                "<i>ഫയലുകൾ ലഭിക്കുന്നതിന് ദയവായി താഴെ കാണുന്ന ബട്ടൺ ക്ലിക്ക് ചെയ്ത് ബോട്ട് തുറക്കുക.</i>",
+                reply_markup=InlineKeyboardMarkup([[open_btn]])
+            )
+            if fb_msg:
+                schedule_filter_message_delete(client, fb_msg.chat.id, fb_msg.id, delay=60)
+            return await query.answer()
+
+    # User is in PM: Show details message with 'Get All File' button
+    details_caption = await format_normal_filter_details_card(group_data)
+    get_all_btn = InlineKeyboardButton("⌯⌲ Get All File", callback_data=f"norm_getall#{norm_group_id}")
     back_data = f"norm_back#{session_id}#{page}" if session_id else f"norm_back#{norm_group_id}#0"
     markup = InlineKeyboardMarkup([
         [get_all_btn],
@@ -4281,6 +4395,7 @@ async def cb_normal_group_select(client: Client, query: CallbackQuery):
     ])
 
     try:
+        from utils import schedule_filter_message_delete
         await query.message.edit_text(text=details_caption, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
         schedule_filter_message_delete(client, query.message.chat.id, query.message.id, delay=1200)
     except MessageNotModified:
@@ -4312,10 +4427,16 @@ async def cb_normal_group_back(client: Client, query: CallbackQuery):
 
     groups = sess.get("groups", [])
     query_text = sess.get("query", "")
-    bot_username = temp.U_NAME if (hasattr(temp, "U_NAME") and temp.U_NAME) else getattr(getattr(client, "me", None), "username", "Bot")
+    bot_username = getattr(getattr(client, "me", None), "username", None)
+    if not bot_username:
+        from utils import get_child_bot_username
+        bot_username = get_child_bot_username()
     if bot_username:
         bot_username = str(bot_username).lstrip("@")
+    else:
+        bot_username = "Bot"
 
+    logger.info(f"[CHILD BOT BACK] bot=@{bot_username} session_id={session_id} page={page} user_id={clicked_user_id}")
     markup = build_normal_group_keyboard(groups=groups, page=page, session_id=session_id, bot_username=bot_username)
     requester_name = query.from_user.mention if getattr(query.from_user, "mention", None) else (query.from_user.first_name or "User")
 
@@ -4328,6 +4449,7 @@ async def cb_normal_group_back(client: Client, query: CallbackQuery):
     )
 
     try:
+        from utils import schedule_filter_message_delete
         await query.message.edit_text(text=caption_text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
         schedule_filter_message_delete(client, query.message.chat.id, query.message.id, delay=1200)
     except MessageNotModified:
@@ -4350,9 +4472,8 @@ async def cb_norm_disclaimer(client: Client, query: CallbackQuery):
 async def cb_norm_get_all_file(client: Client, query: CallbackQuery):
     """
     'Get All File' button handler for Normal Filter.
-    - In GROUP: mirrors super movie filter quality button — calls query.answer(url=start_url)
-      so Telegram instantly opens the bot PM (no popup, no extra button).
-    - In PM: deletes details card and starts inline file delivery directly.
+    - If clicked in PM: delivers all files directly in Child Bot PM.
+    - If clicked in Group: opens Child Bot PM via deep-link.
     """
     parts = query.data.split("#")
     if len(parts) < 2:
@@ -4361,35 +4482,43 @@ async def cb_norm_get_all_file(client: Client, query: CallbackQuery):
     user_id = query.from_user.id
     is_pm = query.message.chat.type == enums.ChatType.PRIVATE
 
+    bot_username = getattr(getattr(client, "me", None), "username", None)
+    if not bot_username:
+        from utils import get_child_bot_username
+        bot_username = get_child_bot_username()
+    if bot_username:
+        bot_username = str(bot_username).lstrip("@")
+    else:
+        bot_username = "Bot"
+
+    logger.info(f"[CHILD BOT GET_ALL_FILE] bot=@{bot_username} group_id={group_id} user_id={user_id} is_pm={is_pm}")
+
     if not is_pm:
-        # GROUP: open bot PM instantly via query.answer(url=...) — same as super movie filter quality button
-        bot_username = temp.U_NAME if (hasattr(temp, "U_NAME") and temp.U_NAME) else getattr(getattr(client, "me", None), "username", None)
-        if bot_username:
-            bot_username = str(bot_username).lstrip("@")
-        else:
-            bot_username = "Bot"
+        # Group fallback: open Child Bot PM
         start_url = f"https://t.me/{bot_username}?start=norm_{group_id}"
         try:
             return await query.answer(url=start_url)
         except Exception as e:
             logger.warning(f"[NORM GETALL GROUP URL] query.answer(url=) failed: {e}. Falling back to button.")
+            from utils import schedule_filter_message_delete
             fb_msg = await query.message.reply_text(
                 "📩 Open bot to get your files:",
                 reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("📂 Open Bot", url=start_url)]])
             )
-            from utils import schedule_filter_message_delete
             if fb_msg:
                 schedule_filter_message_delete(client, fb_msg.chat.id, fb_msg.id, 60)
-            return
+            return await query.answer()
 
-    # PM: delete details card and start inline delivery
-    try:
-        await query.message.delete()
-    except Exception:
-        pass
+    # User is in PM: Check duplicate delivery
+    if not hasattr(temp, "ACTIVE_NORMAL_DELIVERIES"):
+        temp.ACTIVE_NORMAL_DELIVERIES = set()
+    if user_id in temp.ACTIVE_NORMAL_DELIVERIES:
+        return await query.answer("⚠️ File delivery is already in progress!", show_alert=True)
+
     await query.answer()
-    await process_normal_filter_deeplink(client, query.message, group_id, user_id=user_id)
-
+    started = await start_normal_file_delivery_in_pm(client, user_id=user_id, norm_group_id=group_id, trigger_msg=query.message)
+    if not started:
+        await query.answer("⚠️ File delivery could not be started or is already running.", show_alert=True)
 
 
 async def process_normal_filter_deeplink(client: Client, message: Message, norm_group_id: str, user_id: int = None) -> bool:
@@ -4397,15 +4526,20 @@ async def process_normal_filter_deeplink(client: Client, message: Message, norm_
     Handles /start norm_{group_id} in PM.
     - Searcher-only access verification.
     - Checks Force Subscribe (AUTH_CHANNEL).
-    - Starts direct file delivery immediately in PM without in-between stickers.
+    - Shows existing details message and '⌯⌲ Get All File' button in Child Bot PM.
     """
+    bot_u = getattr(getattr(client, "me", None), "username", None) or getattr(temp, "CHILD_U_NAME", "ChildBot")
     from database.series_db import get_temp_request
     group_data = getattr(temp, "NORMAL_FILTER_GROUPS", {}).get(norm_group_id)
+    if not group_data and not norm_group_id.startswith("n_"):
+        group_data = getattr(temp, "NORMAL_FILTER_GROUPS", {}).get(f"n_{norm_group_id}")
     if not group_data:
         group_data = await get_temp_request(norm_group_id)
 
     if not group_data:
-        await message.reply_text("<b>❌ Requested filter files were not found or have expired.</b>")
+        logger.warning(f"[CHILD BOT DEEPLINK FAILED] bot=@{bot_u} group_id={norm_group_id} not found in memory or DB")
+        if message:
+            await message.reply_text("<b>❌ Requested filter files were not found or have expired.</b>")
         return False
 
     # 1. Access Control: Searcher Only Check
@@ -4425,25 +4559,19 @@ async def process_normal_filter_deeplink(client: Client, message: Message, norm_
             "സ്വന്തം ആയി സെർച്ച് ചെയ്യുക. മറ്റുള്ളവർ സേർച്ച് ചയ്തു കിട്ടിയ ബട്ടൺ ക്ലിക്ക് ചയ്തു വരണ്ട ."
         )
         try:
-            unauth_msg = await message.reply_text(unauth_text)
-            if unauth_msg:
-                from utils import schedule_filter_message_delete
-                schedule_filter_message_delete(client, unauth_msg.chat.id, unauth_msg.id, delay=20)
+            if message:
+                unauth_msg = await message.reply_text(unauth_text)
+                if unauth_msg:
+                    from utils import schedule_filter_message_delete
+                    schedule_filter_message_delete(client, unauth_msg.chat.id, unauth_msg.id, delay=20)
         except Exception:
             pass
         return False
 
-    if not hasattr(temp, "ACTIVE_NORMAL_DELIVERIES"):
-        temp.ACTIVE_NORMAL_DELIVERIES = set()
-
-    if clicked_user_id in temp.ACTIVE_NORMAL_DELIVERIES:
-        await message.reply_text("<b>⚠️ File delivery is already in progress!</b>")
-        return False
-
     # 2. Force Sub (Join Request) Check
     from info import AUTH_CHANNEL, REQUEST_TO_JOIN_MODE
-    from utils import is_subscribed, get_fsub_invite_link
-    import time, uuid
+    from utils import is_subscribed, get_fsub_invite_link, schedule_filter_message_delete
+    import time
 
     if AUTH_CHANNEL and not await is_subscribed(client, clicked_user_id):
         invite_link = await get_fsub_invite_link(client, AUTH_CHANNEL, creates_join_request=REQUEST_TO_JOIN_MODE)
@@ -4475,51 +4603,26 @@ async def process_normal_filter_deeplink(client: Client, message: Message, norm_
                 "fsub_chat_id": fsub_msg.chat.id if fsub_msg else clicked_user_id,
                 "timestamp": time.time()
             }
+            logger.info(f"[CHILD BOT FSUB REQUIRED] bot=@{bot_u} user_id={clicked_user_id} group_id={norm_group_id}")
             return False
 
-    temp.ACTIVE_NORMAL_DELIVERIES.add(clicked_user_id)
+    # 3. In Child Bot PM: Show existing details message and '⌯⌲ Get All File' button
+    details_caption = await format_normal_filter_details_card(group_data)
+    get_all_btn = InlineKeyboardButton("⌯⌲ Get All File", callback_data=f"norm_getall#{norm_group_id}")
+    markup = InlineKeyboardMarkup([
+        [get_all_btn],
+        [InlineKeyboardButton("⚠ Disclaimer", callback_data="norm_disc")]
+    ])
 
-    session_id = f"normdel_{clicked_user_id}_{uuid.uuid4().hex[:6]}"
-    if not hasattr(temp, "NORMAL_DELIVERY_SESSIONS"):
-        temp.NORMAL_DELIVERY_SESSIONS = {}
-
-    temp.NORMAL_DELIVERY_SESSIONS[session_id] = {
-        "cancelled": False,
-        "user_id": clicked_user_id,
-        "group_id": norm_group_id
-    }
-
-    stop_btn = InlineKeyboardButton("🛑 Stop Files", callback_data=f"norm_stop#{session_id}")
-    try:
-        import inspect
-        if "style" in inspect.signature(InlineKeyboardButton.__init__).parameters:
-            stop_btn = InlineKeyboardButton("🛑 Stop Files", callback_data=f"norm_stop#{session_id}", style="danger")
-    except Exception:
-        pass
-
-    ctrl_text = (
-        "<i>Click the stop button shown below to stop incoming files.\n\n"
-        "വരുന്ന ഫിലെസ് നിർത്താനായി താഴെ കാണുന്ന സ്റ്റോപ്പ് ബട്ടൺ ക്ലിക്ക് ചെയ്യുക.</i>"
-    )
-    ctrl_msg = await client.send_message(
+    det_msg = await client.send_message(
         chat_id=clicked_user_id,
-        text=ctrl_text,
-        reply_markup=InlineKeyboardMarkup([[stop_btn]]),
+        text=details_caption,
+        reply_markup=markup,
         parse_mode=enums.ParseMode.HTML
     )
+    if det_msg:
+        schedule_filter_message_delete(client, det_msg.chat.id, det_msg.id, delay=1200)
 
-    temp.NORMAL_DELIVERY_SESSIONS[session_id]["ctrl_msg_id"] = ctrl_msg.id
-    temp.NORMAL_DELIVERY_SESSIONS[session_id]["chat_id"] = ctrl_msg.chat.id
-
-    asyncio.create_task(
-        execute_normal_group_file_delivery(
-            client=client,
-            user_id=clicked_user_id,
-            group_id=norm_group_id,
-            session_id=session_id,
-            ctrl_msg=ctrl_msg
-        )
-    )
     return True
 
 
@@ -4532,6 +4635,9 @@ async def trigger_normal_fsub_approved_delivery(client: Client, user_id: int, pe
     group_id = pending_norm.get("group_id")
     if not group_id:
         return
+
+    # Deliver using Child Bot if available
+    deliv_client = getattr(temp, "CHILD_BOT", None) or client
 
     if not hasattr(temp, "ACTIVE_NORMAL_DELIVERIES"):
         temp.ACTIVE_NORMAL_DELIVERIES = set()
@@ -4546,7 +4652,7 @@ async def trigger_normal_fsub_approved_delivery(client: Client, user_id: int, pe
     det_chat_id = pending_norm.get("details_chat_id", user_id)
     if det_msg_id:
         try:
-            await client.delete_messages(chat_id=det_chat_id, message_ids=det_msg_id)
+            await deliv_client.delete_messages(chat_id=det_chat_id, message_ids=det_msg_id)
         except Exception as de:
             logger.warning(f"[NORMAL FSUB DELETE DET MSG ERROR] {de}")
 
@@ -4555,7 +4661,7 @@ async def trigger_normal_fsub_approved_delivery(client: Client, user_id: int, pe
     fsub_chat_id = pending_norm.get("fsub_chat_id", user_id)
     if fsub_msg_id:
         try:
-            await client.delete_messages(chat_id=fsub_chat_id, message_ids=fsub_msg_id)
+            await deliv_client.delete_messages(chat_id=fsub_chat_id, message_ids=fsub_msg_id)
         except Exception as fe:
             logger.warning(f"[NORMAL FSUB DELETE FSUB MSG ERROR] {fe}")
 
@@ -4584,7 +4690,7 @@ async def trigger_normal_fsub_approved_delivery(client: Client, user_id: int, pe
         "വരുന്ന ഫിലെസ് നിർത്താനായി താഴെ കാണുന്ന സ്റ്റോപ്പ് ബട്ടൺ ക്ലിക്ക് ചെയ്യുക.</i>"
     )
     try:
-        ctrl_msg = await client.send_message(
+        ctrl_msg = await deliv_client.send_message(
             chat_id=user_id,
             text=ctrl_text,
             reply_markup=InlineKeyboardMarkup([[stop_btn]]),
@@ -4596,7 +4702,7 @@ async def trigger_normal_fsub_approved_delivery(client: Client, user_id: int, pe
 
         asyncio.create_task(
             execute_normal_group_file_delivery(
-                client=client,
+                client=deliv_client,
                 user_id=user_id,
                 group_id=group_id,
                 session_id=session_id,
@@ -4621,6 +4727,7 @@ async def cb_norm_stop_files(client: Client, query: CallbackQuery):
         sess["cancelled"] = True
 
     getattr(temp, "ACTIVE_NORMAL_DELIVERIES", set()).discard(user_id)
+    logger.info(f"[CHILD BOT STOP CLICKED] session_id={session_id} user_id={user_id}")
     await query.answer("🛑 Stopping file delivery...", show_alert=False)
 
     try:
@@ -4638,18 +4745,29 @@ async def execute_normal_group_file_delivery(client: Client, user_id: int, group
     Delivers each file in the selected Normal/Legacy group sequentially with custom formatted captions.
     Each file message automatically deletes after 600 seconds (10 minutes).
     Stops immediately if user clicks the Stop Files button.
+    Includes diagnostic logs and a reliable relay fallback if direct send_cached_media fails.
     """
+    delivered_count = 0
+    total_files = 0
     try:
-        bot_username = temp.U_NAME if (hasattr(temp, "U_NAME") and temp.U_NAME) else getattr(getattr(client, "me", None), "username", "Bot")
+        bot_username = getattr(getattr(client, "me", None), "username", None)
+        if not bot_username:
+            from utils import get_child_bot_username
+            bot_username = get_child_bot_username()
         if bot_username:
             bot_username = str(bot_username).lstrip("@")
+        else:
+            bot_username = "Bot"
 
         group_data = getattr(temp, "NORMAL_FILTER_GROUPS", {}).get(group_id)
+        if not group_data and not group_id.startswith("n_"):
+            group_data = getattr(temp, "NORMAL_FILTER_GROUPS", {}).get(f"n_{group_id}")
         if not group_data:
             from database.series_db import get_temp_request
             group_data = await get_temp_request(group_id)
 
         if not group_data:
+            logger.warning(f"[CHILD BOT DELIVERY ERROR] bot=@{bot_username} group_id={group_id} not found in memory or DB")
             await ctrl_msg.reply_text("❌ Files not found or expired.")
             return
 
@@ -4660,6 +4778,7 @@ async def execute_normal_group_file_delivery(client: Client, user_id: int, group
             raw_files = [fmap[fid] for fid in group_data["file_ids"] if fid in fmap]
 
         if not raw_files:
+            logger.warning(f"[CHILD BOT DELIVERY ERROR] bot=@{bot_username} group_id={group_id} has no raw files")
             await ctrl_msg.reply_text("❌ No files available in this group.")
             return
 
@@ -4675,6 +4794,7 @@ async def execute_normal_group_file_delivery(client: Client, user_id: int, group
 
         total_files = len(resolved_files)
         if total_files == 0:
+            logger.warning(f"[CHILD BOT DELIVERY ERROR] bot=@{bot_username} group_id={group_id} resolved_files is empty")
             await ctrl_msg.reply_text("❌ No files available in this group.")
             return
 
@@ -4700,9 +4820,12 @@ async def execute_normal_group_file_delivery(client: Client, user_id: int, group
 
         from utils import get_size, schedule_filter_message_delete
 
+        logger.info(f"[CHILD BOT DELIVERY START] bot=@{bot_username} session_id={session_id} user_id={user_id} group_id={group_id} total_files={total_files}")
+
         for idx, f in enumerate(sorted_files, 1):
             sess = getattr(temp, "NORMAL_DELIVERY_SESSIONS", {}).get(session_id, {})
             if sess.get("cancelled"):
+                logger.info(f"[CHILD BOT DELIVERY CANCELLED] session_id={session_id} stopped at {idx-1}/{total_files}")
                 break
 
             fname = f.get("file_name", "File")
@@ -4718,8 +4841,18 @@ async def execute_normal_group_file_delivery(client: Client, user_id: int, group
                 f"</i>"
             )
 
-            fid = f.get("file_id") or f.get("_id")
+            fid = f.get("file_id")
+            if not fid:
+                raw_fid = f.get("_id")
+                if raw_fid:
+                    from database.ia_filterdb import get_file_details
+                    fdoc = await get_file_details(str(raw_fid))
+                    if fdoc and fdoc.get("file_id"):
+                        fid = fdoc["file_id"]
+
             if fid:
+                sent_f = None
+                # 1. Try direct send_cached_media
                 try:
                     sent_f = await client.send_cached_media(
                         chat_id=user_id,
@@ -4727,18 +4860,78 @@ async def execute_normal_group_file_delivery(client: Client, user_id: int, group
                         caption=caption,
                         parse_mode=enums.ParseMode.HTML
                     )
-                    if sent_f and getattr(sent_f, "id", None):
-                        schedule_filter_message_delete(client, user_id, sent_f.id, delay=600)
                 except Exception as e:
-                    logger.error(f"[NORMAL FILE DELIVERY ERROR] file_id={fid}: {e}")
+                    logger.warning(f"[CHILD BOT DIRECT SEND FAILED] file_id={fid} user_id={user_id} error={e}. Attempting relay...")
+
+                # 2. If direct send failed, try relaying through available shared channels
+                if not sent_f:
+                    from info import LOG_CHANNEL, PUBLIC_FILE_CHANNEL, CHANNELS, AUTH_CHANNEL
+                    main_bot = getattr(temp, "BOT", None)
+                    if main_bot:
+                        relay_candidates = []
+                        if PUBLIC_FILE_CHANNEL:
+                            relay_candidates.append(PUBLIC_FILE_CHANNEL)
+                        if LOG_CHANNEL:
+                            relay_candidates.append(LOG_CHANNEL)
+                        if isinstance(CHANNELS, list):
+                            relay_candidates.extend(CHANNELS)
+                        if AUTH_CHANNEL:
+                            relay_candidates.append(AUTH_CHANNEL)
+
+                        for ch_id in relay_candidates:
+                            try:
+                                relay_msg = await main_bot.send_cached_media(chat_id=ch_id, file_id=str(fid))
+                                vj = await client.get_messages(ch_id, relay_msg.id)
+                                mg = getattr(vj, getattr(vj.media, "value", "document"), None) if vj and getattr(vj, "media", None) else None
+                                if mg and getattr(mg, "file_id", None):
+                                    sent_f = await client.send_cached_media(
+                                        chat_id=user_id,
+                                        file_id=mg.file_id,
+                                        caption=caption,
+                                        parse_mode=enums.ParseMode.HTML
+                                    )
+                                try:
+                                    await relay_msg.delete()
+                                except Exception:
+                                    pass
+                                if sent_f:
+                                    break
+                            except Exception as re:
+                                logger.debug(f"[CHILD BOT RELAY FAILED ON {ch_id}] {re}")
+                                continue
+
+                # 3. If relay failed, attempt direct delivery via Main Bot if user has interacted with it
+                if not sent_f:
+                    main_bot = getattr(temp, "BOT", None)
+                    if main_bot and client != main_bot:
+                        try:
+                            sent_f = await main_bot.send_cached_media(
+                                chat_id=user_id,
+                                file_id=str(fid),
+                                caption=caption,
+                                parse_mode=enums.ParseMode.HTML
+                            )
+                            logger.info(f"[MAIN BOT FALLBACK SENT FILE] file_id={fid} user_id={user_id}")
+                        except Exception as mbe:
+                            logger.warning(f"[MAIN BOT FALLBACK FAILED] {mbe}")
+
+                if sent_f and getattr(sent_f, "id", None):
+                    delivered_count += 1
+                    logger.info(f"[CHILD BOT FILE SENT] idx={idx}/{total_files} file_id={fid} user_id={user_id} sent_msg_id={sent_f.id}")
+                    schedule_filter_message_delete(client, user_id, sent_f.id, delay=600)
+                else:
+                    logger.error(f"[CHILD BOT FILE NOT SENT] idx={idx}/{total_files} file_id={fid} user_id={user_id}")
 
             await asyncio.sleep(0.6)
 
             if sess.get("cancelled"):
+                logger.info(f"[CHILD BOT DELIVERY CANCELLED] session_id={session_id} stopped at {idx}/{total_files}")
                 break
 
+        logger.info(f"[CHILD BOT DELIVERY COMPLETED] session_id={session_id} user_id={user_id} delivered={delivered_count}/{total_files}")
+
         sess = getattr(temp, "NORMAL_DELIVERY_SESSIONS", {}).get(session_id, {})
-        if not sess.get("cancelled"):
+        if not sess.get("cancelled") and delivered_count > 0:
             try:
                 await ctrl_msg.delete()
             except Exception:
@@ -5254,7 +5447,9 @@ async def child_start_handler(client: Client, message: Message):
 
         # 1. Normal Filter Deeplink Flow (/start norm_...)
         if data.startswith("norm_"):
-            norm_key = data.split("_", 1)[1]
+            norm_key = data[5:]
+            child_u = getattr(getattr(client, "me", None), "username", None) or getattr(temp, "CHILD_U_NAME", "ChildBot")
+            logger.info(f"[CHILD BOT DEEPLINK START] bot=@{child_u} norm_key={norm_key} user_id={message.from_user.id}")
             await process_normal_filter_deeplink(client, message, norm_key, user_id=message.from_user.id)
             return
 
@@ -5413,8 +5608,10 @@ async def child_filter_message_handler(client: Client, message: Message):
             return
 
     # 2. Normal / Legacy Filter Search in Mongo DB
-    logger.info(f"[CHILD BOT NORMAL SEARCH] query={search} chat_id={message.chat.id}")
+    child_u = getattr(getattr(client, "me", None), "username", None) or getattr(temp, "CHILD_U_NAME", "ChildBot")
+    logger.info(f"[CHILD BOT NORMAL SEARCH] bot=@{child_u} query='{search}' chat_id={message.chat.id} is_group={is_group}")
     files, offset, total_results = await get_search_results(message.chat.id, search.lower(), max_results=100, offset=0, filter=True)
+    logger.info(f"[CHILD BOT DB RESULTS] bot=@{child_u} query='{search}' total_results={total_results} returned={len(files) if files else 0}")
 
     if not files:
         if is_group:
