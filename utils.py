@@ -86,7 +86,13 @@ class temp(object):
 
 
 def get_child_bot_username() -> str:
-    """Returns Main Bot username since Child Bot is decommissioned."""
+    """Returns Child Bot username if active, otherwise Main Bot username."""
+    if hasattr(temp, "CHILD_U_NAME") and temp.CHILD_U_NAME:
+        return str(temp.CHILD_U_NAME).strip().lstrip("@")
+    if hasattr(temp, "CHILD_BOT") and getattr(temp.CHILD_BOT, "me", None):
+        u = getattr(temp.CHILD_BOT.me, "username", None)
+        if u:
+            return str(u).strip().lstrip("@")
     return get_main_bot_username()
 
 
