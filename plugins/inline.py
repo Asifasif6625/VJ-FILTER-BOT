@@ -96,12 +96,12 @@ def _build_movie_inline_result(movie: dict, bot_username: str) -> InlineQueryRes
         
     # Sent Message Caption
     caption = (
-        f"<i><tg-emoji emoji-id=\"4926956800005112527\">🍿</tg-emoji> <b>Movie:</b> <b>{title_clean}</b>\n"
-        f"<tg-emoji emoji-id=\"4926956800005112527\">🍿</tg-emoji> <b>Year:</b> {year}\n"
-        f"<tg-emoji emoji-id=\"4926956800005112527\">🍿</tg-emoji> <b>Genres:</b> {genres}\n"
-        f"<tg-emoji emoji-id=\"4926956800005112527\">🍿</tg-emoji> <b>Rating:</b> {rating}\n"
-        f"<tg-emoji emoji-id=\"4926956800005112527\">🍿</tg-emoji> <b>Quality:</b> {quals_str}\n"
-        f"<tg-emoji emoji-id=\"4926956800005112527\">🍿</tg-emoji> <b>Languages:</b> {langs_str}</i>"
+        f"<i>🍿 <b>Movie:</b> <b>{title_clean}</b>\n"
+        f"🍿 <b>Year:</b> {year}\n"
+        f"🍿 <b>Genres:</b> {genres}\n"
+        f"🍿 <b>Rating:</b> {rating}\n"
+        f"🍿 <b>Quality:</b> {quals_str}\n"
+        f"🍿 <b>Languages:</b> {langs_str}</i>"
     )
     
     # 1-Click Action Button
@@ -180,12 +180,12 @@ def _build_series_inline_result(series: dict, bot_username: str) -> InlineQueryR
         
     # Sent Message Caption
     caption = (
-        f"<i><tg-emoji emoji-id=\"4926956800005112527\">🍿</tg-emoji> <b>Series:</b> <b>{name_clean}</b>\n"
-        f"<tg-emoji emoji-id=\"4926956800005112527\">🍿</tg-emoji> <b>Year:</b> {year}\n"
-        f"<tg-emoji emoji-id=\"4926956800005112527\">🍿</tg-emoji> <b>Genres:</b> {genres}\n"
-        f"<tg-emoji emoji-id=\"4926956800005112527\">🍿</tg-emoji> <b>Rating:</b> {rating}\n"
-        f"<tg-emoji emoji-id=\"4926956800005112527\">🍿</tg-emoji> <b>Seasons:</b> {seasons_str}\n"
-        f"<tg-emoji emoji-id=\"4926956800005112527\">🍿</tg-emoji> <b>Languages:</b> {langs_str}</i>"
+        f"<i>🍿 <b>Series:</b> <b>{name_clean}</b>\n"
+        f"🍿 <b>Year:</b> {year}\n"
+        f"🍿 <b>Genres:</b> {genres}\n"
+        f"🍿 <b>Rating:</b> {rating}\n"
+        f"🍿 <b>Seasons:</b> {seasons_str}\n"
+        f"🍿 <b>Languages:</b> {langs_str}</i>"
     )
     
     # 1-Click Action Button

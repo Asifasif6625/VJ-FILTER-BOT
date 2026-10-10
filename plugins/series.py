@@ -2547,7 +2547,7 @@ def _user_lang_keyboard(sid: str, langs: list[str]) -> InlineKeyboardMarkup:
     for i in range(0, len(langs), 2):
         row = []
         for l in langs[i:i+2]:
-            row.append(make_styled_button(f"<tg-emoji emoji-id=\"5388632425314140043\">🌐</tg-emoji> {to_series_font(l)}", callback_data=f"sr#{sid}#l#{l}", style="success"))
+            row.append(make_styled_button(to_series_font(l), callback_data=f"sr#{sid}#l#{l}", style="success"))
         rows.append(row)
     return InlineKeyboardMarkup(rows)
 
@@ -8389,7 +8389,7 @@ async def render_series_direct(client: Client, message: Message, series_doc: dic
     for i in range(0, len(langs_sorted), 2):
         row = []
         for l in langs_sorted[i:i+2]:
-            row.append(make_styled_button(f"<tg-emoji emoji-id=\"5388632425314140043\">🌐</tg-emoji> {to_series_font(l)}", callback_data=f"ser_lang#{series_id}#{l}", style="success"))
+            row.append(make_styled_button(to_series_font(l), callback_data=f"ser_lang#{series_id}#{l}", style="success"))
         buttons.append(row)
 
     caption_text = format_series_metadata_caption(series_doc, page_type="lang")
