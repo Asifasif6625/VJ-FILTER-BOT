@@ -36,11 +36,16 @@ EMOJI_PATTERN = re.compile(
 
 def clean_series_title(title: str) -> str:
     """
-    Cleans markdown formatting, decorative symbols, and punctuation
-    from a Series title while preserving the alphanumeric title words.
+    Cleans prefix markers, markdown formatting, decorative symbols, and punctuation
+    from a Series/Movie title while preserving alphanumeric title words.
     """
     if not title:
         return ""
+    try:
+        from utils import strip_file_prefix_markers
+        title = strip_file_prefix_markers(title)
+    except Exception:
+        pass
     # Remove HTML tags if present (e.g. <b>title</b>)
     cleaned = re.sub(r"<[^>]+>", " ", title)
     # Remove markdown formatting characters: *, _, `, ~, |, #
