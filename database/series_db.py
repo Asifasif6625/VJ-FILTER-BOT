@@ -148,9 +148,13 @@ async def create_series(data: dict) -> str:
     existing = None
     if doc.get("imdb_id"):
         existing = await series_col.find_one({"imdb_id": doc["imdb_id"], "status": {"$ne": "deleted"}})
+    if not existing and doc.get("tmdb_id"):
+        existing = await series_col.find_one({"tmdb_id": doc["tmdb_id"], "status": {"$ne": "deleted"}})
     if not existing:
         existing = await series_col.find_one({"normalized_name": doc["normalized_name"], "year": doc["year"], "status": {"$ne": "deleted"}})
-    if not existing and doc["year"] == "N/A":
+    if not existing:
+        existing = await series_col.find_one({"normalized_name": doc["normalized_name"], "year": {"$in": ["N/A", "", None, doc["year"]]}, "status": {"$ne": "deleted"}})
+    if not existing:
         existing = await series_col.find_one({"normalized_name": doc["normalized_name"], "status": {"$ne": "deleted"}})
 
     if existing:
@@ -859,17 +863,23 @@ async def set_sbatch_msgid(doc_id: str, message_id: int):
 # ─── Temp Requests (Group -> PM Flow) ─────────────────────────────────────────
 
 async def save_temp_request(req_id: str, data: dict):
-    """Save a temporary request (e.g. for series quality navigation)."""
+    """Save or update a temporary request (e.g. for series quality navigation or normal filter)."""
     data["_id"] = req_id
-    data["created_at"] = datetime.utcnow()
+    if "created_at" not in data:
+        data["created_at"] = datetime.utcnow()
     try:
-        await temp_reqs_col.insert_one(data)
-    except DuplicateKeyError:
-        pass
+        await temp_reqs_col.update_one({"_id": req_id}, {"$set": data}, upsert=True)
+    except Exception as e:
+        logger.warning(f"[SAVE TEMP REQUEST ERROR] req_id={req_id}: {e}")
         
 async def get_temp_request(req_id: str) -> dict:
-    """Retrieve and delete a temporary request."""
+    """Retrieve a temporary request."""
     doc = await temp_reqs_col.find_one({"_id": req_id})
+    if not doc and isinstance(req_id, str):
+        if not req_id.startswith("n_"):
+            doc = await temp_reqs_col.find_one({"_id": f"n_{req_id}"})
+        elif req_id.startswith("n_"):
+            doc = await temp_reqs_col.find_one({"_id": req_id[2:]})
     return doc
 
 
@@ -1534,28 +1544,46 @@ async def resolve_series_episode_group_context(
     batch_files: list = None
 ) -> tuple[str | None, str | None, bool]:
     """
-    Authoritative Series Episode Group Continuity & Orphan Protection Resolver.
+    Authoritative Series Episode Group Continuity & Parent Linking Resolver.
     
     Rules:
     1. Identifies exact Series Name, Season, Episode.
     2. Inspects filename/caption for explicit quality and explicit language.
        If both are explicitly specified in the filename/caption, uses them.
-    3. If quality or language is missing, inspects existing established groups for the same Series + Season.
-    4. If there is an established reliable group continuity (e.g. S01E01, S01E02, S01E04 belong to Malayalam 1080p),
-       places this episode into that established group.
-    5. If multiple conflicting groups exist and the filename lacks explicit metadata to disambiguate:
-       - Does NOT blindly guess.
-       - Does NOT create an orphan quality or language group.
-       - Returns (None, None, False) to protect data integrity and keep unresolved safely.
+    3. If language is missing, uses the series's original_language (normalized).
+       If original_language is not available, inherits the established group language or primary series language.
+    4. If quality is missing, uses established group quality for that season or defaults to '720p'.
+    5. Always attaches single episodes (e.g. S01E05) into the parent series document safely.
     """
     from plugins.pm_filter import detect_file_languages
     from plugins.series import extract_quality_from_filename
+    from utils import normalize_language_name
 
     raw_qual = extract_quality_from_filename(filename)
+    if (not raw_qual or raw_qual == "Unknown") and detected_qual and detected_qual != "Unknown":
+        raw_qual = detected_qual
     has_exp_qual = bool(raw_qual and raw_qual != "Unknown")
 
     exp_langs = detect_file_languages(filename, caption=caption, default=None)
+    if not exp_langs and detected_lang:
+        exp_langs = [detected_lang]
     has_exp_lang = bool(exp_langs and len(exp_langs) > 0)
+
+    # Resolve normalized original/fallback language
+    norm_orig = normalize_language_name(original_language) if original_language else None
+    if not norm_orig and series_id:
+        try:
+            s_doc = await get_series(series_id)
+            if s_doc:
+                if s_doc.get("original_language"):
+                    norm_orig = normalize_language_name(s_doc.get("original_language")) or s_doc.get("original_language")
+                elif s_doc.get("languages") and len(s_doc.get("languages")) > 0:
+                    norm_orig = normalize_language_name(s_doc.get("languages")[0]) or s_doc.get("languages")[0]
+        except Exception:
+            pass
+
+    if not norm_orig:
+        norm_orig = "Malayalam"
 
     # If both quality and language are explicitly present in the filename
     if has_exp_qual and has_exp_lang:
@@ -1571,7 +1599,7 @@ async def resolve_series_episode_group_context(
         except Exception:
             pass
 
-    # Incorporate batch_files if available (e.g. during bulk database scan)
+    # Incorporate batch_files if available
     if batch_files:
         for bf in batch_files:
             if bf.get("season") == int(season):
@@ -1596,71 +1624,59 @@ async def resolve_series_episode_group_context(
 
     # Case 1: No established groups in database / batch yet
     if not groups:
-        if has_exp_qual and has_exp_lang:
-            return (exp_langs[0], raw_qual, True)
-        elif has_exp_qual:
-            l_val = exp_langs[0] if has_exp_lang else (original_language or "English")
-            return (l_val, raw_qual, True)
-        elif has_exp_lang:
-            return (exp_langs[0], "Unknown", False)
-        else:
-            return (None, None, False)
+        target_l = exp_langs[0] if has_exp_lang else norm_orig
+        target_q = raw_qual if has_exp_qual else "720p"
+        return (target_l, target_q, True)
 
     # Case 2: Exactly ONE established group exists for this Season (e.g. Malayalam 1080p)
     if len(groups) == 1:
         (established_lang, established_qual), eps = list(groups.items())[0]
 
-        # If filename explicitly specified a different language or quality
         if has_exp_lang and exp_langs[0] != established_lang:
-            if has_exp_qual:
-                return (exp_langs[0], raw_qual, True)
-            else:
-                return (exp_langs[0], "Unknown", False)
+            target_q = raw_qual if has_exp_qual else established_qual
+            return (exp_langs[0], target_q, True)
 
         if has_exp_qual and raw_qual != established_qual:
             target_l = exp_langs[0] if has_exp_lang else established_lang
             return (target_l, raw_qual, True)
 
-        # Inherit group continuity
         final_l = exp_langs[0] if has_exp_lang else established_lang
         final_q = raw_qual if has_exp_qual else established_qual
         return (final_l, final_q, True)
 
-    # Case 3: Multiple groups exist for this Season (e.g. Malayalam 1080p, Tamil 720p, etc.)
-    # 3a. Filename has explicit language (e.g. Tamil)
+    # Case 3: Multiple groups exist for this Season
+    # 3a. Filename has explicit language
     if has_exp_lang:
         target_lang = exp_langs[0]
         matching_groups = [(l, q, eps) for (l, q), eps in groups.items() if l == target_lang]
-        if len(matching_groups) == 1:
-            inherited_qual = raw_qual if has_exp_qual else matching_groups[0][1]
-            return (target_lang, inherited_qual, True)
-        elif len(matching_groups) > 1 and not has_exp_qual:
+        if matching_groups:
+            if has_exp_qual:
+                return (target_lang, raw_qual, True)
             missing_in = [mg for mg in matching_groups if episode not in mg[2]]
-            if len(missing_in) == 1:
+            if missing_in:
                 return (target_lang, missing_in[0][1], True)
-            return (target_lang, "Unknown", False)
+            return (target_lang, matching_groups[0][1], True)
+        return (target_lang, raw_qual if has_exp_qual else "720p", True)
 
-    # 3b. Filename has explicit quality (e.g. 1080p)
+    # 3b. Filename has explicit quality
     if has_exp_qual:
         target_qual = raw_qual
         matching_groups = [(l, q, eps) for (l, q), eps in groups.items() if q == target_qual]
-        if len(matching_groups) == 1:
-            inherited_lang = exp_langs[0] if has_exp_lang else matching_groups[0][0]
-            return (inherited_lang, target_qual, True)
-        elif len(matching_groups) > 1 and not has_exp_lang:
+        if matching_groups:
             missing_in = [mg for mg in matching_groups if episode not in mg[2]]
-            if len(missing_in) == 1:
+            if missing_in:
                 return (missing_in[0][0], target_qual, True)
-            return (None, target_qual, False)
+            return (matching_groups[0][0], target_qual, True)
+        return (norm_orig, target_qual, True)
 
     # 3c. Neither language nor quality is explicit in filename
     missing_in = [((l, q), eps) for (l, q), eps in groups.items() if episode not in eps]
-    if len(missing_in) == 1:
+    if missing_in:
         (res_l, res_q), _ = missing_in[0]
         return (res_l, res_q, True)
 
-    # Orphan Protection: Ambiguous context -> do NOT guess and do NOT create orphan group
-    return (None, None, False)
+    (first_l, first_q), _ = list(groups.items())[0]
+    return (first_l or norm_orig, first_q or "720p", True)
 
 
 async def find_matching_super_movie(file_name: str, caption: str = "") -> dict | None:
@@ -1843,6 +1859,7 @@ async def sync_movie_filter_for_files(file_docs, *, trigger="file_add"):
 
     from plugins.pm_filter import detect_file_languages
     from plugins.series import extract_quality_from_filename
+    from utils import normalize_language_name
 
     # Group file_docs by matching Super Movie
     matched_updates = {}
@@ -1863,8 +1880,16 @@ async def sync_movie_filter_for_files(file_docs, *, trigger="file_add"):
             langs = detect_file_languages(fname, caption, default=None)
             if not langs and movie:
                 orig_l = movie.get("original_language")
-                langs = [orig_l] if orig_l else ["English"]
+                if orig_l:
+                    orig_l = normalize_language_name(orig_l) or orig_l
+                elif movie.get("languages") and len(movie.get("languages")) > 0:
+                    orig_l = movie.get("languages")[0]
+                else:
+                    orig_l = "Malayalam"
+                langs = [orig_l]
             qual = extract_quality_from_filename(fname)
+            if not qual or qual == "Unknown":
+                qual = (movie.get("qualities") or ["720p"])[0] if movie.get("qualities") else "720p"
 
             mid = str(movie["_id"])
             if mid not in matched_updates:
@@ -1983,7 +2008,7 @@ async def sync_series_filter_for_files(file_docs, *, trigger="file_add"):
     if isinstance(file_docs, dict):
         file_docs = [file_docs]
 
-    from utils import match_automatic_series_file
+    from utils import match_automatic_series_file, normalize_language_name
 
     active_series_cursor = series_col.find({"status": {"$ne": "deleted"}})
     active_series_list = await active_series_cursor.to_list(length=1000)
@@ -2009,14 +2034,26 @@ async def sync_series_filter_for_files(file_docs, *, trigger="file_add"):
                     s_aliases.append(series_doc.get("second_name"))
                 if series_doc.get("aliases"):
                     s_aliases.extend(series_doc.get("aliases"))
+                if series_doc.get("search_aliases"):
+                    s_aliases.extend(series_doc.get("search_aliases"))
+                if series_doc.get("generated_aliases"):
+                    s_aliases.extend(series_doc.get("generated_aliases"))
                 s_aliases = list(dict.fromkeys(s_aliases))
+
+                orig_l = series_doc.get("original_language")
+                if orig_l:
+                    orig_l = normalize_language_name(orig_l) or orig_l
+                elif series_doc.get("languages") and len(series_doc.get("languages")) > 0:
+                    orig_l = series_doc.get("languages")[0]
+                else:
+                    orig_l = "Malayalam"
 
                 parsed = match_automatic_series_file(
                     target_series_name=series_name,
                     target_year=series_doc.get("year"),
                     filename=fname,
                     caption=caption,
-                    original_language=series_doc.get("original_language"),
+                    original_language=orig_l,
                     target_aliases=s_aliases
                 )
 
@@ -2036,7 +2073,7 @@ async def sync_series_filter_for_files(file_docs, *, trigger="file_add"):
                 if existing:
                     break
 
-                # Resolve group continuity & orphan protection
+                # Resolve group continuity & group context
                 res_lang, res_qual, is_reliable = await resolve_series_episode_group_context(
                     series_id=series_id,
                     season=season,
@@ -2045,20 +2082,13 @@ async def sync_series_filter_for_files(file_docs, *, trigger="file_add"):
                     caption=caption,
                     detected_lang=detected_lang,
                     detected_qual=detected_qual,
-                    original_language=series_doc.get("original_language")
+                    original_language=orig_l
                 )
 
-                if not is_reliable:
-                    logger.info(
-                        f"[SERIES ORPHAN PROTECTION SKIP]\n"
-                        f"series_id={series_id}\n"
-                        f"title={series_name}\n"
-                        f"season={season}\n"
-                        f"episode={episode}\n"
-                        f"filename={fname}\n"
-                        f"reason=ambiguous_or_orphan_group"
-                    )
-                    continue
+                if not is_reliable or not res_lang:
+                    res_lang = detected_lang or orig_l or "Malayalam"
+                if not res_qual or res_qual == "Unknown":
+                    res_qual = detected_qual if (detected_qual and detected_qual != "Unknown") else "720p"
 
                 lang = res_lang
                 qual = res_qual
@@ -2094,6 +2124,10 @@ async def sync_series_filter_for_files(file_docs, *, trigger="file_add"):
                     update_fields.setdefault("$addToSet", {})["seasons"] = season
                 if qual and qual != "Unknown" and qual not in (series_doc.get("qualities") or []):
                     update_fields.setdefault("$addToSet", {})["qualities"] = qual
+
+                if series_doc.get("coming_soon") or series_doc.get("status") == "coming_soon":
+                    update_fields.setdefault("$set", {})["status"] = "active"
+                    update_fields.setdefault("$set", {})["coming_soon"] = False
 
                 if update_fields:
                     await series_col.update_one({"_id": ObjectId(series_id)}, update_fields)
