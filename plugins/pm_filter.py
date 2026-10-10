@@ -4023,24 +4023,20 @@ def build_normal_filter_groups(files: list[dict]) -> list[dict]:
             if cand_prefix:
                 cand_title = get_filter_button_filename_text(cand_prefix)
             else:
-                cand_title = get_filter_button_filename_text(fname)
-
-            if f_year != "N/A" and cand_title.endswith(f_year):
-                f_title = cand_title[:-len(f_year)].strip(" ._+-")
-            else:
-                f_title = cand_title
-            if not f_title:
-                f_title = clean_name
+                cand_title = get_filter_button_filename_text(clean_name)
         else:
             f_season = None
-            cand_title = get_filter_button_filename_text(fname)
-            if f_year != "N/A" and cand_title.endswith(f_year):
-                f_title = cand_title[:-len(f_year)].strip(" ._+-")
-            else:
-                f_title = cand_title
-            if not f_title:
-                f_title = clean_name
+            cand_title = get_filter_button_filename_text(clean_name)
 
+        # Extract strictly clean title without prefixes, brackets, or year
+        clean_cand = strip_file_prefix_markers(cand_title)
+        if f_year != "N/A":
+            clean_cand = re.sub(rf"(?i)[\s\._\-\(\[\{{]*{re.escape(str(f_year))}[\s\._\-\)\]\}}]*$", "", clean_cand).strip(" ._+-")
+        clean_cand = strip_file_prefix_markers(clean_cand)
+        clean_cand = re.sub(r"[\._]", " ", clean_cand)
+        clean_cand = re.sub(r"\s+", " ", clean_cand).strip(" ._+-")
+
+        f_title = clean_cand if clean_cand else (clean_name or "Movie")
         norm_title = normalize_series_identity_title(f_title)
         id_key = (norm_title, f_year, f_season, is_ser)
 
