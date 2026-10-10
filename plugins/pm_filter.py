@@ -565,13 +565,14 @@ def format_movie_metadata_caption(movie_data: dict, grouped_data: dict = None, s
         languages_str = "N/A"
     languages_str = html.escape(languages_str)
 
+    CUSTOM_EMOJI = '<tg-emoji emoji-id="4926956800005112527">🔴</tg-emoji>'
     meta_block = (
-        f"<i>🍿 Movie: <b>{title}</b>\n"
-        f"🍿 Year: {year_str}\n"
-        f"🍿 Genres: {genre_str}\n"
-        f"🍿 Rating: {rating_str}\n"
-        f"🍿 Quality: {quality_str}\n"
-        f"🍿 Languages: {languages_str}</i>"
+        f"<i>{CUSTOM_EMOJI} Movie: <b>{title}</b>\n"
+        f"{CUSTOM_EMOJI} Year: {year_str}\n"
+        f"{CUSTOM_EMOJI} Genres: {genre_str}\n"
+        f"{CUSTOM_EMOJI} Rating: {rating_str}\n"
+        f"{CUSTOM_EMOJI} Quality: {quality_str}\n"
+        f"{CUSTOM_EMOJI} Languages: {languages_str}</i>"
     )
 
     selected_parts = []
@@ -677,14 +678,15 @@ def format_series_metadata_caption(series_data: dict, selected_lang: str = None,
         languages_str = str(m_langs) or "N/A"
     languages_str = html.escape(languages_str)
 
+    CUSTOM_EMOJI = '<tg-emoji emoji-id="4926956800005112527">🔴</tg-emoji>'
     meta_block = (
-        f"<i>🍿 Series: <b>{title}</b>\n"
-        f"🍿 Year: {year_str}\n"
-        f"🍿 Genres: {genre_str}\n"
-        f"🍿 Rating: {rating_str}\n"
-        f"🍿 Quality: {quality_str}\n"
-        f"🍿 Seasons: {seasons_str}\n"
-        f"🍿 Languages: {languages_str}</i>"
+        f"<i>{CUSTOM_EMOJI} Series: <b>{title}</b>\n"
+        f"{CUSTOM_EMOJI} Year: {year_str}\n"
+        f"{CUSTOM_EMOJI} Genres: {genre_str}\n"
+        f"{CUSTOM_EMOJI} Rating: {rating_str}\n"
+        f"{CUSTOM_EMOJI} Quality: {quality_str}\n"
+        f"{CUSTOM_EMOJI} Seasons: {seasons_str}\n"
+        f"{CUSTOM_EMOJI} Languages: {languages_str}</i>"
     )
 
     selected_parts = []

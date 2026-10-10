@@ -4,7 +4,7 @@
 
 import html
 import logging
-from pyrogram import Client, emoji
+from pyrogram import Client, emoji, enums
 from pyrogram.errors import QueryIdInvalid
 from pyrogram.types import (
     InlineKeyboardButton,
@@ -94,14 +94,15 @@ def _build_movie_inline_result(movie: dict, bot_username: str) -> InlineQueryRes
     if is_cs:
         card_desc = f"⏳ Coming Soon • {card_desc}"
         
+    CUSTOM_EMOJI = '<tg-emoji emoji-id="4926956800005112527">🔴</tg-emoji>'
     # Sent Message Caption
     caption = (
-        f"<i>🍿 <b>Movie:</b> <b>{title_clean}</b>\n"
-        f"🍿 <b>Year:</b> {year}\n"
-        f"🍿 <b>Genres:</b> {genres}\n"
-        f"🍿 <b>Rating:</b> {rating}\n"
-        f"🍿 <b>Quality:</b> {quals_str}\n"
-        f"🍿 <b>Languages:</b> {langs_str}</i>"
+        f"<i>{CUSTOM_EMOJI} <b>Movie:</b> <b>{title_clean}</b>\n"
+        f"{CUSTOM_EMOJI} <b>Year:</b> {year}\n"
+        f"{CUSTOM_EMOJI} <b>Genres:</b> {genres}\n"
+        f"{CUSTOM_EMOJI} <b>Rating:</b> {rating}\n"
+        f"{CUSTOM_EMOJI} <b>Quality:</b> {quals_str}\n"
+        f"{CUSTOM_EMOJI} <b>Languages:</b> {langs_str}</i>"
     )
     
     # 1-Click Action Button
@@ -120,6 +121,7 @@ def _build_movie_inline_result(movie: dict, bot_username: str) -> InlineQueryRes
         title=card_title,
         description=card_desc,
         caption=caption,
+        parse_mode=enums.ParseMode.HTML,
         reply_markup=InlineKeyboardMarkup(btn)
     )
 
@@ -178,14 +180,15 @@ def _build_series_inline_result(series: dict, bot_username: str) -> InlineQueryR
     if is_cs:
         card_desc = f"⏳ Coming Soon • {card_desc}"
         
+    CUSTOM_EMOJI = '<tg-emoji emoji-id="4926956800005112527">🔴</tg-emoji>'
     # Sent Message Caption
     caption = (
-        f"<i>🍿 <b>Series:</b> <b>{name_clean}</b>\n"
-        f"🍿 <b>Year:</b> {year}\n"
-        f"🍿 <b>Genres:</b> {genres}\n"
-        f"🍿 <b>Rating:</b> {rating}\n"
-        f"🍿 <b>Seasons:</b> {seasons_str}\n"
-        f"🍿 <b>Languages:</b> {langs_str}</i>"
+        f"<i>{CUSTOM_EMOJI} <b>Series:</b> <b>{name_clean}</b>\n"
+        f"{CUSTOM_EMOJI} <b>Year:</b> {year}\n"
+        f"{CUSTOM_EMOJI} <b>Genres:</b> {genres}\n"
+        f"{CUSTOM_EMOJI} <b>Rating:</b> {rating}\n"
+        f"{CUSTOM_EMOJI} <b>Seasons:</b> {seasons_str}\n"
+        f"{CUSTOM_EMOJI} <b>Languages:</b> {langs_str}</i>"
     )
     
     # 1-Click Action Button
@@ -204,6 +207,7 @@ def _build_series_inline_result(series: dict, bot_username: str) -> InlineQueryR
         title=card_title,
         description=card_desc,
         caption=caption,
+        parse_mode=enums.ParseMode.HTML,
         reply_markup=InlineKeyboardMarkup(btn)
     )
 
