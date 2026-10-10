@@ -413,7 +413,7 @@ def get_movie_qualities(files, target_lang=None, movie_doc: dict = None):
         if target_lang:
             flangs = detect_file_languages(f.get("file_name", ""), f.get("caption"), default=None)
             if not flangs:
-                fallback = resolve_file_language(f.get("file_name", ""), f.get("caption"), metadata=movie_doc, default_fallback=movie_orig or "Malayalam")
+                fallback = resolve_file_language(f.get("file_name", ""), f.get("caption"), metadata=movie_doc, default_fallback=movie_orig or "English")
                 flangs = [fallback]
             if target_lang not in flangs:
                 continue
@@ -469,7 +469,7 @@ def group_movie_files(files, movie_doc: dict = None):
             fqual = extract_quality_from_filename(fname)
             flangs = detect_file_languages(fname, f.get("caption"), default=None)
             if not flangs:
-                fallback_l = resolve_file_language(fname, f.get("caption"), metadata=movie_doc, default_fallback=movie_orig or "Malayalam")
+                fallback_l = resolve_file_language(fname, f.get("caption"), metadata=movie_doc, default_fallback=movie_orig or "English")
                 flangs = [fallback_l]
 
         for lang in flangs:
