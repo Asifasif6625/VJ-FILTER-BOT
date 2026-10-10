@@ -4982,6 +4982,8 @@ async def execute_normal_group_file_delivery(client: Client, user_id: int, group
 
         logger.info(f"[CHILD BOT DELIVERY START] bot=@{bot_username} session_id={session_id} user_id={user_id} group_id={group_id} total_files={total_files}")
 
+        ctrl_msg_id = getattr(ctrl_msg, "id", None)
+
         for idx, f in enumerate(sorted_files, 1):
             sess = getattr(temp, "NORMAL_DELIVERY_SESSIONS", {}).get(session_id, {})
             if sess.get("cancelled"):
@@ -5018,7 +5020,8 @@ async def execute_normal_group_file_delivery(client: Client, user_id: int, group
                         chat_id=user_id,
                         file_id=str(fid),
                         caption=caption,
-                        parse_mode=enums.ParseMode.HTML
+                        parse_mode=enums.ParseMode.HTML,
+                        reply_to_message_id=ctrl_msg_id
                     )
                 except Exception as e:
                     logger.warning(f"[CHILD BOT DIRECT SEND FAILED] file_id={fid} user_id={user_id} error={e}. Attempting relay...")
@@ -5048,7 +5051,8 @@ async def execute_normal_group_file_delivery(client: Client, user_id: int, group
                                         chat_id=user_id,
                                         file_id=mg.file_id,
                                         caption=caption,
-                                        parse_mode=enums.ParseMode.HTML
+                                        parse_mode=enums.ParseMode.HTML,
+                                        reply_to_message_id=ctrl_msg_id
                                     )
                                 try:
                                     await relay_msg.delete()
@@ -5069,7 +5073,8 @@ async def execute_normal_group_file_delivery(client: Client, user_id: int, group
                                 chat_id=user_id,
                                 file_id=str(fid),
                                 caption=caption,
-                                parse_mode=enums.ParseMode.HTML
+                                parse_mode=enums.ParseMode.HTML,
+                                reply_to_message_id=ctrl_msg_id
                             )
                             logger.info(f"[MAIN BOT FALLBACK SENT FILE] file_id={fid} user_id={user_id}")
                         except Exception as mbe:
