@@ -4383,11 +4383,31 @@ async def format_normal_filter_details_card(group_data: dict) -> tuple:
     return details_caption, poster_url
 
 
+def format_delivery_control_message(current: int, total: int) -> str:
+    if total > 0:
+        percent = int((current / total) * 100)
+        filled = int((current / total) * 10)
+        filled = min(max(filled, 0), 10)
+        bar = "▰" * filled + "▱" * (10 - filled)
+        progress_block = f"📊 <b>Progress:</b> <code>[{bar}] {percent}%</code> ({current}/{total})\n\n"
+    else:
+        progress_block = "📊 <b>Progress:</b> <code>[▱▱▱▱▱▱▱▱▱▱] 0%</code>\n\n"
+
+    ctrl_text = (
+        "<b>📥 Delivering Files...</b>\n\n"
+        f"{progress_block}"
+        "<i>Click the stop button shown below to stop incoming files.\n\n"
+        "വരുന്ന ഫയലുകൾ നിർത്താനായി താഴെ കാണുന്ന സ്റ്റോപ്പ് ബട്ടൺ ക്ലിക്ക് ചെയ്യുക.</i>"
+    )
+    return ctrl_text
+
+
 async def start_normal_file_delivery_in_pm(client: Client, user_id: int, norm_group_id: str, trigger_msg: Message = None) -> bool:
     """
     Initiates file delivery for a Normal Filter group in Child Bot PM.
     - Prevents duplicate delivery.
-    - Sends 'Stop Files' control message.
+    - Sends 'Stop Files' control message with dynamic progress bar.
+    - Pins the control message during delivery.
     - Spawns background delivery task via execute_normal_group_file_delivery.
     """
     if not hasattr(temp, "ACTIVE_NORMAL_DELIVERIES"):
@@ -4423,10 +4443,7 @@ async def start_normal_file_delivery_in_pm(client: Client, user_id: int, norm_gr
     except Exception:
         pass
 
-    ctrl_text = (
-        "<i>Click the stop button shown below to stop incoming files.\n\n"
-        "വരുന്ന ഫിലെസ് നിർത്താനായി താഴെ കാണുന്ന സ്റ്റോപ്പ് ബട്ടൺ ക്ലിക്ക് ചെയ്യുക.</i>"
-    )
+    ctrl_text = format_delivery_control_message(0, 0)
     try:
         ctrl_msg = await client.send_message(
             chat_id=user_id,
@@ -4438,6 +4455,18 @@ async def start_normal_file_delivery_in_pm(client: Client, user_id: int, norm_gr
         logger.error(f"[START NORMAL FILE DELIVERY SEND MSG ERROR] {ce}")
         temp.ACTIVE_NORMAL_DELIVERIES.discard(user_id)
         return False
+
+    # Pin the delivery control message in PM
+    try:
+        await ctrl_msg.pin(both_sides=True)
+    except Exception:
+        try:
+            await client.pin_chat_message(chat_id=user_id, message_id=ctrl_msg.id, both_sides=True)
+        except Exception:
+            try:
+                await client.pin_chat_message(chat_id=user_id, message_id=ctrl_msg.id)
+            except Exception as pe:
+                logger.debug(f"[PIN CTRL MSG ERROR] {pe}")
 
     temp.NORMAL_DELIVERY_SESSIONS[session_id]["ctrl_msg_id"] = ctrl_msg.id
     temp.NORMAL_DELIVERY_SESSIONS[session_id]["chat_id"] = ctrl_msg.chat.id
@@ -4921,10 +4950,7 @@ async def trigger_normal_fsub_approved_delivery(client: Client, user_id: int, pe
     except Exception:
         pass
 
-    ctrl_text = (
-        "<i>Click the stop button shown below to stop incoming files.\n\n"
-        "വരുന്ന ഫിലെസ് നിർത്താനായി താഴെ കാണുന്ന സ്റ്റോപ്പ് ബട്ടൺ ക്ലിക്ക് ചെയ്യുക.</i>"
-    )
+    ctrl_text = format_delivery_control_message(0, 0)
     try:
         ctrl_msg = await deliv_client.send_message(
             chat_id=user_id,
@@ -4932,6 +4958,18 @@ async def trigger_normal_fsub_approved_delivery(client: Client, user_id: int, pe
             reply_markup=InlineKeyboardMarkup([[stop_btn]]),
             parse_mode=enums.ParseMode.HTML
         )
+
+        # Pin the delivery control message in PM
+        try:
+            await ctrl_msg.pin(both_sides=True)
+        except Exception:
+            try:
+                await deliv_client.pin_chat_message(chat_id=user_id, message_id=ctrl_msg.id, both_sides=True)
+            except Exception:
+                try:
+                    await deliv_client.pin_chat_message(chat_id=user_id, message_id=ctrl_msg.id)
+                except Exception as pe:
+                    logger.debug(f"[PIN CTRL MSG ERROR] {pe}")
 
         temp.NORMAL_DELIVERY_SESSIONS[session_id]["ctrl_msg_id"] = ctrl_msg.id
         temp.NORMAL_DELIVERY_SESSIONS[session_id]["chat_id"] = ctrl_msg.chat.id
@@ -4966,6 +5004,12 @@ async def cb_norm_stop_files(client: Client, query: CallbackQuery):
     logger.info(f"[CHILD BOT STOP CLICKED] session_id={session_id} user_id={user_id}")
     await query.answer("🛑 Stopping file delivery...", show_alert=False)
 
+    if query.message:
+        try:
+            await client.unpin_chat_message(chat_id=user_id, message_id=query.message.id)
+        except Exception:
+            pass
+
     try:
         await query.message.edit_text(
             text="<i>🛑 File delivery stopped.\n\nഫയൽ അയക്കുന്നത് നിർത്തിയിരിക്കുന്നു.</i>",
@@ -4979,12 +5023,14 @@ async def cb_norm_stop_files(client: Client, query: CallbackQuery):
 async def execute_normal_group_file_delivery(client: Client, user_id: int, group_id: str, session_id: str, ctrl_msg: Message):
     """
     Delivers each file in the selected Normal/Legacy group sequentially with custom formatted captions.
+    Updates the pinned control message with dynamic loading/progress bar after each file.
     Each file message automatically deletes after 600 seconds (10 minutes).
     Stops immediately if user clicks the Stop Files button.
     Includes diagnostic logs and a reliable relay fallback if direct send_cached_media fails.
     """
     delivered_count = 0
     total_files = 0
+    ctrl_msg_id = getattr(ctrl_msg, "id", None)
     try:
         bot_username = getattr(getattr(client, "me", None), "username", None)
         if not bot_username:
@@ -5058,7 +5104,24 @@ async def execute_normal_group_file_delivery(client: Client, user_id: int, group
 
         logger.info(f"[CHILD BOT DELIVERY START] bot=@{bot_username} session_id={session_id} user_id={user_id} group_id={group_id} total_files={total_files}")
 
-        ctrl_msg_id = getattr(ctrl_msg, "id", None)
+        stop_btn = InlineKeyboardButton("🛑 Stop Files", callback_data=f"norm_stop#{session_id}")
+        try:
+            import inspect
+            if "style" in inspect.signature(InlineKeyboardButton.__init__).parameters:
+                stop_btn = InlineKeyboardButton("🛑 Stop Files", callback_data=f"norm_stop#{session_id}", style="danger")
+        except Exception:
+            pass
+        stop_markup = InlineKeyboardMarkup([[stop_btn]])
+
+        # Update initial progress in pinned control message
+        try:
+            await ctrl_msg.edit_text(
+                text=format_delivery_control_message(0, total_files),
+                reply_markup=stop_markup,
+                parse_mode=enums.ParseMode.HTML
+            )
+        except Exception:
+            pass
 
         for idx, f in enumerate(sorted_files, 1):
             sess = getattr(temp, "NORMAL_DELIVERY_SESSIONS", {}).get(session_id, {})
@@ -5160,6 +5223,19 @@ async def execute_normal_group_file_delivery(client: Client, user_id: int, group
                     delivered_count += 1
                     logger.info(f"[CHILD BOT FILE SENT] idx={idx}/{total_files} file_id={fid} user_id={user_id} sent_msg_id={sent_f.id}")
                     schedule_filter_message_delete(client, user_id, sent_f.id, delay=600)
+
+                    # Update loading/progress bar on pinned control message
+                    if not sess.get("cancelled"):
+                        try:
+                            await ctrl_msg.edit_text(
+                                text=format_delivery_control_message(delivered_count, total_files),
+                                reply_markup=stop_markup,
+                                parse_mode=enums.ParseMode.HTML
+                            )
+                        except MessageNotModified:
+                            pass
+                        except Exception as ee:
+                            logger.debug(f"[PROGRESS EDIT ERROR] {ee}")
                 else:
                     logger.error(f"[CHILD BOT FILE NOT SENT] idx={idx}/{total_files} file_id={fid} user_id={user_id}")
 
@@ -5170,6 +5246,13 @@ async def execute_normal_group_file_delivery(client: Client, user_id: int, group
                 break
 
         logger.info(f"[CHILD BOT DELIVERY COMPLETED] session_id={session_id} user_id={user_id} delivered={delivered_count}/{total_files}")
+
+        # Unpin ctrl_msg before concluding
+        if ctrl_msg_id:
+            try:
+                await client.unpin_chat_message(chat_id=user_id, message_id=ctrl_msg_id)
+            except Exception:
+                pass
 
         sess = getattr(temp, "NORMAL_DELIVERY_SESSIONS", {}).get(session_id, {})
         if not sess.get("cancelled") and delivered_count > 0:
@@ -5200,6 +5283,163 @@ async def execute_normal_group_file_delivery(client: Client, user_id: int, group
         getattr(temp, "ACTIVE_NORMAL_DELIVERIES", set()).discard(user_id)
         if hasattr(temp, "NORMAL_DELIVERY_SESSIONS"):
             temp.NORMAL_DELIVERY_SESSIONS.pop(session_id, None)
+
+
+@Client.on_message(filters.command(["ano", "announce", "anomov", "anoser"]) & filters.incoming, group=-5)
+async def cmd_normal_filter_announce(client: Client, message: Message):
+    """
+    Announces a Normal Filter movie/series to the connected Announcement Channel.
+    Triggered by replying /ano to a Normal Filter details card.
+    Includes the movie poster, details caption, and deep-link download button.
+    """
+    from info import ADMINS
+    uid = message.from_user.id if message.from_user else (message.sender_chat.id if message.sender_chat else 0)
+    if uid not in ADMINS:
+        return await message.reply_text("❌ <b>You are not authorized to use this command.</b>", parse_mode=enums.ParseMode.HTML)
+
+    reply_to = message.reply_to_message
+    if not reply_to:
+        return await message.reply_text(
+            "⚠️ <b>Please reply to a Normal Filter movie/series details message with /ano to announce it.</b>\n\n"
+            "<i>മൂവി/സീരീസ് ഡീറ്റെയിൽസ് കാർഡിന് റിപ്ലൈ ആയി /ano എന്ന് അയക്കുക.</i>",
+            parse_mode=enums.ParseMode.HTML
+        )
+
+    # 1. Extract norm_group_id from replied message's inline keyboard or callback_data
+    norm_group_id = None
+    group_data = None
+
+    if reply_to.reply_markup and reply_to.reply_markup.inline_keyboard:
+        for row in reply_to.reply_markup.inline_keyboard:
+            for btn in row:
+                cb = getattr(btn, "callback_data", "") or ""
+                url = getattr(btn, "url", "") or ""
+                if cb.startswith("norm_getall#"):
+                    norm_group_id = cb.split("#")[1]
+                    break
+                elif cb.startswith("norm_grp#"):
+                    norm_group_id = cb.split("#")[1]
+                    break
+                elif "start=norm_" in url:
+                    norm_group_id = url.split("start=norm_", 1)[1].split("&")[0].strip()
+                    break
+            if norm_group_id:
+                break
+
+    if norm_group_id:
+        group_data = getattr(temp, "NORMAL_FILTER_GROUPS", {}).get(norm_group_id)
+        if not group_data and not norm_group_id.startswith("n_"):
+            group_data = getattr(temp, "NORMAL_FILTER_GROUPS", {}).get(f"n_{norm_group_id}")
+        if not group_data:
+            from database.series_db import get_temp_request
+            group_data = await get_temp_request(norm_group_id)
+
+    # 2. Get announcement channel
+    from database.series_db import get_announcement_channel, save_temp_request
+    channel_id = await get_announcement_channel()
+    if not channel_id:
+        return await message.reply_text(
+            "⚠️ <b>Announcement channel is not configured!</b>\n\n"
+            "Use <code>/add_ano &lt;channel_id&gt;</code> to set the announcement channel.",
+            parse_mode=enums.ParseMode.HTML
+        )
+
+    # 3. Determine bot username for deep link
+    from utils import get_child_bot_username
+    bot_username = get_child_bot_username()
+    if not bot_username:
+        bot_username = getattr(getattr(client, "me", None), "username", None)
+    if bot_username:
+        bot_username = str(bot_username).lstrip("@")
+    else:
+        bot_username = "Bot"
+
+    # If norm_group_id was found and group_data exists, ensure it's saved in DB for deep links
+    if norm_group_id and group_data:
+        try:
+            await save_temp_request(norm_group_id, group_data)
+            await save_temp_request(f"n_{norm_group_id}", group_data)
+        except Exception:
+            pass
+
+    # Build deep link & button
+    from info import ANNOUNCEMENT_DOWNLOAD_BUTTON_TEXT, ANNOUNCEMENT_DOWNLOAD_BUTTON_STYLE
+    btn_text = ANNOUNCEMENT_DOWNLOAD_BUTTON_TEXT or "ԃσɯɳʅσαԃ ɱσʋιҽ"
+    btn_style = ANNOUNCEMENT_DOWNLOAD_BUTTON_STYLE or "primary"
+
+    if norm_group_id:
+        start_link = f"https://t.me/{bot_username}?start=norm_{norm_group_id}"
+    elif group_data and group_data.get("title"):
+        title_slug = group_data["title"].replace(" ", "_")
+        start_link = f"https://t.me/{bot_username}?start=getme_{title_slug}"
+    else:
+        start_link = f"https://t.me/{bot_username}"
+
+    from plugins.series import make_styled_button
+    download_btn = make_styled_button(btn_text, url=start_link, style=btn_style)
+    markup = InlineKeyboardMarkup([[download_btn]])
+
+    # Extract caption & photo
+    caption_text = reply_to.caption or reply_to.text or ""
+    if not caption_text and group_data:
+        caption_text, _ = await format_normal_filter_details_card(group_data)
+
+    photo_id = None
+    if reply_to.photo:
+        photo_id = reply_to.photo.file_id
+
+    # 4. Post announcement to channel
+    sent_msg = None
+    try:
+        if photo_id:
+            sent_msg = await client.send_photo(
+                chat_id=channel_id,
+                photo=photo_id,
+                caption=caption_text,
+                reply_markup=markup,
+                parse_mode=enums.ParseMode.HTML
+            )
+        else:
+            sent_msg = await client.send_message(
+                chat_id=channel_id,
+                text=caption_text,
+                reply_markup=markup,
+                parse_mode=enums.ParseMode.HTML
+            )
+    except Exception as e:
+        logger.error(f"[ANNOUNCEMENT SEND ERROR] {e}")
+        main_bot = getattr(temp, "BOT", None)
+        if main_bot and client != main_bot:
+            try:
+                if photo_id:
+                    sent_msg = await main_bot.send_photo(
+                        chat_id=channel_id,
+                        photo=photo_id,
+                        caption=caption_text,
+                        reply_markup=markup,
+                        parse_mode=enums.ParseMode.HTML
+                    )
+                else:
+                    sent_msg = await main_bot.send_message(
+                        chat_id=channel_id,
+                        text=caption_text,
+                        reply_markup=markup,
+                        parse_mode=enums.ParseMode.HTML
+                    )
+            except Exception as me:
+                logger.error(f"[MAIN BOT ANNOUNCEMENT SEND ERROR] {me}")
+                return await message.reply_text(f"❌ <b>Failed to post announcement:</b> <code>{html.escape(str(me))}</code>", parse_mode=enums.ParseMode.HTML)
+        else:
+            return await message.reply_text(f"❌ <b>Failed to post announcement:</b> <code>{html.escape(str(e))}</code>", parse_mode=enums.ParseMode.HTML)
+
+    post_link = f"https://t.me/c/{str(channel_id).replace('-100', '')}/{sent_msg.id}" if str(channel_id).startswith("-100") else ""
+    link_info = f"\n🔗 <a href='{post_link}'>View Post</a>" if post_link else ""
+    await message.reply_text(
+        f"✅ <b>Announcement posted successfully!</b>\n\n"
+        f"📢 <b>Channel:</b> <code>{channel_id}</code>{link_info}",
+        parse_mode=enums.ParseMode.HTML,
+        disable_web_page_preview=True
+    )
 
 async def advantage_spell_chok(client, name, msg, reply_msg, vj_search):
     mv_id = msg.id
@@ -5896,12 +6136,13 @@ def register_normal_filter_handlers(child_bot: Client) -> int:
     child_bot.add_handler(MessageHandler(child_help_handler, filters.command("help") & filters.incoming), group=0)
     child_bot.add_handler(MessageHandler(child_pm_broadcast, filters.command("broadcast") & filters.user(ADMINS)), group=0)
     child_bot.add_handler(MessageHandler(child_broadcast_group, filters.command("grp_broadcast") & filters.user(ADMINS)), group=0)
+    child_bot.add_handler(MessageHandler(cmd_normal_filter_announce, filters.command(["ano", "announce", "anomov", "anoser"]) & filters.user(ADMINS)), group=0)
 
     # 2. Normal Filter Search
     child_bot.add_handler(
         MessageHandler(
             child_filter_message_handler,
-            filters.text & filters.incoming & ~filters.command(["start", "about", "help", "broadcast", "grp_broadcast", "edt", "edit", "quick_edit"])
+            filters.text & filters.incoming & ~filters.command(["start", "about", "help", "broadcast", "grp_broadcast", "edt", "edit", "quick_edit", "ano", "announce", "anomov", "anoser"])
         ),
         group=0
     )
