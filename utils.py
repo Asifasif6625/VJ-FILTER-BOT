@@ -2481,13 +2481,26 @@ async def get_imdb_metadata_direct(imdb_id: str):
             f"kind={kind}"
         )
 
+        orig_l = None
+        if exact.get("id"):
+            try:
+                tt = str(exact["id"])
+                imdb_web = f"https://www.imdb.com/title/{tt}/"
+                p_html = await asyncio.to_thread(_fetch_url_sync, imdb_web)
+                if p_html:
+                    lm = re.search(r'data-testid=["\']title-details-languages["\'][^>]*>(?:<[^>]+>)*\s*<a[^>]*>([^<]+)</a>', p_html, re.I) or re.search(r'href=["\']/search/title/\?primary_language=([^"&]+)', p_html, re.I) or re.search(r'["\']inLanguage["\']\s*:\s*["\']([^"\']+)["\']', p_html, re.I)
+                    if lm:
+                        orig_l = normalize_language_name(lm.group(1).strip())
+            except Exception:
+                pass
+
         return {
             "title": title,
             "year": str(year) if year else None,
             "kind": kind,
             "imdb_id": exact.get("id", imdb_id),
             "tmdb_id": None,
-            "original_language": None,
+            "original_language": orig_l,
             "poster": poster,
             "posters": [poster] if poster else [],
             "rating": "",
@@ -2603,6 +2616,11 @@ async def get_poster(query, bulk=False, id=False, file=None):
                         is_tv = any(k in page_html.lower() for k in ['"type":"tvseries"', '"type":"tvepisode"', 'tv series'])
                         kind = "tv series" if is_tv else "movie"
 
+                        orig_l = None
+                        lm = re.search(r'data-testid=["\']title-details-languages["\'][^>]*>(?:<[^>]+>)*\s*<a[^>]*>([^<]+)</a>', page_html, re.I) or re.search(r'href=["\']/search/title/\?primary_language=([^"&]+)', page_html, re.I) or re.search(r'["\']inLanguage["\']\s*:\s*["\']([^"\']+)["\']', page_html, re.I)
+                        if lm:
+                            orig_l = normalize_language_name(lm.group(1).strip())
+
                         return {
                             'title': c_title,
                             'votes': None,
@@ -2617,6 +2635,7 @@ async def get_poster(query, bulk=False, id=False, file=None):
                             'countries': None,
                             'certificates': None,
                             'languages': None,
+                            'original_language': orig_l,
                             'director': None,
                             'writer': None,
                             'producer': None,
@@ -2728,6 +2747,13 @@ async def get_poster(query, bulk=False, id=False, file=None):
             if plot and len(plot) > 800:
                 plot = plot[0:800] + "..."
 
+            cin_langs = movie.get("languages") or []
+            orig_l = None
+            if isinstance(cin_langs, list) and cin_langs:
+                orig_l = normalize_language_name(cin_langs[0])
+            elif isinstance(cin_langs, str) and cin_langs:
+                orig_l = normalize_language_name(cin_langs.split(",")[0].strip())
+
             return {
                 'title': movie.get('title'),
                 'votes': movie.get('votes'),
@@ -2742,6 +2768,7 @@ async def get_poster(query, bulk=False, id=False, file=None):
                 "countries": list_to_str(movie.get("countries")),
                 "certificates": list_to_str(movie.get("certificates")),
                 "languages": list_to_str(movie.get("languages")),
+                "original_language": orig_l,
                 "director": list_to_str(movie.get("director")),
                 "writer": list_to_str(movie.get("writer")),
                 "producer": list_to_str(movie.get("producer")),
@@ -2833,6 +2860,11 @@ async def get_poster(query, bulk=False, id=False, file=None):
                     is_tv = any(k in page_html.lower() for k in ['"type":"tvseries"', '"type":"tvepisode"', 'tv series'])
                     kind = "tv series" if is_tv else "movie"
 
+                    orig_l = None
+                    lm = re.search(r'data-testid=["\']title-details-languages["\'][^>]*>(?:<[^>]+>)*\s*<a[^>]*>([^<]+)</a>', page_html, re.I) or re.search(r'href=["\']/search/title/\?primary_language=([^"&]+)', page_html, re.I) or re.search(r'["\']inLanguage["\']\s*:\s*["\']([^"\']+)["\']', page_html, re.I)
+                    if lm:
+                        orig_l = normalize_language_name(lm.group(1).strip())
+
                     return {
                         'title': c_title,
                         'votes': None,
@@ -2847,6 +2879,7 @@ async def get_poster(query, bulk=False, id=False, file=None):
                         'countries': None,
                         'certificates': None,
                         'languages': None,
+                        'original_language': orig_l,
                         'director': None,
                         'writer': None,
                         'producer': None,
@@ -2869,6 +2902,92 @@ async def get_poster(query, bulk=False, id=False, file=None):
     except Exception as e:
         logger.error(f"get_poster unexpected error for query='{query}': {e}")
         return None
+
+
+async def fetch_media_original_language(title: str, year: str | int = None, imdb_id: str = None, tmdb_id: str = None) -> str | None:
+    """
+    Intelligently discovers and returns the standardized original language of a movie/series
+    from TMDB, IMDb, Google, or search engine snippets.
+    """
+    import urllib.parse
+    import html as _html
+
+    clean_title = re.sub(r"[^\w\s]", " ", str(title or "")).strip()
+    clean_year = str(year).strip() if year and str(year).strip() not in ("N/A", "None", "0", "") else None
+
+    # 1. Direct TMDB Lookup (by tmdb_id)
+    if tmdb_id and str(tmdb_id).strip() not in ("0", "None", "N/A", ""):
+        try:
+            res = await get_tmdb_public_metadata(f"https://www.themoviedb.org/movie/{tmdb_id}")
+            if res and res.get("original_language"):
+                return normalize_language_name(res["original_language"])
+            res_tv = await get_tmdb_public_metadata(f"https://www.themoviedb.org/tv/{tmdb_id}")
+            if res_tv and res_tv.get("original_language"):
+                return normalize_language_name(res_tv["original_language"])
+        except Exception as e:
+            logger.debug(f"[FETCH ORIG LANG] TMDB direct error: {e}")
+
+    # 2. Direct IMDb Lookup (by imdb_id)
+    if imdb_id and str(imdb_id).startswith("tt"):
+        try:
+            res_imdb = await get_imdb_public_metadata(str(imdb_id))
+            if res_imdb and res_imdb.get("original_language"):
+                return normalize_language_name(res_imdb["original_language"])
+        except Exception as e:
+            logger.debug(f"[FETCH ORIG LANG] IMDb direct error: {e}")
+
+    # 3. TMDB Public Search by Title
+    if clean_title:
+        try:
+            q_search = f"{clean_title} {clean_year}" if clean_year else clean_title
+            tmdb_res = await get_public_tmdb_poster(q_search)
+            if tmdb_res and tmdb_res.get("original_language"):
+                return normalize_language_name(tmdb_res["original_language"])
+        except Exception as e:
+            logger.debug(f"[FETCH ORIG LANG] TMDB search error: {e}")
+
+    # 4. IMDb Suggestion / Scraping by Title
+    if clean_title:
+        try:
+            q_search = f"{clean_title} {clean_year}" if clean_year else clean_title
+            imdb_res = await get_poster(q_search)
+            if imdb_res and imdb_res.get("original_language"):
+                return normalize_language_name(imdb_res["original_language"])
+            if imdb_res and imdb_res.get("languages"):
+                raw_langs = imdb_res["languages"]
+                if isinstance(raw_langs, str) and raw_langs:
+                    first_l = raw_langs.split(",")[0].strip()
+                    norm = normalize_language_name(first_l)
+                    if norm:
+                        return norm
+        except Exception as e:
+            logger.debug(f"[FETCH ORIG LANG] IMDb get_poster error: {e}")
+
+    # 5. Search Engine / Web Fallback (DuckDuckGo / Google Search snippet)
+    if clean_title:
+        try:
+            search_query = f"{clean_title} {clean_year or ''} movie series language wikipedia"
+            ddg_url = f"https://html.duckduckgo.com/html/?q={urllib.parse.quote(search_query)}"
+            headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+            html_text = await asyncio.to_thread(_fetch_url_sync, ddg_url)
+            if html_text:
+                known_langs = [
+                    "Malayalam", "Tamil", "Telugu", "Hindi", "Kannada", "English",
+                    "Korean", "Japanese", "Spanish", "French", "German", "Chinese",
+                    "Italian", "Russian", "Arabic", "Portuguese", "Turkish", "Thai",
+                    "Bengali", "Marathi", "Punjabi", "Gujarati"
+                ]
+                text_lower = html_text.lower()
+                for kl in known_langs:
+                    pattern = rf"\b(?:language|in|original language|original)\s*[:\-]?\s*{kl.lower()}\b"
+                    if re.search(pattern, text_lower):
+                        return kl
+                    if rf"{kl.lower()}-language" in text_lower or rf"{kl.lower()} cinema" in text_lower:
+                        return kl
+        except Exception as e:
+            logger.debug(f"[FETCH ORIG LANG] Web search fallback error: {e}")
+
+    return None
 
 async def broadcast_messages(user_id, message):
     try:
