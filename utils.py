@@ -86,18 +86,8 @@ class temp(object):
 
 
 def get_child_bot_username() -> str:
-    """Returns the username of the Child Bot (without @), falling back to env vars or temp."""
-    if hasattr(temp, "CHILD_U_NAME") and temp.CHILD_U_NAME:
-        return str(temp.CHILD_U_NAME).strip().lstrip("@")
-    if hasattr(temp, "CHILD_BOT") and getattr(temp.CHILD_BOT, "me", None):
-        u = getattr(temp.CHILD_BOT.me, "username", None)
-        if u:
-            return str(u).strip().lstrip("@")
-    for env_k in ["CHILD_USERNAME", "BOT_USERNAME2", "NORMAL_BOT_USERNAME", "CHILD_BOT_USERNAME"]:
-        val = os.environ.get(env_k)
-        if val:
-            return str(val).strip().lstrip("@")
-    return "Bot"
+    """Returns Main Bot username since Child Bot is decommissioned."""
+    return get_main_bot_username()
 
 
 def get_main_bot_username() -> str:
@@ -1287,25 +1277,40 @@ async def get_fsub_invite_link(bot, auth_channel, creates_join_request=True) -> 
         return None
     try:
         ch_id = int(auth_channel) if str(auth_channel).lstrip("-").isdigit() else auth_channel
+        active_bot = bot
         if creates_join_request:
             try:
-                link_obj = await bot.create_chat_invite_link(ch_id, creates_join_request=True)
+                link_obj = await active_bot.create_chat_invite_link(ch_id, creates_join_request=True)
                 if link_obj and hasattr(link_obj, "invite_link") and link_obj.invite_link:
                     return link_obj.invite_link
                 if isinstance(link_obj, str) and link_obj.startswith("http"):
                     return link_obj
             except Exception as e:
-                logger.warning(f"[FSUB LINK] creates_join_request failed: {e}, falling back to standard link")
+                logger.warning(f"[FSUB LINK] creates_join_request failed on bot: {e}")
+                if hasattr(temp, "BOT") and temp.BOT and temp.BOT != active_bot:
+                    try:
+                        link_obj = await temp.BOT.create_chat_invite_link(ch_id, creates_join_request=True)
+                        if link_obj and hasattr(link_obj, "invite_link") and link_obj.invite_link:
+                            return link_obj.invite_link
+                    except Exception:
+                        pass
         try:
-            link_obj = await bot.create_chat_invite_link(ch_id)
+            link_obj = await active_bot.create_chat_invite_link(ch_id)
             if link_obj and hasattr(link_obj, "invite_link") and link_obj.invite_link:
                 return link_obj.invite_link
             if isinstance(link_obj, str) and link_obj.startswith("http"):
                 return link_obj
         except Exception as e:
             logger.warning(f"[FSUB LINK] standard create_chat_invite_link failed: {e}")
+            if hasattr(temp, "BOT") and temp.BOT and temp.BOT != active_bot:
+                try:
+                    link_obj = await temp.BOT.create_chat_invite_link(ch_id)
+                    if link_obj and hasattr(link_obj, "invite_link") and link_obj.invite_link:
+                        return link_obj.invite_link
+                except Exception:
+                    pass
         try:
-            chat = await bot.get_chat(ch_id)
+            chat = await active_bot.get_chat(ch_id)
             if getattr(chat, "invite_link", None):
                 return chat.invite_link
             if getattr(chat, "username", None):
@@ -1346,7 +1351,17 @@ async def is_subscribed(bot, query):
 
     try:
         auth_ch = int(AUTH_CHANNEL) if str(AUTH_CHANNEL).lstrip("-").isdigit() else AUTH_CHANNEL
-        user_data = await bot.get_chat_member(auth_ch, user_id)
+        user_data = None
+        try:
+            user_data = await bot.get_chat_member(auth_ch, user_id)
+        except Exception as be:
+            if hasattr(temp, "BOT") and temp.BOT and temp.BOT != bot:
+                try:
+                    user_data = await temp.BOT.get_chat_member(auth_ch, user_id)
+                except Exception:
+                    raise be
+            else:
+                raise be
         if user_data:
             st = user_data.status
             if st in [enums.ChatMemberStatus.MEMBER, enums.ChatMemberStatus.ADMINISTRATOR, enums.ChatMemberStatus.OWNER, enums.ChatMemberStatus.RESTRICTED]:

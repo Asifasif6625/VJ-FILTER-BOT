@@ -327,28 +327,21 @@ async def start(client, message):
                 is_handled = await process_unified_filter_search(client, message, search_query)
                 if is_handled:
                     return
-            # If not Super Filter, redirect to Child Bot
-            from utils import get_child_bot_username
-            child_username = get_child_bot_username()
-            child_link = f"https://t.me/{child_username}?start={data}"
-            redirect_text = (
-                "<b>🌟 This title is available on our Normal Filter Bot!</b>\n\n"
-                "<i>ഈ മൂവി / സീരീസ് നോർമൽ ഫിൽട്ടർ ബോട്ടിൽ ലഭ്യമാണ്. താഴെ കാണുന്ന ബട്ടൺ ക്ലിക്ക് ചെയ്യുക.</i>"
-            )
-            markup = InlineKeyboardMarkup([[InlineKeyboardButton("🚀 Search on Normal Filter Bot", url=child_link)]])
-            await message.reply_text(redirect_text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
+            # Normal Filter search on Main Bot in PM
+            from database.ia_filterdb import get_search_results
+            from plugins.pm_filter import render_normal_grouped_results
+            files, _, _ = await get_search_results(message.chat.id, search_query.lower(), max_results=100, offset=0, filter=True)
+            if files:
+                rendered = await render_normal_grouped_results(client=client, message=message, query_text=search_query, files=files)
+                if rendered:
+                    return
+            await message.reply_text(f"<b>No files found in database for '<i>{html.escape(search_query)}</i>'</b>", parse_mode=enums.ParseMode.HTML)
         return
 
     if data.startswith("norm_"):
-        from utils import get_child_bot_username
-        child_username = get_child_bot_username()
-        child_link = f"https://t.me/{child_username}?start={data}"
-        redirect_text = (
-            "<b>🌟 This file selection belongs to our Normal Filter Bot!</b>\n\n"
-            "<i>ഫയലുകൾ ലഭിക്കുന്നതിനായി താഴെ കാണുന്ന ബട്ടൺ ക്ലിക്ക് ചെയ്യുക.</i>"
-        )
-        markup = InlineKeyboardMarkup([[InlineKeyboardButton("🚀 Open in Normal Filter Bot", url=child_link)]])
-        await message.reply_text(redirect_text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
+        norm_key = data.split("_", 1)[1]
+        from plugins.pm_filter import process_normal_filter_deeplink
+        await process_normal_filter_deeplink(client, message, norm_key, user_id=message.from_user.id)
         return
 
     if data.startswith("series_"):
