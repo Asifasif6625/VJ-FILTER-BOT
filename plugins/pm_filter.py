@@ -436,12 +436,12 @@ def group_movie_files(files, movie_doc: dict = None):
 def format_movie_metadata_caption(movie_data: dict, grouped_data: dict = None, selected_lang: str = None, selected_qual: str = None, page_type: str = "lang") -> str:
     """
     Renders Movie filter UI with italic metadata block:
-    <i><tg-emoji emoji-id="4926956800005112527">🍿</tg-emoji> Movie: <b>Movie Name</b>
-    <tg-emoji emoji-id="4926956800005112527">🍿</tg-emoji> Year: 2026
-    <tg-emoji emoji-id="4926956800005112527">🍿</tg-emoji> Genres: Action, Thriller
-    <tg-emoji emoji-id="4926956800005112527">🍿</tg-emoji> Rating: 8.2/10
-    <tg-emoji emoji-id="4926956800005112527">🍿</tg-emoji> Quality: 1080p, 720p
-    <tg-emoji emoji-id="4926956800005112527">🍿</tg-emoji> Languages: Malayalam, Tamil, English</i>
+    <i>🍿 Movie: <b>Movie Name</b>
+    🍿 Year: 2026
+    🍿 Genres: Action, Thriller
+    🍿 Rating: 8.2/10
+    🍿 Quality: 1080p, 720p
+    🍿 Languages: Malayalam, Tamil, English</i>
 
     Followed by page-specific italic prompt:
     - lang: 📌 <i>select your movie language...!</i>
@@ -518,12 +518,12 @@ def format_movie_metadata_caption(movie_data: dict, grouped_data: dict = None, s
     languages_str = html.escape(languages_str)
 
     meta_block = (
-        f"<i><tg-emoji emoji-id=\"4926956800005112527\">🍿</tg-emoji> Movie: <b>{title}</b>\n"
-        f"<tg-emoji emoji-id=\"4926956800005112527\">🍿</tg-emoji> Year: {year_str}\n"
-        f"<tg-emoji emoji-id=\"4926956800005112527\">🍿</tg-emoji> Genres: {genre_str}\n"
-        f"<tg-emoji emoji-id=\"4926956800005112527\">🍿</tg-emoji> Rating: {rating_str}\n"
-        f"<tg-emoji emoji-id=\"4926956800005112527\">🍿</tg-emoji> Quality: {quality_str}\n"
-        f"<tg-emoji emoji-id=\"4926956800005112527\">🍿</tg-emoji> Languages: {languages_str}</i>"
+        f"<i>🍿 Movie: <b>{title}</b>\n"
+        f"🍿 Year: {year_str}\n"
+        f"🍿 Genres: {genre_str}\n"
+        f"🍿 Rating: {rating_str}\n"
+        f"🍿 Quality: {quality_str}\n"
+        f"🍿 Languages: {languages_str}</i>"
     )
 
     selected_parts = []
@@ -554,13 +554,13 @@ def format_movie_metadata_caption(movie_data: dict, grouped_data: dict = None, s
 def format_series_metadata_caption(series_data: dict, selected_lang: str = None, selected_season: int = None, selected_qual: str = None, page_type: str = "lang") -> str:
     """
     Renders Series filter UI with italic metadata block identical to Movie Filter:
-    <i><tg-emoji emoji-id="4926956800005112527">🍿</tg-emoji> Series: <b>Series Name</b>
-    <tg-emoji emoji-id="4926956800005112527">🍿</tg-emoji> Year: 2026
-    <tg-emoji emoji-id="4926956800005112527">🍿</tg-emoji> Genres: Action, Thriller
-    <tg-emoji emoji-id="4926956800005112527">🍿</tg-emoji> Rating: 8.2/10
-    <tg-emoji emoji-id="4926956800005112527">🍿</tg-emoji> Quality: 1080p, 720p
-    <tg-emoji emoji-id="4926956800005112527">🍿</tg-emoji> Seasons: Season 1, Season 2
-    <tg-emoji emoji-id="4926956800005112527">🍿</tg-emoji> Languages: Malayalam, Tamil, English</i>
+    <i>🍿 Series: <b>Series Name</b>
+    🍿 Year: 2026
+    🍿 Genres: Action, Thriller
+    🍿 Rating: 8.2/10
+    🍿 Quality: 1080p, 720p
+    🍿 Seasons: Season 1, Season 2
+    🍿 Languages: Malayalam, Tamil, English</i>
 
     Followed by quote block of selected buttons and page-specific italic prompt:
     - lang: 📌 <i>select your series language...!</i>
@@ -630,13 +630,13 @@ def format_series_metadata_caption(series_data: dict, selected_lang: str = None,
     languages_str = html.escape(languages_str)
 
     meta_block = (
-        f"<i><tg-emoji emoji-id=\"4926956800005112527\">🍿</tg-emoji> Series: <b>{title}</b>\n"
-        f"<tg-emoji emoji-id=\"4926956800005112527\">🍿</tg-emoji> Year: {year_str}\n"
-        f"<tg-emoji emoji-id=\"4926956800005112527\">🍿</tg-emoji> Genres: {genre_str}\n"
-        f"<tg-emoji emoji-id=\"4926956800005112527\">🍿</tg-emoji> Rating: {rating_str}\n"
-        f"<tg-emoji emoji-id=\"4926956800005112527\">🍿</tg-emoji> Quality: {quality_str}\n"
-        f"<tg-emoji emoji-id=\"4926956800005112527\">🍿</tg-emoji> Seasons: {seasons_str}\n"
-        f"<tg-emoji emoji-id=\"4926956800005112527\">🍿</tg-emoji> Languages: {languages_str}</i>"
+        f"<i>🍿 Series: <b>{title}</b>\n"
+        f"🍿 Year: {year_str}\n"
+        f"🍿 Genres: {genre_str}\n"
+        f"🍿 Rating: {rating_str}\n"
+        f"🍿 Quality: {quality_str}\n"
+        f"🍿 Seasons: {seasons_str}\n"
+        f"🍿 Languages: {languages_str}</i>"
     )
 
     selected_parts = []
@@ -678,7 +678,7 @@ def build_movie_language_keyboard(key, grouped_data, has_subtitles: bool = False
     for i in range(0, len(langs), 2):
         row = []
         for l in langs[i:i+2]:
-            row.append(make_styled_button(f"<tg-emoji emoji-id=\"5388632425314140043\">🌐</tg-emoji> {to_series_font(l)}", callback_data=f"movie_lang#{key}#{l}", style="success"))
+            row.append(make_styled_button(to_series_font(l), callback_data=f"movie_lang#{key}#{l}", style="success"))
         buttons.append(row)
         
     # Subtitles button is appended ONLY when has_subtitles is True
@@ -3879,7 +3879,12 @@ async def auto_filter(client, name, msg, reply_msg=None, ai_search=True, spoll=F
             except Exception as e:
                 logger.error(f"[SUPER FILTER SEARCH ROUTING ERROR] query={search if search else name} error={e}")
 
-            # If not a Super Filter: execute Normal/Legacy Filter Search directly on Main Bot
+            # If not a Super Filter: Check if Child Bot is running in group
+            if message.chat.type in [enums.ChatType.GROUP, enums.ChatType.SUPERGROUP] and getattr(temp, "CHILD_BOT", None):
+                logger.info(f"[MAIN BOT NORMAL FILTER ROUTE] ChildBot is active. Main Bot remaining silent in group for '{search}'.")
+                return
+
+            # Execute Normal/Legacy Filter Search directly on Main Bot
             logger.info(f"[MAIN BOT NORMAL FILTER ROUTE] query='{search}' chat_id={message.chat.id}")
             files, offset, total_results = await get_search_results(message.chat.id, search.lower(), max_results=100, offset=0, filter=True)
             if not files:
@@ -4350,7 +4355,35 @@ async def cb_normal_group_select(client: Client, query: CallbackQuery):
             "Perform the search yourself; do not simply click on a button generated by someone else's search.😁\n\n"
             "സ്വന്തം ആയി സെർച്ച് ചെയ്യുക. മറ്റുള്ളവർ സേർച്ച് ചയ്തു കിട്ടിയ ബട്ടൺ ക്ലിക്ക് ചയ്തു വരണ്ട ."
         )
-        return await query.answer(unauth_text, show_alert=True)
+        await query.answer(unauth_text, show_alert=True)
+        try:
+            from utils import schedule_filter_message_delete
+            unauth_stk = await query.message.reply_sticker("CAACAgUAAxkBAAER_8dqxXfvlg-A--CYLwSri-jYZR6gvwACTwcAAlx3UVf4uOtL0Swhdz0E")
+            unauth_msg = await query.message.reply_text(unauth_text)
+            if unauth_stk:
+                schedule_filter_message_delete(client, unauth_stk.chat.id, unauth_stk.id, delay=20)
+            if unauth_msg:
+                schedule_filter_message_delete(client, unauth_msg.chat.id, unauth_msg.id, delay=20)
+        except Exception as e:
+            logger.warning(f"[UNAUTH STICKER/MSG ERROR] {e}")
+        return
+
+    await query.answer()
+
+    # 2. 5-Second Sticker Loading
+    loading_stk = None
+    try:
+        loading_stk = await query.message.reply_sticker("CAACAgIAAxkBAAER_8VqxXSfQ8NwUz3f6IgFpuZM7PKBmQAC7hQAAuNVUEk4S4qtAhNhvD0E")
+    except Exception as e:
+        logger.warning(f"[NORMAL STICKER ERROR] {e}")
+
+    await asyncio.sleep(5)
+
+    if loading_stk:
+        try:
+            await loading_stk.delete()
+        except Exception:
+            pass
 
     bot_username = getattr(getattr(client, "me", None), "username", None)
     if not bot_username:
@@ -4362,30 +4395,15 @@ async def cb_normal_group_select(client: Client, query: CallbackQuery):
         bot_username = "Bot"
 
     is_pm = bool(query.message.chat.type == enums.ChatType.PRIVATE)
+    details_caption = await format_normal_filter_details_card(group_data)
+    back_data = f"norm_back#{session_id}#{page}" if session_id else f"norm_back#{norm_group_id}#0"
 
     if not is_pm:
-        # Group chat: Open Bot PM via deep-link
         start_url = f"https://t.me/{bot_username}?start=norm_{norm_group_id}"
-        logger.info(f"[GROUP BUTTON CLICKED] user_id={clicked_user_id} group_id={norm_group_id} opening Bot PM url={start_url}")
-        try:
-            return await query.answer(url=start_url)
-        except Exception as err:
-            logger.warning(f"[GROUP BUTTON QUERY ANSWER URL FAILED] {err}. Sending fallback button in group.")
-            from utils import schedule_filter_message_delete
-            open_btn = InlineKeyboardButton("📂 Open in Bot", url=start_url)
-            fb_msg = await query.message.reply_text(
-                "<b>⚠️ Click below to open Bot and view files:</b>\n\n"
-                "<i>ഫയലുകൾ ലഭിക്കുന്നതിന് ദയവായി താഴെ കാണുന്ന ബട്ടൺ ക്ലിക്ക് ചെയ്ത് ബോട്ട് തുറക്കുക.</i>",
-                reply_markup=InlineKeyboardMarkup([[open_btn]])
-            )
-            if fb_msg:
-                schedule_filter_message_delete(client, fb_msg.chat.id, fb_msg.id, delay=60)
-            return await query.answer()
+        get_all_btn = InlineKeyboardButton("⌯⌲ Get All File", url=start_url)
+    else:
+        get_all_btn = InlineKeyboardButton("⌯⌲ Get All File", callback_data=f"norm_getall#{norm_group_id}")
 
-    # User is in PM: Show details message with 'Get All File' button
-    details_caption = await format_normal_filter_details_card(group_data)
-    get_all_btn = InlineKeyboardButton("⌯⌲ Get All File", callback_data=f"norm_getall#{norm_group_id}")
-    back_data = f"norm_back#{session_id}#{page}" if session_id else f"norm_back#{norm_group_id}#0"
     markup = InlineKeyboardMarkup([
         [get_all_btn],
         [
@@ -4402,8 +4420,6 @@ async def cb_normal_group_select(client: Client, query: CallbackQuery):
         pass
     except Exception as ee:
         logger.error(f"[NORMAL SELECT EDIT MSG ERROR] {ee}")
-
-    await query.answer()
 
 
 @Client.on_callback_query(filters.regex(r"^norm_back#"))
@@ -4509,7 +4525,44 @@ async def cb_norm_get_all_file(client: Client, query: CallbackQuery):
                 schedule_filter_message_delete(client, fb_msg.chat.id, fb_msg.id, 60)
             return await query.answer()
 
-    # User is in PM: Check duplicate delivery
+    # User is in PM: Check Force Subscribe
+    from info import AUTH_CHANNEL, REQUEST_TO_JOIN_MODE
+    from utils import is_subscribed, get_fsub_invite_link
+    import time
+
+    if AUTH_CHANNEL and not await is_subscribed(client, user_id):
+        invite_link = await get_fsub_invite_link(client, AUTH_CHANNEL, creates_join_request=REQUEST_TO_JOIN_MODE)
+        if invite_link:
+            btn_text = "📢 Send Join Request" if REQUEST_TO_JOIN_MODE else "📢 Join Channel"
+            fsub_markup = InlineKeyboardMarkup([[InlineKeyboardButton(btn_text, url=invite_link)]])
+            fsub_text = (
+                "📢 <b>Join Request Required</b>\n\n"
+                "ഫയലുകൾ ലഭിക്കുന്നതിന് താഴെ കാണുന്ന ബട്ടൺ ക്ലിക്ക് ചെയ്ത് ഞങ്ങളുടെ ചാനലിലേക്ക് Join Request അയക്കുക.\n\n"
+                "<i>Please send a join request to our channel to receive the files.</i>"
+            ) if REQUEST_TO_JOIN_MODE else (
+                "📢 <b>Channel Subscription Required</b>\n\n"
+                "ഫയലുകൾ ലഭിക്കുന്നതിന് താഴെ കാണുന്ന ബട്ടൺ ക്ലിക്ക് ചെയ്ത് ഞങ്ങളുടെ ചാനലിൽ Join ചെയ്യുക.\n\n"
+                "<i>Please join our channel to receive the files.</i>"
+            )
+            fsub_msg = await client.send_message(
+                chat_id=user_id,
+                text=fsub_text,
+                reply_markup=fsub_markup,
+                parse_mode=enums.ParseMode.HTML
+            )
+            if not hasattr(temp, "PENDING_NORMAL_FSUB"):
+                temp.PENDING_NORMAL_FSUB = {}
+            temp.PENDING_NORMAL_FSUB[user_id] = {
+                "group_id": group_id,
+                "details_msg_id": query.message.id,
+                "details_chat_id": query.message.chat.id,
+                "fsub_msg_id": fsub_msg.id if fsub_msg else None,
+                "fsub_chat_id": fsub_msg.chat.id if fsub_msg else user_id,
+                "timestamp": time.time()
+            }
+            return await query.answer()
+
+    # Check duplicate delivery
     if not hasattr(temp, "ACTIVE_NORMAL_DELIVERIES"):
         temp.ACTIVE_NORMAL_DELIVERIES = set()
     if user_id in temp.ACTIVE_NORMAL_DELIVERIES:
@@ -4560,9 +4613,12 @@ async def process_normal_filter_deeplink(client: Client, message: Message, norm_
         )
         try:
             if message:
+                from utils import schedule_filter_message_delete
+                unauth_stk = await message.reply_sticker("CAACAgUAAxkBAAER_8dqxXfvlg-A--CYLwSri-jYZR6gvwACTwcAAlx3UVf4uOtL0Swhdz0E")
                 unauth_msg = await message.reply_text(unauth_text)
+                if unauth_stk:
+                    schedule_filter_message_delete(client, unauth_stk.chat.id, unauth_stk.id, delay=20)
                 if unauth_msg:
-                    from utils import schedule_filter_message_delete
                     schedule_filter_message_delete(client, unauth_msg.chat.id, unauth_msg.id, delay=20)
         except Exception:
             pass
@@ -4606,24 +4662,10 @@ async def process_normal_filter_deeplink(client: Client, message: Message, norm_
             logger.info(f"[CHILD BOT FSUB REQUIRED] bot=@{bot_u} user_id={clicked_user_id} group_id={norm_group_id}")
             return False
 
-    # 3. In Child Bot PM: Show existing details message and '⌯⌲ Get All File' button
-    details_caption = await format_normal_filter_details_card(group_data)
-    get_all_btn = InlineKeyboardButton("⌯⌲ Get All File", callback_data=f"norm_getall#{norm_group_id}")
-    markup = InlineKeyboardMarkup([
-        [get_all_btn],
-        [InlineKeyboardButton("⚠ Disclaimer", callback_data="norm_disc")]
-    ])
-
-    det_msg = await client.send_message(
-        chat_id=clicked_user_id,
-        text=details_caption,
-        reply_markup=markup,
-        parse_mode=enums.ParseMode.HTML
-    )
-    if det_msg:
-        schedule_filter_message_delete(client, det_msg.chat.id, det_msg.id, delay=1200)
-
-    return True
+    # 3. DIRECT FILE DELIVERY IN PM
+    logger.info(f"[CHILD BOT START DIRECT DELIVERY] bot=@{bot_u} user_id={clicked_user_id} group_id={norm_group_id}")
+    started = await start_normal_file_delivery_in_pm(client, user_id=clicked_user_id, norm_group_id=norm_group_id, trigger_msg=message)
+    return started
 
 
 async def trigger_normal_fsub_approved_delivery(client: Client, user_id: int, pending_norm: dict):
