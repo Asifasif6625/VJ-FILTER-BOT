@@ -886,15 +886,16 @@ def match_automatic_series_file(
         }
 
     # Metadata extraction strictly from remaining_text / filename
-    from utils import extract_quality_from_filename
+    from utils import extract_quality_from_filename, normalize_language_name
     from plugins.pm_filter import resolve_file_language
 
     detected_quality = extract_quality_from_filename(remaining_text or raw_name)
+    norm_orig = normalize_language_name(original_language) if original_language else None
     detected_lang = resolve_file_language(
         remaining_text or raw_name,
         caption=caption,
-        metadata={"original_language": original_language},
-        default_fallback="English"
+        metadata={"original_language": norm_orig or original_language},
+        default_fallback=norm_orig or "Malayalam"
     )
 
     return {
@@ -1178,30 +1179,30 @@ def match_automatic_movie_file(
         }
 
     # 7. Metadata extraction from remaining_text / filename
-    from utils import extract_quality_from_filename
+    from utils import extract_quality_from_filename, normalize_language_name
     from plugins.pm_filter import resolve_file_language, detect_file_languages
-    from utils import normalize_language_name
 
     rem_text = matched_candidate["remaining_text"]
     c_year = matched_candidate["candidate_year"]
     cand_raw = matched_candidate["candidate_raw"]
 
     detected_quality = extract_quality_from_filename(rem_text or raw_name)
+    norm_orig = normalize_language_name(original_language) if original_language else None
+
     detected_lang = resolve_file_language(
         rem_text or raw_name,
         caption=caption,
-        metadata={"original_language": original_language},
-        default_fallback=None
+        metadata={"original_language": norm_orig or original_language},
+        default_fallback=norm_orig or "Malayalam"
     )
     detected_langs = detect_file_languages(rem_text or raw_name, caption=caption, default=None)
-    if not detected_langs and original_language:
-        norm_orig = normalize_language_name(original_language) or original_language
+    if not detected_langs and norm_orig:
         detected_langs = [norm_orig]
         if not detected_lang:
             detected_lang = norm_orig
 
     if not detected_lang:
-        detected_lang = "English"
+        detected_lang = norm_orig or "Malayalam"
 
     return {
         "matched": True,
@@ -1218,7 +1219,7 @@ def match_automatic_movie_file(
     }
 
 
-def match_movie_identity(file_doc: dict, requested_title: str, requested_year: str | int = None, imdb_id: str = None, tmdb_id: str = None, known_conflicts: set = None, target_aliases: list = None) -> tuple[bool, str]:
+def match_movie_identity(file_doc: dict, requested_title: str, requested_year: str | int = None, imdb_id: str = None, tmdb_id: str = None, known_conflicts: set = None, target_aliases: list = None, original_language: str = None) -> tuple[bool, str]:
     """
     Strict identity matcher for Auto Movie Add / Super Movie Filter synchronization.
     Enforces BOTH Title and Release Year matching to prevent cross-contamination across sequels/different years.
@@ -1240,6 +1241,7 @@ def match_movie_identity(file_doc: dict, requested_title: str, requested_year: s
         caption=caption,
         imdb_id=imdb_id,
         tmdb_id=tmdb_id,
+        original_language=original_language,
         target_aliases=target_aliases
     )
 
