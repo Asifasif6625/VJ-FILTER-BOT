@@ -854,7 +854,143 @@ async def delete_announcement(identifier: str, filter_type: str = None) -> dict 
                 )
             except Exception:
                 pass
-    return doc
+# ─── Super Filter Custom Emoji Settings ───────────────────────────────────────
+
+async def set_super_button_emoji(button_type: str, custom_emoji_id: str, fallback_emoji: str) -> bool:
+    """
+    Saves custom emoji settings for a button type ('lang', 'season', 'quality') in MongoDB.
+    """
+    b_type = str(button_type).lower().strip()
+    if b_type in ("l", "lang", "language"):
+        doc_id = "emoji_setting_lang"
+        cache_key = "lang"
+    elif b_type in ("s", "season", "seasons"):
+        doc_id = "emoji_setting_season"
+        cache_key = "season"
+    elif b_type in ("q", "qual", "quality", "qualities"):
+        doc_id = "emoji_setting_quality"
+        cache_key = "quality"
+    else:
+        return False
+
+    data = {
+        "custom_emoji_id": str(custom_emoji_id).strip(),
+        "fallback_emoji": str(fallback_emoji).strip(),
+        "updated_at": datetime.utcnow()
+    }
+    await settings_col.update_one(
+        {"_id": doc_id},
+        {"$set": data},
+        upsert=True
+    )
+    # Update in-memory cache in temp
+    try:
+        from utils import temp
+        if not hasattr(temp, "SUPER_BUTTON_EMOJIS") or not isinstance(temp.SUPER_BUTTON_EMOJIS, dict):
+            temp.SUPER_BUTTON_EMOJIS = {}
+        temp.SUPER_BUTTON_EMOJIS[cache_key] = data
+    except Exception:
+        pass
+    return True
+
+
+async def get_super_button_emoji(button_type: str) -> dict | None:
+    """
+    Retrieves custom emoji settings for a button type ('lang', 'season', 'quality').
+    """
+    b_type = str(button_type).lower().strip()
+    if b_type in ("l", "lang", "language"):
+        doc_id = "emoji_setting_lang"
+        cache_key = "lang"
+    elif b_type in ("s", "season", "seasons"):
+        doc_id = "emoji_setting_season"
+        cache_key = "season"
+    elif b_type in ("q", "qual", "quality", "qualities"):
+        doc_id = "emoji_setting_quality"
+        cache_key = "quality"
+    else:
+        return None
+
+    try:
+        from utils import temp
+        if hasattr(temp, "SUPER_BUTTON_EMOJIS") and isinstance(temp.SUPER_BUTTON_EMOJIS, dict) and cache_key in temp.SUPER_BUTTON_EMOJIS:
+            return temp.SUPER_BUTTON_EMOJIS.get(cache_key)
+    except Exception:
+        pass
+
+    doc = await settings_col.find_one({"_id": doc_id})
+    if doc:
+        res = {
+            "custom_emoji_id": doc.get("custom_emoji_id", ""),
+            "fallback_emoji": doc.get("fallback_emoji", "")
+        }
+    else:
+        res = None
+
+    try:
+        from utils import temp
+        if not hasattr(temp, "SUPER_BUTTON_EMOJIS") or not isinstance(temp.SUPER_BUTTON_EMOJIS, dict):
+            temp.SUPER_BUTTON_EMOJIS = {}
+        temp.SUPER_BUTTON_EMOJIS[cache_key] = res
+    except Exception:
+        pass
+
+    return res
+
+
+async def get_all_super_button_emojis() -> dict:
+    """
+    Retrieves all custom emoji settings for language, season, and quality buttons.
+    """
+    res = {}
+    for k in ("lang", "season", "quality"):
+        res[k] = await get_super_button_emoji(k)
+    return res
+
+
+async def delete_all_super_button_emojis() -> int:
+    """
+    Deletes all saved custom emoji settings for language, season, and quality buttons.
+    """
+    result = await settings_col.delete_many({
+        "_id": {"$in": ["emoji_setting_lang", "emoji_setting_season", "emoji_setting_quality"]}
+    })
+    try:
+        from utils import temp
+        temp.SUPER_BUTTON_EMOJIS = {
+            "lang": None,
+            "season": None,
+            "quality": None
+        }
+    except Exception:
+        pass
+    return result.deleted_count
+
+
+async def load_super_button_emojis_cache():
+    """
+    Preloads saved emoji settings from MongoDB into temp.SUPER_BUTTON_EMOJIS.
+    """
+    try:
+        from utils import temp
+        if not hasattr(temp, "SUPER_BUTTON_EMOJIS") or not isinstance(temp.SUPER_BUTTON_EMOJIS, dict):
+            temp.SUPER_BUTTON_EMOJIS = {}
+        for doc_id, cache_key in [
+            ("emoji_setting_lang", "lang"),
+            ("emoji_setting_season", "season"),
+            ("emoji_setting_quality", "quality")
+        ]:
+            doc = await settings_col.find_one({"_id": doc_id})
+            if doc:
+                temp.SUPER_BUTTON_EMOJIS[cache_key] = {
+                    "custom_emoji_id": doc.get("custom_emoji_id", ""),
+                    "fallback_emoji": doc.get("fallback_emoji", "")
+                }
+            else:
+                temp.SUPER_BUTTON_EMOJIS[cache_key] = None
+        logger.info(f"[EMOJI CACHE LOADED] {temp.SUPER_BUTTON_EMOJIS}")
+    except Exception as e:
+        logger.warning(f"[EMOJI CACHE LOAD FAILED] {e}")
 
 
 async def set_sbatch_msgid(doc_id: str, message_id: int):
