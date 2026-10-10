@@ -3996,48 +3996,112 @@ async def auto_filter(client, name, msg, reply_msg=None, ai_search=True, spoll=F
         return
 
 
-def build_normal_filter_groups(files: list[dict]) -> list[dict]:
+def build_normal_filter_groups(files: list[dict], query_text: str = "") -> list[dict]:
     """
     Groups raw normal/legacy files into Movie groups and Series season groups.
-    Assigns:
-    - Normal Movie: 'ജ⁀➴ {Title} ({Year})' (with v2, v3 suffixes for separate filter groups)
-    - Normal Series: 'જ⁀➴S01 {Title} ({Year})' (with v2, v3 suffixes for separate filter groups)
+    Enforces strict canonical movie identity extraction:
+    - Strips all leading prefixes, bracket tags ([MV], (SS), [PM], [MM], @channelid, etc.)
+    - Strips standalone leading channel noise words (Links, PM, MV, SS, VJ, V, TG, MM, MS, etc.)
+    - Normalizes and collapses all versions of the SAME movie with the SAME year into ONE single group/button!
+    - Assigns button labels:
+      - Movie: '🪶 {Title} ({Year})'
+      - Series: '🪶 S01 {Title} ({Year})'
     """
     from utils import normalize_series_identity_title, get_filter_button_filename_text, strip_file_prefix_markers
 
     series_pattern = re.compile(r"(?i)(?:^|[\s._\-\(\[\{])(S\d{1,2}(?:E\d{1,4})?|Season\s*\d{1,2}|E\d{1,4}|Episode\s*\d{1,4})(?:[\s._\-\)\]\}]|$)")
+    year_regex = re.compile(r"(?i)(?<!\d)(19\d\d|20\d\d)(?!\d)")
     
+    clean_query = clean_child_search_query(query_text) if query_text else ""
+    norm_query = normalize_series_identity_title(clean_query) if clean_query else ""
+
     identity_map = {}
 
     for f in files:
         fname = f.get("file_name", "")
-        clean_name = strip_file_prefix_markers(fname)
-        year_m = re.search(r"(?<!\d)(19\d\d|20\d\d)(?!\d)", clean_name)
-        f_year = year_m.group(1) if year_m else "N/A"
+        if not fname:
+            continue
 
-        is_ser = bool(series_pattern.search(clean_name))
+        # 1. Separate concatenated numbers/words (e.g. 2012720p -> 2012 720p, 2012BDRip -> 2012 BDRip)
+        raw_clean = re.sub(
+            r"(?i)\b(19\d\d|20\d\d)(720p|1080p|480p|360p|2160p|4k|bdrip|hdrip|dvdrip|bluray|web[\s\-_]?dl|web[\s\-_]?rip|web|hevc|x264|x265|h264|h265|tamil|telugu|malayalam|hindi|english|kannada|dual|multi)",
+            r"\1 \2",
+            str(fname)
+        )
+
+        # 2. Strip file extensions and trailing format words
+        raw_clean = re.sub(
+            r"\.(mkv|mp4|avi|mov|wmv|flv|webm|m4v|ts|3gp|mpeg|mpg|vob|ogv|divx|m2ts|m2v|f4v|srt|sub|zip|rar)$",
+            "",
+            raw_clean,
+            flags=re.IGNORECASE
+        ).strip()
+        raw_clean = re.sub(r"(?i)\b(mkv|mp4|avi|mov|wmv|flv|webm|ts|3gp)$", "", raw_clean).strip(" ._+-")
+
+        # 3. Strip all leading prefixes, bracket tags ([MV], (SS), [PM], @id, Links, PM, etc.)
+        clean_name = strip_file_prefix_markers(raw_clean)
+
+        # 4. Extract Release Year
+        year_matches = list(year_regex.finditer(clean_name))
+        if year_matches:
+            ym = year_matches[0]
+            f_year = ym.group(1)
+            text_before_year = clean_name[:ym.start()].strip(" ._+-")
+            text_after_year = clean_name[ym.end():].strip(" ._+-")
+        else:
+            f_year = "N/A"
+            text_before_year = clean_name
+            text_after_year = ""
+
+        # 5. Detect Series vs Movie
+        is_ser = bool(series_pattern.search(clean_name)) or bool(series_pattern.search(text_before_year)) or bool(series_pattern.search(text_after_year))
         if is_ser:
-            s_match = re.search(r"(?i)\b(?:s|season\s*)(\d{1,2})", clean_name)
-            f_season = int(s_match.group(1)) if s_match else 1
-            cand_prefix = re.split(r"(?i)(?:s\d{1,2}|season\s*\d{1,2})", clean_name)[0].strip(" ._+-")
-            if cand_prefix:
-                cand_title = get_filter_button_filename_text(cand_prefix)
+            s_match = series_pattern.search(clean_name)
+            if s_match:
+                s_digits = re.search(r"\d{1,2}", s_match.group(1))
+                f_season = int(s_digits.group(0)) if s_digits else 1
             else:
-                cand_title = get_filter_button_filename_text(clean_name)
+                f_season = 1
+            cand_prefix = re.split(r"(?i)(?:s\d{1,2}|season\s*\d{1,2})", text_before_year if text_before_year else clean_name)[0].strip(" ._+-")
+            cand_title = cand_prefix if cand_prefix else text_before_year
         else:
             f_season = None
-            cand_title = get_filter_button_filename_text(clean_name)
+            cand_title = text_before_year if text_before_year else clean_name
 
-        # Extract strictly clean title without prefixes, brackets, or year
-        clean_cand = strip_file_prefix_markers(cand_title)
+        # 6. Clean candidate title strictly
+        cand_title = strip_file_prefix_markers(cand_title)
+        
+        # Strip any trailing quality markers, languages, or rip tags
+        cand_title = re.sub(
+            r"(?i)\b(1080p|720p|480p|360p|2160p|4k|fhd|hd|uhd|bluray|bdrip|brrip|hdrip|dvdrip|dvd|web[\s\-_]?dl|web[\s\-_]?rip|web|hevc|x264|x265|h264|h265|avc|10bit|8bit|aac|ac3|dts|mp3|dd5[\s\._]?1|5[\s\._]?1|dual[\s\-_]?audio|multi[\s\-_]?audio|tamil|telugu|malayalam|hindi|english|kannada|bengali|marathi|gujarati|punjabi|dubbed|subbed|esub|sub|clean|proper|repack|unrated|extended|directors[\s\-_]?cut|imax)\b.*$",
+            "",
+            cand_title
+        ).strip()
+
         if f_year != "N/A":
-            clean_cand = re.sub(rf"(?i)[\s\._\-\(\[\{{]*{re.escape(str(f_year))}[\s\._\-\)\]\}}]*$", "", clean_cand).strip(" ._+-")
-        clean_cand = strip_file_prefix_markers(clean_cand)
-        clean_cand = re.sub(r"[\._]", " ", clean_cand)
-        clean_cand = re.sub(r"\s+", " ", clean_cand).strip(" ._+-")
+            cand_title = re.sub(rf"(?i)[\s\._\-\(\[\{{]*{re.escape(str(f_year))}[\s\._\-\)\]\}}]*$", "", cand_title).strip()
 
-        f_title = clean_cand if clean_cand else (clean_name or "Movie")
-        norm_title = normalize_series_identity_title(f_title)
+        cand_title = strip_file_prefix_markers(cand_title)
+        cand_title = re.sub(r"[\._]", " ", cand_title)
+        cand_title = re.sub(r"[\s\._\-\+\[\]\(\)\{\}:;!?,/\\~|#*\"\'`]+$", "", cand_title).strip(" ._+-")
+        cand_title = re.sub(r"^[\s\._\-\+\[\]\(\)\{\}:;!?,/\\~|#*\"\'`]+", "", cand_title).strip(" ._+-")
+        cand_title = re.sub(r"\s+", " ", cand_title).strip(" ._+-")
+
+        norm_title = normalize_series_identity_title(cand_title)
+
+        # 7. Check with search query to canonicalize title
+        if norm_query and (norm_title == norm_query or norm_title.endswith(norm_query) or norm_query in norm_title):
+            f_title = clean_query.title()
+            norm_title = norm_query
+        elif cand_title:
+            f_title = cand_title.title()
+        elif clean_query:
+            f_title = clean_query.title()
+            norm_title = norm_query
+        else:
+            f_title = "Movie"
+            norm_title = "movie"
+
         id_key = (norm_title, f_year, f_season, is_ser)
 
         if id_key not in identity_map:
@@ -4125,7 +4189,7 @@ async def render_normal_grouped_results(client: Client, message: Message, query_
     - Used by both Group Chat and PM Search.
     - Max 5 buttons per page.
     """
-    groups = build_normal_filter_groups(files)
+    groups = build_normal_filter_groups(files, query_text=query_text)
     if not groups:
         return False
 
