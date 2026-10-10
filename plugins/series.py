@@ -1317,6 +1317,11 @@ async def fetch_auto_movie_metadata(client: Client, chat_id: int | str, loading_
         resolved_imdb_id = info.get("imdb_id") or imdb_id
         resolved_tmdb_id = info.get("tmdb_id")
 
+        m_orig_lang = info.get("original_language")
+        if not m_orig_lang:
+            from utils import fetch_media_original_language
+            m_orig_lang = await fetch_media_original_language(title, year, imdb_id=resolved_imdb_id, tmdb_id=resolved_tmdb_id)
+
         movie_data.update({
             "session_id": session_id,
             "user_id": uid,
@@ -1329,7 +1334,7 @@ async def fetch_auto_movie_metadata(client: Client, chat_id: int | str, loading_
             "description": description,
             "imdb_id": resolved_imdb_id,
             "tmdb_id": resolved_tmdb_id,
-            "original_language": info.get("original_language"),
+            "original_language": m_orig_lang,
             "metadata_complete": True,
             "state": "METADATA_COMPLETE",
             "created_at": time.time(),
@@ -1503,6 +1508,10 @@ async def fetch_auto_series_metadata(client: Client, chat_id: int | str, loading
         )
 
         s_orig_lang = info.get("original_language")
+        if not s_orig_lang:
+            from utils import fetch_media_original_language
+            s_orig_lang = await fetch_media_original_language(s_title, s_year, imdb_id=imdb_id, tmdb_id=tmdb_id)
+
         scan_res = await scan_sdatabase_for_series(chat_id, s_title, season=None, client=client, original_language=s_orig_lang)
         all_files = scan_res.get("all_matching_files") or scan_res.get("valid_new_files") or []
 
@@ -2820,6 +2829,11 @@ async def cmd_sync_series(client: Client, message: Message):
         name = s.get("name", "")
         s_year = s.get("year")
         s_orig_lang = s.get("original_language")
+        if not s_orig_lang:
+            from utils import fetch_media_original_language
+            s_orig_lang = await fetch_media_original_language(name, s_year, imdb_id=s.get("imdb_id"), tmdb_id=s.get("tmdb_id"))
+            if s_orig_lang:
+                await series_col.update_one({"_id": s["_id"]}, {"$set": {"original_language": s_orig_lang}})
         if s_orig_lang:
             s_orig_lang = normalize_language_name(s_orig_lang) or s_orig_lang
         elif s.get("languages") and len(s.get("languages")) > 0:
