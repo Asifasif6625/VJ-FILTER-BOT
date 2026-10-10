@@ -4341,7 +4341,12 @@ async def format_normal_filter_details_card(group_data: dict) -> tuple:
     try:
         from utils import get_poster
         search_query_imdb = f"{title} {year_str}" if year_str != "N/A" else title
-        imdb_data = await asyncio.wait_for(get_poster(search_query_imdb), timeout=3.0)
+        imdb_data = await asyncio.wait_for(get_poster(search_query_imdb), timeout=5.0)
+        if (not imdb_data or not imdb_data.get("poster")) and year_str != "N/A":
+            try:
+                imdb_data = await asyncio.wait_for(get_poster(title), timeout=3.0)
+            except Exception:
+                pass
         if imdb_data and isinstance(imdb_data, dict):
             poster_url = imdb_data.get("poster")
             raw_langs = imdb_data.get("languages")
@@ -4512,13 +4517,7 @@ async def cb_normal_group_select(client: Client, query: CallbackQuery):
         [back_btn, disc_btn]
     ])
 
-    target_poster = poster_url
-    if not target_poster and hasattr(temp, "DEF_PHOTO") and temp.DEF_PHOTO:
-        target_poster = temp.DEF_PHOTO
-    elif not target_poster:
-        from info import PICS
-        if PICS and isinstance(PICS, list) and len(PICS) > 0:
-            target_poster = PICS[0]
+    target_poster = poster_url or group_data.get("poster")
 
     try:
         from utils import schedule_filter_message_delete
@@ -4567,14 +4566,23 @@ async def cb_normal_group_select(client: Client, query: CallbackQuery):
                         schedule_filter_message_delete(client, sent_msg.chat.id, sent_msg.id, delay=1200)
                         BUTTON_OWNERS[f"{sent_msg.chat.id}-{sent_msg.id}"] = clicked_user_id
             else:
+                # No poster available for this movie/series: show text message only
                 if getattr(query.message, "photo", None) or getattr(query.message, "caption", None):
                     try:
-                        await query.message.edit_caption(caption=details_caption, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
+                        await query.message.delete()
                     except Exception:
-                        await query.message.edit_reply_markup(reply_markup=markup)
+                        pass
+                    sent_msg = await client.send_message(
+                        chat_id=chat_id,
+                        text=details_caption,
+                        reply_markup=markup,
+                        parse_mode=enums.ParseMode.HTML
+                    )
+                    schedule_filter_message_delete(client, sent_msg.chat.id, sent_msg.id, delay=1200)
+                    BUTTON_OWNERS[f"{sent_msg.chat.id}-{sent_msg.id}"] = clicked_user_id
                 else:
                     await query.message.edit_text(text=details_caption, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
-                schedule_filter_message_delete(client, chat_id, query.message.id, delay=1200)
+                    schedule_filter_message_delete(client, chat_id, query.message.id, delay=1200)
     except MessageNotModified:
         pass
     except Exception as ee:
