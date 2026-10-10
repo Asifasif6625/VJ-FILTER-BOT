@@ -436,12 +436,12 @@ def group_movie_files(files, movie_doc: dict = None):
 def format_movie_metadata_caption(movie_data: dict, grouped_data: dict = None, selected_lang: str = None, selected_qual: str = None, page_type: str = "lang") -> str:
     """
     Renders Movie filter UI with italic metadata block:
-    <i>○ Movie: <b>Movie Name</b>
-    ○ Year: 2026
-    ○ Genres: Action, Thriller
-    ○ Rating: 8.2/10
-    ○ Quality: 1080p, 720p
-    ○ Languages: Malayalam, Tamil, English</i>
+    <i><tg-emoji emoji-id="4926956800005112527">🍿</tg-emoji> Movie: <b>Movie Name</b>
+    <tg-emoji emoji-id="4926956800005112527">🍿</tg-emoji> Year: 2026
+    <tg-emoji emoji-id="4926956800005112527">🍿</tg-emoji> Genres: Action, Thriller
+    <tg-emoji emoji-id="4926956800005112527">🍿</tg-emoji> Rating: 8.2/10
+    <tg-emoji emoji-id="4926956800005112527">🍿</tg-emoji> Quality: 1080p, 720p
+    <tg-emoji emoji-id="4926956800005112527">🍿</tg-emoji> Languages: Malayalam, Tamil, English</i>
 
     Followed by page-specific italic prompt:
     - lang: 📌 <i>select your movie language...!</i>
@@ -518,12 +518,12 @@ def format_movie_metadata_caption(movie_data: dict, grouped_data: dict = None, s
     languages_str = html.escape(languages_str)
 
     meta_block = (
-        f"<i>○ Movie: <b>{title}</b>\n"
-        f"○ Year: {year_str}\n"
-        f"○ Genres: {genre_str}\n"
-        f"○ Rating: {rating_str}\n"
-        f"○ Quality: {quality_str}\n"
-        f"○ Languages: {languages_str}</i>"
+        f"<i><tg-emoji emoji-id=\"4926956800005112527\">🍿</tg-emoji> Movie: <b>{title}</b>\n"
+        f"<tg-emoji emoji-id=\"4926956800005112527\">🍿</tg-emoji> Year: {year_str}\n"
+        f"<tg-emoji emoji-id=\"4926956800005112527\">🍿</tg-emoji> Genres: {genre_str}\n"
+        f"<tg-emoji emoji-id=\"4926956800005112527\">🍿</tg-emoji> Rating: {rating_str}\n"
+        f"<tg-emoji emoji-id=\"4926956800005112527\">🍿</tg-emoji> Quality: {quality_str}\n"
+        f"<tg-emoji emoji-id=\"4926956800005112527\">🍿</tg-emoji> Languages: {languages_str}</i>"
     )
 
     selected_parts = []
@@ -554,13 +554,13 @@ def format_movie_metadata_caption(movie_data: dict, grouped_data: dict = None, s
 def format_series_metadata_caption(series_data: dict, selected_lang: str = None, selected_season: int = None, selected_qual: str = None, page_type: str = "lang") -> str:
     """
     Renders Series filter UI with italic metadata block identical to Movie Filter:
-    <i>○ Series: <b>Series Name</b>
-    ○ Year: 2026
-    ○ Genres: Action, Thriller
-    ○ Rating: 8.2/10
-    ○ Quality: 1080p, 720p
-    ○ Seasons: Season 1, Season 2
-    ○ Languages: Malayalam, Tamil, English</i>
+    <i><tg-emoji emoji-id="4926956800005112527">🍿</tg-emoji> Series: <b>Series Name</b>
+    <tg-emoji emoji-id="4926956800005112527">🍿</tg-emoji> Year: 2026
+    <tg-emoji emoji-id="4926956800005112527">🍿</tg-emoji> Genres: Action, Thriller
+    <tg-emoji emoji-id="4926956800005112527">🍿</tg-emoji> Rating: 8.2/10
+    <tg-emoji emoji-id="4926956800005112527">🍿</tg-emoji> Quality: 1080p, 720p
+    <tg-emoji emoji-id="4926956800005112527">🍿</tg-emoji> Seasons: Season 1, Season 2
+    <tg-emoji emoji-id="4926956800005112527">🍿</tg-emoji> Languages: Malayalam, Tamil, English</i>
 
     Followed by quote block of selected buttons and page-specific italic prompt:
     - lang: 📌 <i>select your series language...!</i>
@@ -630,13 +630,13 @@ def format_series_metadata_caption(series_data: dict, selected_lang: str = None,
     languages_str = html.escape(languages_str)
 
     meta_block = (
-        f"<i>○ Series: <b>{title}</b>\n"
-        f"○ Year: {year_str}\n"
-        f"○ Genres: {genre_str}\n"
-        f"○ Rating: {rating_str}\n"
-        f"○ Quality: {quality_str}\n"
-        f"○ Seasons: {seasons_str}\n"
-        f"○ Languages: {languages_str}</i>"
+        f"<i><tg-emoji emoji-id=\"4926956800005112527\">🍿</tg-emoji> Series: <b>{title}</b>\n"
+        f"<tg-emoji emoji-id=\"4926956800005112527\">🍿</tg-emoji> Year: {year_str}\n"
+        f"<tg-emoji emoji-id=\"4926956800005112527\">🍿</tg-emoji> Genres: {genre_str}\n"
+        f"<tg-emoji emoji-id=\"4926956800005112527\">🍿</tg-emoji> Rating: {rating_str}\n"
+        f"<tg-emoji emoji-id=\"4926956800005112527\">🍿</tg-emoji> Quality: {quality_str}\n"
+        f"<tg-emoji emoji-id=\"4926956800005112527\">🍿</tg-emoji> Seasons: {seasons_str}\n"
+        f"<tg-emoji emoji-id=\"4926956800005112527\">🍿</tg-emoji> Languages: {languages_str}</i>"
     )
 
     selected_parts = []
@@ -678,7 +678,7 @@ def build_movie_language_keyboard(key, grouped_data, has_subtitles: bool = False
     for i in range(0, len(langs), 2):
         row = []
         for l in langs[i:i+2]:
-            row.append(make_styled_button(to_series_font(l), callback_data=f"movie_lang#{key}#{l}", style="success"))
+            row.append(make_styled_button(f"<tg-emoji emoji-id=\"5388632425314140043\">🌐</tg-emoji> {to_series_font(l)}", callback_data=f"movie_lang#{key}#{l}", style="success"))
         buttons.append(row)
         
     # Subtitles button is appended ONLY when has_subtitles is True
