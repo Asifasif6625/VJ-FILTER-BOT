@@ -326,41 +326,71 @@ def detect_file_languages(filename: str, caption: str = None, default: str = Non
         
     return detected
 
-def resolve_file_language(filename: str = "", caption: str = "", metadata: dict = None, default_fallback: str = "English") -> str:
+def resolve_file_language(filename: str = "", caption: str = "", metadata: dict | str = None, default_fallback: str = "Malayalam") -> str:
     """
     Resolve language for movie/series files following the priority rule:
     1. Explicit language detected from filename/caption
     2. IMDb/TMDB original language from metadata
-    3. Existing project fallback (default_fallback, e.g. 'English')
+    3. Primary language from metadata languages list
+    4. Project fallback (default_fallback, e.g. 'Malayalam')
     """
     from utils import normalize_language_name
     detected = detect_file_languages(filename, caption, default=None)
     if detected and len(detected) > 0:
         return detected[0]
     
-    if metadata and isinstance(metadata, dict):
-        orig_lang = metadata.get("original_language") or metadata.get("orig_lang")
-        if orig_lang:
-            norm = normalize_language_name(orig_lang)
-            if norm:
-                return norm
-            return str(orig_lang).strip()
+    if metadata:
+        if isinstance(metadata, dict):
+            orig_lang = metadata.get("original_language") or metadata.get("orig_lang")
+            if orig_lang:
+                norm = normalize_language_name(orig_lang)
+                if norm:
+                    return norm
+                return str(orig_lang).strip()
+            m_langs = metadata.get("languages")
+            if m_langs and isinstance(m_langs, list) and len(m_langs) > 0:
+                norm_m = normalize_language_name(m_langs[0])
+                if norm_m:
+                    return norm_m
+                return str(m_langs[0]).strip()
+        elif isinstance(metadata, str) and metadata.strip():
+            norm_str = normalize_language_name(metadata)
+            if norm_str:
+                return norm_str
+            return metadata.strip()
 
-    return default_fallback or "English"
+    return default_fallback or "Malayalam"
 
 def parse_movie_file_info(file_doc, movie_doc: dict = None):
     from plugins.series import extract_quality_from_filename
+    from utils import normalize_language_name
+    movie_orig = None
+    if isinstance(movie_doc, dict):
+        movie_orig = movie_doc.get("original_language")
+        if movie_orig:
+            movie_orig = normalize_language_name(movie_orig) or movie_orig
+        elif movie_doc.get("languages"):
+            movie_orig = movie_doc.get("languages")[0]
     fname = file_doc.get("file_name", "")
     quality = extract_quality_from_filename(fname)
-    primary_lang = resolve_file_language(fname, file_doc.get("caption"), metadata=movie_doc, default_fallback="English")
+    primary_lang = resolve_file_language(fname, file_doc.get("caption"), metadata=movie_doc, default_fallback=movie_orig or "Malayalam")
     return primary_lang, quality
 
 def get_movie_languages(files, movie_doc: dict = None):
+    from utils import normalize_language_name
+    movie_orig = None
+    if isinstance(movie_doc, dict):
+        movie_orig = movie_doc.get("original_language")
+        if movie_orig:
+            movie_orig = normalize_language_name(movie_orig) or movie_orig
+        elif movie_doc.get("languages"):
+            movie_orig = movie_doc.get("languages")[0]
+
     langs = set()
     for f in files:
         flangs = detect_file_languages(f.get("file_name", ""), f.get("caption"), default=None)
         if not flangs:
-            fallback = resolve_file_language(f.get("file_name", ""), f.get("caption"), metadata=movie_doc, default_fallback="English")
+            fallback = resolve_file_language(f.get("file_name", ""), f.get("caption"), metadata=movie_doc, default_fallback=movie_orig or "Malayalam")
             flangs = [fallback]
         for l in flangs:
             langs.add(l)
@@ -369,12 +399,21 @@ def get_movie_languages(files, movie_doc: dict = None):
 
 def get_movie_qualities(files, target_lang=None, movie_doc: dict = None):
     from plugins.series import extract_quality_from_filename
+    from utils import normalize_language_name
+    movie_orig = None
+    if isinstance(movie_doc, dict):
+        movie_orig = movie_doc.get("original_language")
+        if movie_orig:
+            movie_orig = normalize_language_name(movie_orig) or movie_orig
+        elif movie_doc.get("languages"):
+            movie_orig = movie_doc.get("languages")[0]
+
     quals = set()
     for f in files:
         if target_lang:
             flangs = detect_file_languages(f.get("file_name", ""), f.get("caption"), default=None)
             if not flangs:
-                fallback = resolve_file_language(f.get("file_name", ""), f.get("caption"), metadata=movie_doc, default_fallback="English")
+                fallback = resolve_file_language(f.get("file_name", ""), f.get("caption"), metadata=movie_doc, default_fallback=movie_orig or "Malayalam")
                 flangs = [fallback]
             if target_lang not in flangs:
                 continue
@@ -396,10 +435,19 @@ def is_subtitle_file(file_obj_or_name) -> bool:
 
 def group_movie_files(files, movie_doc: dict = None):
     from plugins.series import extract_quality_from_filename
+    from utils import normalize_language_name
     grouped = {}
     file_associations = {}
     if isinstance(movie_doc, dict):
         file_associations = movie_doc.get("file_associations") or movie_doc.get("file_map") or {}
+
+    movie_orig = None
+    if isinstance(movie_doc, dict):
+        movie_orig = movie_doc.get("original_language")
+        if movie_orig:
+            movie_orig = normalize_language_name(movie_orig) or movie_orig
+        elif movie_doc.get("languages"):
+            movie_orig = movie_doc.get("languages")[0]
 
     for f in files:
         if is_subtitle_file(f):
@@ -421,7 +469,7 @@ def group_movie_files(files, movie_doc: dict = None):
             fqual = extract_quality_from_filename(fname)
             flangs = detect_file_languages(fname, f.get("caption"), default=None)
             if not flangs:
-                fallback_l = resolve_file_language(fname, f.get("caption"), metadata=movie_doc, default_fallback="English")
+                fallback_l = resolve_file_language(fname, f.get("caption"), metadata=movie_doc, default_fallback=movie_orig or "Malayalam")
                 flangs = [fallback_l]
 
         for lang in flangs:
