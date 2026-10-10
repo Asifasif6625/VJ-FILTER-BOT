@@ -554,10 +554,18 @@ async def scan_sdatabase_for_series(chat_id: int | str, title: str, season: int 
             if sdoc:
                 if not year and sdoc.get("year"):
                     year = sdoc.get("year")
+                if not original_language and sdoc.get("original_language"):
+                    original_language = sdoc.get("original_language")
+                elif not original_language and sdoc.get("languages"):
+                    original_language = sdoc.get("languages")[0]
                 if sdoc.get("second_name"):
                     s_aliases.append(sdoc.get("second_name"))
                 if sdoc.get("aliases"):
                     s_aliases.extend(sdoc.get("aliases"))
+                if sdoc.get("search_aliases"):
+                    s_aliases.extend(sdoc.get("search_aliases"))
+                if sdoc.get("generated_aliases"):
+                    s_aliases.extend(sdoc.get("generated_aliases"))
         except Exception:
             pass
     s_aliases = list(dict.fromkeys(s_aliases))
@@ -600,7 +608,7 @@ async def scan_sdatabase_for_series(chat_id: int | str, title: str, season: int 
         raw_qual = parsed["quality"]
         raw_lang = parsed["language"]
 
-        # Resolve group continuity & orphan protection
+        # Resolve group continuity & group context
         from database.series_db import resolve_series_episode_group_context
         res_lang, res_qual, is_reliable = await resolve_series_episode_group_context(
             series_id=series_id,
@@ -614,10 +622,10 @@ async def scan_sdatabase_for_series(chat_id: int | str, title: str, season: int 
             batch_files=all_matching_files
         )
 
-        if not is_reliable:
-            total_invalid += 1
-            logger.info(f"[AUTO S ADD SCAN] filename={fname} match=False reason=ambiguous_or_orphan_group")
-            continue
+        if not is_reliable or not res_lang:
+            res_lang = raw_lang or original_language or "Malayalam"
+        if not res_qual or res_qual == "Unknown":
+            res_qual = raw_qual if (raw_qual and raw_qual != "Unknown") else "720p"
 
         total_matched += 1
         lang = res_lang
@@ -774,10 +782,12 @@ async def scan_sdatabase_for_movie(
     valid_new_files = []
     duplicate_files = []
     seen_keys = set()
+    from utils import normalize_language_name
+    norm_orig = normalize_language_name(original_language) if original_language else None
 
     for doc in all_matching_files:
         fid = doc.get("file_id")
-        lang = doc.get("language") or original_language or "English"
+        lang = doc.get("language") or norm_orig or "Malayalam"
         qual = doc.get("quality", "Unknown")
 
         file_entry = {
@@ -848,42 +858,44 @@ async def scan_sdatabase_for_movie(
     }
 
 
-# ??? Auto Movie Add Hierarchical UI Helpers ?????????????????????????????????
+# ─── Auto Movie Add Hierarchical UI Helpers ─────────────────────────────────
 
 LANGUAGE_FLAGS = {
-    "Malayalam": "????",
-    "Tamil": "????",
-    "Hindi": "????",
-    "Telugu": "????",
-    "Kannada": "????",
-    "Bengali": "????",
-    "Marathi": "????",
-    "Punjabi": "????",
-    "Gujarati": "????",
-    "Urdu": "????",
-    "Odia": "????",
-    "English": "????",
-    "Dual Audio": "??",
-    "Multi Audio": "??",
-    "German": "????",
-    "Korean": "????",
-    "Japanese": "????",
-    "Spanish": "????",
-    "French": "????",
-    "Arabic": "????",
-    "Russian": "????",
-    "Chinese": "????",
-    "Italian": "????",
-    "Portuguese": "????",
-    "Turkish": "????",
-    "Thai": "????",
+    "Malayalam": "🇮🇳",
+    "Tamil": "🇮🇳",
+    "Hindi": "🇮🇳",
+    "Telugu": "🇮🇳",
+    "Kannada": "🇮🇳",
+    "Bengali": "🇮🇳",
+    "Marathi": "🇮🇳",
+    "Punjabi": "🇮🇳",
+    "Gujarati": "🇮🇳",
+    "Urdu": "🇮🇳",
+    "Odia": "🇮🇳",
+    "English": "🇬🇧",
+    "Dual Audio": "🎧",
+    "Multi Audio": "🎧",
+    "German": "🇩🇪",
+    "Korean": "🇰🇷",
+    "Japanese": "🇯🇵",
+    "Spanish": "🇪🇸",
+    "French": "🇫🇷",
+    "Arabic": "🇸🇦",
+    "Russian": "🇷🇺",
+    "Chinese": "🇨🇳",
+    "Italian": "🇮🇹",
+    "Portuguese": "🇵🇹",
+    "Turkish": "🇹🇷",
+    "Thai": "🇹🇭",
 }
 
 def _group_auto_movie_files(res, orig_lang=None):
+    from utils import normalize_language_name
+    norm_orig = normalize_language_name(orig_lang) if orig_lang else None
     match_list = res.get("all_matching_files") or res.get("valid_files") or []
     grouped = {}
     for f in match_list:
-        l = f.get("language") or orig_lang or "English"
+        l = f.get("language") or norm_orig or "Malayalam"
         q = f.get("quality") or "Unknown"
         if l not in grouped:
             grouped[l] = {}
@@ -2786,7 +2798,9 @@ async def cmd_sync_series(client: Client, message: Message):
         return await message.reply_text("❌ <b>You are not authorized.</b>", parse_mode=enums.ParseMode.HTML)
 
     status_msg = await message.reply_text("🔄 <b>Synchronizing all Series filters with database...</b>", parse_mode=enums.ParseMode.HTML)
-    from database.series_db import series_col, scan_sdatabase_for_series, add_series_file
+    from database.series_db import series_col, scan_sdatabase_for_series, add_series_file, is_filter_coming_soon
+    from utils import normalize_language_name
+    from bson import ObjectId
     cursor = series_col.find({"status": {"$ne": "deleted"}})
     series_list = [doc async for doc in cursor]
 
@@ -2795,11 +2809,24 @@ async def cmd_sync_series(client: Client, message: Message):
     for s in series_list:
         sid = str(s["_id"])
         name = s.get("name", "")
-        res = await scan_sdatabase_for_series(message.chat.id, name, season=None, series_id=sid, client=client)
+        s_year = s.get("year")
+        s_orig_lang = s.get("original_language")
+        if s_orig_lang:
+            s_orig_lang = normalize_language_name(s_orig_lang) or s_orig_lang
+        elif s.get("languages") and len(s.get("languages")) > 0:
+            s_orig_lang = s.get("languages")[0]
+        else:
+            s_orig_lang = "Malayalam"
+
+        res = await scan_sdatabase_for_series(message.chat.id, name, season=None, series_id=sid, client=client, original_language=s_orig_lang, year=s_year)
         new_files = res.get("valid_new_files") or []
+        new_langs = set()
+        new_quals = set()
+        new_seasons = set()
+
         for f in new_files:
             try:
-                await add_series_file({
+                ok, _ = await add_series_file({
                     "series_id": sid,
                     "language": f["language"],
                     "season": f["season"],
@@ -2810,9 +2837,32 @@ async def cmd_sync_series(client: Client, message: Message):
                     "file_name": f.get("file_name"),
                     "file_size": f.get("file_size", 0)
                 })
-                total_added += 1
+                if ok:
+                    total_added += 1
+                    if f.get("language"):
+                        new_langs.add(f["language"])
+                    if f.get("quality") and f["quality"] != "Unknown":
+                        new_quals.add(f["quality"])
+                    if f.get("season"):
+                        new_seasons.add(int(f["season"]))
             except Exception:
                 pass
+
+        update_fields = {}
+        if new_langs:
+            update_fields.setdefault("$addToSet", {})["languages"] = {"$each": list(new_langs)}
+        if new_quals:
+            update_fields.setdefault("$addToSet", {})["qualities"] = {"$each": list(new_quals)}
+        if new_seasons:
+            update_fields.setdefault("$addToSet", {})["seasons"] = {"$each": list(new_seasons)}
+
+        if is_filter_coming_soon(s) and (new_files or s.get("seasons")):
+            update_fields.setdefault("$set", {})["status"] = "active"
+            update_fields.setdefault("$set", {})["coming_soon"] = False
+
+        if update_fields:
+            await series_col.update_one({"_id": ObjectId(sid)}, update_fields)
+
         synced += 1
 
     await status_msg.edit_text(
