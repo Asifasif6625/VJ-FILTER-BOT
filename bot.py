@@ -56,6 +56,29 @@ async def start():
     temp.B_NAME = me.first_name
     logging.info(f"MAIN BOT: All handlers loaded on @{me.username}.")
 
+    if BOT_TOKEN2:
+        try:
+            from TechVJ.bot import TechVJXBot
+            ChildBot = Client(
+                name=CHILD_SESSION,
+                api_id=API_ID,
+                api_hash=API_HASH,
+                bot_token=BOT_TOKEN2,
+                sleep_threshold=5,
+                workers=50,
+            )
+            await ChildBot.start()
+            child_me = await ChildBot.get_me()
+            temp.CHILD_BOT = ChildBot
+            temp.CHILD_U_NAME = child_me.username
+            temp.CHILD_B_NAME = child_me.first_name
+            temp.CHILD_ME = child_me.id
+            from plugins.pm_filter import register_normal_filter_handlers
+            register_normal_filter_handlers(ChildBot)
+            logging.info(f"CHILD BOT: Started and registered handlers on @{child_me.username}")
+        except Exception as e:
+            logging.error(f"Failed starting Child Bot: {e}", exc_info=True)
+
 
     try:
         from plugins.series import start_cleanup_schedulers
