@@ -85,8 +85,9 @@ async def start():
         start_cleanup_schedulers(TechVJBot)
         from utils import start_telegram_watchdog
         start_telegram_watchdog(TechVJBot)
-        from database.series_db import backfill_super_movie_normalized_names
+        from database.series_db import backfill_super_movie_normalized_names, load_super_button_emojis_cache
         asyncio.create_task(backfill_super_movie_normalized_names())
+        asyncio.create_task(load_super_button_emojis_cache())
     except Exception as e:
         logging.warning(f"Failed to start cleanup schedulers or migrations: {e}")
     logging.info(script.LOGO)
