@@ -1007,6 +1007,24 @@ def _sid_query(series_id: str):
     candidates = [sid]
     if len(sid) == 24:
         candidates.append(sid[-8:])
+        try:
+            from bson import ObjectId
+            candidates.append(ObjectId(sid))
+        except Exception:
+            pass
+    elif len(sid) == 8:
+        try:
+            from plugins.series import _SERIES_ID_MAP
+            full = _SERIES_ID_MAP.get(sid)
+            if full:
+                candidates.append(full)
+                try:
+                    from bson import ObjectId
+                    candidates.append(ObjectId(full))
+                except Exception:
+                    pass
+        except Exception:
+            pass
     return {"$in": candidates} if len(candidates) > 1 else sid
 
 
@@ -1096,11 +1114,15 @@ async def list_series_languages(series_id: str) -> list[str]:
     return [v for v in vals if v]
 
 
-async def list_series_seasons(series_id: str, language: str) -> list[int]:
+async def list_series_seasons(series_id: str, language: str = None) -> list[int]:
     """Distinct season numbers for (series, language)."""
-    vals = await sfiles_col.distinct(
-        "season", {"series_id": _sid_query(series_id), "language": language}
-    )
+    import re
+    q = {"series_id": _sid_query(series_id)}
+    if language:
+        q["language"] = {"$regex": f"^{re.escape(str(language))}$", "$options": "i"}
+    vals = await sfiles_col.distinct("season", q)
+    if not vals and language:
+        vals = await sfiles_col.distinct("season", {"series_id": _sid_query(series_id)})
     result = []
     for v in vals:
         try:
@@ -1110,16 +1132,21 @@ async def list_series_seasons(series_id: str, language: str) -> list[int]:
     return sorted(list(set(result)))
 
 
-async def list_season_qualities(series_id: str, language: str, season: int) -> list[str]:
+async def list_season_qualities(series_id: str, language: str = None, season: int = 1) -> list[str]:
     """Distinct qualities for (series, language, season)."""
-    vals = await sfiles_col.distinct(
-        "quality",
-        {
+    import re
+    q = {
+        "series_id": _sid_query(series_id),
+        "season":    _num_query(season),
+    }
+    if language:
+        q["language"] = {"$regex": f"^{re.escape(str(language))}$", "$options": "i"}
+    vals = await sfiles_col.distinct("quality", q)
+    if not vals and language:
+        vals = await sfiles_col.distinct("quality", {
             "series_id": _sid_query(series_id),
-            "language":  language,
             "season":    _num_query(season),
-        }
-    )
+        })
     return [v for v in vals if v]
 
 
@@ -1583,7 +1610,7 @@ async def resolve_series_episode_group_context(
             pass
 
     if not norm_orig:
-        norm_orig = "Malayalam"
+        norm_orig = "English"
 
     # If both quality and language are explicitly present in the filename
     if has_exp_qual and has_exp_lang:
@@ -2086,7 +2113,7 @@ async def sync_series_filter_for_files(file_docs, *, trigger="file_add"):
                 )
 
                 if not is_reliable or not res_lang:
-                    res_lang = detected_lang or orig_l or "Malayalam"
+                    res_lang = detected_lang or orig_l or "English"
                 if not res_qual or res_qual == "Unknown":
                     res_qual = detected_qual if (detected_qual and detected_qual != "Unknown") else "720p"
 
