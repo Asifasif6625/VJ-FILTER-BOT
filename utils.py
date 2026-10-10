@@ -895,7 +895,7 @@ def match_automatic_series_file(
         remaining_text or raw_name,
         caption=caption,
         metadata={"original_language": norm_orig or original_language},
-        default_fallback=norm_orig or "Malayalam"
+        default_fallback=norm_orig or "English"
     )
 
     return {
@@ -1193,7 +1193,7 @@ def match_automatic_movie_file(
         rem_text or raw_name,
         caption=caption,
         metadata={"original_language": norm_orig or original_language},
-        default_fallback=norm_orig or "Malayalam"
+        default_fallback=norm_orig or "English"
     )
     detected_langs = detect_file_languages(rem_text or raw_name, caption=caption, default=None)
     if not detected_langs and norm_orig:
@@ -1202,7 +1202,7 @@ def match_automatic_movie_file(
             detected_lang = norm_orig
 
     if not detected_lang:
-        detected_lang = norm_orig or "Malayalam"
+        detected_lang = norm_orig or "English"
 
     return {
         "matched": True,
