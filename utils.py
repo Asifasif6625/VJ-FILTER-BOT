@@ -451,7 +451,8 @@ def strip_file_prefix_markers(text: str) -> str:
     """
     Authoritative prefix stripper:
     Strips ALL leading prefix tags, channel names, usernames, urls, bracketed channel labels
-    (e.g. [MM], (MM), {MM}, @channelid, [Channel], (Channel), (Malayalam Movies), t.me/channel, etc.)
+    (e.g. [MM], (MM), {MM}, (SS), [MV], [PM], @channelid, [Channel], (Channel), (Malayalam Movies), t.me/channel, etc.)
+    and leading standalone noise words (Links, PM, MV, SS, VJ, V, TG, MM, MS, HD, HQ, etc.)
     from the beginning of a filename, caption, or search string.
     
     Preserves:
@@ -464,13 +465,25 @@ def strip_file_prefix_markers(text: str) -> str:
     
     cleaned = str(text).strip()
     
+    # 0. Separate concatenated year and quality/word (e.g. 2012720p -> 2012 720p, 2012BDRip -> 2012 BDRip)
+    cleaned = re.sub(r"(?i)\b(19\d\d|20\d\d)(720p|1080p|480p|360p|2160p|4k|bdrip|hdrip|dvdrip|bluray|web[\s\-_]?dl|web[\s\-_]?rip|web|hevc|x264|x265|h264|h265|tamil|telugu|malayalam|hindi|english|kannada|dual|multi)", r"\1 \2", cleaned)
+    
     url_pattern = re.compile(r"^(?:https?://\S+|www\.\S+|t\.me/\S+|telegram\.me/\S+)[\s\._\-\+:]*", re.IGNORECASE)
-    user_pattern = re.compile(r"^@[a-zA-Z0-9_]+[\s\._\-\+:]*", re.IGNORECASE)
+    user_pattern = re.compile(r"^(?:@[\w]+|@\[[^\]]+\]|@\([^\)]+\))[\s\._\-\+:]*", re.IGNORECASE)
     bracket_pattern = re.compile(r"^([\[\(\{【『「〔《〈])(.*?)([\]\)\}】』」〕》〉])[\s\._\-\+:]*", re.IGNORECASE)
-    tag_pattern = re.compile(r"^(?:MM|MS|TG|VJ|HQ|HD|UHD|4K|FHD|WEB|WEBDL|HDRIP|DVDRIP|BRRIP|BLURAY|HEVC|X264|X265|D[\s\-_]*Z)[\s\._\-\+:]+", re.IGNORECASE)
-    symbol_pattern = re.compile(r"^[\s\._\-\+:~|•★⚡»>#=]+", re.IGNORECASE)
+    tag_pattern = re.compile(
+        r"^(?:"
+        r"links|linkz|link|pm|mv|ss|mm|ms|vj|tg|hd|hq|uhd|4k|fhd|v|"
+        r"club|team|zone|hub|flix|media|world|rockers|tamilmv|movierulz|mallu|mallumovies|"
+        r"kottaka|cinemakottaka|cinema|movies|movie|channel|telegram|download|join|files|"
+        r"official|exclusive|original|special|film|series|dubbed|collection|"
+        r"web|webdl|webrip|hdrip|dvdrip|brrip|bluray|hevc|x264|x265|d[\s\-_]*z"
+        r")[\s\._\-\+:]+",
+        re.IGNORECASE
+    )
+    symbol_pattern = re.compile(r"^[\s\._\-\+:~|•★⚡»>#=/\\;,]+", re.IGNORECASE)
 
-    for _ in range(20):
+    for _ in range(25):
         old_len = len(cleaned)
         
         # Strip leading decorative symbols/separators
@@ -488,13 +501,7 @@ def strip_file_prefix_markers(text: str) -> str:
             cleaned = cleaned[m_usr.end():].strip()
             continue
 
-        # Check and strip tag abbreviations
-        m_tag = tag_pattern.match(cleaned)
-        if m_tag:
-            cleaned = cleaned[m_tag.end():].strip()
-            continue
-
-        # Check and strip bracket prefix
+        # Check and strip bracket prefix (e.g. [PM], (SS), [MV], [MM], [Channel], etc.)
         m_brk = bracket_pattern.match(cleaned)
         if m_brk:
             inner = m_brk.group(2).strip()
@@ -502,12 +509,12 @@ def strip_file_prefix_markers(text: str) -> str:
             if not is_pure_year:
                 cleaned = cleaned[m_brk.end():].strip()
                 continue
-            else:
-                # If pure year bracket is at index 0, check if there's a title after it
-                rem = cleaned[m_brk.end():].strip()
-                if rem and not re.match(r"^\.(mkv|mp4|avi|mov|ts|webm|flv)$", rem, re.IGNORECASE):
-                    # Check if rem starts with another bracket/tag or title
-                    pass
+
+        # Check and strip tag / noise word abbreviations (e.g. Links, PM, MV, SS, V, VJ, TG, etc.)
+        m_tag = tag_pattern.match(cleaned)
+        if m_tag:
+            cleaned = cleaned[m_tag.end():].strip()
+            continue
 
         if len(cleaned) == old_len:
             break
