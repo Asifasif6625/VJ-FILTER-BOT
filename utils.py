@@ -836,6 +836,14 @@ def match_automatic_series_file(
         if norm_candidate in valid_targets:
             candidate_series_name = candidate_raw
             title_matched = True
+        else:
+            for vt in valid_targets:
+                if norm_candidate.endswith(" " + vt) or norm_candidate.endswith(vt):
+                    prefix_part = norm_candidate[:-len(vt)].strip()
+                    if len(prefix_part.split()) <= 2:
+                        candidate_series_name = target_series_name
+                        title_matched = True
+                        break
 
     # If year wasn't found before SxxEyy marker, check remaining_text / filename
     if detected_year is None:
@@ -1192,6 +1200,14 @@ def match_automatic_movie_file(
 
         # Check title match & year match
         title_matches = (norm_cand in valid_targets)
+        if not title_matches:
+            for vt in valid_targets:
+                if norm_cand.endswith(" " + vt) or norm_cand.endswith(vt):
+                    prefix_part = norm_cand[:-len(vt)].strip()
+                    if len(prefix_part.split()) <= 2:
+                        title_matches = True
+                        break
+
         year_matches = (req_year is None or c_year == req_year)
 
         if title_matches and year_matches:
@@ -2571,7 +2587,124 @@ async def get_poster(query, bulk=False, id=False, file=None):
 
         imdb_url_match = re.search(r"(?:imdb\.com/title/)?(tt\d{5,12})", query_str, re.IGNORECASE)
 
-        # ── 1. Fast Public TMDB lookup (if enabled and not explicit tt ID) ───────────
+        # ── 1. Fast Suggestion API Lookup by Title (Primary - ~80ms) ───────────────
+        if not id and not imdb_url_match:
+            year = None
+            y_match = re.search(r'\b(19\d\d|20\d\d)\b', query_str)
+            if y_match:
+                year = y_match.group(1)
+                clean_title = re.sub(r'\b(19\d\d|20\d\d)\b', '', query_str).strip()
+            elif file is not None:
+                fy_match = re.search(r'\b(19\d\d|20\d\d)\b', str(file))
+                if fy_match:
+                    year = fy_match.group(1)
+                clean_title = query_str
+            else:
+                clean_title = query_str
+
+            clean_title = re.sub(r'[\._\-\:\+\[\]\(\)\{\}\#\@\*\&]', ' ', clean_title).strip()
+            clean_title = re.sub(r'\s+', ' ', clean_title).strip()
+
+            clean_slug = re.sub(r'[^a-zA-Z0-9]+', '_', clean_title.lower()).strip('_')
+            if clean_slug:
+                first_ch = clean_slug[0]
+                s_url = f"https://v3.sg.media-imdb.com/suggestion/titles/{first_ch}/{clean_slug}.json"
+                headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"}
+                try:
+                    timeout = aiohttp.ClientTimeout(total=3.5, connect=1.5, sock_read=2.0)
+                    async with aiohttp.ClientSession(timeout=timeout, headers=headers) as session:
+                        async with session.get(s_url) as resp:
+                            if resp.status == 200:
+                                s_data = await resp.json(content_type=None)
+                                items = s_data.get("d") or []
+                                if items:
+                                    if bulk:
+                                        class MockMovie(dict):
+                                            def __init__(self, d):
+                                                super().__init__(d)
+                                                self.movieID = re.sub(r"^tt", "", d.get("id", ""))
+                                                self.data = d
+                                            def __getitem__(self, k):
+                                                return self.get(k)
+                                        return [MockMovie({'title': item.get('l'), 'year': item.get('y'), 'kind': 'movie', 'id': item.get('id')}) for item in items if item.get('id')]
+
+                                    best_item = None
+                                    if year:
+                                        for it in items:
+                                            if str(it.get("y", "")) == str(year):
+                                                best_item = it
+                                                break
+                                    if not best_item:
+                                        best_item = items[0]
+
+                                    p_url = best_item.get("i", {}).get("imageUrl") if isinstance(best_item.get("i"), dict) else None
+                                    clean_tt = best_item.get("id")
+                                    q_type = str(best_item.get("qid") or best_item.get("q") or "").lower()
+                                    is_tv = any(k in q_type for k in ["tv", "series"])
+                                    kind = "tv series" if is_tv else "movie"
+
+                                    if p_url or clean_tt:
+                                        res_dict = {
+                                            'title': best_item.get("l") or clean_title,
+                                            'votes': None,
+                                            'aka': None,
+                                            'seasons': None,
+                                            'box_office': None,
+                                            'localized_title': best_item.get("l"),
+                                            'kind': kind,
+                                            'imdb_id': clean_tt,
+                                            'cast': best_item.get("s"),
+                                            'runtime': None,
+                                            'countries': None,
+                                            'certificates': None,
+                                            'languages': None,
+                                            'original_language': None,
+                                            'director': None,
+                                            'writer': None,
+                                            'producer': None,
+                                            'composer': None,
+                                            'cinematographer': None,
+                                            'music_team': None,
+                                            'distributors': None,
+                                            'release_date': str(best_item.get("y") or year or "N/A"),
+                                            'year': best_item.get("y") or year,
+                                            'genres': "Drama",
+                                            'poster': p_url,
+                                            'plot': best_item.get("s", ""),
+                                            'rating': "7.5",
+                                            'url': f'https://www.imdb.com/title/{clean_tt}' if clean_tt else None
+                                        }
+                                        if clean_tt:
+                                            try:
+                                                imdb_web_url = f"https://www.imdb.com/title/{clean_tt}/"
+                                                async with session.get(imdb_web_url) as page_resp:
+                                                    if page_resp.status == 200:
+                                                        page_html = await page_resp.text()
+                                                        rm = re.search(r'data-testid="hero-rating-bar__aggregate-rating__score"[^>]*>(\d+\.?\d*)', page_html) or re.search(r'"ratingValue":\s*"([^"]+)"', page_html) or re.search(r'"aggregateRating":\s*\{[^}]*"ratingValue":\s*([0-9\.]+)', page_html)
+                                                        if rm:
+                                                            res_dict['rating'] = rm.group(1).strip()
+                                                        vm = re.search(r'"ratingCount":\s*(\d+)', page_html) or re.search(r'data-testid="hero-rating-bar__aggregate-rating__count"[^>]*>([^<]+)</span>', page_html)
+                                                        if vm:
+                                                            res_dict['votes'] = vm.group(1).strip()
+                                                        dm = re.search(r'data-testid="title-details-releasedate"[^>]*>(?:<[^>]+>)*\s*<a[^>]*>([^<]+)</a>', page_html) or re.search(r'"datePublished":\s*"([^"]+)"', page_html)
+                                                        if dm:
+                                                            res_dict['release_date'] = dm.group(1).strip()
+                                                        lm = re.search(r'data-testid="title-details-languages"[^>]*>(?:<[^>]+>)*\s*<a[^>]*>([^<]+)</a>', page_html) or re.search(r'href=["\']/search/title/\?primary_language=([^"&]+)', page_html)
+                                                        if lm:
+                                                            res_dict['languages'] = [lm.group(1).strip()]
+                                                            res_dict['original_language'] = normalize_language_name(lm.group(1).strip())
+                                                        if not res_dict.get('poster'):
+                                                            img_m = re.search(r'<meta property="og:image" content="([^"]+)"', page_html)
+                                                            if img_m:
+                                                                res_dict['poster'] = img_m.group(1).strip()
+                                            except Exception:
+                                                pass
+                                        if res_dict.get('poster'):
+                                            return res_dict
+                except Exception as se:
+                    logger.debug(f"[FAST IMDB SUGGESTION LOOKUP ERROR] {se}")
+
+        # ── 2. Fast Public TMDB lookup (if enabled and not explicit tt ID) ───────────
         if TMDB_DATA and not id and not imdb_url_match:
             try:
                 tmdb_res = await get_public_tmdb_poster(query, bulk=bulk, id=id, file=file)
@@ -2588,7 +2721,7 @@ async def get_poster(query, bulk=False, id=False, file=None):
 
             clean_tt = f"tt{movieid}"
 
-            # ── 1. Fast IMDb Suggestion API by ID (Primary - ~100ms) ───────────
+            # Fast IMDb Suggestion API by ID (~100ms)
             try:
                 s_url = f"https://v3.sg.media-imdb.com/suggestion/titles/t/{clean_tt}.json"
                 headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
@@ -2634,7 +2767,7 @@ async def get_poster(query, bulk=False, id=False, file=None):
             except Exception as se:
                 logger.warning(f"Fast IMDb suggestion API lookup failed for {clean_tt}: {se}")
 
-            # ── 2. Direct IMDb HTML Scraper by ID (~200ms) ────────────────────
+            # Direct IMDb HTML Scraper by ID (~200ms)
             try:
                 imdb_web_url = f"https://www.imdb.com/title/{clean_tt}/"
                 page_html = await asyncio.to_thread(_fetch_url_sync, imdb_web_url)
@@ -2713,26 +2846,26 @@ async def get_poster(query, bulk=False, id=False, file=None):
             try:
                 clean_q = re.sub(r"[^a-zA-Z0-9\s]", "", title).strip()
                 if clean_q:
-                    first_ch = clean_q[0].lower()
-                    import urllib.parse
-                    enc_q = urllib.parse.quote(clean_q.lower())
-                    s_url = f"https://v3.sg.media-imdb.com/suggestion/titles/{first_ch}/{enc_q}.json"
-                    page_data = await asyncio.to_thread(_fetch_url_sync, s_url)
-                    if page_data:
-                        import json as _json
-                        s_data = _json.loads(page_data)
-                        if "d" in s_data and s_data["d"]:
-                            first_match = s_data["d"][0]
-                            if bulk:
-                                class MockMovie(dict):
-                                    def __init__(self, d):
-                                        super().__init__(d)
-                                        self.movieID = re.sub(r"^tt", "", d.get("id", ""))
-                                        self.data = d
-                                    def __getitem__(self, k):
-                                        return self.get(k)
-                                return [MockMovie({'title': item.get('l'), 'year': item.get('y'), 'kind': 'movie', 'id': item.get('id')}) for item in s_data["d"] if item.get('id')]
-                            movieid = re.sub(r"^tt", "", str(first_match.get("id", "")))
+                    clean_slug = re.sub(r'[^a-zA-Z0-9]+', '_', clean_q.lower()).strip('_')
+                    if clean_slug:
+                        first_ch = clean_slug[0]
+                        s_url = f"https://v3.sg.media-imdb.com/suggestion/titles/{first_ch}/{clean_slug}.json"
+                        page_data = await asyncio.to_thread(_fetch_url_sync, s_url)
+                        if page_data:
+                            import json as _json
+                            s_data = _json.loads(page_data)
+                            if "d" in s_data and s_data["d"]:
+                                first_match = s_data["d"][0]
+                                if bulk:
+                                    class MockMovie(dict):
+                                        def __init__(self, d):
+                                            super().__init__(d)
+                                            self.movieID = re.sub(r"^tt", "", d.get("id", ""))
+                                            self.data = d
+                                        def __getitem__(self, k):
+                                            return self.get(k)
+                                    return [MockMovie({'title': item.get('l'), 'year': item.get('y'), 'kind': 'movie', 'id': item.get('id')}) for item in s_data["d"] if item.get('id')]
+                                movieid = re.sub(r"^tt", "", str(first_match.get("id", "")))
             except Exception as fe:
                 logger.warning(f"IMDb suggestion search failed for '{title}': {fe}")
 
