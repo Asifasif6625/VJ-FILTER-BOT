@@ -46,12 +46,12 @@ def build_movie_caption_and_entities(
     """
     Builds the plain-text caption and explicit MessageEntity list for Super Movie Filter.
     Format:
-    🔴 Movie: {title}
-    🔴 Year: {year}
-    🔴 Genres: {genres}
-    🔴 Rating: {rating}
-    🔴 Quality: {quals}
-    🔴 Languages: {langs}
+    ○ Movie: {title}
+    ○ Year: {year}
+    ○ Genres: {genres}
+    ○ Rating: {rating}
+    ○ Quality: {quals}
+    ○ Languages: {langs}
     """
     lines_meta = [
         ("Movie:", title, True),
@@ -65,24 +65,13 @@ def build_movie_caption_and_entities(
     entities = []
     caption_lines = []
     current_utf16_offset = 0
-    emoji_str = "🔴"
-    emoji_utf16_len = _utf16_len(emoji_str)
+    emoji_str = "○"
     
     for idx, (label, val, is_val_bold) in enumerate(lines_meta):
         line_text = f"{emoji_str} {label} {val}"
         line_utf16_len = _utf16_len(line_text)
         
-        # 1. Custom Emoji entity for 🔴
-        entities.append(
-            MessageEntity(
-                type=MessageEntityType.CUSTOM_EMOJI,
-                offset=current_utf16_offset,
-                length=emoji_utf16_len,
-                custom_emoji_id=CUSTOM_EMOJI_ID
-            )
-        )
-        
-        # 2. Bold entity for label (e.g. "Movie:")
+        # 1. Bold entity for label (e.g. "Movie:")
         label_offset = current_utf16_offset + _utf16_len(f"{emoji_str} ")
         label_len = _utf16_len(label)
         entities.append(
@@ -93,7 +82,7 @@ def build_movie_caption_and_entities(
             )
         )
         
-        # 3. Bold entity for movie title
+        # 2. Bold entity for movie title
         if is_val_bold and val:
             val_offset = label_offset + label_len + _utf16_len(" ")
             val_len = _utf16_len(val)
@@ -110,7 +99,7 @@ def build_movie_caption_and_entities(
         
     full_caption = "\n".join(caption_lines)
     
-    # 4. Italic entity covering the whole metadata block
+    # 3. Italic entity covering the whole metadata block
     entities.append(
         MessageEntity(
             type=MessageEntityType.ITALIC,
@@ -133,12 +122,12 @@ def build_series_caption_and_entities(
     """
     Builds the plain-text caption and explicit MessageEntity list for Super Series Filter.
     Format:
-    🔴 Series: {name}
-    🔴 Year: {year}
-    🔴 Genres: {genres}
-    🔴 Rating: {rating}
-    🔴 Seasons: {seasons}
-    🔴 Languages: {langs}
+    ○ Series: {name}
+    ○ Year: {year}
+    ○ Genres: {genres}
+    ○ Rating: {rating}
+    ○ Seasons: {seasons}
+    ○ Languages: {langs}
     """
     lines_meta = [
         ("Series:", name, True),
@@ -152,24 +141,13 @@ def build_series_caption_and_entities(
     entities = []
     caption_lines = []
     current_utf16_offset = 0
-    emoji_str = "🔴"
-    emoji_utf16_len = _utf16_len(emoji_str)
+    emoji_str = "○"
     
     for idx, (label, val, is_val_bold) in enumerate(lines_meta):
         line_text = f"{emoji_str} {label} {val}"
         line_utf16_len = _utf16_len(line_text)
         
-        # 1. Custom Emoji entity for 🔴
-        entities.append(
-            MessageEntity(
-                type=MessageEntityType.CUSTOM_EMOJI,
-                offset=current_utf16_offset,
-                length=emoji_utf16_len,
-                custom_emoji_id=CUSTOM_EMOJI_ID
-            )
-        )
-        
-        # 2. Bold entity for label (e.g. "Series:")
+        # 1. Bold entity for label (e.g. "Series:")
         label_offset = current_utf16_offset + _utf16_len(f"{emoji_str} ")
         label_len = _utf16_len(label)
         entities.append(
@@ -180,7 +158,7 @@ def build_series_caption_and_entities(
             )
         )
         
-        # 3. Bold entity for series name
+        # 2. Bold entity for series name
         if is_val_bold and val:
             val_offset = label_offset + label_len + _utf16_len(" ")
             val_len = _utf16_len(val)
@@ -197,7 +175,7 @@ def build_series_caption_and_entities(
         
     full_caption = "\n".join(caption_lines)
     
-    # 4. Italic entity covering the whole metadata block
+    # 3. Italic entity covering the whole metadata block
     entities.append(
         MessageEntity(
             type=MessageEntityType.ITALIC,
