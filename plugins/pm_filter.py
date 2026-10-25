@@ -566,7 +566,7 @@ def format_movie_metadata_caption(movie_data: dict, grouped_data: dict = None, s
         languages_str = "N/A"
     languages_str = html.escape(languages_str)
 
-    CUSTOM_EMOJI = '<tg-emoji emoji-id="4926956800005112527">🔴</tg-emoji>'
+    CUSTOM_EMOJI = "○"
     meta_block = (
         f"<i>{CUSTOM_EMOJI} Movie: <b>{title}</b>\n"
         f"{CUSTOM_EMOJI} Year: {year_str}\n"
@@ -679,7 +679,7 @@ def format_series_metadata_caption(series_data: dict, selected_lang: str = None,
         languages_str = str(m_langs) or "N/A"
     languages_str = html.escape(languages_str)
 
-    CUSTOM_EMOJI = '<tg-emoji emoji-id="4926956800005112527">🔴</tg-emoji>'
+    CUSTOM_EMOJI = "○"
     meta_block = (
         f"<i>{CUSTOM_EMOJI} Series: <b>{title}</b>\n"
         f"{CUSTOM_EMOJI} Year: {year_str}\n"
