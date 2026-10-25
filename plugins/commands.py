@@ -335,7 +335,10 @@ async def start(client, message):
                 rendered = await render_normal_grouped_results(client=client, message=message, query_text=search_query, files=files)
                 if rendered:
                     return
-            await message.reply_text(f"<b>No files found in database for '<i>{html.escape(search_query)}</i>'</b>", parse_mode=enums.ParseMode.HTML)
+            uid = message.from_user.id if (message and message.from_user) else 0
+            u_name = html.escape(message.from_user.first_name if (message and message.from_user) else "User")
+            user_mention = f"<a href='tg://user?id={uid}'>{u_name}</a>" if uid else u_name
+            await message.reply_text(f"<b>Hᴇʏ {user_mention}, no files found in database for '<i>{html.escape(search_query)}</i>'</b>", parse_mode=enums.ParseMode.HTML, reply_to_message_id=message.id)
         return
 
     if data.startswith("norm_"):
