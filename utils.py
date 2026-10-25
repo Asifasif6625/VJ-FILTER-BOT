@@ -424,7 +424,11 @@ def get_random_filter_poster(filter_data: dict | None) -> str | None:
     3. Return None if no valid poster is available.
     """
     if not filter_data or not isinstance(filter_data, dict):
-        return None
+        try:
+            from info import DEFAULT_POSTER
+            return DEFAULT_POSTER
+        except Exception:
+            return "https://files.catbox.moe/mp2y81.jpg"
 
     posters = filter_data.get("posters")
     if isinstance(posters, list) and posters:
@@ -444,7 +448,11 @@ def get_random_filter_poster(filter_data: dict | None) -> str | None:
     if single_poster and single_poster.upper() != "N/A":
         return single_poster
 
-    return None
+    try:
+        from info import DEFAULT_POSTER
+        return DEFAULT_POSTER
+    except Exception:
+        return "https://files.catbox.moe/mp2y81.jpg"
 
 
 def strip_file_prefix_markers(text: str) -> str:
