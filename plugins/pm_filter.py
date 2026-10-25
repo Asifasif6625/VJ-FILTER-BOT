@@ -4322,6 +4322,12 @@ async def render_normal_grouped_results(client: Client, message: Message, query_
         from info import PICS
         if PICS:
             thumb = PICS[0]
+        else:
+            try:
+                from info import DEFAULT_POSTER
+                thumb = DEFAULT_POSTER
+            except Exception:
+                thumb = "https://files.catbox.moe/mp2y81.jpg"
 
     from utils import schedule_filter_message_delete
 
@@ -4486,6 +4492,12 @@ async def format_normal_filter_details_card(group_data: dict, requester_name: st
 
     if not poster_url and group_data.get("poster"):
         poster_url = group_data.get("poster")
+    if not poster_url or str(poster_url).upper() == "N/A":
+        try:
+            from info import DEFAULT_POSTER
+            poster_url = DEFAULT_POSTER
+        except Exception:
+            poster_url = "https://files.catbox.moe/mp2y81.jpg"
 
     req_line = f"☁︎ Requester: {requester_name}\n" if requester_name else ""
     details_caption = (
@@ -4668,6 +4680,12 @@ async def cb_normal_group_select(client: Client, query: CallbackQuery):
     ])
 
     target_poster = poster_url or group_data.get("poster")
+    if not target_poster or str(target_poster).upper() == "N/A":
+        try:
+            from info import DEFAULT_POSTER
+            target_poster = DEFAULT_POSTER
+        except Exception:
+            target_poster = "https://files.catbox.moe/mp2y81.jpg"
 
     try:
         from utils import schedule_filter_message_delete

@@ -3716,6 +3716,12 @@ async def announce_filter_created(client: Client, filter_type: str = "series", f
             genre = series.get("genre", "")
             genre_str = f"\n🎭 <b>Genre:</b> {genre}" if genre and genre != "N/A" else ""
             poster = series.get("poster")
+            if not poster or str(poster).upper() == "N/A":
+                try:
+                    from info import DEFAULT_POSTER
+                    poster = DEFAULT_POSTER
+                except Exception:
+                    poster = "https://files.catbox.moe/mp2y81.jpg"
 
             langs = await list_series_languages(str(filter_id))
             if not langs:
@@ -3775,6 +3781,12 @@ async def announce_filter_created(client: Client, filter_type: str = "series", f
             genre = movie.get("genre", "")
             genre_str = f"\n🎭 <b>Genre:</b> {genre}" if genre and genre != "N/A" else ""
             poster = movie.get("poster")
+            if not poster or str(poster).upper() == "N/A":
+                try:
+                    from info import DEFAULT_POSTER
+                    poster = DEFAULT_POSTER
+                except Exception:
+                    poster = "https://files.catbox.moe/mp2y81.jpg"
             langs = movie.get("languages", [])
             lang_str = ", ".join(langs) if langs else "Multi"
             qualities = movie.get("qualities", [])
@@ -8282,8 +8294,14 @@ async def render_super_movie_direct(client: Client, message: Message, movie: dic
         posters_to_try.append(single_p)
 
     poster = posters_to_try[0] if posters_to_try else (get_random_filter_poster(movie) or "")
-    if poster.upper() == "N/A":
-        poster = ""
+    if not poster or poster.upper() == "N/A":
+        try:
+            from info import DEFAULT_POSTER
+            poster = DEFAULT_POSTER
+        except Exception:
+            poster = "https://files.catbox.moe/mp2y81.jpg"
+    if not posters_to_try:
+        posters_to_try = [poster]
 
     # Coming Soon Check
     if is_filter_coming_soon(movie) or (movie.get("coming_soon") and not file_ids):
@@ -8533,8 +8551,14 @@ async def render_series_direct(client: Client, message: Message, series_doc: dic
         posters_to_try.append(single_p)
 
     poster = posters_to_try[0] if posters_to_try else (get_random_filter_poster(series_doc) or "")
-    if poster.upper() == "N/A":
-        poster = ""
+    if not poster or poster.upper() == "N/A":
+        try:
+            from info import DEFAULT_POSTER
+            poster = DEFAULT_POSTER
+        except Exception:
+            poster = "https://files.catbox.moe/mp2y81.jpg"
+    if not posters_to_try:
+        posters_to_try = [poster]
 
     from database.series_db import list_series_languages
     from utils import normalize_language_name
