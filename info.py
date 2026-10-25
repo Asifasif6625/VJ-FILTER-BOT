@@ -32,6 +32,7 @@ CHILD_SESSION = environ.get('CHILD_SESSION', 'TechVJChildBot').strip()
 
 # This Pictures Is For Start Message Picture, You Can Add Multiple By Giving One Space Between Each.
 PICS = (environ.get('PICS', 'https://files.catbox.moe/zck4ym.jpg')).split()
+DEFAULT_POSTER = environ.get('DEFAULT_POSTER', 'https://files.catbox.moe/mp2y81.jpg')
 
 
 # Admins & Users
