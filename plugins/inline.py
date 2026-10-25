@@ -25,7 +25,7 @@ from database.series_db import (
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_POSTER = PICS[0] if PICS else "https://files.catbox.moe/zck4ym.jpg"
+DEFAULT_POSTER = "https://files.catbox.moe/mp2y81.jpg"
 PAGE_SIZE = 15
 CUSTOM_EMOJI_ID = 4926956800005112527
 
