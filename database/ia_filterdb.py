@@ -115,19 +115,21 @@ async def get_search_results(chat_id, query, file_type=None, max_results=5, offs
     query = query.strip()
     if not query:
         raw_pattern = '.'
-    elif ' ' not in query:
-        raw_pattern = r'(\b|[\.\+\-_])' + query + r'(\b|[\.\+\-_])'
     else:
-        raw_pattern = query.replace(' ', r'.*[\s\.\+\-_]') 
+        words = [re.escape(w) for w in query.split() if w]
+        if len(words) == 1:
+            raw_pattern = r'(\b|[\.\+\-_])' + words[0] + r'(\b|[\.\+\-_])'
+        else:
+            raw_pattern = r'.*[\s\.\+\-_]'.join(words)
     try:
         regex = re.compile(raw_pattern, flags=re.IGNORECASE)
-    except:
-        regex = query
-    filter = {'file_name': regex}
+    except Exception:
+        regex = re.compile(re.escape(query), flags=re.IGNORECASE)
+    filter_criteria = {'file_name': regex}
     files = []
     if MULTIPLE_DATABASE:
-        cursor1 = col.find(filter).sort('$natural', -1).skip(offset).limit(max_results)
-        cursor2 = sec_col.find(filter).sort('$natural', -1).skip(offset).limit(max_results)
+        cursor1 = col.find(filter_criteria).sort('$natural', -1).skip(offset).limit(max_results)
+        cursor2 = sec_col.find(filter_criteria).sort('$natural', -1).skip(offset).limit(max_results)
         
         for file in cursor1:
             files.append(file)
@@ -137,12 +139,40 @@ async def get_search_results(chat_id, query, file_type=None, max_results=5, offs
             files.append(file)
         files = files[:max_results]
     else:
-        cursor = col.find(filter).sort('$natural', -1).skip(offset).limit(max_results)
+        cursor = col.find(filter_criteria).sort('$natural', -1).skip(offset).limit(max_results)
         
         for file in cursor:
             files.append(file)
 
-    total_results = col.count_documents(filter) if not MULTIPLE_DATABASE else (col.count_documents(filter) + sec_col.count_documents(filter))
+    total_results = col.count_documents(filter_criteria) if not MULTIPLE_DATABASE else (col.count_documents(filter_criteria) + sec_col.count_documents(filter_criteria))
+
+    # Fallback search if no results and query contains punctuation or apostrophe (e.g. Butcher's vs Butchers)
+    if not files and query and any(c in query for c in ("'", "’", "-", ":", ".")):
+        alt_query = re.sub(r"['’\-:\.]+", " ", query).strip()
+        alt_words = [re.escape(w) for w in alt_query.split() if len(w) > 1]
+        if alt_words:
+            alt_pattern = r'.*[\s\.\+\-_]'.join(alt_words)
+            try:
+                alt_regex = re.compile(alt_pattern, flags=re.IGNORECASE)
+                alt_filter = {'file_name': alt_regex}
+                if MULTIPLE_DATABASE:
+                    alt_cur1 = col.find(alt_filter).sort('$natural', -1).skip(offset).limit(max_results)
+                    alt_cur2 = sec_col.find(alt_filter).sort('$natural', -1).skip(offset).limit(max_results)
+                    for file in alt_cur1:
+                        files.append(file)
+                    for file in alt_cur2:
+                        if len(files) >= max_results:
+                            break
+                        files.append(file)
+                    files = files[:max_results]
+                else:
+                    alt_cur = col.find(alt_filter).sort('$natural', -1).skip(offset).limit(max_results)
+                    for file in alt_cur:
+                        files.append(file)
+                total_results = col.count_documents(alt_filter) if not MULTIPLE_DATABASE else (col.count_documents(alt_filter) + sec_col.count_documents(alt_filter))
+            except Exception:
+                pass
+
     next_offset = "" if (offset + len(files)) >= total_results or (offset + max_results) >= total_results else (offset + max_results)
 
     return files, next_offset, total_results
