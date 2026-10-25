@@ -131,6 +131,7 @@ def is_english_only(text: str) -> bool:
     cleaned = EMOJI_PATTERN.sub("", text).strip()
     if not cleaned:
         return True
+    cleaned = cleaned.replace("’", "'").replace("‘", "'").replace("“", '"').replace("”", '"').replace("—", "-").replace("–", "-").replace("…", "...")
     try:
         cleaned.encode('ascii')
         return True
@@ -3916,10 +3917,9 @@ async def auto_filter(client, name, msg, reply_msg=None, ai_search=True, spoll=F
                 f"query={name}"
             )
 
-            search = EMOJI_PATTERN.sub(" ", name)
-            search = re.sub(r"[\.\_\-\:\+\/\\\[\]\(\)\{\}\#\@\*\&]+", " ", search)
-            search = re.sub(r"(?i)\b(pl(i|e)*?(s|z+|ease|se|ese|(e+)s(e)?)|((send|snd|giv(e)?|gib)(\sme)?)|movie(s)?|new|latest|bro|bruh|broh|helo|that|find|dubbed|link|venum|iruka|pannunga|pannungga|anuppunga|anupunga|anuppungga|anupungga|film|undo|kitti|kitty|tharu|kittumo|kittum|movie|any(one)|with\ssubtitle(s)?|upload|full|print|file)\b", " ", search)
-            search = re.sub(r"\s+", " ", search).strip()
+            search = clean_child_search_query(name)
+            if not search:
+                search = re.sub(r"\s+", " ", EMOJI_PATTERN.sub(" ", name)).strip()
 
             # -- 1. Check Unified Movie & Series Filter Search (SUPER FILTERS ONLY) --
             try:
@@ -3931,27 +3931,42 @@ async def auto_filter(client, name, msg, reply_msg=None, ai_search=True, spoll=F
             except Exception as e:
                 logger.error(f"[SUPER FILTER SEARCH ROUTING ERROR] query={search if search else name} error={e}")
 
-            # If not a Super Filter: Check if Child Bot is running in group
-            if message.chat.type in [enums.ChatType.GROUP, enums.ChatType.SUPERGROUP] and getattr(temp, "CHILD_BOT", None):
-                logger.info(f"[MAIN BOT NORMAL FILTER ROUTE] ChildBot is active. Main Bot remaining silent in group for '{search}'.")
-                return
+            # If not a Super Filter: Only defer to Child Bot if Child Bot is ACTUALLY an admin in this group!
+            if message.chat and message.chat.type in [enums.ChatType.GROUP, enums.ChatType.SUPERGROUP]:
+                child_bot = getattr(temp, "CHILD_BOT", None)
+                child_me_id = getattr(temp, "CHILD_ME", None)
+                child_active_in_group = False
+                if child_bot and child_me_id:
+                    try:
+                        cm = await client.get_chat_member(message.chat.id, child_me_id)
+                        if cm and cm.status in [enums.ChatMemberStatus.ADMINISTRATOR, enums.ChatMemberStatus.OWNER]:
+                            child_active_in_group = True
+                    except Exception:
+                        child_active_in_group = False
+
+                if child_active_in_group:
+                    logger.info(f"[MAIN BOT NORMAL FILTER ROUTE] ChildBot is active admin in group {message.chat.id}. Main Bot remaining silent for '{search}'.")
+                    return
 
             # Execute Normal/Legacy Filter Search directly on Main Bot
             logger.info(f"[MAIN BOT NORMAL FILTER ROUTE] query='{search}' chat_id={message.chat.id}")
             files, offset, total_results = await get_search_results(message.chat.id, search.lower(), max_results=100, offset=0, filter=True)
             if not files:
+                uid = message.from_user.id if (message and message.from_user) else 0
+                u_name = html.escape(message.from_user.first_name if (message and message.from_user) else "User")
+                user_mention = f"<a href='tg://user?id={uid}'>{u_name}</a>" if uid else u_name
                 if message.chat.type in [enums.ChatType.GROUP, enums.ChatType.SUPERGROUP]:
                     msg_text = (
-                        "<b>sᴏʀʀʏ ɴᴏ ꜰɪʟᴇs ᴡᴇʀᴇ ꜰᴏᴜɴᴅ ꜰᴏʀ ʏᴏᴜʀ ʀᴇǫᴜᴇꜱᴛ😕\n\n"
-                        "ᴄʜᴇᴄᴋ ʏᴏᴜʀ sᴘᴇʟʟɪɴɢ ɪɴ ɢᴏᴏɢʟᴇ ᴀɴᴅ ᴛʀʏ ᴀɢᴀɪɴ 😃\n\n"
-                        "<i>🕐 This message will be deleted in 50 seconds.</i></b>"
+                        f"<b>Hᴇʏ {user_mention}, sᴏʀʀʏ ɴᴏ ꜰɪʟᴇs ᴡᴇʀᴇ ꜰᴏᴜɴᴅ ꜰᴏʀ ʏᴏᴜʀ ʀᴇǫᴜᴇꜱᴛ '{html.escape(search)}'😕\n\n"
+                        f"ᴄʜᴇᴄᴋ ʏᴏᴜʀ sᴘᴇʟʟɪɴɢ ɪɴ ɢᴏᴏɢʟᴇ ᴀɴᴅ ᴛʀʏ ᴀɢᴀɪɴ 😃\n\n"
+                        f"<i>🕐 This message will be deleted in 50 seconds.</i></b>"
                     )
-                    sent_msg = await message.reply_text(msg_text, parse_mode=enums.ParseMode.HTML)
+                    sent_msg = await message.reply_text(msg_text, parse_mode=enums.ParseMode.HTML, reply_to_message_id=message.id)
                     if sent_msg:
                         schedule_filter_message_delete(client, sent_msg.chat.id, sent_msg.id, delay=50)
                         schedule_filter_message_delete(client, message.chat.id, message.id, delay=50)
                 else:
-                    await message.reply_text(f"<b>No files found in database for '<i>{html.escape(search)}</i>'</b>", parse_mode=enums.ParseMode.HTML)
+                    await message.reply_text(f"<b>Hᴇʏ {user_mention}, no files found in database for '<i>{html.escape(search)}</i>'</b>", parse_mode=enums.ParseMode.HTML, reply_to_message_id=message.id)
                 return
 
             await render_normal_grouped_results(client=client, message=message, query_text=search, files=files, reply_msg=reply_msg, page=0)
@@ -3983,18 +3998,21 @@ async def auto_filter(client, name, msg, reply_msg=None, ai_search=True, spoll=F
         if files:
             await render_normal_grouped_results(client=client, message=message, query_text=search, files=files, reply_msg=None, page=0)
         else:
+            uid = message.from_user.id if (message and message.from_user) else 0
+            u_name = html.escape(message.from_user.first_name if (message and message.from_user) else "User")
+            user_mention = f"<a href='tg://user?id={uid}'>{u_name}</a>" if uid else u_name
             if message.chat.type in [enums.ChatType.GROUP, enums.ChatType.SUPERGROUP]:
                 msg_text = (
-                    "<b>sᴏʀʀʏ ɴᴏ ꜰɪʟᴇs ᴡᴇʀᴇ ꜰᴏᴜɴᴅ ꜰᴏʀ ʏᴏᴜʀ ʀᴇǫᴜᴇꜱᴛ😕\n\n"
-                    "ᴄʜᴇᴄᴋ ʏᴏᴜʀ sᴘᴇʟʟɪɴɢ ɪɴ ɢᴏᴏɢʟᴇ ᴀɴᴅ ᴛʀʏ ᴀɢᴀɪɴ 😃\n\n"
-                    "<i>🕐 This message will be deleted in 50 seconds.</i></b>"
+                    f"<b>Hᴇʏ {user_mention}, sᴏʀʀʏ ɴᴏ ꜰɪʟᴇs ᴡᴇʀᴇ ꜰᴏᴜɴᴅ ꜰᴏʀ ʏᴏᴜʀ ʀᴇǫᴜᴇꜱᴛ '{html.escape(search)}'😕\n\n"
+                    f"ᴄʜᴇᴄᴋ ʏᴏᴜʀ sᴘᴇʟʟɪɴɢ ɪɴ ɢᴏᴏɢʟᴇ ᴀɴᴅ ᴛʀʏ ᴀɢᴀɪɴ 😃\n\n"
+                    f"<i>🕐 This message will be deleted in 50 seconds.</i></b>"
                 )
-                sent_msg = await message.reply_text(msg_text, parse_mode=enums.ParseMode.HTML)
+                sent_msg = await message.reply_text(msg_text, parse_mode=enums.ParseMode.HTML, reply_to_message_id=message.id)
                 if sent_msg:
                     schedule_filter_message_delete(client, sent_msg.chat.id, sent_msg.id, delay=50)
                     schedule_filter_message_delete(client, message.chat.id, message.id, delay=50)
             else:
-                await message.reply_text(f"<b>No files found in database for '<i>{html.escape(search)}</i>'</b>", parse_mode=enums.ParseMode.HTML)
+                await message.reply_text(f"<b>Hᴇʏ {user_mention}, no files found in database for '<i>{html.escape(search)}</i>'</b>", parse_mode=enums.ParseMode.HTML, reply_to_message_id=message.id)
         return
 
 
@@ -4193,7 +4211,31 @@ async def render_normal_grouped_results(client: Client, message: Message, query_
     """
     groups = build_normal_filter_groups(files, query_text=query_text)
     if not groups:
-        return False
+        if files:
+            import uuid
+            gid = f"n_{uuid.uuid4().hex[:10]}"
+            cand_title = clean_child_search_query(query_text).title() if query_text else "Movie"
+            fallback_group = {
+                "group_id": gid,
+                "title": cand_title,
+                "year": "N/A",
+                "season": None,
+                "is_series": False,
+                "files": files,
+                "file_ids": [f.get("file_id") for f in files if f.get("file_id")],
+                "button_label": f"🪶 {cand_title}"
+            }
+            if not hasattr(temp, "NORMAL_FILTER_GROUPS"):
+                temp.NORMAL_FILTER_GROUPS = {}
+            temp.NORMAL_FILTER_GROUPS[gid] = fallback_group
+            try:
+                from database.series_db import save_temp_request
+                asyncio.create_task(save_temp_request(gid, fallback_group))
+            except Exception:
+                pass
+            groups = [fallback_group]
+        else:
+            return False
 
     chat_id = message.chat.id if message and message.chat else (reply_msg.chat.id if reply_msg else 0)
     msg_id = message.id if message else (reply_msg.id if reply_msg else 0)
@@ -4249,10 +4291,16 @@ async def render_normal_grouped_results(client: Client, message: Message, query_
     markup = build_normal_group_keyboard(groups=groups, page=page, session_id=session_id, bot_username=bot_username)
     
     requester_name = "User"
-    if message and message.from_user:
-        requester_name = message.from_user.mention if getattr(message.from_user, "mention", None) else (message.from_user.first_name or "User")
+    if real_user_id:
+        u_obj = (message.from_user if (message and message.from_user) else (reply_msg.from_user if (reply_msg and reply_msg.from_user) else None))
+        u_name = html.escape(u_obj.first_name if (u_obj and u_obj.first_name) else "User")
+        requester_name = f"<a href='tg://user?id={real_user_id}'>{u_name}</a>"
+    elif message and message.from_user:
+        u_name = html.escape(message.from_user.first_name or "User")
+        requester_name = f"<a href='tg://user?id={message.from_user.id}'>{u_name}</a>" if message.from_user.id else u_name
     elif reply_msg and reply_msg.from_user:
-        requester_name = reply_msg.from_user.mention if getattr(reply_msg.from_user, "mention", None) else (reply_msg.from_user.first_name or "User")
+        u_name = html.escape(reply_msg.from_user.first_name or "User")
+        requester_name = f"<a href='tg://user?id={reply_msg.from_user.id}'>{u_name}</a>" if reply_msg.from_user.id else u_name
 
     caption_text = (
         f"<b><i>"
@@ -4262,27 +4310,91 @@ async def render_normal_grouped_results(client: Client, message: Message, query_
         f"</i></b>"
     )
 
+    thumb = None
+    try:
+        from database.series_db import get_series_thumbnail
+        thumb = await get_series_thumbnail()
+    except Exception as e:
+        logger.debug(f"[NORMAL THUMBNAIL GET ERROR] {e}")
+    if not thumb:
+        from info import PICS
+        if PICS:
+            thumb = PICS[0]
+
     from utils import schedule_filter_message_delete
 
+    reply_to_id = message.id if message else None
+
+    sent_msg = None
     if reply_msg:
         try:
-            if not getattr(reply_msg, "photo", None):
-                await reply_msg.edit_text(text=caption_text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
-                schedule_filter_message_delete(client, reply_msg.chat.id, reply_msg.id, delay=1200)
-                BUTTON_OWNERS[f"{reply_msg.chat.id}-{reply_msg.id}"] = real_user_id
-                return True
+            if getattr(reply_msg, "photo", None) or getattr(reply_msg, "caption", None):
+                if thumb:
+                    from pyrogram.types import InputMediaPhoto
+                    await reply_msg.edit_media(media=InputMediaPhoto(media=thumb, caption=caption_text, parse_mode=enums.ParseMode.HTML), reply_markup=markup)
+                else:
+                    await reply_msg.edit_caption(caption=caption_text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
+                sent_msg = reply_msg
             else:
-                await reply_msg.delete()
+                if not thumb:
+                    await reply_msg.edit_text(text=caption_text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
+                    sent_msg = reply_msg
+                else:
+                    await reply_msg.delete()
         except Exception:
             try:
                 await reply_msg.delete()
             except Exception:
                 pass
 
-    sent_sug_t = await (message.reply_text(text=caption_text, reply_markup=markup, parse_mode=enums.ParseMode.HTML) if message else client.send_message(chat_id=chat_id, text=caption_text, reply_markup=markup, parse_mode=enums.ParseMode.HTML))
-    if sent_sug_t:
-        schedule_filter_message_delete(client, sent_sug_t.chat.id, sent_sug_t.id, delay=1200)
-        BUTTON_OWNERS[f"{sent_sug_t.chat.id}-{sent_sug_t.id}"] = real_user_id
+    if not sent_msg:
+        if thumb:
+            try:
+                if message:
+                    sent_msg = await message.reply_photo(
+                        photo=thumb,
+                        caption=caption_text,
+                        reply_markup=markup,
+                        parse_mode=enums.ParseMode.HTML,
+                        reply_to_message_id=reply_to_id
+                    )
+                else:
+                    sent_msg = await client.send_photo(
+                        chat_id=chat_id,
+                        photo=thumb,
+                        caption=caption_text,
+                        reply_markup=markup,
+                        parse_mode=enums.ParseMode.HTML,
+                        reply_to_message_id=reply_to_id
+                    )
+            except Exception as pe:
+                logger.warning(f"[NORMAL GROUP RENDER PHOTO FAILED] {pe}")
+                sent_msg = None
+
+        if not sent_msg:
+            try:
+                if message:
+                    sent_msg = await message.reply_text(
+                        text=caption_text,
+                        reply_markup=markup,
+                        parse_mode=enums.ParseMode.HTML,
+                        reply_to_message_id=reply_to_id
+                    )
+                else:
+                    sent_msg = await client.send_message(
+                        chat_id=chat_id,
+                        text=caption_text,
+                        reply_markup=markup,
+                        parse_mode=enums.ParseMode.HTML,
+                        reply_to_message_id=reply_to_id
+                    )
+            except Exception as te:
+                logger.error(f"[NORMAL GROUP RENDER TEXT FAILED] {te}")
+                return False
+
+    if sent_msg:
+        schedule_filter_message_delete(client, sent_msg.chat.id, sent_msg.id, delay=1200)
+        BUTTON_OWNERS[f"{sent_msg.chat.id}-{sent_msg.id}"] = real_user_id
     return True
 
 
@@ -4655,7 +4767,8 @@ async def cb_normal_group_back(client: Client, query: CallbackQuery):
 
     logger.info(f"[CHILD BOT BACK] bot=@{bot_username} session_id={session_id} page={page} user_id={clicked_user_id}")
     markup = build_normal_group_keyboard(groups=groups, page=page, session_id=session_id, bot_username=bot_username)
-    requester_name = query.from_user.mention if getattr(query.from_user, "mention", None) else (query.from_user.first_name or "User")
+    u_name = html.escape(query.from_user.first_name or "User")
+    requester_name = f"<a href='tg://user?id={clicked_user_id}'>{u_name}</a>"
 
     caption_text = (
         f"<b><i>"
@@ -4665,28 +4778,66 @@ async def cb_normal_group_back(client: Client, query: CallbackQuery):
         f"</i></b>"
     )
 
+    thumb = None
+    try:
+        from database.series_db import get_series_thumbnail
+        thumb = await get_series_thumbnail()
+    except Exception:
+        pass
+    if not thumb:
+        from info import PICS
+        if PICS:
+            thumb = PICS[0]
+
     try:
         from utils import schedule_filter_message_delete
         if query.message:
             chat_id = query.message.chat.id
             if getattr(query.message, "photo", None) or getattr(query.message, "caption", None):
-                # Transitioning back from photo details card to text search list:
-                # delete photo and send text message to restore clean search list
-                try:
-                    await query.message.delete()
-                except Exception:
-                    pass
-                sent_msg = await client.send_message(
-                    chat_id=chat_id,
-                    text=caption_text,
-                    reply_markup=markup,
-                    parse_mode=enums.ParseMode.HTML
-                )
-                schedule_filter_message_delete(client, sent_msg.chat.id, sent_msg.id, delay=1200)
-                BUTTON_OWNERS[f"{sent_msg.chat.id}-{sent_msg.id}"] = clicked_user_id
+                if thumb:
+                    try:
+                        from pyrogram.types import InputMediaPhoto
+                        await query.message.edit_media(
+                            media=InputMediaPhoto(media=thumb, caption=caption_text, parse_mode=enums.ParseMode.HTML),
+                            reply_markup=markup
+                        )
+                        schedule_filter_message_delete(client, chat_id, query.message.id, delay=1200)
+                        BUTTON_OWNERS[f"{chat_id}-{query.message.id}"] = clicked_user_id
+                    except Exception as me:
+                        logger.warning(f"[NORMAL BACK EDIT MEDIA ERROR] {me}")
+                        await query.message.edit_caption(caption=caption_text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
+                        schedule_filter_message_delete(client, chat_id, query.message.id, delay=1200)
+                else:
+                    try:
+                        await query.message.delete()
+                    except Exception:
+                        pass
+                    sent_msg = await client.send_message(
+                        chat_id=chat_id,
+                        text=caption_text,
+                        reply_markup=markup,
+                        parse_mode=enums.ParseMode.HTML
+                    )
+                    schedule_filter_message_delete(client, sent_msg.chat.id, sent_msg.id, delay=1200)
+                    BUTTON_OWNERS[f"{sent_msg.chat.id}-{sent_msg.id}"] = clicked_user_id
             else:
-                await query.message.edit_text(text=caption_text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
-                schedule_filter_message_delete(client, chat_id, query.message.id, delay=1200)
+                if thumb:
+                    try:
+                        await query.message.delete()
+                    except Exception:
+                        pass
+                    sent_msg = await client.send_photo(
+                        chat_id=chat_id,
+                        photo=thumb,
+                        caption=caption_text,
+                        reply_markup=markup,
+                        parse_mode=enums.ParseMode.HTML
+                    )
+                    schedule_filter_message_delete(client, sent_msg.chat.id, sent_msg.id, delay=1200)
+                    BUTTON_OWNERS[f"{sent_msg.chat.id}-{sent_msg.id}"] = clicked_user_id
+                else:
+                    await query.message.edit_text(text=caption_text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
+                    schedule_filter_message_delete(client, chat_id, query.message.id, delay=1200)
     except MessageNotModified:
         pass
     except Exception as ee:
@@ -5945,7 +6096,10 @@ async def child_start_handler(client: Client, message: Message):
                     rendered = await render_normal_grouped_results(client=client, message=message, query_text=search_query, files=files)
                     if rendered:
                         return
-                await message.reply_text(f"<b>No files found in database for '<i>{html.escape(search_query)}</i>'</b>", parse_mode=enums.ParseMode.HTML)
+                uid = message.from_user.id if (message and message.from_user) else 0
+                u_name = html.escape(message.from_user.first_name if (message and message.from_user) else "User")
+                user_mention = f"<a href='tg://user?id={uid}'>{u_name}</a>" if uid else u_name
+                await message.reply_text(f"<b>Hᴇʏ {user_mention}, no files found in database for '<i>{html.escape(search_query)}</i>'</b>", parse_mode=enums.ParseMode.HTML, reply_to_message_id=message.id)
             return
 
     # Plain /start welcome message
@@ -6097,18 +6251,21 @@ async def child_filter_message_handler(client: Client, message: Message):
     logger.info(f"[CHILD BOT DB RESULTS] bot=@{child_u} query='{search}' total_results={total_results} returned={len(files) if files else 0}")
 
     if not files:
+        uid = message.from_user.id if (message and message.from_user) else 0
+        u_name = html.escape(message.from_user.first_name if (message and message.from_user) else "User")
+        user_mention = f"<a href='tg://user?id={uid}'>{u_name}</a>" if uid else u_name
         if is_group:
             msg_text = (
-                "<b>sᴏʀʀʏ ɴᴏ ꜰɪʟᴇs ᴡᴇʀᴇ ꜰᴏᴜɴᴅ ꜰᴏʀ ʏᴏᴜʀ ʀᴇǫᴜᴇꜱᴛ😕\n\n"
-                "ᴄʜᴇᴄᴋ ʏᴏᴜʀ sᴘᴇʟʟɪɴɢ ɪɴ ɢᴏᴏɢʟᴇ ᴀɴᴅ ᴛʀʏ ᴀɢᴀɪɴ 😃\n\n"
-                "<i>🕐 This message will be deleted in 50 seconds.</i></b>"
+                f"<b>Hᴇʏ {user_mention}, sᴏʀʀʏ ɴᴏ ꜰɪʟᴇs ᴡᴇʀᴇ ꜰᴏᴜɴᴅ ꜰᴏʀ ʏᴏᴜʀ ʀᴇǫᴜᴇꜱᴛ '{html.escape(search)}'😕\n\n"
+                f"ᴄʜᴇᴄᴋ ʏᴏᴜʀ sᴘᴇʟʟɪɴɢ ɪɴ ɢᴏᴏɢʟᴇ ᴀɴᴅ ᴛʀʏ ᴀɢᴀɪɴ 😃\n\n"
+                f"<i>🕐 This message will be deleted in 50 seconds.</i></b>"
             )
-            sent_msg = await message.reply_text(msg_text, parse_mode=enums.ParseMode.HTML)
+            sent_msg = await message.reply_text(msg_text, parse_mode=enums.ParseMode.HTML, reply_to_message_id=message.id)
             if sent_msg:
                 schedule_filter_message_delete(client, sent_msg.chat.id, sent_msg.id, delay=50)
                 schedule_filter_message_delete(client, message.chat.id, message.id, delay=50)
         else:
-            await message.reply_text(f"<b>No files found in database for '<i>{html.escape(search)}</i>'</b>", parse_mode=enums.ParseMode.HTML)
+            await message.reply_text(f"<b>Hᴇʏ {user_mention}, no files found in database for '<i>{html.escape(search)}</i>'</b>", parse_mode=enums.ParseMode.HTML, reply_to_message_id=message.id)
         return
 
     # Render Normal Filter Results with max 5 buttons per page and 20-min auto-delete
