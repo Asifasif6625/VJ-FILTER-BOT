@@ -4443,7 +4443,7 @@ async def cb_normal_group_page(client: Client, query: CallbackQuery):
     await query.answer()
 
 
-async def format_normal_filter_details_card(group_data: dict) -> tuple:
+async def format_normal_filter_details_card(group_data: dict, requester_name: str = None) -> tuple:
     """Formats the IMDb / metadata details card for Normal Filter."""
     title = group_data.get("title", "Files")
     year = group_data.get("year", "N/A")
@@ -4487,13 +4487,15 @@ async def format_normal_filter_details_card(group_data: dict) -> tuple:
     if not poster_url and group_data.get("poster"):
         poster_url = group_data.get("poster")
 
+    req_line = f"☁︎ Requester: {requester_name}\n" if requester_name else ""
     details_caption = (
         f"<i>\n"
         f"☁︎ File Name: {html.escape(title)}\n"
         f"☁︎ Year: {html.escape(year_str)}\n"
         f"☁︎ Languages: {html.escape(lang_str)}\n"
         f"☁︎ Release Date: {html.escape(rel_date_str)}\n"
-        f"☁︎ Rating: {html.escape(rating_str)}\n\n"
+        f"☁︎ Rating: {html.escape(rating_str)}\n"
+        f"{req_line}"
         f"</i>"
     )
     return details_caption, poster_url
@@ -4649,7 +4651,10 @@ async def cb_normal_group_select(client: Client, query: CallbackQuery):
     else:
         bot_username = "Bot"
 
-    details_caption, poster_url = await format_normal_filter_details_card(group_data)
+    req_user_id = group_data.get("user_id") or group_data.get("requester_user_id") or clicked_user_id
+    u_name = html.escape(query.from_user.first_name or "User")
+    requester_name = f"<a href='tg://user?id={req_user_id}'>{u_name}</a>"
+    details_caption, poster_url = await format_normal_filter_details_card(group_data, requester_name=requester_name)
     back_data = f"norm_back#{session_id}#{page}" if session_id else f"norm_back#{norm_group_id}#0"
 
     from plugins.series import make_styled_button
@@ -4711,23 +4716,28 @@ async def cb_normal_group_select(client: Client, query: CallbackQuery):
                         schedule_filter_message_delete(client, sent_msg.chat.id, sent_msg.id, delay=1200)
                         BUTTON_OWNERS[f"{sent_msg.chat.id}-{sent_msg.id}"] = clicked_user_id
             else:
-                # No poster available for this movie/series: show text message only
+                # No poster available for this movie/series: edit existing message in-place! DO NOT DELETE!
                 if getattr(query.message, "photo", None) or getattr(query.message, "caption", None):
                     try:
-                        await query.message.delete()
-                    except Exception:
-                        pass
-                    sent_msg = await client.send_message(
-                        chat_id=chat_id,
+                        await query.message.edit_caption(
+                            caption=details_caption,
+                            reply_markup=markup,
+                            parse_mode=enums.ParseMode.HTML
+                        )
+                        schedule_filter_message_delete(client, chat_id, query.message.id, delay=1200)
+                        BUTTON_OWNERS[f"{chat_id}-{query.message.id}"] = clicked_user_id
+                    except Exception as ce:
+                        logger.warning(f"[NORMAL SELECT EDIT CAPTION ERROR] {ce}")
+                        await query.message.edit_reply_markup(reply_markup=markup)
+                        schedule_filter_message_delete(client, chat_id, query.message.id, delay=1200)
+                else:
+                    await query.message.edit_text(
                         text=details_caption,
                         reply_markup=markup,
                         parse_mode=enums.ParseMode.HTML
                     )
-                    schedule_filter_message_delete(client, sent_msg.chat.id, sent_msg.id, delay=1200)
-                    BUTTON_OWNERS[f"{sent_msg.chat.id}-{sent_msg.id}"] = clicked_user_id
-                else:
-                    await query.message.edit_text(text=details_caption, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
                     schedule_filter_message_delete(client, chat_id, query.message.id, delay=1200)
+                    BUTTON_OWNERS[f"{chat_id}-{query.message.id}"] = clicked_user_id
     except MessageNotModified:
         pass
     except Exception as ee:
