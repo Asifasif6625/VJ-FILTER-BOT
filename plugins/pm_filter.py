@@ -4109,12 +4109,14 @@ def build_normal_filter_groups(files: list[dict], query_text: str = "") -> list[
 
         norm_title = normalize_series_identity_title(cand_title)
 
-        # 7. Check with search query to canonicalize title
-        if norm_query and (norm_title == norm_query or norm_title.endswith(norm_query) or norm_query in norm_title):
-            f_title = clean_query.title()
-            norm_title = norm_query
-        elif cand_title:
-            f_title = cand_title.title()
+        # 7. Preserve actual movie/series title extracted from filename!
+        if cand_title:
+            if norm_query and norm_title == norm_query:
+                f_title = clean_query.title()
+                norm_title = norm_query
+            else:
+                f_title = cand_title.title()
+                norm_title = normalize_series_identity_title(cand_title)
         elif clean_query:
             f_title = clean_query.title()
             norm_title = norm_query
