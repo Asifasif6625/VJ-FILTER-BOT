@@ -32,21 +32,93 @@ if MULTIPLE_DATABASE:
 
 
 async def save_file(media):
-    """Save file in the database."""
-    
+    """Save file in the database with automatic bot token migration support."""
+    from datetime import datetime
     file_id = unpack_new_file_id(media.file_id)
     file_name = clean_file_name(media.file_name)
-    
+    chat_id = getattr(media, "chat_id", None)
+    message_id = getattr(media, "message_id", None)
+
+    cap = None
+    if getattr(media, "caption", None):
+        cap = media.caption.html if hasattr(media.caption, "html") else str(media.caption)
+
     file = {
         'file_id': file_id,
         'file_name': file_name,
         'file_size': media.file_size,
-        'caption': media.caption.html if media.caption else None
+        'caption': cap
     }
+    if chat_id:
+        file['chat_id'] = chat_id
+    if message_id:
+        file['message_id'] = message_id
 
-    if is_file_already_saved(file_id, file_name):
-        return False, 0
+    # 1. Exact match check (already saved with this exact file_id)
+    found_exact = {'file_id': file_id}
+    collections_to_check = [col, sec_col] if MULTIPLE_DATABASE else [col]
+    for collection in collections_to_check:
+        if collection.find_one(found_exact):
+            return False, 0
 
+    # 2. Token migration check: same file_name exists, but file_id is different (old bot token)
+    found_name = {'file_name': file_name}
+    target_col = None
+    existing_doc = col.find_one(found_name)
+    if existing_doc:
+        target_col = col
+    elif MULTIPLE_DATABASE:
+        existing_doc = sec_col.find_one(found_name)
+        if existing_doc:
+            target_col = sec_col
+
+    if existing_doc and target_col:
+        old_file_id = existing_doc.get("file_id")
+        if old_file_id != file_id:
+            # File exists under old bot token: migrate file_id and channel coordinates in-place
+            update_fields = {
+                'file_id': file_id,
+                'file_size': media.file_size,
+                'caption': cap or existing_doc.get("caption"),
+                'updated_at': datetime.utcnow()
+            }
+            if chat_id:
+                update_fields['chat_id'] = chat_id
+            if message_id:
+                update_fields['message_id'] = message_id
+
+            target_col.update_one({"_id": existing_doc["_id"]}, {"$set": update_fields})
+            print(f"[TOKEN MIGRATION] Updated {file_name}: old_file_id={str(old_file_id)[:12]}... -> new_file_id={str(file_id)[:12]}...")
+
+            # Seamlessly migrate Super Movies & Series database records
+            try:
+                from database.series_db import super_movies_col, sfiles_col, sync_movie_filter_for_files, sync_series_filter_for_files
+                if old_file_id:
+                    # Update super movies file_ids list
+                    await super_movies_col.update_many(
+                        {"file_ids": old_file_id},
+                        {"$set": {"file_ids.$": file_id, "updated_at": datetime.utcnow()}}
+                    )
+                    # Update series files record
+                    s_up = {"file_id": file_id}
+                    if chat_id:
+                        s_up["chat_id"] = chat_id
+                    if message_id:
+                        s_up["message_id"] = message_id
+                    await sfiles_col.update_many(
+                        {"file_id": old_file_id},
+                        {"$set": s_up}
+                    )
+                migrated_file_doc = {**existing_doc, **update_fields}
+                await sync_movie_filter_for_files([migrated_file_doc], trigger="token_migration")
+                await sync_series_filter_for_files([migrated_file_doc], trigger="token_migration")
+            except Exception as se:
+                print(f"[TOKEN MIGRATION FILTER SYNC ERROR] {se}")
+            return True, 1
+        else:
+            return False, 0
+
+    # 3. New file insertion
     try:
         col.insert_one(file)
         print(f"{file_name} is successfully saved.")
@@ -60,7 +132,7 @@ async def save_file(media):
     except DuplicateKeyError:
         print(f"{file_name} is already saved.")
         return False, 0
-    except:
+    except Exception as e:
         if MULTIPLE_DATABASE:
             try:
                 sec_col.insert_one(file)
@@ -76,33 +148,16 @@ async def save_file(media):
                 print(f"{file_name} is already saved.")
                 return False, 0
         else:
-            print("Your Current File Database Is Full, Turn On Multiple Database Feature And Add Second File Mongodb To Save File.")
-
-def clean_file_name(file_name):
-    """Clean and format the file name."""
-    try:
-        from utils import strip_file_prefix_markers
-        file_name = strip_file_prefix_markers(file_name)
-    except Exception:
-        pass
-    file_name = re.sub(r"(_|\-|\.|\+)", " ", str(file_name)) 
-    unwanted_chars = ['[', ']', '(', ')', '{', '}']
-    
-    for char in unwanted_chars:
-        file_name = file_name.replace(char, '')
-        
-    return ' '.join(filter(lambda x: not x.startswith('@') and not x.startswith('http') and not x.startswith('www.') and not x.startswith('t.me'), file_name.split()))
+            print(f"Error saving file: {e}")
+            return False, 2
 
 def is_file_already_saved(file_id, file_name):
-    """Check if the file is already saved in either collection."""
-    found1 = {'file_name': file_name}
+    """Check if the exact file_id is already saved in either collection."""
     found = {'file_id': file_id}
-
-    for collection in [col, sec_col]:
-        if collection.find_one(found1) or collection.find_one(found):
-            print(f"{file_name} is already saved.")
+    collections_to_check = [col, sec_col] if MULTIPLE_DATABASE else [col]
+    for collection in collections_to_check:
+        if collection.find_one(found):
             return True
-            
     return False
 
 async def get_search_results(chat_id, query, file_type=None, max_results=5, offset=0, filter=False):
