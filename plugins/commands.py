@@ -49,6 +49,17 @@ async def process_series_start(client: Client, user_id: int, req_key: str, messa
                     temp.MOVIE_STATE = {}
                 temp.MOVIE_STATE[req_key] = req
             
+    if not req and len(str(req_key).strip()) == 24:
+        from database.series_db import get_super_movie, get_series
+        m_cand = await get_super_movie(req_key)
+        if m_cand:
+            from plugins.series import process_movie_deeplink
+            return await process_movie_deeplink(client, message, req_key)
+        s_cand = await get_series(req_key)
+        if s_cand:
+            from plugins.series import process_series_deeplink
+            return await process_series_deeplink(client, message, req_key)
+
     if not req:
         from plugins.series import to_series_font
         log.warning(f"[SERIES START]\naction=REQUEST_NOT_FOUND\nrequest_key={req_key}")
@@ -144,15 +155,10 @@ async def process_series_start(client: Client, user_id: int, req_key: str, messa
         return
         
     status = str(req.get("delivery_status", req.get("state", ""))).lower()
-    if status == "completed":
-        from plugins.series import to_series_font
-        if message:
-            await message.reply(f"✅ {to_series_font('Files already sent.')}")
-        return
     if status == "sending":
         from plugins.series import to_series_font
         if message:
-            await message.reply(f"⏳ {to_series_font('Files are already being sent.')}")
+            await message.reply(f"⏳ {to_series_font('Files are currently being sent...')}")
         return
         
     if AUTH_CHANNEL:
@@ -309,6 +315,13 @@ async def start(client, message):
         return
         
     # --- SERIES & MOVIE REQUEST DEEP LINK FLOW ---
+    log.info(
+        f"[START DEEP LINK DISPATCH]\n"
+        f"payload={data}\n"
+        f"user_id={message.from_user.id if message.from_user else 0}\n"
+        f"chat_type={message.chat.type}"
+    )
+
     if data.startswith("all_"):
         file_id = data.split("_", 1)[1]
         await process_series_start(client, message.from_user.id, file_id, message=message)
@@ -347,17 +360,28 @@ async def start(client, message):
         await process_normal_filter_deeplink(client, message, norm_key, user_id=message.from_user.id)
         return
 
-    if data.startswith("series_"):
+    if data.startswith("series_") or data.startswith("s_"):
         series_key = data.split("_", 1)[1]
         from plugins.series import process_series_deeplink
         await process_series_deeplink(client, message, series_key)
         return
 
-    if data.startswith("movie_") or data.startswith("smovie_"):
+    if data.startswith("movie_") or data.startswith("smovie_") or data.startswith("m_"):
         movie_key = data.split("_", 1)[1]
         from plugins.series import process_movie_deeplink
         await process_movie_deeplink(client, message, movie_key)
         return
+
+    if len(str(data).strip()) == 24 and not data.startswith(("all_", "norm_", "fsub_", "BATCH", "PBATCH", "DSTORE")):
+        from database.series_db import get_super_movie, get_series
+        m_doc = await get_super_movie(data)
+        if m_doc:
+            from plugins.series import process_movie_deeplink
+            return await process_movie_deeplink(client, message, data)
+        s_doc = await get_series(data)
+        if s_doc:
+            from plugins.series import process_series_deeplink
+            return await process_series_deeplink(client, message, data)
     # --- END SERIES & MOVIE DEEP LINK PM FLOW ---
     
     # Global Force Subscribe Check
@@ -824,9 +848,9 @@ async def start(client, message):
     import logging
     log = logging.getLogger(__name__)
     
+    msg = None
     try:
         log.info(f"[FILE SEND] request_id={file_id}")
-        log.info(f"[FILE SEND] file_id={file_id}")
         msg = await client.send_cached_media(
             chat_id=message.from_user.id,
             file_id=file_id,
@@ -836,8 +860,25 @@ async def start(client, message):
         )
         log.info(f"[FILE SEND] SUCCESS request_id={file_id}")
     except Exception as e:
-        log.error(f"[FILE SEND] ERROR: {e}")
-        return await message.reply("Error sending file.")
+        log.error(f"[FILE SEND] ERROR: {e} file_id={file_id}")
+        ch_id = files.get("chat_id")
+        m_id = files.get("message_id")
+        if ch_id and m_id:
+            try:
+                log.info(f"[FILE SEND] Attempting copy_message fallback from chat {ch_id} msg {m_id}")
+                msg = await client.copy_message(
+                    chat_id=message.from_user.id,
+                    from_chat_id=int(ch_id),
+                    message_id=int(m_id),
+                    caption=f_caption,
+                    protect_content=True if pre == 'filep' else False,
+                    reply_markup=reply_markup
+                )
+                log.info(f"[FILE SEND COPY FALLBACK SUCCESS] request_id={file_id}")
+            except Exception as ce:
+                log.error(f"[FILE SEND COPY FALLBACK FAILED] {ce}")
+        if not msg:
+            return await message.reply("⚠️ Error sending file. This file was indexed with a previous bot token. Please ask an admin to run <code>/remap_files</code>.")
         
     btn = [[InlineKeyboardButton("✅ ɢᴇᴛ ғɪʟᴇ ᴀɢᴀɪɴ ✅", callback_data=f'del#{file_id}')]]
     k = await msg.reply(text=f"<blockquote><b><u>❗️❗️❗️IMPORTANT❗️️❗️❗️</u></b>\n\nᴛʜɪs ᴍᴇssᴀɢᴇ ᴡɪʟʟ ʙᴇ ᴅᴇʟᴇᴛᴇᴅ ɪɴ <b><u>10 mins</u> 🫥 <i></b>(ᴅᴜᴇ ᴛᴏ ᴄᴏᴘʏʀɪɢʜᴛ ɪssᴜᴇs)</i>.\n\n<b><i>ᴘʟᴇᴀsᴇ ғᴏʀᴡᴀʀᴅ ᴛʜɪs ᴍᴇssᴀɢᴇ ᴛᴏ ʏᴏᴜʀ sᴀᴠᴇᴅ ᴍᴇssᴀɢᴇs ᴏʀ ᴀɴʏ ᴘʀɪᴠᴀᴛᴇ ᴄʜᴀᴛ.</i></b></blockquote>")
@@ -1837,7 +1878,9 @@ async def send_batch_files(
             "file_id": str(fid),
             "caption": cap,
             "protect": file_doc.get("protect", protect_content),
-            "reply_markup": file_doc.get("reply_markup", reply_markup)
+            "reply_markup": file_doc.get("reply_markup", reply_markup),
+            "chat_id": file_doc.get("chat_id"),
+            "message_id": file_doc.get("message_id")
         })
 
     if not prepared_items:
@@ -1852,14 +1895,17 @@ async def send_batch_files(
         cap = item["caption"]
         prot = item["protect"]
         rm = item["reply_markup"]
+        ch_id = item.get("chat_id")
+        m_id = item.get("message_id")
 
         log.info(
-            f"[BATCH SEND]\n"
-            f"index={item['index']}\n"
-            f"total={total_files}\n"
-            f"file_id={fid}"
+            f"[BATCH SEND ATTEMPT]\n"
+            f"index={item['index']}/{total_files}\n"
+            f"file_id={fid[:16]}...\n"
+            f"has_coords={'yes' if (ch_id and m_id) else 'no'}"
         )
 
+        last_error = None
         for attempt in range(3):
             try:
                 async with semaphore:
@@ -1875,18 +1921,51 @@ async def send_batch_files(
                     sent_results[idx_pos] = msg
                     return msg
             except FloodWait as fw:
-                log.warning(f"[BATCH SEND] FloodWait {fw.value}s on file_id={fid}")
+                log.warning(f"[BATCH SEND] FloodWait {fw.value}s on file_id={fid[:16]}...")
                 await asyncio.sleep(fw.value + 1)
             except Exception as ex:
+                last_error = ex
                 if attempt < 2:
-                    await asyncio.sleep(2 ** attempt)
-                else:
-                    log.error(
-                        f"[BATCH SEND FAILED]\n"
-                        f"file_id={fid}\n"
-                        f"error={ex}"
+                    await asyncio.sleep(1.5 ** attempt)
+
+        # Fallback: copy directly from channel if chat_id and message_id are known
+        if ch_id and m_id:
+            try:
+                log.info(f"[BATCH SEND COPY FALLBACK] Attempting copy_message chat_id={ch_id} msg_id={m_id} for file_id={fid[:16]}...")
+                async with semaphore:
+                    msg = await client.copy_message(
+                        chat_id=target_id,
+                        from_chat_id=int(ch_id),
+                        message_id=int(m_id),
+                        caption=cap,
+                        protect_content=prot,
+                        reply_markup=rm
                     )
-                    return None
+                if msg:
+                    schedule_filter_message_delete(client, msg.chat.id, msg.id, 600)
+                    sent_results[idx_pos] = msg
+                    # Background auto-update of new valid file_id
+                    try:
+                        media_obj = getattr(msg, getattr(msg.media, "value", "document"), None) if getattr(msg, "media", None) else None
+                        if media_obj and getattr(media_obj, "file_id", None):
+                            from database.ia_filterdb import unpack_new_file_id, col, sec_col
+                            from info import MULTIPLE_DATABASE
+                            new_fid = unpack_new_file_id(media_obj.file_id)
+                            col.update_one({"file_id": fid}, {"$set": {"file_id": new_fid}})
+                            if MULTIPLE_DATABASE:
+                                sec_col.update_one({"file_id": fid}, {"$set": {"file_id": new_fid}})
+                    except Exception:
+                        pass
+                    return msg
+            except Exception as cpe:
+                log.error(f"[BATCH SEND COPY FALLBACK FAILED] {cpe}")
+
+        log.error(
+            f"[BATCH SEND FAILED]\n"
+            f"file_id={fid[:16]}...\n"
+            f"error={last_error}\n"
+            f"diagnostic=File ID belongs to previous bot token. Run /remap_files to migrate files to new bot."
+        )
         return None
 
     for i, item in enumerate(prepared_items):
