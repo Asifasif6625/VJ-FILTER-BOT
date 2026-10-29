@@ -783,17 +783,27 @@ async def remap_files_command(bot, message):
 
     for ch_idx, ch_id in enumerate(target_channels, 1):
         try:
-            chat_obj = await bot.get_chat(ch_id)
+            ch_num = int(ch_id) if str(ch_id).lstrip("-").isdigit() else ch_id
+            chat_obj = await bot.get_chat(ch_num)
             c_title = chat_obj.title or str(ch_id)
         except Exception as ce:
             logger.warning(f"[REMAP_FILES] Cannot access channel {ch_id}: {ce}")
-            await status_msg.edit_text(f"⚠️ <b>Cannot access channel:</b> <code>{ch_id}</code> ({ce})\nMake sure the new bot is Admin.")
+            await status_msg.edit_text(f"⚠️ <b>Cannot access channel:</b> <code>{ch_id}</code> ({ce})\nMake sure the new bot is Admin with full rights.")
             await asyncio.sleep(2)
             continue
 
+        probe_limit = 100000
+        try:
+            ping = await bot.send_message(chat_obj.id, "🔄 <b>Verifying Channel for Token Migration...</b>")
+            probe_limit = ping.id
+            await ping.delete()
+        except Exception as pe:
+            logger.info(f"[REMAP_FILES] Probe ping failed in {chat_obj.id}: {pe}")
+
         await status_msg.edit_text(
             f"🔄 <b>Migrating Files from Channel {ch_idx}/{len(target_channels)}</b>\n\n"
-            f"📌 <b>Channel:</b> <code>{pyhtml.escape(c_title)}</code> (<code>{ch_id}</code>)\n"
+            f"📌 <b>Channel:</b> <code>{pyhtml.escape(c_title)}</code> (<code>{chat_obj.id}</code>)\n"
+            f"📊 <b>Channel Messages:</b> ~<code>{probe_limit}</code>\n"
             f"📊 <b>Scanned:</b> 0\n"
             f"✅ <b>Migrated / Linked:</b> {total_migrated}\n"
             f"⚡ <b>Already Valid:</b> {total_already_valid}"
@@ -803,14 +813,14 @@ async def remap_files_command(bot, message):
         last_edit_time = time.monotonic()
 
         try:
-            async for msg in bot.iter_messages(chat_obj.id):
+            async for msg in bot.iter_messages(chat_obj.id, limit=probe_limit, offset=1):
                 ch_scanned += 1
                 total_scanned += 1
 
                 if not msg.media or msg.media not in [enums.MessageMediaType.VIDEO, enums.MessageMediaType.AUDIO, enums.MessageMediaType.DOCUMENT]:
                     continue
 
-                media = getattr(msg, msg.media.value, None)
+                media = getattr(msg, getattr(msg.media, "value", "document"), None)
                 if not media:
                     continue
 
@@ -837,7 +847,7 @@ async def remap_files_command(bot, message):
                         await status_msg.edit_text(
                             f"🔄 <b>Migrating Files ({ch_idx}/{len(target_channels)})</b>\n\n"
                             f"📌 <b>Channel:</b> <code>{pyhtml.escape(c_title)}</code>\n"
-                            f"📊 <b>Channel Scanned:</b> <code>{ch_scanned}</code>\n"
+                            f"📊 <b>Channel Scanned:</b> <code>{ch_scanned}/{probe_limit}</code>\n"
                             f"✅ <b>Total Migrated:</b> <code>{total_migrated}</code>\n"
                             f"⚡ <b>Already Valid:</b> <code>{total_already_valid}</code>\n"
                             f"⚠️ <b>Errors:</b> <code>{total_errors}</code>"
