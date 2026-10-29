@@ -36,8 +36,9 @@ EMOJI_PATTERN = re.compile(
 
 def clean_series_title(title: str) -> str:
     """
-    Cleans prefix markers, markdown formatting, decorative symbols, and punctuation
-    from a Series/Movie title while preserving alphanumeric title words.
+    Cleans prefix markers, markdown formatting, decorative symbols, and noise
+    from a Series/Movie title while PRESERVING alphanumeric title words and
+    legitimate title punctuation: &, !, ?, :, ', -, ., ,, (, )
     """
     if not title:
         return ""
@@ -48,10 +49,9 @@ def clean_series_title(title: str) -> str:
         pass
     # Remove HTML tags if present (e.g. <b>title</b>)
     cleaned = re.sub(r"<[^>]+>", " ", title)
-    # Remove markdown formatting characters: *, _, `, ~, |, #
-    cleaned = re.sub(r"[\*\_`~|#]", " ", cleaned)
-    # Remove punctuation & decorative symbols: !, ?, :, ;, ,, ", ', (, ), [, ], {, }, <, >, /, \, @, $, %, ^, &, +, =, ~
-    cleaned = re.sub(r"[!?:;,\"'\(\)\[\]\{\}<>/\\@$%^&+=~]", " ", cleaned)
+    # Remove markdown formatting characters and decorative symbols
+    # PRESERVES legitimate title punctuation & symbols: &, !, ?, :, ', -, ., ,, (, )
+    cleaned = re.sub(r"[\*\_`~|#\[\]\{\}<>/\\@$%^+=;\"]", " ", cleaned)
     # Remove emojis & non-printable symbols
     cleaned = EMOJI_PATTERN.sub(" ", cleaned)
     # Collapse multiple spaces and strip
@@ -270,6 +270,7 @@ def normalize_search_text(text: str) -> str:
     Standardizes search text:
     - NFKD Unicode normalization (stripping accents/diacritics)
     - Lowercase
+    - Expands '&' to ' and ' so '&' and 'and' normalize identically
     - Replaces apostrophes, hyphens, and non-alphanumeric punctuation with spaces
     - Collapses multiple whitespace to single space
     - Preserves letters and digits
@@ -280,10 +281,12 @@ def normalize_search_text(text: str) -> str:
     text_nfkd = unicodedata.normalize("NFKD", text_str)
     text_clean = "".join(c for c in text_nfkd if not unicodedata.combining(c))
     
+    # Expand ampersand to ' and ' so '&' and 'and' normalize identically
+    text_clean = re.sub(r"&", " and ", text_clean)
     # Remove apostrophes (e.g. Spider-Man's -> spidermans or spider mans)
     text_clean = re.sub(r"[''`’‘]", "", text_clean)
     # Replace hyphens, underscores, dots, and symbols with spaces
-    text_clean = re.sub(r"[-–—_./\\+\[\]\(\)\{\}:;!?,#&]+", " ", text_clean)
+    text_clean = re.sub(r"[-–—_./\\+\[\]\(\)\{\}:;!?,#]+", " ", text_clean)
     # Strip any remaining non-alphanumeric (keep unicode word characters and digits)
     text_clean = re.sub(r"[^\w\s]", " ", text_clean)
     # Collapse multiple spaces and lowercase
@@ -340,6 +343,7 @@ def generate_smart_aliases(title: str) -> list[str]:
     'Bethlehem Kudumba Unit' -> ['bku']
     'The Great Indian Kitchen' -> ['gik', 'tgik', 'great indian kitchen']
     'Spider-Man: No Way Home' -> ['smnwh']
+    'Fast & Furious' -> ['faf', 'ff', 'fast furious']
     Filters out bad/ambiguous aliases (pure numbers, single characters, common short words).
     """
     if not title:
@@ -351,6 +355,13 @@ def generate_smart_aliases(title: str) -> list[str]:
         
     words = [w for w in norm.split() if w]
     aliases = set()
+
+    # If title has 'and', also generate alias without 'and' (e.g. 'fast and furious' -> 'fast furious')
+    if " and " in f" {norm} ":
+        no_and = re.sub(r"\band\b", " ", norm)
+        no_and_clean = re.sub(r"\s+", " ", no_and).strip()
+        if no_and_clean and no_and_clean != norm:
+            aliases.add(no_and_clean)
     
     # 1. Multi-word initialism (>= 2 words)
     if len(words) >= 2:
@@ -358,7 +369,7 @@ def generate_smart_aliases(title: str) -> list[str]:
         if len(full_init) >= 2 and not full_init.isdigit():
             aliases.add(full_init)
             
-        # Initialism without stopwords (e.g. "The Great Indian Kitchen" -> "gik")
+        # Initialism without stopwords (e.g. "The Great Indian Kitchen" -> "gik", "Fast and Furious" -> "ff")
         non_stop_words = [w for w in words if w not in COMMON_STOPWORDS]
         if len(non_stop_words) >= 2 and len(non_stop_words) < len(words):
             non_stop_init = "".join(w[0] for w in non_stop_words if w)
@@ -414,6 +425,12 @@ def compute_smart_search_score(query: str, target_title: str, aliases: list[str]
     if q_norm == t_norm or q_base == t_base:
         score = 100.0
         match_type = "exact"
+    elif score < 99.0:
+        q_no_and = re.sub(r"\s+", " ", re.sub(r"\band\b", " ", q_norm)).strip()
+        t_no_and = re.sub(r"\s+", " ", re.sub(r"\band\b", " ", t_norm)).strip()
+        if q_no_and and (q_no_and == t_norm or q_norm == t_no_and or q_no_and == t_no_and):
+            score = 99.0
+            match_type = "exact_and_variant"
 
     # 2. Alias / Initialism Match
     if score < 98.0:
@@ -524,6 +541,16 @@ async def _get_search_candidates(collection, query: str, limit: int = 60) -> lis
             {"generated_aliases": clean_norm},
             {"second_name": {"$regex": f"^{re.escape(clean_raw)}$", "$options": "i"}}
         ])
+
+    if " and " in f" {q_norm} ":
+        no_and = re.sub(r"\s+", " ", re.sub(r"\band\b", " ", q_norm)).strip()
+        if no_and and no_and != q_norm:
+            exact_conds.extend([
+                {"normalized_name": no_and},
+                {"search_aliases": no_and},
+                {"aliases": no_and},
+                {"generated_aliases": no_and}
+            ])
 
     try:
         exact_cursor = collection.find({
