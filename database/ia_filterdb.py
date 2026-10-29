@@ -31,23 +31,34 @@ if MULTIPLE_DATABASE:
         pass
 
 
+def clean_file_name(file_name, caption=None):
+    raw_name = file_name or caption or "file"
+    cleaned = re.sub(r"(_|\-|\.|\+)", " ", str(raw_name))
+    unwanted_chars = ['[', ']', '(', ')']
+    for char in unwanted_chars:
+        cleaned = cleaned.replace(char, '')
+    cleaned = ' '.join(filter(lambda x: not x.startswith('@'), cleaned.split()))
+    return cleaned
+
 async def save_file(media):
     """Save file in the database with automatic bot token migration support."""
     from datetime import datetime
     file_id = unpack_new_file_id(media.file_id)
-    file_name = clean_file_name(media.file_name)
+    raw_fname = getattr(media, "file_name", None)
+    raw_cap = None
+    if getattr(media, "caption", None):
+        raw_cap = media.caption.html if hasattr(media.caption, "html") else str(media.caption)
+
+    file_name = clean_file_name(raw_fname, raw_cap)
     chat_id = getattr(media, "chat_id", None)
     message_id = getattr(media, "message_id", None)
-
-    cap = None
-    if getattr(media, "caption", None):
-        cap = media.caption.html if hasattr(media.caption, "html") else str(media.caption)
+    file_sz = getattr(media, "file_size", 0)
 
     file = {
         'file_id': file_id,
         'file_name': file_name,
-        'file_size': media.file_size,
-        'caption': cap
+        'file_size': file_sz,
+        'caption': raw_cap
     }
     if chat_id:
         file['chat_id'] = chat_id
@@ -61,16 +72,39 @@ async def save_file(media):
         if collection.find_one(found_exact):
             return False, 0
 
-    # 2. Token migration check: same file_name exists, but file_id is different (old bot token)
-    found_name = {'file_name': file_name}
+    # 2. Token migration check: same file exists, but file_id is different (old bot token)
     target_col = None
-    existing_doc = col.find_one(found_name)
+    existing_doc = None
+
+    # Check 2a: Exact match on file_name AND file_size
+    query_exact = {'file_name': file_name, 'file_size': file_sz}
+    existing_doc = col.find_one(query_exact)
     if existing_doc:
         target_col = col
     elif MULTIPLE_DATABASE:
-        existing_doc = sec_col.find_one(found_name)
+        existing_doc = sec_col.find_one(query_exact)
         if existing_doc:
             target_col = sec_col
+
+    # Check 2b: Match on file_name only
+    if not existing_doc:
+        existing_doc = col.find_one({'file_name': file_name})
+        if existing_doc:
+            target_col = col
+        elif MULTIPLE_DATABASE:
+            existing_doc = sec_col.find_one({'file_name': file_name})
+            if existing_doc:
+                target_col = sec_col
+
+    # Check 2c: Match on raw uncleaned media.file_name if different
+    if not existing_doc and raw_fname and raw_fname != file_name:
+        existing_doc = col.find_one({'file_name': raw_fname})
+        if existing_doc:
+            target_col = col
+        elif MULTIPLE_DATABASE:
+            existing_doc = sec_col.find_one({'file_name': raw_fname})
+            if existing_doc:
+                target_col = sec_col
 
     if existing_doc and target_col:
         old_file_id = existing_doc.get("file_id")
@@ -78,8 +112,8 @@ async def save_file(media):
             # File exists under old bot token: migrate file_id and channel coordinates in-place
             update_fields = {
                 'file_id': file_id,
-                'file_size': media.file_size,
-                'caption': cap or existing_doc.get("caption"),
+                'file_size': file_sz or existing_doc.get("file_size", 0),
+                'caption': raw_cap or existing_doc.get("caption"),
                 'updated_at': datetime.utcnow()
             }
             if chat_id:
