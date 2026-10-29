@@ -5346,7 +5346,22 @@ async def execute_normal_group_file_delivery(client: Client, user_id: int, group
                         reply_to_message_id=ctrl_msg_id
                     )
                 except Exception as e:
-                    logger.warning(f"[CHILD BOT DIRECT SEND FAILED] file_id={fid} user_id={user_id} error={e}. Attempting relay...")
+                    logger.warning(f"[CHILD BOT DIRECT SEND FAILED] file_id={fid} user_id={user_id} error={e}. Attempting copy fallback...")
+                    ch_id_coord = f.get("chat_id")
+                    m_id_coord = f.get("message_id")
+                    if ch_id_coord and m_id_coord:
+                        try:
+                            sent_f = await client.copy_message(
+                                chat_id=user_id,
+                                from_chat_id=int(ch_id_coord),
+                                message_id=int(m_id_coord),
+                                caption=caption,
+                                parse_mode=enums.ParseMode.HTML,
+                                reply_to_message_id=ctrl_msg_id
+                            )
+                            logger.info(f"[CHILD BOT COPY FALLBACK SUCCESS] file_id={fid} from ch={ch_id_coord} msg={m_id_coord}")
+                        except Exception as cpe:
+                            logger.warning(f"[CHILD BOT COPY FALLBACK FAILED] {cpe}")
 
                 # 2. If direct send failed, try relaying through available shared channels
                 if not sent_f:
