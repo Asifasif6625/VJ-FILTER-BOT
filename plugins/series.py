@@ -469,7 +469,8 @@ def _fetch_movie_candidates_sync(title: str, year: str | int = None, limit: int 
     Uses flexible regex tokens ignoring leading stopwords/articles like 'The'/'A'/'An'.
     """
     from database.ia_filterdb import col, sec_col, MULTIPLE_DATABASE
-    clean_title = re.sub(r"[\._\-\+\[\]\(\)\{\}:;!?,/\\~|#*\"\'`]", " ", clean_series_title(title))
+    clean_title = re.sub(r"&", " and ", clean_series_title(title))
+    clean_title = re.sub(r"[\._\-\+\[\]\(\)\{\}:;!?,/\\~|#*\"\'`]", " ", clean_title)
     raw_tokens = [w for w in clean_title.lower().split() if len(w) > 1]
     
     # Filter out common leading noise articles for broader candidate recall

@@ -4103,8 +4103,8 @@ def build_normal_filter_groups(files: list[dict], query_text: str = "") -> list[
 
         cand_title = strip_file_prefix_markers(cand_title)
         cand_title = re.sub(r"[\._]", " ", cand_title)
-        cand_title = re.sub(r"[\s\._\-\+\[\]\(\)\{\}:;!?,/\\~|#*\"\'`]+$", "", cand_title).strip(" ._+-")
-        cand_title = re.sub(r"^[\s\._\-\+\[\]\(\)\{\}:;!?,/\\~|#*\"\'`]+", "", cand_title).strip(" ._+-")
+        cand_title = re.sub(r"[\s\._\-\+\[\]\(\)\{\}/\\~|#*\"`]+$", "", cand_title).strip(" ._+-")
+        cand_title = re.sub(r"^[\s\._\-\+\[\]\(\)\{\}/\\~|#*\"`]+", "", cand_title).strip(" ._+-")
         cand_title = re.sub(r"\s+", " ", cand_title).strip(" ._+-")
 
         norm_title = normalize_series_identity_title(cand_title)
@@ -6321,7 +6321,7 @@ async def child_broadcast_group(client: Client, message: Message):
 def clean_child_search_query(text: str) -> str:
     name = str(text or "").strip()
     search = EMOJI_PATTERN.sub(" ", name)
-    search = re.sub(r"[\.\_\-\:\+\/\\\[\]\(\)\{\}\#\@\*\&]+", " ", search)
+    search = re.sub(r"[\.\_\-\:\+\/\\\[\]\(\)\{\}\#\@\*]+", " ", search)
     search = re.sub(r"(?i)\b(pl(i|e)*?(s|z+|ease|se|ese|(e+)s(e)?)|((send|snd|giv(e)?|gib)(\sme)?)|movie(s)?|new|latest|bro|bruh|broh|helo|that|find|dubbed|link|venum|iruka|pannunga|pannungga|anuppunga|anupunga|anuppungga|anupungga|film|undo|kitti|kitty|tharu|kittumo|kittum|movie|any(one)|with\ssubtitle(s)?|upload|full|print|file)\b", " ", search)
     search = re.sub(r"\s+", " ", search).strip()
     return search if search else name
