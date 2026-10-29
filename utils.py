@@ -684,7 +684,7 @@ def get_series_filter_button_text(file_name: str, file_size=None) -> str:
 def normalize_series_identity_title(text: str) -> str:
     """
     Normalizes a series title for strict identity comparison.
-    Lowercases, unifies unicode, replaces punctuation (. _ - [ ] etc.) with spaces,
+    Lowercases, unifies unicode, expands ampersands to ' and ', replaces punctuation (. _ - [ ] etc.) with spaces,
     and collapses whitespace.
     DOES NOT strip meaningful words like 'The', 'Real', 'Love', 'Ishq', 'Starts', 'Today', etc.
     """
@@ -693,6 +693,7 @@ def normalize_series_identity_title(text: str) -> str:
     import unicodedata
     t = unicodedata.normalize("NFKD", str(text))
     t = t.lower()
+    t = re.sub(r"&", " and ", t)
     t = re.sub(r"[\._\-\+\[\]\(\)\{\}:;!?,/\\~|#*\"\'`]", " ", t)
     t = re.sub(r"\s+", " ", t).strip()
     return t
@@ -823,6 +824,15 @@ def match_automatic_series_file(
             na = normalize_series_identity_title(a)
             if na:
                 valid_targets.add(na)
+
+    # Support interchangeable 'and' variants (e.g. "fast and furious" <-> "fast furious")
+    extra_variants = set()
+    for vt in valid_targets:
+        if " and " in f" {vt} ":
+            no_and = re.sub(r"\s+", " ", re.sub(r"\band\b", " ", vt)).strip()
+            if no_and:
+                extra_variants.add(no_and)
+    valid_targets.update(extra_variants)
 
     # Check if stripping year from candidate_raw matches target title
     title_matched = False
@@ -1168,6 +1178,15 @@ def match_automatic_movie_file(
             na = normalize_movie_identity_title(a)
             if na:
                 valid_targets.add(na)
+
+    # Support interchangeable 'and' variants (e.g. "fast and furious" <-> "fast furious")
+    extra_variants = set()
+    for vt in valid_targets:
+        if " and " in f" {vt} ":
+            no_and = re.sub(r"\s+", " ", re.sub(r"\band\b", " ", vt)).strip()
+            if no_and:
+                extra_variants.add(no_and)
+    valid_targets.update(extra_variants)
 
     req_year = None
     if target_year and str(target_year).strip() not in ["N/A", "None", "0", ""]:
