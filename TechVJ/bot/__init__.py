@@ -34,7 +34,7 @@ class TechVJXBot(Client):
     async def iter_messages(
         self,
         chat_id: Union[int, str],
-        limit: int,
+        limit: int = 100000,
         offset: int = 0,
     ) -> Optional[AsyncGenerator["types.Message", None]]:
         current = offset
