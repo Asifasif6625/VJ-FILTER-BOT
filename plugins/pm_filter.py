@@ -4312,22 +4312,39 @@ async def render_normal_grouped_results(client: Client, message: Message, query_
         f"</i></b>"
     )
 
+    # ── Fetch Poster for Normal Suggestion Message ──
+    from info import DEFAULT_POSTER, PICS
+    fallback_poster = DEFAULT_POSTER or "https://files.catbox.moe/mp2y81.jpg"
+
     thumb = None
     try:
-        from database.series_db import get_series_thumbnail
-        thumb = await get_series_thumbnail()
-    except Exception as e:
-        logger.debug(f"[NORMAL THUMBNAIL GET ERROR] {e}")
+        from utils import get_poster
+        imdb_data = await asyncio.wait_for(get_poster(query_text), timeout=2.5)
+        if imdb_data and isinstance(imdb_data, dict) and imdb_data.get("poster"):
+            p_val = imdb_data["poster"]
+            if p_val and str(p_val).startswith("http"):
+                thumb = p_val
+    except Exception:
+        pass
+
     if not thumb:
-        from info import PICS
-        if PICS:
-            thumb = PICS[0]
-        else:
-            try:
-                from info import DEFAULT_POSTER
-                thumb = DEFAULT_POSTER
-            except Exception:
-                thumb = "https://files.catbox.moe/mp2y81.jpg"
+        for g in groups:
+            gp = g.get("poster")
+            if gp and str(gp).startswith("http") and str(gp).upper() != "N/A":
+                thumb = gp
+                break
+
+    if not thumb:
+        try:
+            from database.series_db import get_series_thumbnail
+            st = await get_series_thumbnail()
+            if st and str(st).startswith("http"):
+                thumb = st
+        except Exception:
+            pass
+
+    if not thumb:
+        thumb = fallback_poster
 
     from utils import schedule_filter_message_delete
 
@@ -4337,36 +4354,21 @@ async def render_normal_grouped_results(client: Client, message: Message, query_
     if reply_msg:
         try:
             if getattr(reply_msg, "photo", None) or getattr(reply_msg, "caption", None):
-                if thumb:
-                    from pyrogram.types import InputMediaPhoto
+                from pyrogram.types import InputMediaPhoto
+                try:
                     await reply_msg.edit_media(media=InputMediaPhoto(media=thumb, caption=caption_text, parse_mode=enums.ParseMode.HTML), reply_markup=markup)
-                else:
-                    await reply_msg.edit_caption(caption=caption_text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
-                sent_msg = reply_msg
-            else:
-                if not thumb:
-                    await reply_msg.edit_text(text=caption_text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
                     sent_msg = reply_msg
-                else:
-                    await reply_msg.delete()
-        except Exception:
-            try:
-                await reply_msg.delete()
-            except Exception:
-                pass
-
-    if not sent_msg:
-        if thumb:
-            try:
-                if message:
-                    sent_msg = await message.reply_photo(
-                        photo=thumb,
-                        caption=caption_text,
-                        reply_markup=markup,
-                        parse_mode=enums.ParseMode.HTML,
-                        reply_to_message_id=reply_to_id
-                    )
-                else:
+                except Exception as me:
+                    logger.warning(f"[NORMAL EDIT MEDIA FAILED with thumb {thumb}]: {me}. Retrying with fallback...")
+                    if thumb != fallback_poster:
+                        await reply_msg.edit_media(media=InputMediaPhoto(media=fallback_poster, caption=caption_text, parse_mode=enums.ParseMode.HTML), reply_markup=markup)
+                        sent_msg = reply_msg
+                    else:
+                        await reply_msg.edit_caption(caption=caption_text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
+                        sent_msg = reply_msg
+            else:
+                # Original reply_msg was text: try editing text or sending photo and deleting text
+                try:
                     sent_msg = await client.send_photo(
                         chat_id=chat_id,
                         photo=thumb,
@@ -4375,9 +4377,60 @@ async def render_normal_grouped_results(client: Client, message: Message, query_
                         parse_mode=enums.ParseMode.HTML,
                         reply_to_message_id=reply_to_id
                     )
-            except Exception as pe:
-                logger.warning(f"[NORMAL GROUP RENDER PHOTO FAILED] {pe}")
-                sent_msg = None
+                    if sent_msg:
+                        try:
+                            await reply_msg.delete()
+                        except Exception:
+                            pass
+                except Exception:
+                    await reply_msg.edit_text(text=caption_text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
+                    sent_msg = reply_msg
+        except Exception as e:
+            logger.warning(f"[NORMAL SUGGESTION EDIT FAILED] {e}")
+
+    if not sent_msg:
+        try:
+            if message:
+                sent_msg = await message.reply_photo(
+                    photo=thumb,
+                    caption=caption_text,
+                    reply_markup=markup,
+                    parse_mode=enums.ParseMode.HTML,
+                    reply_to_message_id=reply_to_id
+                )
+            else:
+                sent_msg = await client.send_photo(
+                    chat_id=chat_id,
+                    photo=thumb,
+                    caption=caption_text,
+                    reply_markup=markup,
+                    parse_mode=enums.ParseMode.HTML,
+                    reply_to_message_id=reply_to_id
+                )
+        except Exception as pe:
+            logger.warning(f"[NORMAL GROUP RENDER PHOTO FAILED] {pe}. Retrying with fallback_poster...")
+            if thumb != fallback_poster:
+                try:
+                    if message:
+                        sent_msg = await message.reply_photo(
+                            photo=fallback_poster,
+                            caption=caption_text,
+                            reply_markup=markup,
+                            parse_mode=enums.ParseMode.HTML,
+                            reply_to_message_id=reply_to_id
+                        )
+                    else:
+                        sent_msg = await client.send_photo(
+                            chat_id=chat_id,
+                            photo=fallback_poster,
+                            caption=caption_text,
+                            reply_markup=markup,
+                            parse_mode=enums.ParseMode.HTML,
+                            reply_to_message_id=reply_to_id
+                        )
+                except Exception as fpe:
+                    logger.warning(f"[NORMAL GROUP FALLBACK PHOTO FAILED] {fpe}")
+                    sent_msg = None
 
         if not sent_msg:
             try:
@@ -4492,7 +4545,7 @@ async def format_normal_filter_details_card(group_data: dict, requester_name: st
 
     if not poster_url and group_data.get("poster"):
         poster_url = group_data.get("poster")
-    if not poster_url or str(poster_url).upper() == "N/A":
+    if not poster_url or str(poster_url).upper() == "N/A" or not str(poster_url).startswith("http"):
         try:
             from info import DEFAULT_POSTER
             poster_url = DEFAULT_POSTER
@@ -4680,7 +4733,7 @@ async def cb_normal_group_select(client: Client, query: CallbackQuery):
     ])
 
     target_poster = poster_url or group_data.get("poster")
-    if not target_poster or str(target_poster).upper() == "N/A":
+    if not target_poster or str(target_poster).upper() == "N/A" or not str(target_poster).startswith("http"):
         try:
             from info import DEFAULT_POSTER
             target_poster = DEFAULT_POSTER
@@ -4808,16 +4861,38 @@ async def cb_normal_group_back(client: Client, query: CallbackQuery):
         f"</i></b>"
     )
 
+    from info import DEFAULT_POSTER, PICS
+    fallback_poster = DEFAULT_POSTER or "https://files.catbox.moe/mp2y81.jpg"
+
     thumb = None
     try:
-        from database.series_db import get_series_thumbnail
-        thumb = await get_series_thumbnail()
+        from utils import get_poster
+        imdb_data = await asyncio.wait_for(get_poster(query_text), timeout=2.0)
+        if imdb_data and isinstance(imdb_data, dict) and imdb_data.get("poster"):
+            p_val = imdb_data["poster"]
+            if p_val and str(p_val).startswith("http"):
+                thumb = p_val
     except Exception:
         pass
+
     if not thumb:
-        from info import PICS
-        if PICS:
-            thumb = PICS[0]
+        for g in groups:
+            gp = g.get("poster")
+            if gp and str(gp).startswith("http") and str(gp).upper() != "N/A":
+                thumb = gp
+                break
+
+    if not thumb:
+        try:
+            from database.series_db import get_series_thumbnail
+            st = await get_series_thumbnail()
+            if st and str(st).startswith("http"):
+                thumb = st
+        except Exception:
+            pass
+
+    if not thumb:
+        thumb = fallback_poster
 
     try:
         from utils import schedule_filter_message_delete
@@ -4834,37 +4909,41 @@ async def cb_normal_group_back(client: Client, query: CallbackQuery):
                         schedule_filter_message_delete(client, chat_id, query.message.id, delay=1200)
                         BUTTON_OWNERS[f"{chat_id}-{query.message.id}"] = clicked_user_id
                     except Exception as me:
-                        logger.warning(f"[NORMAL BACK EDIT MEDIA ERROR] {me}")
-                        await query.message.edit_caption(caption=caption_text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
+                        logger.warning(f"[NORMAL BACK EDIT MEDIA ERROR] {me}. Trying fallback...")
+                        if thumb != fallback_poster:
+                            try:
+                                from pyrogram.types import InputMediaPhoto
+                                await query.message.edit_media(
+                                    media=InputMediaPhoto(media=fallback_poster, caption=caption_text, parse_mode=enums.ParseMode.HTML),
+                                    reply_markup=markup
+                                )
+                            except Exception:
+                                await query.message.edit_caption(caption=caption_text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
+                        else:
+                            await query.message.edit_caption(caption=caption_text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
                         schedule_filter_message_delete(client, chat_id, query.message.id, delay=1200)
                 else:
-                    try:
-                        await query.message.delete()
-                    except Exception:
-                        pass
-                    sent_msg = await client.send_message(
-                        chat_id=chat_id,
-                        text=caption_text,
-                        reply_markup=markup,
-                        parse_mode=enums.ParseMode.HTML
-                    )
-                    schedule_filter_message_delete(client, sent_msg.chat.id, sent_msg.id, delay=1200)
-                    BUTTON_OWNERS[f"{sent_msg.chat.id}-{sent_msg.id}"] = clicked_user_id
+                    await query.message.edit_caption(caption=caption_text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
+                    schedule_filter_message_delete(client, chat_id, query.message.id, delay=1200)
             else:
                 if thumb:
                     try:
-                        await query.message.delete()
+                        sent_msg = await client.send_photo(
+                            chat_id=chat_id,
+                            photo=thumb,
+                            caption=caption_text,
+                            reply_markup=markup,
+                            parse_mode=enums.ParseMode.HTML
+                        )
+                        if sent_msg:
+                            try:
+                                await query.message.delete()
+                            except Exception:
+                                pass
+                            schedule_filter_message_delete(client, sent_msg.chat.id, sent_msg.id, delay=1200)
+                            BUTTON_OWNERS[f"{sent_msg.chat.id}-{sent_msg.id}"] = clicked_user_id
                     except Exception:
-                        pass
-                    sent_msg = await client.send_photo(
-                        chat_id=chat_id,
-                        photo=thumb,
-                        caption=caption_text,
-                        reply_markup=markup,
-                        parse_mode=enums.ParseMode.HTML
-                    )
-                    schedule_filter_message_delete(client, sent_msg.chat.id, sent_msg.id, delay=1200)
-                    BUTTON_OWNERS[f"{sent_msg.chat.id}-{sent_msg.id}"] = clicked_user_id
+                        await query.message.edit_text(text=caption_text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
                 else:
                     await query.message.edit_text(text=caption_text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
                     schedule_filter_message_delete(client, chat_id, query.message.id, delay=1200)
