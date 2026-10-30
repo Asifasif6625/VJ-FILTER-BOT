@@ -41,7 +41,8 @@ async def gen_link_s(bot, message):
     prefix = 'filep_' if message.text.lower().strip() == "/plink" else 'file_'
     string = prefix + raw_file_id
     outstr = base64.urlsafe_b64encode(string.encode("ascii")).decode().strip("=")
-    await message.reply(f"Here is your Link:\nhttps://t.me/{temp.U_NAME}?start={outstr}")
+    b_u = getattr(getattr(bot, "me", None), "username", None) or temp.U_NAME
+    await message.reply(f"Here is your Link:\nhttps://t.me/{b_u}?start={outstr}")
 
 @Client.on_message(filters.command(['batch', 'pbatch']) & filters.create(allowed))
 async def gen_link_batch(bot, message):
@@ -100,7 +101,8 @@ async def gen_link_batch(bot, message):
     if chat_id in FILE_STORE_CHANNEL:
         string = f"{f_msg_id}_{l_msg_id}_{chat_id}_{cmd.lower().strip()}"
         b_64 = base64.urlsafe_b64encode(string.encode("ascii")).decode().strip("=")
-        return await sts.edit(f"Here is your link https://t.me/{temp.U_NAME}?start=DSTORE-{b_64}")
+        b_u = getattr(getattr(bot, "me", None), "username", None) or temp.U_NAME
+        return await sts.edit(f"Here is your link https://t.me/{b_u}?start=DSTORE-{b_64}")
 
     # ── Verify bot can read the channel ───────────────────────────────────────
     try:
@@ -186,6 +188,6 @@ async def gen_link_batch(bot, message):
         f"✅ <b>Batch link generated!</b>\n\n"
         f"📦 Contains <code>{og_msg}</code> files"
         + (f" (<code>{errors}</code> skipped)" if errors else "") + ".\n\n"
-        f"🔗 <code>https://t.me/{temp.U_NAME}?start={prefix}{msg_id}</code>",
+        f"🔗 <code>https://t.me/{getattr(getattr(bot, 'me', None), 'username', None) or temp.U_NAME}?start={prefix}{msg_id}</code>",
         parse_mode=enums.ParseMode.HTML,
     )
