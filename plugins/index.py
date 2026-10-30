@@ -847,10 +847,16 @@ async def remap_files_command(bot, message):
     total_migrated = 0
     total_already_valid = 0
     total_scanned = 0
+    total_media_detected = 0
+    total_non_media = 0
     total_errors = 0
     start_time = time.monotonic()
 
     sem = asyncio.Semaphore(20)
+
+    def make_prog_bar(pct, length=10):
+        filled = max(0, min(length, int(length * pct / 100)))
+        return "█" * filled + "░" * (length - filled)
 
     try:
         for ch_idx, ch_id in enumerate(target_channels, 1):
@@ -869,33 +875,26 @@ async def remap_files_command(bot, message):
 
             probe_limit = 0
             try:
-                async for m in bot.get_chat_history(chat_obj.id, limit=1):
-                    probe_limit = m.id
-                    break
-            except Exception as he:
-                logger.info(f"[REMAP_FILES] get_chat_history failed in {chat_obj.id}: {he}")
+                ping = await bot.send_message(chat_obj.id, "🔄 <b>Verifying Channel for Token Migration...</b>")
+                probe_limit = ping.id
+                await ping.delete()
+            except Exception as pe:
+                logger.info(f"[REMAP_FILES] Probe ping failed in {chat_obj.id}: {pe}")
 
+            has_exact_limit = True
             if not probe_limit:
-                try:
-                    ping = await bot.send_message(chat_obj.id, "🔄 <b>Verifying Channel for Token Migration...</b>")
-                    probe_limit = ping.id
-                    await ping.delete()
-                except Exception as pe:
-                    logger.info(f"[REMAP_FILES] Probe ping failed in {chat_obj.id}: {pe}")
+                probe_limit = 50000
+                has_exact_limit = False
 
-            if not probe_limit:
-                logger.warning(f"[REMAP_FILES] Could not determine message count in channel {chat_obj.id}")
-                await status_msg.edit_text(f"⚠️ <b>Could not access messages in channel:</b> <code>{pyhtml.escape(c_title)}</code>\nSkipping to next channel...")
-                await asyncio.sleep(2)
-                continue
-
+            limit_str = f"~{probe_limit}" if has_exact_limit else "Auto-Scanning..."
             await status_msg.edit_text(
                 f"⚡ <b>Scanning Channel {ch_idx}/{len(target_channels)}</b>\n\n"
                 f"📌 <b>Channel:</b> <code>{pyhtml.escape(c_title)}</code> (<code>{chat_obj.id}</code>)\n"
-                f"📊 <b>Channel Messages:</b> ~<code>{probe_limit}</code>\n"
-                f"📊 <b>Scanned:</b> 0\n"
-                f"✅ <b>Migrated / Linked:</b> {total_migrated}\n"
-                f"⚡ <b>Already Valid:</b> {total_already_valid}",
+                f"📊 <b>Channel Target:</b> <code>{limit_str}</code>\n"
+                f"📁 <b>Real-Time Scanned:</b> <code>{total_scanned}</code> messages\n"
+                f"🎬 <b>Media Files Found:</b> <code>{total_media_detected}</code>\n"
+                f"✅ <b>Migrated / Linked:</b> <code>{total_migrated}</code>\n"
+                f"⚡ <b>Already Valid:</b> <code>{total_already_valid}</code>",
                 reply_markup=stop_btn
             )
 
@@ -953,7 +952,7 @@ async def remap_files_command(bot, message):
             prefetch_task = asyncio.create_task(fetch_ids(initial_ids)) if initial_ids else None
 
             empty_batches_count = 0
-            max_empty_batches = 10
+            max_empty_batches = 6
 
             try:
                 while current <= probe_limit and not is_stopped():
@@ -992,6 +991,7 @@ async def remap_files_command(bot, message):
                     # Check if entire batch is empty/deleted
                     if not messages or all(getattr(m, 'empty', True) for m in messages):
                         empty_batches_count += 1
+                        total_non_media += current_batch_size
                         if empty_batches_count >= max_empty_batches:
                             logger.info(f"[REMAP_FILES] {max_empty_batches} consecutive empty batches in {chat_obj.id}, moving forward.")
                             break
@@ -1004,6 +1004,11 @@ async def remap_files_command(bot, message):
                         if m and not getattr(m, 'empty', False) 
                         and getattr(m, 'media', None) in [enums.MessageMediaType.VIDEO, enums.MessageMediaType.AUDIO, enums.MessageMediaType.DOCUMENT]
                     ]
+
+                    media_count = len(media_msgs)
+                    total_media_detected += media_count
+                    if messages and not all(getattr(m, 'empty', True) for m in messages):
+                        total_non_media += max(0, current_batch_size - media_count)
 
                     if media_msgs:
                         results = await asyncio.gather(*(process_single_media(m) for m in media_msgs), return_exceptions=True)
@@ -1018,20 +1023,25 @@ async def remap_files_command(bot, message):
                     current += current_batch_size
 
                     now = time.monotonic()
-                    if (now - last_edit_time) >= 3.5:
+                    if (now - last_edit_time) >= 3.0:
                         last_edit_time = now
-                        elapsed = max(1, now - start_time)
+                        elapsed = max(1, int(now - start_time))
+                        elapsed_str = f"{elapsed // 60}m {elapsed % 60}s"
                         speed = round(total_scanned / elapsed, 1)
-                        pct = min(100.0, round((ch_scanned / max(1, probe_limit)) * 100, 1))
+                        pct = min(100.0, round((ch_scanned / max(1, probe_limit)) * 100, 1)) if has_exact_limit else 0
+                        prog_display = f"[{make_prog_bar(pct)}] <b>{pct}%</b> (<code>{ch_scanned}/{probe_limit}</code>)" if has_exact_limit else f"<code>{ch_scanned}</code> msgs in channel"
                         try:
                             await status_msg.edit_text(
                                 f"⚡ <b>High-Speed File Migration ({ch_idx}/{len(target_channels)})</b>\n\n"
                                 f"📌 <b>Channel:</b> <code>{pyhtml.escape(c_title)}</code>\n"
-                                f"📊 <b>Progress:</b> <code>{ch_scanned}/{probe_limit}</code> ({pct}%)\n"
-                                f"🚀 <b>Scan Speed:</b> <code>{speed} msg/sec</code>\n"
-                                f"✅ <b>Total Migrated:</b> <code>{total_migrated}</code>\n"
+                                f"📊 <b>Channel Progress:</b> {prog_display}\n\n"
+                                f"📁 <b>Real-Time Total Scanned:</b> <code>{total_scanned}</code> messages\n"
+                                f"🎬 <b>Media Files Found:</b> <code>{total_media_detected}</code>\n"
+                                f"✅ <b>Files Migrated:</b> <code>{total_migrated}</code>\n"
                                 f"⚡ <b>Already Valid:</b> <code>{total_already_valid}</code>\n"
-                                f"⚠️ <b>Errors:</b> <code>{total_errors}</code>",
+                                f"⏩ <b>Non-Media / Skipped:</b> <code>{total_non_media}</code>\n"
+                                f"⚠️ <b>Errors:</b> <code>{total_errors}</code>\n\n"
+                                f"🚀 <b>Scan Speed:</b> <code>{speed} msg/sec</code> | <b>Elapsed:</b> <code>{elapsed_str}</code>",
                                 reply_markup=stop_btn
                             )
                         except Exception:
@@ -1042,15 +1052,20 @@ async def remap_files_command(bot, message):
                 if prefetch_task and not prefetch_task.done():
                     prefetch_task.cancel()
 
+        elapsed_final = max(1, int(time.monotonic() - start_time))
+        elapsed_final_str = f"{elapsed_final // 60}m {elapsed_final % 60}s"
         final_status = "Stopped" if is_stopped() else "Completed"
         final_icon = "🛑" if is_stopped() else "✅"
         final_text = (
             f"{final_icon} <b>Bot Token File Migration {final_status}!</b> 🎉\n\n"
             f"📁 <b>Total Messages Scanned:</b> <code>{total_scanned}</code>\n"
+            f"🎬 <b>Total Media Files Found:</b> <code>{total_media_detected}</code>\n"
             f"🔄 <b>Files Migrated / Updated:</b> <code>{total_migrated}</code>\n"
             f"⚡ <b>Files Already Valid:</b> <code>{total_already_valid}</code>\n"
-            f"⚠️ <b>Errors:</b> <code>{total_errors}</code>\n\n"
-            "<i>All Super Movie, Super Series, and Normal Filter file deliveries are now mapped to the bot token.</i>"
+            f"⏩ <b>Non-Media / Skipped:</b> <code>{total_non_media}</code>\n"
+            f"⚠️ <b>Errors:</b> <code>{total_errors}</code>\n"
+            f"⏱️ <b>Time Taken:</b> <code>{elapsed_final_str}</code>\n\n"
+            "<i>All Super Movie, Super Series, and Normal Filter file deliveries are now mapped to the active bot token.</i>"
         )
         try:
             await status_msg.edit_text(final_text)
@@ -1059,13 +1074,18 @@ async def remap_files_command(bot, message):
 
     except asyncio.CancelledError:
         logger.info(f"[REMAP_FILES] Task cancelled for bot={bot_id}")
+        elapsed_c = max(1, int(time.monotonic() - start_time))
+        elapsed_c_str = f"{elapsed_c // 60}m {elapsed_c % 60}s"
         try:
             await status_msg.edit_text(
                 f"🛑 <b>File Migration Stopped by Admin!</b>\n\n"
-                f"📁 <b>Messages Scanned so far:</b> <code>{total_scanned}</code>\n"
+                f"📁 <b>Real-Time Scanned so far:</b> <code>{total_scanned}</code> messages\n"
+                f"🎬 <b>Media Files Found:</b> <code>{total_media_detected}</code>\n"
                 f"🔄 <b>Files Migrated / Updated:</b> <code>{total_migrated}</code>\n"
                 f"⚡ <b>Files Already Valid:</b> <code>{total_already_valid}</code>\n"
-                f"⚠️ <b>Errors:</b> <code>{total_errors}</code>"
+                f"⏩ <b>Non-Media / Skipped:</b> <code>{total_non_media}</code>\n"
+                f"⚠️ <b>Errors:</b> <code>{total_errors}</code>\n"
+                f"⏱️ <b>Run Time:</b> <code>{elapsed_c_str}</code>"
             )
         except Exception:
             pass
