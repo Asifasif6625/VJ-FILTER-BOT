@@ -91,6 +91,8 @@ class temp(object):
     U_NAME2 = None
     BOT_STATUS = {}
     REMAP_STOP_BOTS = {}
+    IS_REMAP_RUNNING = False
+    CURRENT_REMAP_TASK = None
 
 
 def get_bot_username(client=None) -> str:
@@ -102,18 +104,58 @@ def get_bot_username(client=None) -> str:
     return os.environ.get("BOT_USERNAME", "Bot")
 
 
+def is_bot_active_in_memory(bot_id: int) -> bool:
+    """Instant, zero-latency in-memory check for bot power state."""
+    if not bot_id:
+        return True
+    if not hasattr(temp, "BOT_STATUS") or not isinstance(temp.BOT_STATUS, dict):
+        return True
+    return bool(temp.BOT_STATUS.get(int(bot_id), True))
+
+
+def get_active_public_bot_id():
+    """
+    Determines which single bot is currently designated to serve the public.
+    Rule:
+    1. Bot 1 is primary. If Bot 1 is ON, Bot 1 serves the public.
+    2. If Bot 1 is OFF, Bot 2 serves the public (if Bot 2 is ON).
+    3. If both are OFF, returns None (maintenance mode).
+    """
+    b1_id = getattr(temp, "ME", None) or getattr(temp, "ME1", None)
+    b2_id = getattr(temp, "ME2", None) or getattr(temp, "CHILD_ME", None)
+
+    if b1_id and is_bot_active_in_memory(b1_id):
+        return b1_id
+
+    if b2_id and is_bot_active_in_memory(b2_id):
+        return b2_id
+
+    return None
+
+
+def is_bot_serving_public(bot_id: int) -> bool:
+    """Returns True if this specific bot is the active public bot."""
+    if not bot_id:
+        return True
+    active_id = get_active_public_bot_id()
+    if active_id is None:
+        return False
+    return int(bot_id) == int(active_id)
+
+
 async def is_bot_active(bot_id: int) -> bool:
     """Checks whether the specified bot is ON (True) or OFF (False)."""
     if not bot_id:
         return True
     if not hasattr(temp, "BOT_STATUS") or not isinstance(temp.BOT_STATUS, dict):
         temp.BOT_STATUS = {}
-    if bot_id in temp.BOT_STATUS:
-        return temp.BOT_STATUS[bot_id]
+    bid = int(bot_id)
+    if bid in temp.BOT_STATUS:
+        return temp.BOT_STATUS[bid]
     try:
         from database.users_chats_db import db
-        status = await db.get_bot_status(bot_id)
-        temp.BOT_STATUS[bot_id] = status
+        status = await db.get_bot_status(bid)
+        temp.BOT_STATUS[bid] = status
         return status
     except Exception:
         return True
@@ -123,10 +165,11 @@ async def set_bot_active(bot_id: int, is_active: bool):
     """Sets whether the specified bot is ON (True) or OFF (False)."""
     if not hasattr(temp, "BOT_STATUS") or not isinstance(temp.BOT_STATUS, dict):
         temp.BOT_STATUS = {}
-    temp.BOT_STATUS[bot_id] = is_active
+    bid = int(bot_id)
+    temp.BOT_STATUS[bid] = is_active
     try:
         from database.users_chats_db import db
-        await db.set_bot_status(bot_id, is_active)
+        await db.set_bot_status(bid, is_active)
     except Exception as e:
         import logging
         logging.getLogger(__name__).error(f"[SET BOT STATUS ERROR] {e}")
