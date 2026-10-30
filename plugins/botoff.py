@@ -99,8 +99,11 @@ async def cmd_botoff(client: Client, message):
     """Admin command to turn the receiving bot OFF."""
     bot_id = getattr(getattr(client, "me", None), "id", None)
     if not bot_id:
-        b_info = await client.get_me()
-        bot_id = b_info.id
+        try:
+            b_info = await client.get_me()
+            bot_id = b_info.id
+        except Exception:
+            bot_id = getattr(temp, "ME", None)
     bot_username = getattr(getattr(client, "me", None), "username", "Bot")
     
     await set_bot_active(bot_id, False)
@@ -116,6 +119,7 @@ async def cmd_botoff(client: Client, message):
     await message.reply_text(
         f"🔴 <b>Bot @{bot_username} is now turned OFF.</b>\n\n"
         f"• This bot will now <b>ONLY</b> respond to Admins.\n"
+        f"• Non-admins sending /start or any message will receive the maintenance notice + sticker (auto-deleted in 40s).\n"
         f"• Active public bot is now: <b>{active_mention}</b>\n"
         f"• Use <code>/boton</code> on this bot to turn it back ON.",
         parse_mode=enums.ParseMode.HTML
@@ -127,8 +131,11 @@ async def cmd_boton(client: Client, message):
     """Admin command to turn the receiving bot ON."""
     bot_id = getattr(getattr(client, "me", None), "id", None)
     if not bot_id:
-        b_info = await client.get_me()
-        bot_id = b_info.id
+        try:
+            b_info = await client.get_me()
+            bot_id = b_info.id
+        except Exception:
+            bot_id = getattr(temp, "ME", None)
     bot_username = getattr(getattr(client, "me", None), "username", "Bot")
     
     await set_bot_active(bot_id, True)
@@ -186,28 +193,39 @@ async def maintenance_message_gate(client: Client, message):
     """
     High-priority message gate:
     1. Admins are exempt: can always use both bots.
-    2. Non-admins are ONLY served by the designated active public bot.
-    3. If this bot is not serving the public, halts message propagation,
-       sends notification + sticker, and auto-deletes in 40 seconds.
+    2. If this receiving bot is turned OFF via /botoff:
+       Halt propagation, send maintenance notice + sticker, auto-delete in 40s.
+    3. If this receiving bot is ON but in standby mode (other bot is active public bot):
+       Halt propagation, send standby redirect notice + sticker, auto-delete in 40s.
+    4. Otherwise, allow message to proceed to normal handlers.
     """
     user_id = message.from_user.id if message.from_user else (message.sender_chat.id if message.sender_chat else 0)
-    if user_id in ADMINS:
+    admins_list = [int(a) for a in ADMINS if str(a).lstrip("-").isdigit()]
+    if user_id in admins_list or str(user_id) in [str(a) for a in ADMINS]:
         return  # Admins always pass through!
 
     bot_id = getattr(getattr(client, "me", None), "id", None)
     if not bot_id:
-        bot_id = getattr(temp, "ME", None)
+        try:
+            b_info = await client.get_me()
+            bot_id = b_info.id
+        except Exception:
+            bot_id = getattr(temp, "ME", None)
 
-    # Check if this bot is currently designated to serve the public
-    if is_bot_serving_public(bot_id):
-        return  # This bot is active for public: proceed to normal handlers!
-
-    # This bot is NOT serving the public: halt update propagation
-    message.stop_propagation()
-
-    # Determine message text based on situation
-    active_id = get_active_public_bot_id()
-    if active_id:
+    # 1. Direct Power Check: Is THIS receiving bot ON or OFF?
+    bot_active = await is_bot_active(bot_id)
+    if not bot_active:
+        # This bot is turned OFF with /botoff!
+        message.stop_propagation()
+        notice_text = (
+            "⚠️ <b>This bot is currently unavailable due to maintenance.</b>\n\n"
+            "<i>Please try again later.</i>\n\n"
+            "<i>🕐 This message will be deleted in 40 seconds.</i>"
+        )
+    elif not is_bot_serving_public(bot_id):
+        # This bot is in standby backup mode (other bot is serving public)
+        message.stop_propagation()
+        active_id = get_active_public_bot_id()
         b1_id = getattr(temp, "ME", None)
         active_u = getattr(temp, "U_NAME", "Bot 1") if active_id == b1_id else getattr(temp, "U_NAME2", "Bot 2")
         notice_text = (
@@ -216,36 +234,33 @@ async def maintenance_message_gate(client: Client, message):
             f"<i>🕐 This message will be deleted in 40 seconds.</i>"
         )
     else:
-        notice_text = (
-            "⚠️ <b>This bot is currently unavailable due to maintenance.</b>\n\n"
-            "<i>Please try again later.</i>\n\n"
-            "<i>🕐 This message will be deleted in 40 seconds.</i>"
-        )
+        # This bot is ON and actively serving the public: proceed!
+        return
 
     to_delete = [message.id]
 
-    # 1. Send notice text first to guarantee delivery
+    # 1. Send maintenance sticker
     try:
-        txt = await message.reply_text(
+        stk = await client.send_sticker(
+            chat_id=message.chat.id,
+            sticker=MAINTENANCE_STICKER_ID
+        )
+        if stk:
+            to_delete.append(stk.id)
+    except Exception as se:
+        logger.warning(f"[MAINTENANCE] Sticker send skipped or failed: {se}")
+
+    # 2. Send maintenance notice text
+    try:
+        txt = await client.send_message(
+            chat_id=message.chat.id,
             text=notice_text,
-            parse_mode=enums.ParseMode.HTML,
-            reply_to_message_id=message.id
+            parse_mode=enums.ParseMode.HTML
         )
         if txt:
             to_delete.append(txt.id)
     except Exception as te:
         logger.warning(f"[MAINTENANCE] Error sending notice text: {te}")
-
-    # 2. Try sending maintenance sticker (catch any bot-specific sticker rejection)
-    try:
-        stk = await message.reply_sticker(
-            sticker=MAINTENANCE_STICKER_ID,
-            reply_to_message_id=message.id
-        )
-        if stk:
-            to_delete.append(stk.id)
-    except Exception as se:
-        logger.debug(f"[MAINTENANCE] Sticker send skipped: {se}")
 
     # 3. Schedule 40-second auto-deletion
     asyncio.create_task(
@@ -265,26 +280,34 @@ async def maintenance_callback_gate(client: Client, query):
     Alerts non-admins if they click a button on a bot that is not active.
     """
     user_id = query.from_user.id if query.from_user else 0
-    if user_id in ADMINS:
+    admins_list = [int(a) for a in ADMINS if str(a).lstrip("-").isdigit()]
+    if user_id in admins_list or str(user_id) in [str(a) for a in ADMINS]:
         return
 
     bot_id = getattr(getattr(client, "me", None), "id", None)
     if not bot_id:
-        bot_id = getattr(temp, "ME", None)
+        try:
+            b_info = await client.get_me()
+            bot_id = b_info.id
+        except Exception:
+            bot_id = getattr(temp, "ME", None)
 
-    if is_bot_serving_public(bot_id):
+    bot_active = await is_bot_active(bot_id)
+    if not bot_active:
+        query.stop_propagation()
+        try:
+            await query.answer("⚠️ This bot is currently unavailable due to maintenance.", show_alert=True)
+        except Exception:
+            pass
         return
 
-    query.stop_propagation()
-    active_id = get_active_public_bot_id()
-    if active_id:
+    if not is_bot_serving_public(bot_id):
+        query.stop_propagation()
+        active_id = get_active_public_bot_id()
         b1_id = getattr(temp, "ME", None)
         active_u = getattr(temp, "U_NAME", "Bot 1") if active_id == b1_id else getattr(temp, "U_NAME2", "Bot 2")
-        alert_msg = f"⚠️ This bot is in standby. Please use @{active_u}."
-    else:
-        alert_msg = "⚠️ This bot is currently unavailable due to maintenance."
-
-    try:
-        await query.answer(alert_msg, show_alert=True)
-    except Exception:
-        pass
+        try:
+            await query.answer(f"⚠️ This bot is in standby. Please use @{active_u}.", show_alert=True)
+        except Exception:
+            pass
+        return
