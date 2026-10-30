@@ -311,7 +311,7 @@ class Database:
     async def set_bot_status(self, bot_id: int, is_active: bool):
         await self.bot_status.update_one(
             {'_id': int(bot_id)},
-            {'': {'is_active': is_active, 'updated_at': datetime.datetime.utcnow()}},
+            {'$set': {'is_active': is_active, 'updated_at': datetime.datetime.utcnow()}},
             upsert=True
         )
 

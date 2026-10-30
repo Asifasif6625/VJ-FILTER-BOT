@@ -105,6 +105,40 @@ async def _ensure_indexes():
         logger.warning(f"Series DB index creation: {e}")
 
 
+# ─── In-Memory Active Cache with TTL ──────────────────────────────────────────
+_ACTIVE_MOVIES_CACHE = None
+_ACTIVE_MOVIES_CACHE_TIME = 0.0
+_ACTIVE_SERIES_CACHE = None
+_ACTIVE_SERIES_CACHE_TIME = 0.0
+
+async def get_cached_active_movies(ttl: float = 30.0) -> list[dict]:
+    global _ACTIVE_MOVIES_CACHE, _ACTIVE_MOVIES_CACHE_TIME
+    now = time.monotonic()
+    if _ACTIVE_MOVIES_CACHE is not None and (now - _ACTIVE_MOVIES_CACHE_TIME) < ttl:
+        return _ACTIVE_MOVIES_CACHE
+    cursor = super_movies_col.find({"status": {"$ne": "deleted"}})
+    _ACTIVE_MOVIES_CACHE = [doc async for doc in cursor]
+    _ACTIVE_MOVIES_CACHE_TIME = now
+    return _ACTIVE_MOVIES_CACHE
+
+async def get_cached_active_series(ttl: float = 30.0) -> list[dict]:
+    global _ACTIVE_SERIES_CACHE, _ACTIVE_SERIES_CACHE_TIME
+    now = time.monotonic()
+    if _ACTIVE_SERIES_CACHE is not None and (now - _ACTIVE_SERIES_CACHE_TIME) < ttl:
+        return _ACTIVE_SERIES_CACHE
+    cursor = series_col.find({"status": {"$ne": "deleted"}})
+    _ACTIVE_SERIES_CACHE = await cursor.to_list(length=1000)
+    _ACTIVE_SERIES_CACHE_TIME = now
+    return _ACTIVE_SERIES_CACHE
+
+def invalidate_active_filters_cache():
+    global _ACTIVE_MOVIES_CACHE, _ACTIVE_MOVIES_CACHE_TIME, _ACTIVE_SERIES_CACHE, _ACTIVE_SERIES_CACHE_TIME
+    _ACTIVE_MOVIES_CACHE = None
+    _ACTIVE_MOVIES_CACHE_TIME = 0.0
+    _ACTIVE_SERIES_CACHE = None
+    _ACTIVE_SERIES_CACHE_TIME = 0.0
+
+
 # ─── Series CRUD ──────────────────────────────────────────────────────────────
 
 async def create_series(data: dict) -> str:
@@ -1904,8 +1938,7 @@ async def find_matching_super_movie(file_name: str, caption: str = "") -> dict |
     if not norm_title:
         return None
 
-    cursor = super_movies_col.find({"status": {"$ne": "deleted"}})
-    candidates = [doc async for doc in cursor]
+    candidates = await get_cached_active_movies()
 
     if not candidates:
         return None
@@ -2205,8 +2238,7 @@ async def sync_series_filter_for_files(file_docs, *, trigger="file_add"):
 
     from utils import match_automatic_series_file, normalize_language_name
 
-    active_series_cursor = series_col.find({"status": {"$ne": "deleted"}})
-    active_series_list = await active_series_cursor.to_list(length=1000)
+    active_series_list = await get_cached_active_series()
     if not active_series_list:
         return
 
