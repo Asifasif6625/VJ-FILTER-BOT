@@ -83,6 +83,53 @@ class temp(object):
     CHILD_ME = None
     CHILD_U_NAME = None
     CHILD_B_NAME = None
+    BOT1 = None
+    BOT2 = None
+    ME1 = None
+    ME2 = None
+    U_NAME1 = None
+    U_NAME2 = None
+    BOT_STATUS = {}
+    REMAP_STOP_BOTS = {}
+
+
+def get_bot_username(client=None) -> str:
+    """Returns the username of the active bot client (without @), falling back to temp.U_NAME."""
+    if client and getattr(client, "me", None) and getattr(client.me, "username", None):
+        return client.me.username.strip().lstrip("@")
+    if hasattr(temp, "U_NAME") and temp.U_NAME:
+        return str(temp.U_NAME).strip().lstrip("@")
+    return os.environ.get("BOT_USERNAME", "Bot")
+
+
+async def is_bot_active(bot_id: int) -> bool:
+    """Checks whether the specified bot is ON (True) or OFF (False)."""
+    if not bot_id:
+        return True
+    if not hasattr(temp, "BOT_STATUS") or not isinstance(temp.BOT_STATUS, dict):
+        temp.BOT_STATUS = {}
+    if bot_id in temp.BOT_STATUS:
+        return temp.BOT_STATUS[bot_id]
+    try:
+        from database.users_chats_db import db
+        status = await db.get_bot_status(bot_id)
+        temp.BOT_STATUS[bot_id] = status
+        return status
+    except Exception:
+        return True
+
+
+async def set_bot_active(bot_id: int, is_active: bool):
+    """Sets whether the specified bot is ON (True) or OFF (False)."""
+    if not hasattr(temp, "BOT_STATUS") or not isinstance(temp.BOT_STATUS, dict):
+        temp.BOT_STATUS = {}
+    temp.BOT_STATUS[bot_id] = is_active
+    try:
+        from database.users_chats_db import db
+        await db.set_bot_status(bot_id, is_active)
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).error(f"[SET BOT STATUS ERROR] {e}")
 
 
 def get_child_bot_username() -> str:

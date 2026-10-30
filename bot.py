@@ -51,33 +51,43 @@ async def start():
     temp.BANNED_CHATS = b_chats
     me = await TechVJBot.get_me()
     temp.BOT = TechVJBot
+    temp.BOT1 = TechVJBot
     temp.ME = me.id
+    temp.ME1 = me.id
     temp.U_NAME = me.username
+    temp.U_NAME1 = me.username
     temp.B_NAME = me.first_name
-    logging.info(f"MAIN BOT: All handlers loaded on @{me.username}.")
+    try:
+        from utils import is_bot_active
+        temp.BOT_STATUS[me.id] = await is_bot_active(me.id)
+    except Exception as bse:
+        logging.warning(f"Error loading bot 1 power status: {bse}")
+    logging.info(f"MAIN BOT 1: All handlers loaded on @{me.username}.")
 
     if BOT_TOKEN2:
         try:
-            from TechVJ.bot import TechVJXBot
-            ChildBot = Client(
-                name=CHILD_SESSION,
-                api_id=API_ID,
-                api_hash=API_HASH,
-                bot_token=BOT_TOKEN2,
-                sleep_threshold=5,
-                workers=50,
-            )
-            await ChildBot.start()
-            child_me = await ChildBot.get_me()
-            temp.CHILD_BOT = ChildBot
-            temp.CHILD_U_NAME = child_me.username
-            temp.CHILD_B_NAME = child_me.first_name
+            from TechVJ.bot import Bot2
+            if not Bot2:
+                from TechVJ.bot import TechVJXBot
+                Bot2 = TechVJXBot(name=CHILD_SESSION, bot_token=BOT_TOKEN2)
+            await Bot2.start()
+            child_me = await Bot2.get_me()
+            temp.BOT2 = Bot2
+            temp.CHILD_BOT = Bot2
+            temp.ME2 = child_me.id
             temp.CHILD_ME = child_me.id
-            from plugins.pm_filter import register_normal_filter_handlers
-            register_normal_filter_handlers(ChildBot)
-            logging.info(f"CHILD BOT: Started and registered handlers on @{child_me.username}")
+            temp.U_NAME2 = child_me.username
+            temp.CHILD_U_NAME = child_me.username
+            temp.B_NAME2 = child_me.first_name
+            temp.CHILD_B_NAME = child_me.first_name
+            try:
+                from utils import is_bot_active
+                temp.BOT_STATUS[child_me.id] = await is_bot_active(child_me.id)
+            except Exception:
+                pass
+            logging.info(f"PARALLEL BOT 2: Started and registered all handlers on @{child_me.username}")
         except Exception as e:
-            logging.error(f"Failed starting Child Bot: {e}", exc_info=True)
+            logging.error(f"Failed starting Parallel Bot 2: {e}", exc_info=True)
 
 
     try:
