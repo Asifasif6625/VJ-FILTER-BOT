@@ -66,6 +66,7 @@ class Database:
         self.grp = self.db.groups
         self.users = self.db.uersz
         self.bot = self.db.clone_bots
+        self.bot_status = self.db.bot_power_status
 
 
     def new_user(self, id, name):
@@ -305,7 +306,20 @@ class Database:
 
     async def get_save(self, id):
         user = await self.col.find_one({'id': int(id)})
-        return user.get('save', False) 
+        return user.get('save', False)
+
+    async def set_bot_status(self, bot_id: int, is_active: bool):
+        await self.bot_status.update_one(
+            {'_id': int(bot_id)},
+            {'': {'is_active': is_active, 'updated_at': datetime.datetime.utcnow()}},
+            upsert=True
+        )
+
+    async def get_bot_status(self, bot_id: int) -> bool:
+        doc = await self.bot_status.find_one({'_id': int(bot_id)})
+        if doc is None:
+            return True
+        return bool(doc.get('is_active', True)) 
     
 
 db = Database(USER_DB_URI, DATABASE_NAME)
