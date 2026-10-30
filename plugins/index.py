@@ -752,7 +752,26 @@ async def remap_stop_callback(bot, query):
     if bot_id:
         temp.REMAP_STOP_BOTS[bot_id] = True
     temp.REMAP_STOP = True
-    await query.answer("🛑 Stopping file migration on this bot...", show_alert=False)
+    temp.IS_REMAP_RUNNING = False
+
+    # Cancel the running remap task immediately if active
+    task = getattr(temp, "CURRENT_REMAP_TASK", None)
+    if task and not task.done():
+        try:
+            task.cancel()
+        except Exception as e:
+            logger.info(f"[REMAP_STOP] Cancelled task: {e}")
+        temp.CURRENT_REMAP_TASK = None
+
+    try:
+        await query.message.edit_text(
+            "🛑 <b>File Migration has been stopped by Admin.</b>\n\n"
+            "<i>Process was terminated immediately.</i>"
+        )
+    except Exception:
+        pass
+
+    await query.answer("🛑 Migration stopped successfully!", show_alert=True)
 
 
 @Client.on_message(filters.private & filters.command(['remap_files', 'migrate_token']) & filters.user(ADMINS))
@@ -763,10 +782,19 @@ async def remap_files_command(bot, message):
     using pipelined batch prefetching and concurrent worker processing.
     Updates MongoDB ia_filterdb, super_movies file_ids, and sfiles_col in-place,
     preserving all existing filter records.
-    Runs independently on whichever bot client invokes it.
+    Runs on whichever bot client invokes it.
+    Only one migration process can run at a time across both bots.
     """
     import html as pyhtml
     from info import CHANNELS, SDATABASE_CHANNEL, FILE_STORE_CHANNEL
+
+    # Mutual exclusion: ensure only ONE migration process runs at a time
+    if getattr(temp, "IS_REMAP_RUNNING", False):
+        return await message.reply(
+            "⚠️ <b>A File Migration is already running!</b>\n\n"
+            "Only one migration process can run at a time across both bots to prevent DB contention and Telegram flood restrictions.\n"
+            "Please wait for it to complete or click <b>🛑 Stop Migration</b> on the active task."
+        )
 
     bot_id = getattr(getattr(bot, "me", None), "id", None)
     if not bot_id:
@@ -778,6 +806,8 @@ async def remap_files_command(bot, message):
         temp.REMAP_STOP_BOTS = {}
     temp.REMAP_STOP_BOTS[bot_id] = False
     temp.REMAP_STOP = False
+    temp.IS_REMAP_RUNNING = True
+    temp.CURRENT_REMAP_TASK = asyncio.current_task()
 
     def is_stopped():
         if bot_id and temp.REMAP_STOP_BOTS.get(bot_id, False):
@@ -804,6 +834,8 @@ async def remap_files_command(bot, message):
                     target_channels.append(fc)
 
     if not target_channels:
+        temp.IS_REMAP_RUNNING = False
+        temp.CURRENT_REMAP_TASK = None
         return await message.reply("❌ No storage channels found in config. Please specify channel ID: <code>/remap_files -100...</code>")
 
     stop_btn = InlineKeyboardMarkup([[InlineKeyboardButton("🛑 Stop Migration", callback_data="remap_stop")]])
@@ -820,182 +852,226 @@ async def remap_files_command(bot, message):
 
     sem = asyncio.Semaphore(20)
 
-    for ch_idx, ch_id in enumerate(target_channels, 1):
-        if is_stopped():
-            break
+    try:
+        for ch_idx, ch_id in enumerate(target_channels, 1):
+            if is_stopped():
+                break
 
-        try:
-            ch_num = int(ch_id) if str(ch_id).lstrip("-").isdigit() else ch_id
-            chat_obj = await bot.get_chat(ch_num)
-            c_title = chat_obj.title or str(ch_id)
-        except Exception as ce:
-            logger.warning(f"[REMAP_FILES] Cannot access channel {ch_id}: {ce}")
-            await status_msg.edit_text(f"⚠️ <b>Cannot access channel:</b> <code>{ch_id}</code> ({ce})\nMake sure the new bot is Admin with full rights.")
-            await asyncio.sleep(2)
-            continue
+            try:
+                ch_num = int(ch_id) if str(ch_id).lstrip("-").isdigit() else ch_id
+                chat_obj = await bot.get_chat(ch_num)
+                c_title = chat_obj.title or str(ch_id)
+            except Exception as ce:
+                logger.warning(f"[REMAP_FILES] Cannot access channel {ch_id}: {ce}")
+                await status_msg.edit_text(f"⚠️ <b>Cannot access channel:</b> <code>{ch_id}</code> ({ce})\nMake sure the new bot is Admin with full rights.")
+                await asyncio.sleep(2)
+                continue
 
-        probe_limit = 100000
-        try:
-            ping = await bot.send_message(chat_obj.id, "🔄 <b>Verifying Channel for Token Migration...</b>")
-            probe_limit = ping.id
-            await ping.delete()
-        except Exception as pe:
-            logger.info(f"[REMAP_FILES] Probe ping failed in {chat_obj.id}: {pe}")
-
-        await status_msg.edit_text(
-            f"⚡ <b>Scanning Channel {ch_idx}/{len(target_channels)}</b>\n\n"
-            f"📌 <b>Channel:</b> <code>{pyhtml.escape(c_title)}</code> (<code>{chat_obj.id}</code>)\n"
-            f"📊 <b>Channel Messages:</b> ~<code>{probe_limit}</code>\n"
-            f"📊 <b>Scanned:</b> 0\n"
-            f"✅ <b>Migrated / Linked:</b> {total_migrated}\n"
-            f"⚡ <b>Already Valid:</b> {total_already_valid}",
-            reply_markup=stop_btn
-        )
-
-        ch_scanned = 0
-        last_edit_time = time.monotonic()
-        batch_size = 200
-        current = 1
-
-        async def fetch_ids(b_ids):
-            if not b_ids:
-                return []
-            for attempt in range(3):
-                if is_stopped():
-                    return None
-                try:
-                    return await bot.get_messages(chat_obj.id, b_ids)
-                except FloodWait as e:
-                    logger.warning(f"[REMAP FLOODWAIT] Sleeping {e.value}s")
-                    await asyncio.sleep(e.value)
-                except Exception as ge:
-                    logger.warning(f"[REMAP GET_MESSAGES RETRY] Attempt {attempt+1}/3: {ge}")
-                    await asyncio.sleep(1 * (attempt + 1))
-            return None
-
-        async def process_single_media(msg):
-            media = getattr(msg, getattr(msg.media, "value", "document"), None)
-            if not media:
-                return "skip"
-            media.caption = msg.caption
-            media.chat_id = chat_obj.id
-            media.message_id = msg.id
-            media.bot_id = bot_id
-            async with sem:
-                try:
-                    is_saved, code = await save_file(media, bot_id=bot_id)
-                    if is_saved:
-                        return "migrated"
-                    elif code == 0:
-                        return "already_valid"
-                    else:
-                        return "error"
-                except Exception as sfe:
-                    logger.error(f"[REMAP_FILES ERROR] msg={msg.id} err={sfe}")
-                    return "error"
-
-        # Start initial prefetch
-        initial_end = min(current + batch_size, probe_limit + 1)
-        initial_ids = list(range(current, initial_end))
-        prefetch_task = asyncio.create_task(fetch_ids(initial_ids)) if initial_ids else None
-
-        empty_batches_count = 0
-        max_empty_batches = 5
-
-        try:
-            while current <= probe_limit and not is_stopped():
-                if not prefetch_task:
+            probe_limit = 0
+            try:
+                async for m in bot.get_chat_history(chat_obj.id, limit=1):
+                    probe_limit = m.id
                     break
+            except Exception as he:
+                logger.info(f"[REMAP_FILES] get_chat_history failed in {chat_obj.id}: {he}")
 
-                messages = await prefetch_task
-                prefetch_task = None
+            if not probe_limit:
+                try:
+                    ping = await bot.send_message(chat_obj.id, "🔄 <b>Verifying Channel for Token Migration...</b>")
+                    probe_limit = ping.id
+                    await ping.delete()
+                except Exception as pe:
+                    logger.info(f"[REMAP_FILES] Probe ping failed in {chat_obj.id}: {pe}")
 
-                if is_stopped():
-                    break
+            if not probe_limit:
+                logger.warning(f"[REMAP_FILES] Could not determine message count in channel {chat_obj.id}")
+                await status_msg.edit_text(f"⚠️ <b>Could not access messages in channel:</b> <code>{pyhtml.escape(c_title)}</code>\nSkipping to next channel...")
+                await asyncio.sleep(2)
+                continue
 
-                current_batch_size = len(initial_ids) if initial_ids else batch_size
+            await status_msg.edit_text(
+                f"⚡ <b>Scanning Channel {ch_idx}/{len(target_channels)}</b>\n\n"
+                f"📌 <b>Channel:</b> <code>{pyhtml.escape(c_title)}</code> (<code>{chat_obj.id}</code>)\n"
+                f"📊 <b>Channel Messages:</b> ~<code>{probe_limit}</code>\n"
+                f"📊 <b>Scanned:</b> 0\n"
+                f"✅ <b>Migrated / Linked:</b> {total_migrated}\n"
+                f"⚡ <b>Already Valid:</b> {total_already_valid}",
+                reply_markup=stop_btn
+            )
 
-                if messages is None:
-                    # Network error after retries, advance to next batch
-                    current += current_batch_size
-                    next_end = min(current + batch_size, probe_limit + 1)
-                    initial_ids = list(range(current, next_end)) if current <= probe_limit else []
-                    prefetch_task = asyncio.create_task(fetch_ids(initial_ids)) if initial_ids else None
-                    continue
+            ch_scanned = 0
+            last_edit_time = time.monotonic()
+            batch_size = 200
+            current = 1
 
-                # Schedule next batch prefetch immediately while current batch is processed
-                next_current = current + current_batch_size
-                if next_current <= probe_limit and not is_stopped():
-                    next_end = min(next_current + batch_size, probe_limit + 1)
-                    next_ids = list(range(next_current, next_end))
-                    if next_ids:
-                        initial_ids = next_ids
-                        prefetch_task = asyncio.create_task(fetch_ids(next_ids))
-                    else:
-                        initial_ids = []
-
-                ch_scanned += current_batch_size
-                total_scanned += current_batch_size
-
-                # Check if entire batch is empty/deleted
-                if not messages or all(getattr(m, 'empty', True) for m in messages):
-                    empty_batches_count += 1
-                    if current >= probe_limit and empty_batches_count >= max_empty_batches:
-                        break
-                else:
-                    empty_batches_count = 0
-
-                # Filter media messages
-                media_msgs = [
-                    m for m in messages 
-                    if m and not getattr(m, 'empty', False) 
-                    and getattr(m, 'media', None) in [enums.MessageMediaType.VIDEO, enums.MessageMediaType.AUDIO, enums.MessageMediaType.DOCUMENT]
-                ]
-
-                if media_msgs:
-                    results = await asyncio.gather(*(process_single_media(m) for m in media_msgs), return_exceptions=True)
-                    for r in results:
-                        if r == "migrated":
-                            total_migrated += 1
-                        elif r == "already_valid":
-                            total_already_valid += 1
-                        elif r == "error":
-                            total_errors += 1
-
-                current += current_batch_size
-
-                now = time.monotonic()
-                if (now - last_edit_time) >= 3.5:
-                    last_edit_time = now
-                    elapsed = max(1, now - start_time)
-                    speed = round(total_scanned / elapsed, 1)
-                    pct = min(100.0, round((ch_scanned / max(1, probe_limit)) * 100, 1))
+            async def fetch_ids(b_ids):
+                if not b_ids:
+                    return []
+                for attempt in range(3):
+                    if is_stopped():
+                        return None
                     try:
-                        await status_msg.edit_text(
-                            f"⚡ <b>High-Speed File Migration ({ch_idx}/{len(target_channels)})</b>\n\n"
-                            f"📌 <b>Channel:</b> <code>{pyhtml.escape(c_title)}</code>\n"
-                            f"📊 <b>Progress:</b> <code>{ch_scanned}/{probe_limit}</code> ({pct}%)\n"
-                            f"🚀 <b>Scan Speed:</b> <code>{speed} msg/sec</code>\n"
-                            f"✅ <b>Total Migrated:</b> <code>{total_migrated}</code>\n"
-                            f"⚡ <b>Already Valid:</b> <code>{total_already_valid}</code>\n"
-                            f"⚠️ <b>Errors:</b> <code>{total_errors}</code>",
-                            reply_markup=stop_btn
-                        )
-                    except Exception:
-                        pass
-        except Exception as che:
-            logger.error(f"[REMAP_FILES CHANNEL ERROR] {ch_id}: {che}")
-        finally:
-            if prefetch_task and not prefetch_task.done():
-                prefetch_task.cancel()
+                        return await bot.get_messages(chat_obj.id, b_ids)
+                    except FloodWait as e:
+                        logger.warning(f"[REMAP FLOODWAIT] Sleeping {e.value}s")
+                        for _ in range(int(e.value)):
+                            if is_stopped():
+                                return None
+                            await asyncio.sleep(1)
+                    except Exception as ge:
+                        logger.warning(f"[REMAP GET_MESSAGES RETRY] Attempt {attempt+1}/3: {ge}")
+                        for _ in range(int(attempt + 1)):
+                            if is_stopped():
+                                return None
+                            await asyncio.sleep(1)
+                return None
 
-    final_status = "Stopped" if is_stopped() else "Completed"
-    final_text = (
-        f"✅ <b>Bot Token File Migration {final_status}!</b> 🎉\n\n"
-        f"📁 <b>Total Messages Scanned:</b> <code>{total_scanned}</code>\n"
-        f"🔄 <b>Files Migrated / Updated:</b> <code>{total_migrated}</code>\n"
-        f"⚡ <b>Files Already Valid:</b> <code>{total_already_valid}</code>\n"
-        f"⚠️ <b>Errors:</b> <code>{total_errors}</code>\n\n"
-        "<i>All Super Movie, Super Series, and Normal Filter file deliveries are now mapped to the new bot token.</i>"
-    )
-    await status_msg.edit_text(final_text)
+            async def process_single_media(msg):
+                media = getattr(msg, getattr(msg.media, "value", "document"), None)
+                if not media:
+                    return "skip"
+                media.caption = msg.caption
+                media.chat_id = chat_obj.id
+                media.message_id = msg.id
+                media.bot_id = bot_id
+                async with sem:
+                    try:
+                        is_saved, code = await save_file(media, bot_id=bot_id)
+                        if is_saved:
+                            return "migrated"
+                        elif code == 0:
+                            return "already_valid"
+                        else:
+                            return "error"
+                    except Exception as sfe:
+                        logger.error(f"[REMAP_FILES ERROR] msg={msg.id} err={sfe}")
+                        return "error"
+
+            # Start initial prefetch
+            initial_end = min(current + batch_size, probe_limit + 1)
+            initial_ids = list(range(current, initial_end))
+            prefetch_task = asyncio.create_task(fetch_ids(initial_ids)) if initial_ids else None
+
+            empty_batches_count = 0
+            max_empty_batches = 10
+
+            try:
+                while current <= probe_limit and not is_stopped():
+                    if not prefetch_task:
+                        break
+
+                    messages = await prefetch_task
+                    prefetch_task = None
+
+                    if is_stopped():
+                        break
+
+                    current_batch_size = len(initial_ids) if initial_ids else batch_size
+
+                    if messages is None:
+                        current += current_batch_size
+                        next_end = min(current + batch_size, probe_limit + 1)
+                        initial_ids = list(range(current, next_end)) if current <= probe_limit else []
+                        prefetch_task = asyncio.create_task(fetch_ids(initial_ids)) if initial_ids else None
+                        continue
+
+                    # Schedule next batch prefetch immediately while current batch is processed
+                    next_current = current + current_batch_size
+                    if next_current <= probe_limit and not is_stopped():
+                        next_end = min(next_current + batch_size, probe_limit + 1)
+                        next_ids = list(range(next_current, next_end))
+                        if next_ids:
+                            initial_ids = next_ids
+                            prefetch_task = asyncio.create_task(fetch_ids(next_ids))
+                        else:
+                            initial_ids = []
+
+                    ch_scanned += current_batch_size
+                    total_scanned += current_batch_size
+
+                    # Check if entire batch is empty/deleted
+                    if not messages or all(getattr(m, 'empty', True) for m in messages):
+                        empty_batches_count += 1
+                        if empty_batches_count >= max_empty_batches:
+                            logger.info(f"[REMAP_FILES] {max_empty_batches} consecutive empty batches in {chat_obj.id}, moving forward.")
+                            break
+                    else:
+                        empty_batches_count = 0
+
+                    # Filter media messages
+                    media_msgs = [
+                        m for m in messages 
+                        if m and not getattr(m, 'empty', False) 
+                        and getattr(m, 'media', None) in [enums.MessageMediaType.VIDEO, enums.MessageMediaType.AUDIO, enums.MessageMediaType.DOCUMENT]
+                    ]
+
+                    if media_msgs:
+                        results = await asyncio.gather(*(process_single_media(m) for m in media_msgs), return_exceptions=True)
+                        for r in results:
+                            if r == "migrated":
+                                total_migrated += 1
+                            elif r == "already_valid":
+                                total_already_valid += 1
+                            elif r == "error":
+                                total_errors += 1
+
+                    current += current_batch_size
+
+                    now = time.monotonic()
+                    if (now - last_edit_time) >= 3.5:
+                        last_edit_time = now
+                        elapsed = max(1, now - start_time)
+                        speed = round(total_scanned / elapsed, 1)
+                        pct = min(100.0, round((ch_scanned / max(1, probe_limit)) * 100, 1))
+                        try:
+                            await status_msg.edit_text(
+                                f"⚡ <b>High-Speed File Migration ({ch_idx}/{len(target_channels)})</b>\n\n"
+                                f"📌 <b>Channel:</b> <code>{pyhtml.escape(c_title)}</code>\n"
+                                f"📊 <b>Progress:</b> <code>{ch_scanned}/{probe_limit}</code> ({pct}%)\n"
+                                f"🚀 <b>Scan Speed:</b> <code>{speed} msg/sec</code>\n"
+                                f"✅ <b>Total Migrated:</b> <code>{total_migrated}</code>\n"
+                                f"⚡ <b>Already Valid:</b> <code>{total_already_valid}</code>\n"
+                                f"⚠️ <b>Errors:</b> <code>{total_errors}</code>",
+                                reply_markup=stop_btn
+                            )
+                        except Exception:
+                            pass
+            except Exception as che:
+                logger.error(f"[REMAP_FILES CHANNEL ERROR] {ch_id}: {che}")
+            finally:
+                if prefetch_task and not prefetch_task.done():
+                    prefetch_task.cancel()
+
+        final_status = "Stopped" if is_stopped() else "Completed"
+        final_icon = "🛑" if is_stopped() else "✅"
+        final_text = (
+            f"{final_icon} <b>Bot Token File Migration {final_status}!</b> 🎉\n\n"
+            f"📁 <b>Total Messages Scanned:</b> <code>{total_scanned}</code>\n"
+            f"🔄 <b>Files Migrated / Updated:</b> <code>{total_migrated}</code>\n"
+            f"⚡ <b>Files Already Valid:</b> <code>{total_already_valid}</code>\n"
+            f"⚠️ <b>Errors:</b> <code>{total_errors}</code>\n\n"
+            "<i>All Super Movie, Super Series, and Normal Filter file deliveries are now mapped to the bot token.</i>"
+        )
+        try:
+            await status_msg.edit_text(final_text)
+        except Exception:
+            pass
+
+    except asyncio.CancelledError:
+        logger.info(f"[REMAP_FILES] Task cancelled for bot={bot_id}")
+        try:
+            await status_msg.edit_text(
+                f"🛑 <b>File Migration Stopped by Admin!</b>\n\n"
+                f"📁 <b>Messages Scanned so far:</b> <code>{total_scanned}</code>\n"
+                f"🔄 <b>Files Migrated / Updated:</b> <code>{total_migrated}</code>\n"
+                f"⚡ <b>Files Already Valid:</b> <code>{total_already_valid}</code>\n"
+                f"⚠️ <b>Errors:</b> <code>{total_errors}</code>"
+            )
+        except Exception:
+            pass
+    finally:
+        temp.IS_REMAP_RUNNING = False
+        temp.CURRENT_REMAP_TASK = None
+        if bot_id and hasattr(temp, "REMAP_STOP_BOTS") and isinstance(temp.REMAP_STOP_BOTS, dict):
+            temp.REMAP_STOP_BOTS[bot_id] = False
+        temp.REMAP_STOP = False
