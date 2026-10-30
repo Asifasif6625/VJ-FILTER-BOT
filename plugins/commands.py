@@ -237,7 +237,7 @@ async def start(client, message):
             InlineKeyboardButton('ᴊᴏɪɴ ᴜᴘᴅᴀᴛᴇ ᴄʜᴀɴɴᴇʟ', url=CHNL_LNK)
         ]]
         reply_markup = InlineKeyboardMarkup(buttons)
-        await message.reply(script.START_TXT.format(message.from_user.mention if message.from_user else message.chat.title, temp.U_NAME, temp.B_NAME), reply_markup=reply_markup, disable_web_page_preview=True)
+        await message.reply(script.START_TXT.format(message.from_user.mention if message.from_user else message.chat.title, getattr(getattr(client, "me", None), "username", None) or temp.U_NAME, getattr(getattr(client, "me", None), "first_name", None) or temp.B_NAME), reply_markup=reply_markup, disable_web_page_preview=True)
         await asyncio.sleep(2) # 😢 https://github.com/EvamariaTG/EvaMaria/blob/master/plugins/p_ttishow.py#L17 😬 wait a bit, before checking.
         if not await db.get_chat(message.chat.id):
             total=await client.get_chat_members_count(message.chat.id)
@@ -264,7 +264,7 @@ async def start(client, message):
         await m.delete()
         await message.reply_photo(
             photo=random.choice(PICS),
-            caption=script.START_TXT.format(message.from_user.mention, temp.U_NAME, temp.B_NAME),
+            caption=script.START_TXT.format(message.from_user.mention, getattr(getattr(client, "me", None), "username", None) or temp.U_NAME, getattr(getattr(client, "me", None), "first_name", None) or temp.B_NAME),
             reply_markup=reply_markup,
             parse_mode=enums.ParseMode.HTML
         )
@@ -454,7 +454,7 @@ async def start(client, message):
             await m.delete()
             await message.reply_photo(
                 photo=random.choice(PICS),
-                caption=script.START_TXT.format(message.from_user.mention, temp.U_NAME, temp.B_NAME),
+                caption=script.START_TXT.format(message.from_user.mention, getattr(getattr(client, "me", None), "username", None) or temp.U_NAME, getattr(getattr(client, "me", None), "first_name", None) or temp.B_NAME),
                 reply_markup=reply_markup,
                 parse_mode=enums.ParseMode.HTML
             )
@@ -622,7 +622,7 @@ async def start(client, message):
         userid = message.from_user.id if message.from_user else None
         settings = await get_settings(chat_id)
         pre = 'allfilesp' if settings['file_secure'] else 'allfiles'
-        g = await get_shortlink(chat_id, f"https://telegram.me/{temp.U_NAME}?start={pre}_{file_id}")
+        g = await get_shortlink(chat_id, f"https://telegram.me/{getattr(getattr(client, 'me', None), 'username', None) or temp.U_NAME}?start={pre}_{file_id}")
         btn = [[
             InlineKeyboardButton('ᴅᴏᴡɴʟᴏᴀᴅ ɴᴏᴡ', url=g)
         ]]
@@ -642,7 +642,7 @@ async def start(client, message):
         chat_id = temp.SHORT.get(user)
         settings = await get_settings(chat_id)
         pre = 'filep' if settings['file_secure'] else 'file'
-        g = await get_shortlink(chat_id, f"https://telegram.me/{temp.U_NAME}?start={pre}_{file_id}")
+        g = await get_shortlink(chat_id, f"https://telegram.me/{getattr(getattr(client, 'me', None), 'username', None) or temp.U_NAME}?start={pre}_{file_id}")
         btn = [[
             InlineKeyboardButton('ᴅᴏᴡɴʟᴏᴀᴅ ɴᴏᴡ', url=g)
         ]]
@@ -670,7 +670,7 @@ async def start(client, message):
         if not await db.has_premium_access(message.from_user.id):
             if not await check_verification(client, message.from_user.id) and VERIFY == True:
                 btn = [[
-                    InlineKeyboardButton("ᴠᴇʀɪғʏ", url=await get_token(client, message.from_user.id, f"https://telegram.me/{temp.U_NAME}?start="))
+                    InlineKeyboardButton("ᴠᴇʀɪғʏ", url=await get_token(client, message.from_user.id, f"https://telegram.me/{getattr(getattr(client, 'me', None), 'username', None) or temp.U_NAME}?start="))
                 ],[
                     InlineKeyboardButton("ʜᴏᴡ ᴛᴏ ᴠᴇʀɪғʏ", url=VERIFY_TUTORIAL)
                 ]]
@@ -748,7 +748,7 @@ async def start(client, message):
         settings = await get_settings(chat_id)
         pre = 'filep' if settings['file_secure'] else 'file'
         if settings['is_shortlink'] and not await db.has_premium_access(user):
-            g = await get_shortlink(chat_id, f"https://telegram.me/{temp.U_NAME}?start={pre}_{file_id}")
+            g = await get_shortlink(chat_id, f"https://telegram.me/{getattr(getattr(client, 'me', None), 'username', None) or temp.U_NAME}?start={pre}_{file_id}")
             btn = [[
                 InlineKeyboardButton('ᴅᴏᴡɴʟᴏᴀᴅ ɴᴏᴡ', url=g)
             ]]
@@ -769,7 +769,7 @@ async def start(client, message):
             if not await db.has_premium_access(message.from_user.id):
                 if not await check_verification(client, message.from_user.id) and VERIFY == True:
                     btn = [[
-                        InlineKeyboardButton("ᴠᴇʀɪғʏ", url=await get_token(client, message.from_user.id, f"https://telegram.me/{temp.U_NAME}?start="))
+                        InlineKeyboardButton("ᴠᴇʀɪғʏ", url=await get_token(client, message.from_user.id, f"https://telegram.me/{getattr(getattr(client, 'me', None), 'username', None) or temp.U_NAME}?start="))
                     ],[
                         InlineKeyboardButton("ʜᴏᴡ ᴛᴏ ᴠᴇʀɪғʏ", url=VERIFY_TUTORIAL)
                     ]]
@@ -827,7 +827,7 @@ async def start(client, message):
     if not await db.has_premium_access(message.from_user.id):
         if not await check_verification(client, message.from_user.id) and VERIFY == True:
             btn = [[
-                InlineKeyboardButton("ᴠᴇʀɪғʏ", url=await get_token(client, message.from_user.id, f"https://telegram.me/{temp.U_NAME}?start="))
+                InlineKeyboardButton("ᴠᴇʀɪғʏ", url=await get_token(client, message.from_user.id, f"https://telegram.me/{getattr(getattr(client, 'me', None), 'username', None) or temp.U_NAME}?start="))
             ],[
                 InlineKeyboardButton("ʜᴏᴡ ᴛᴏ ᴠᴇʀɪғʏ", url=VERIFY_TUTORIAL)
             ]]
@@ -849,18 +849,25 @@ async def start(client, message):
     log = logging.getLogger(__name__)
     
     msg = None
+    client_bot_id = str(getattr(getattr(client, 'me', None), 'id', ''))
+    actual_file_id = file_id
+    if files and isinstance(files, dict):
+        bot_fmap = files.get("bot_file_map", {})
+        if client_bot_id and client_bot_id in bot_fmap:
+            actual_file_id = bot_fmap[client_bot_id]
+
     try:
-        log.info(f"[FILE SEND] request_id={file_id}")
+        log.info(f"[FILE SEND] request_id={actual_file_id}")
         msg = await client.send_cached_media(
             chat_id=message.from_user.id,
-            file_id=file_id,
+            file_id=actual_file_id,
             caption=f_caption,
             protect_content=True if pre == 'filep' else False,
             reply_markup=reply_markup
         )
-        log.info(f"[FILE SEND] SUCCESS request_id={file_id}")
+        log.info(f"[FILE SEND] SUCCESS request_id={actual_file_id}")
     except Exception as e:
-        log.error(f"[FILE SEND] ERROR: {e} file_id={file_id}")
+        log.error(f"[FILE SEND] ERROR: {e} file_id={actual_file_id}")
         ch_id = files.get("chat_id")
         m_id = files.get("message_id")
         if ch_id and m_id:
@@ -874,7 +881,24 @@ async def start(client, message):
                     protect_content=True if pre == 'filep' else False,
                     reply_markup=reply_markup
                 )
-                log.info(f"[FILE SEND COPY FALLBACK SUCCESS] request_id={file_id}")
+                log.info(f"[FILE SEND COPY FALLBACK SUCCESS] request_id={actual_file_id}")
+                if msg:
+                    try:
+                        sent_m = getattr(msg, getattr(msg.media, "value", "document"), None) if getattr(msg, "media", None) else None
+                        if sent_m and getattr(sent_m, "file_id", None) and client_bot_id:
+                            new_fid = unpack_new_file_id(sent_m.file_id)
+                            from info import MULTIPLE_DATABASE
+                            t_col = col if col.find_one({"_id": files["_id"]}) else (sec_col if MULTIPLE_DATABASE else col)
+                            t_col.update_one(
+                                {"_id": files["_id"]},
+                                {
+                                    "$set": {f"bot_file_map.{client_bot_id}": new_fid},
+                                    "$addToSet": {"file_ids": new_fid}
+                                }
+                            )
+                            log.info(f"[AUTO CACHE FILE] Saved bot {client_bot_id} file_id for {files.get('file_name')}")
+                    except Exception as ace:
+                        log.warning(f"[AUTO CACHE FILE ERROR] {ace}")
             except Exception as ce:
                 log.error(f"[FILE SEND COPY FALLBACK FAILED] {ce}")
         if not msg:
@@ -1848,6 +1872,12 @@ async def send_batch_files(
             fid = getattr(f, "file_id", None)
             file_doc = getattr(f, "__dict__", {})
 
+        client_bot_id = str(getattr(getattr(client, 'me', None), 'id', ''))
+        if client_bot_id and isinstance(file_doc, dict):
+            bmap = file_doc.get("bot_file_map", {})
+            if client_bot_id in bmap:
+                fid = bmap[client_bot_id]
+
         if not fid:
             continue
 
@@ -1951,9 +1981,13 @@ async def send_batch_files(
                             from database.ia_filterdb import unpack_new_file_id, col, sec_col
                             from info import MULTIPLE_DATABASE
                             new_fid = unpack_new_file_id(media_obj.file_id)
-                            col.update_one({"file_id": fid}, {"$set": {"file_id": new_fid}})
+                            c_bid = str(getattr(getattr(client, 'me', None), 'id', ''))
+                            up_d = {"$addToSet": {"file_ids": new_fid}}
+                            if c_bid:
+                                up_d["$set"] = {f"bot_file_map.{c_bid}": new_fid}
+                            col.update_one({"$or": [{"file_id": fid}, {"file_ids": fid}]}, up_d)
                             if MULTIPLE_DATABASE:
-                                sec_col.update_one({"file_id": fid}, {"$set": {"file_id": new_fid}})
+                                sec_col.update_one({"$or": [{"file_id": fid}, {"file_ids": fid}]}, up_d)
                     except Exception:
                         pass
                     return msg

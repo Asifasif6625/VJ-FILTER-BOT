@@ -3688,7 +3688,7 @@ async def announce_filter_created(client: Client, filter_type: str = "series", f
         logger.info(f"[ANNOUNCEMENT SKIPPED] Already sent for {ann_key}")
         return True
 
-    bot_username = temp.U_NAME if (hasattr(temp, "U_NAME") and temp.U_NAME) else getattr(getattr(client, "me", None), "username", None)
+    bot_username = getattr(getattr(client, "me", None), "username", None) or getattr(temp, "U_NAME", "Bot")
     if bot_username:
         bot_username = str(bot_username).lstrip("@")
     else:
@@ -9287,7 +9287,7 @@ async def ser_qual_callback(client: Client, query: CallbackQuery):
     except Exception:
         pass
 
-    bot_username = temp.U_NAME if (hasattr(temp, "U_NAME") and temp.U_NAME) else getattr(getattr(client, "me", None), "username", None)
+    bot_username = getattr(getattr(client, "me", None), "username", None) or getattr(temp, "U_NAME", "Bot")
     if bot_username:
         bot_username = str(bot_username).lstrip("@")
     else:

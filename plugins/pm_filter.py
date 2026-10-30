@@ -883,7 +883,7 @@ async def movie_qual_callback(client: Client, query: CallbackQuery):
     except Exception:
         pass
         
-    bot_username = temp.U_NAME if (hasattr(temp, "U_NAME") and temp.U_NAME) else getattr(getattr(client, "me", None), "username", None)
+    bot_username = getattr(getattr(client, "me", None), "username", None) or getattr(temp, "U_NAME", "Bot")
     if bot_username:
         bot_username = str(bot_username).lstrip("@")
     else:
@@ -1090,7 +1090,7 @@ async def movie_sub_callback(client: Client, query: CallbackQuery):
     except Exception:
         pass
 
-    bot_username = temp.U_NAME if (hasattr(temp, "U_NAME") and temp.U_NAME) else getattr(getattr(client, "me", None), "username", None)
+    bot_username = getattr(getattr(client, "me", None), "username", None) or getattr(temp, "U_NAME", "Bot")
     if bot_username:
         bot_username = str(bot_username).lstrip("@")
     else:
@@ -1187,7 +1187,7 @@ async def movie_sub_ok_callback(client: Client, query: CallbackQuery):
     except Exception:
         pass
 
-    bot_username = temp.U_NAME if (hasattr(temp, "U_NAME") and temp.U_NAME) else getattr(getattr(client, "me", None), "username", None)
+    bot_username = getattr(getattr(client, "me", None), "username", None) or getattr(temp, "U_NAME", "Bot")
     if bot_username:
         bot_username = str(bot_username).lstrip("@")
     else:
@@ -2505,22 +2505,26 @@ async def cb_handler(client: Client, query: CallbackQuery):
                             "cmd": cmd
                         }
                         log.info(f"[GROUP MOVIE] FILE CLICK\n[GROUP MOVIE] USER = {clicked}\n[GROUP MOVIE] REQUEST ID = {req_id}\n[GROUP MOVIE] FORCE SUB CHECK\n[GROUP MOVIE] FORCE SUB RESULT = FAIL")
-                        await query.answer(url=f"https://telegram.me/{temp.U_NAME}?start=fsub_{req_id}")
+                        b_uname = getattr(getattr(client, "me", None), "username", None) or temp.U_NAME
+                        await query.answer(url=f"https://telegram.me/{b_uname}?start=fsub_{req_id}")
                         return
                     else:
                         log.info(f"[GROUP MOVIE] NEW FILE REQUEST\n[GROUP MOVIE] FRESH FORCE SUB CHECK\n[GROUP MOVIE] FORCE SUB RESULT = PASS")
                         if settings['is_shortlink'] and not await db.has_premium_access(query.from_user.id):
                             temp.SHORT[clicked] = query.message.chat.id
-                        await query.answer(url=f"https://telegram.me/{temp.U_NAME}?start={cmd}")
+                        b_uname = getattr(getattr(client, "me", None), "username", None) or temp.U_NAME
+                        await query.answer(url=f"https://telegram.me/{b_uname}?start={cmd}")
                         return
             else:
                 await query.answer("this is not your button 😊", show_alert=True)
         except UserIsBlocked:
             await query.answer('Uɴʙʟᴏᴄᴋ ᴛʜᴇ ʙᴏᴛ ᴍᴀʜɴ !', show_alert=True)
         except PeerIdInvalid:
-            await query.answer(url=f"https://telegram.me/{temp.U_NAME}?start={cmd}")
+            b_uname = getattr(getattr(client, "me", None), "username", None) or temp.U_NAME
+            await query.answer(url=f"https://telegram.me/{b_uname}?start={cmd}")
         except Exception as e:
-            await query.answer(url=f"https://telegram.me/{temp.U_NAME}?start={cmd}")
+            b_uname = getattr(getattr(client, "me", None), "username", None) or temp.U_NAME
+            await query.answer(url=f"https://telegram.me/{b_uname}?start={cmd}")
             
     elif query.data.startswith("sendfiles"):
         ident, key = query.data.split("#")
@@ -2566,20 +2570,24 @@ async def cb_handler(client: Client, query: CallbackQuery):
                         "cmd": cmd
                     }
                     log.info(f"[GROUP MOVIE] FILE CLICK\n[GROUP MOVIE] USER = {clicked}\n[GROUP MOVIE] REQUEST ID = {req_id}\n[GROUP MOVIE] FORCE SUB CHECK\n[GROUP MOVIE] FORCE SUB RESULT = FAIL")
-                    await query.answer(url=f"https://telegram.me/{temp.U_NAME}?start=fsub_{req_id}")
+                    b_uname = getattr(getattr(client, "me", None), "username", None) or temp.U_NAME
+                    await query.answer(url=f"https://telegram.me/{b_uname}?start=fsub_{req_id}")
                     return
                 else:
                     log.info(f"[GROUP MOVIE] NEW FILE REQUEST\n[GROUP MOVIE] FRESH FORCE SUB CHECK\n[GROUP MOVIE] FORCE SUB RESULT = PASS")
-                    await query.answer(url=f"https://telegram.me/{temp.U_NAME}?start={cmd}")
+                    b_uname = getattr(getattr(client, "me", None), "username", None) or temp.U_NAME
+                    await query.answer(url=f"https://telegram.me/{b_uname}?start={cmd}")
                     return
                 
         except UserIsBlocked:
             await query.answer('Uɴʙʟᴏᴄᴋ ᴛʜᴇ ʙᴏᴛ ᴍᴀʜɴ !', show_alert=True)
         except PeerIdInvalid:
-            await query.answer(url=f"https://telegram.me/{temp.U_NAME}?start={cmd}")
+            b_uname = getattr(getattr(client, "me", None), "username", None) or temp.U_NAME
+            await query.answer(url=f"https://telegram.me/{b_uname}?start={cmd}")
         except Exception as e:
             logger.exception(e)
-            await query.answer(url=f"https://telegram.me/{temp.U_NAME}?start={cmd}")
+            b_uname = getattr(getattr(client, "me", None), "username", None) or temp.U_NAME
+            await query.answer(url=f"https://telegram.me/{b_uname}?start={cmd}")
 
     elif query.data.startswith("unmuteme"):
         ident, userid = query.data.split("#")
@@ -2622,7 +2630,8 @@ async def cb_handler(client: Client, query: CallbackQuery):
             f_caption = f_caption
         if f_caption is None:
             f_caption = f"{files['file_name']}"
-        await query.answer(url=f"https://telegram.me/{temp.U_NAME}?start=file_{file_id}")
+        b_uname = getattr(getattr(client, "me", None), "username", None) or temp.U_NAME
+        await query.answer(url=f"https://telegram.me/{b_uname}?start=file_{file_id}")
     
     elif query.data.startswith("checksub"):
         try:
@@ -2986,7 +2995,7 @@ async def cb_handler(client: Client, query: CallbackQuery):
         title = query.message.chat.title
         settings = await get_settings(grp_id)
         btn2 = [[
-                 InlineKeyboardButton("Cʜᴇᴄᴋ PM", url=f"telegram.me/{temp.U_NAME}")
+                 InlineKeyboardButton("Cʜᴇᴄᴋ PM", url=f"telegram.me/{getattr(getattr(client, 'me', None), 'username', None) or temp.U_NAME}")
                ]]
         reply_markup = InlineKeyboardMarkup(btn2)
         await query.message.edit_text(f"<b>Yᴏᴜʀ sᴇᴛᴛɪɴɢs ᴍᴇɴᴜ ғᴏʀ {title} ʜᴀs ʙᴇᴇɴ sᴇɴᴛ ᴛᴏ ʏᴏᴜʀ PM</b>")
@@ -3931,22 +3940,20 @@ async def auto_filter(client, name, msg, reply_msg=None, ai_search=True, spoll=F
             except Exception as e:
                 logger.error(f"[SUPER FILTER SEARCH ROUTING ERROR] query={search if search else name} error={e}")
 
-            # If not a Super Filter: Only defer to Child Bot if Child Bot is ACTUALLY an admin in this group!
+            # If in group: if this client is Bot 2 and Bot 1 is also active in this group, let Bot 1 handle to avoid duplicate replies
             if message.chat and message.chat.type in [enums.ChatType.GROUP, enums.ChatType.SUPERGROUP]:
-                child_bot = getattr(temp, "CHILD_BOT", None)
-                child_me_id = getattr(temp, "CHILD_ME", None)
-                child_active_in_group = False
-                if child_bot and child_me_id:
+                main_me_id = getattr(temp, "ME", None)
+                curr_me_id = getattr(getattr(client, "me", None), "id", None)
+                if curr_me_id and main_me_id and curr_me_id != main_me_id:
                     try:
-                        cm = await client.get_chat_member(message.chat.id, child_me_id)
-                        if cm and cm.status in [enums.ChatMemberStatus.ADMINISTRATOR, enums.ChatMemberStatus.OWNER]:
-                            child_active_in_group = True
+                        from utils import is_bot_active
+                        if await is_bot_active(main_me_id):
+                            cm = await client.get_chat_member(message.chat.id, main_me_id)
+                            if cm and cm.status in [enums.ChatMemberStatus.ADMINISTRATOR, enums.ChatMemberStatus.OWNER]:
+                                logger.info(f"[PARALLEL BOT 2 GROUP ROUTE] Bot 1 is active admin in group {message.chat.id}. Bot 2 remaining silent.")
+                                return
                     except Exception:
-                        child_active_in_group = False
-
-                if child_active_in_group:
-                    logger.info(f"[MAIN BOT NORMAL FILTER ROUTE] ChildBot is active admin in group {message.chat.id}. Main Bot remaining silent for '{search}'.")
-                    return
+                        pass
 
             # Execute Normal/Legacy Filter Search directly on Main Bot
             logger.info(f"[MAIN BOT NORMAL FILTER ROUTE] query='{search}' chat_id={message.chat.id}")
@@ -5438,7 +5445,22 @@ async def execute_normal_group_file_delivery(client: Client, user_id: int, group
                                 parse_mode=enums.ParseMode.HTML,
                                 reply_to_message_id=ctrl_msg_id
                             )
-                            logger.info(f"[CHILD BOT COPY FALLBACK SUCCESS] file_id={fid} from ch={ch_id_coord} msg={m_id_coord}")
+                            logger.info(f"[PARALLEL BOT COPY FALLBACK SUCCESS] file_id={fid} from ch={ch_id_coord} msg={m_id_coord}")
+                            if sent_f:
+                                try:
+                                    sent_m = getattr(sent_f, getattr(sent_f.media, "value", "document"), None) if getattr(sent_f, "media", None) else None
+                                    c_bid = str(getattr(getattr(client, "me", None), "id", ""))
+                                    if sent_m and getattr(sent_m, "file_id", None) and c_bid:
+                                        from database.ia_filterdb import unpack_new_file_id, col, sec_col
+                                        from info import MULTIPLE_DATABASE
+                                        new_fid = unpack_new_file_id(sent_m.file_id)
+                                        up_d = {"$set": {f"bot_file_map.{c_bid}": new_fid}, "$addToSet": {"file_ids": new_fid}}
+                                        col.update_one({"$or": [{"file_id": fid}, {"file_ids": fid}]}, up_d)
+                                        if MULTIPLE_DATABASE:
+                                            sec_col.update_one({"$or": [{"file_id": fid}, {"file_ids": fid}]}, up_d)
+                                        logger.info(f"[AUTO CACHE FILE] Saved bot {c_bid} file_id={new_fid[:12]}...")
+                                except Exception as ace:
+                                    logger.warning(f"[AUTO CACHE FILE ERROR] {ace}")
                         except Exception as cpe:
                             logger.warning(f"[CHILD BOT COPY FALLBACK FAILED] {cpe}")
 
