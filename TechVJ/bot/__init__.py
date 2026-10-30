@@ -2,9 +2,10 @@
 # Subscribe YouTube Channel For Amazing Bot @Tech_VJ
 # Ask Doubt on telegram @KingVJ01
 
-import os
+import os, asyncio
 from os import environ
 from pyrogram import Client, types
+from pyrogram.errors import FloodWait
 from info import *
 from utils import temp
 from typing import Union, Optional, AsyncGenerator
@@ -38,14 +39,24 @@ class TechVJXBot(Client):
         offset: int = 0,
     ) -> Optional[AsyncGenerator["types.Message", None]]:
         current = offset
-        while True:
-            new_diff = min(200, limit - current)
+        batch_size = 200
+        while current <= limit:
+            new_diff = min(batch_size, (limit - current) + 1)
             if new_diff <= 0:
-                return
-            messages = await self.get_messages(chat_id, list(range(current, current+new_diff+1)))
+                break
+            batch_ids = list(range(current, current + new_diff))
+            current += new_diff
+            try:
+                messages = await self.get_messages(chat_id, batch_ids)
+            except FloodWait as e:
+                await asyncio.sleep(e.value)
+                messages = await self.get_messages(chat_id, batch_ids)
+            except Exception:
+                continue
+            if not messages:
+                continue
             for message in messages:
                 yield message
-                current += 1
       
 TechVJBot = TechVJXBot()
 ChildBot = None
@@ -57,4 +68,3 @@ __all__ = [
     "multi_clients",
     "work_loads"
 ]
-
