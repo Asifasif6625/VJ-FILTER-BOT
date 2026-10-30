@@ -58,10 +58,15 @@ async def start():
     temp.U_NAME1 = me.username
     temp.B_NAME = me.first_name
     try:
-        from utils import is_bot_active
+        from plugins.botoff import is_bot_active
         temp.BOT_STATUS[me.id] = await is_bot_active(me.id)
-    except Exception as bse:
-        logging.warning(f"Error loading bot 1 power status: {bse}")
+    except Exception:
+        try:
+            from utils import is_bot_active
+            temp.BOT_STATUS[me.id] = await is_bot_active(me.id)
+        except Exception as bse:
+            temp.BOT_STATUS[me.id] = True
+            logging.warning(f"Error loading bot 1 power status: {bse}")
     logging.info(f"MAIN BOT 1: All handlers loaded on @{me.username}.")
 
     if BOT_TOKEN2:
@@ -81,10 +86,14 @@ async def start():
             temp.B_NAME2 = child_me.first_name
             temp.CHILD_B_NAME = child_me.first_name
             try:
-                from utils import is_bot_active
+                from plugins.botoff import is_bot_active
                 temp.BOT_STATUS[child_me.id] = await is_bot_active(child_me.id)
             except Exception:
-                pass
+                try:
+                    from utils import is_bot_active
+                    temp.BOT_STATUS[child_me.id] = await is_bot_active(child_me.id)
+                except Exception:
+                    temp.BOT_STATUS[child_me.id] = True
             logging.info(f"PARALLEL BOT 2: Started and registered all handlers on @{child_me.username}")
         except Exception as e:
             logging.error(f"Failed starting Parallel Bot 2: {e}", exc_info=True)
