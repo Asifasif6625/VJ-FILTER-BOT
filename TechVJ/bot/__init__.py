@@ -18,15 +18,16 @@ work_loads = {}
 
 class TechVJXBot(Client):
 
-    def __init__(self):
+    def __init__(self, name=SESSION, bot_token=BOT_TOKEN, in_memory=False):
         super().__init__(
-            name=SESSION,
+            name=name,
             api_id=API_ID,
             api_hash=API_HASH,
-            bot_token=BOT_TOKEN,
+            bot_token=bot_token,
             workers=150,
             plugins={"root": "plugins"},
             sleep_threshold=5,
+            in_memory=in_memory,
         )
 
     async def set_self(self):
@@ -58,11 +59,15 @@ class TechVJXBot(Client):
             for message in messages:
                 yield message
       
-TechVJBot = TechVJXBot()
-ChildBot = None
+TechVJBot = TechVJXBot(name=SESSION, bot_token=BOT_TOKEN)
+Bot2 = None
+if BOT_TOKEN2:
+    Bot2 = TechVJXBot(name=CHILD_SESSION, bot_token=BOT_TOKEN2)
+ChildBot = Bot2
 
 __all__ = [
     "TechVJBot",
+    "Bot2",
     "ChildBot",
     "TechVJXBot",
     "multi_clients",
