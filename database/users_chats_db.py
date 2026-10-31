@@ -309,14 +309,21 @@ class Database:
         return user.get('save', False)
 
     async def set_bot_status(self, bot_id: int, is_active: bool):
+        if not bot_id:
+            return
+        bid = int(bot_id)
         await self.bot_status.update_one(
-            {'_id': int(bot_id)},
+            {'_id': bid},
             {'$set': {'is_active': is_active, 'updated_at': datetime.datetime.utcnow()}},
             upsert=True
         )
 
     async def get_bot_status(self, bot_id: int) -> bool:
-        doc = await self.bot_status.find_one({'_id': int(bot_id)})
+        if not bot_id:
+            return True
+        bid_int = int(bot_id)
+        bid_str = str(bot_id)
+        doc = await self.bot_status.find_one({'$or': [{'_id': bid_int}, {'_id': bid_str}]})
         if doc is None:
             return True
         return bool(doc.get('is_active', True)) 
