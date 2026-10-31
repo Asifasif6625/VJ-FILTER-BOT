@@ -4218,11 +4218,67 @@ async def safe_edit_text(message_or_query, text: str, max_retries: int = 3, **kw
 
 # ─── Telegram Connection Watchdog ─────────────────────────────────────────────
 _WATCHDOG_TASK = None
+_RECONNECT_LOCK = asyncio.Lock()
 
-async def _telegram_watchdog_loop(client, check_interval: int = 30):
+
+async def is_client_connected(client) -> bool:
+    """Verifies whether the client is connected and actively responsive."""
+    if not client or not getattr(client, "is_connected", False):
+        return False
+    try:
+        await asyncio.wait_for(client.get_me(), timeout=12.0)
+        return True
+    except Exception:
+        return False
+
+
+async def safe_reconnect_client(client, max_retries: int = 3) -> bool:
+    """
+    Safely reconnects a Pyrogram client with concurrency control and lock synchronization.
+    Prevents concurrent reconnect attempts and never calls connect() on an already-connected client.
+    """
+    async with _RECONNECT_LOCK:
+        # Re-check under lock
+        is_conn = getattr(client, "is_connected", False)
+        if is_conn:
+            # Check if it actually responds
+            try:
+                await asyncio.wait_for(client.get_me(), timeout=10.0)
+                logger.info("[TELEGRAM CONNECTION] Client verified healthy under lock.")
+                return True
+            except Exception as pe:
+                logger.warning(f"[TELEGRAM CONNECTION] Client marked connected but unresponsive: {pe}. Performing clean disconnect first.")
+                try:
+                    await client.disconnect()
+                except Exception as de:
+                    logger.debug(f"[CLIENT DISCONNECT EXCEPTION] {de}")
+                await asyncio.sleep(2)
+
+        # Now client is disconnected, attempt clean connect
+        for attempt in range(1, max_retries + 1):
+            try:
+                logger.info(f"[TELEGRAM CONNECTION] Connecting client (attempt {attempt}/{max_retries})...")
+                await client.connect()
+                # Verify
+                await asyncio.wait_for(client.get_me(), timeout=10.0)
+                logger.info(f"[TELEGRAM CONNECTION] Client successfully connected on attempt {attempt}.")
+                return True
+            except Exception as ce:
+                err_s = str(ce).lower()
+                if "already connected" in err_s:
+                    logger.info("[TELEGRAM CONNECTION] Client already connected, verified.")
+                    return True
+                logger.warning(f"[TELEGRAM RECONNECT ATTEMPT {attempt} FAILED] {ce}")
+                await asyncio.sleep(attempt * 3)
+
+        return False
+
+
+async def _telegram_watchdog_loop(client, check_interval: int = 60):
     """
     Single-instance connection health watchdog.
-    Monitors Telegram connectivity and triggers safe reconnection upon connection loss.
+    Periodically checks Telegram connectivity and safely reconnects if disconnected.
+    Pauses checks during active file migration to avoid interfering with bulk operations.
     """
     logger.info("[TELEGRAM WATCHDOG] Connection health monitor active.")
     consecutive_fails = 0
@@ -4231,34 +4287,30 @@ async def _telegram_watchdog_loop(client, check_interval: int = 30):
         try:
             await asyncio.sleep(check_interval)
 
-            is_connected = getattr(client, "is_connected", True)
-            if not is_connected:
+            # Do not ping while migration is actively running to prevent socket contention
+            if getattr(temp, "IS_REMAP_RUNNING", False):
+                consecutive_fails = 0
+                continue
+
+            # Check if client.is_connected property is False
+            if not getattr(client, "is_connected", False):
                 consecutive_fails += 1
                 logger.warning(
                     f"[TELEGRAM CONNECTION]\n"
                     f"status=DISCONNECTED\n"
-                    f"reason=is_connected is False\n"
+                    f"reason=client.is_connected is False\n"
                     f"attempt={consecutive_fails}"
                 )
-                logger.info(
-                    f"[TELEGRAM CONNECTION]\n"
-                    f"action=RECONNECT\n"
-                    f"attempt={consecutive_fails}"
-                )
-                try:
-                    if hasattr(client, "connect"):
-                        await client.connect()
+                success = await safe_reconnect_client(client, max_retries=3)
+                if success:
                     consecutive_fails = 0
-                    logger.info(
-                        f"[TELEGRAM CONNECTION]\n"
-                        f"action=RECONNECTED"
-                    )
-                except Exception as rec_err:
-                    logger.warning(f"[TELEGRAM RECONNECT FAILED] {rec_err}")
+                    logger.info("[TELEGRAM CONNECTION]\naction=RECONNECTED")
+                else:
+                    logger.warning("[TELEGRAM RECONNECT FAILED] Reconnect attempts exhausted.")
             else:
-                # Test connectivity with a fast timeout
+                # Test responsiveness with generous 15.0s timeout
                 try:
-                    await asyncio.wait_for(client.get_me(), timeout=6.0)
+                    await asyncio.wait_for(client.get_me(), timeout=15.0)
                     consecutive_fails = 0
                 except (asyncio.TimeoutError, OSError, Exception) as ping_err:
                     err_s = str(ping_err).lower()
@@ -4266,33 +4318,30 @@ async def _telegram_watchdog_loop(client, check_interval: int = 30):
                         consecutive_fails += 1
                         logger.warning(
                             f"[TELEGRAM CONNECTION]\n"
-                            f"status=DISCONNECTED\n"
-                            f"reason={ping_err}"
+                            f"status=DISCONNECTED_UNRESPONSIVE\n"
+                            f"reason={ping_err}\n"
+                            f"consecutive_fails={consecutive_fails}/3"
                         )
-                        logger.info(
-                            f"[TELEGRAM CONNECTION]\n"
-                            f"action=RECONNECT\n"
-                            f"attempt={consecutive_fails}"
-                        )
-                        try:
-                            if hasattr(client, "reconnect"):
-                                await client.reconnect()
-                            elif hasattr(client, "connect"):
-                                await client.connect()
-                            consecutive_fails = 0
+                        # Only attempt reconnect after 3 consecutive failures to avoid flapping on transient latency
+                        if consecutive_fails >= 3:
                             logger.info(
                                 f"[TELEGRAM CONNECTION]\n"
-                                f"action=RECONNECTED"
+                                f"action=RECONNECT\n"
+                                f"attempt={consecutive_fails}"
                             )
-                        except Exception as r_err:
-                            logger.warning(f"[TELEGRAM RECONNECT ATTEMPT FAILED] {r_err}")
+                            success = await safe_reconnect_client(client, max_retries=3)
+                            if success:
+                                consecutive_fails = 0
+                                logger.info("[TELEGRAM CONNECTION]\naction=RECONNECTED")
+                            else:
+                                logger.warning("[TELEGRAM RECONNECT ATTEMPT FAILED] Reconnect attempts exhausted.")
         except asyncio.CancelledError:
             break
         except Exception as e:
             logger.warning(f"[TELEGRAM WATCHDOG ERROR] {e}")
 
 
-def start_telegram_watchdog(client, check_interval: int = 30):
+def start_telegram_watchdog(client, check_interval: int = 60):
     """Guarantees a single watchdog instance is started."""
     global _WATCHDOG_TASK
     if _WATCHDOG_TASK is not None and not _WATCHDOG_TASK.done():
