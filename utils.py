@@ -104,13 +104,34 @@ def get_bot_username(client=None) -> str:
     return os.environ.get("BOT_USERNAME", "Bot")
 
 
+def _check_env_bot_off(bot_id: int) -> bool:
+    """Checks if environment variables have explicitly forced this bot OFF."""
+    try:
+        if os.environ.get("BOT_OFF", "").strip().lower() in ("true", "1", "yes"):
+            return True
+        b1_id = getattr(temp, "ME", None) or getattr(temp, "ME1", None)
+        b2_id = getattr(temp, "ME2", None) or getattr(temp, "CHILD_ME", None)
+        if b1_id and int(bot_id) == int(b1_id) and os.environ.get("BOT1_OFF", "").strip().lower() in ("true", "1", "yes"):
+            return True
+        if b2_id and int(bot_id) == int(b2_id) and os.environ.get("BOT2_OFF", "").strip().lower() in ("true", "1", "yes"):
+            return True
+    except Exception:
+        pass
+    return False
+
+
 def is_bot_active_in_memory(bot_id: int) -> bool:
     """Instant, zero-latency in-memory check for bot power state."""
     if not bot_id:
         return True
     if not hasattr(temp, "BOT_STATUS") or not isinstance(temp.BOT_STATUS, dict):
-        return True
-    return bool(temp.BOT_STATUS.get(int(bot_id), True))
+        return not _check_env_bot_off(bot_id)
+    bid = int(bot_id)
+    if bid in temp.BOT_STATUS:
+        return bool(temp.BOT_STATUS[bid])
+    if _check_env_bot_off(bid):
+        return False
+    return True
 
 
 def get_active_public_bot_id():
@@ -124,11 +145,14 @@ def get_active_public_bot_id():
     b1_id = getattr(temp, "ME", None) or getattr(temp, "ME1", None)
     b2_id = getattr(temp, "ME2", None) or getattr(temp, "CHILD_ME", None)
 
-    if b1_id and is_bot_active_in_memory(b1_id):
-        return b1_id
+    b1_int = int(b1_id) if b1_id else None
+    b2_int = int(b2_id) if b2_id else None
 
-    if b2_id and is_bot_active_in_memory(b2_id):
-        return b2_id
+    if b1_int and is_bot_active_in_memory(b1_int):
+        return b1_int
+
+    if b2_int and is_bot_active_in_memory(b2_int):
+        return b2_int
 
     return None
 
@@ -152,6 +176,11 @@ async def is_bot_active(bot_id: int) -> bool:
     bid = int(bot_id)
     if bid in temp.BOT_STATUS:
         return temp.BOT_STATUS[bid]
+
+    if _check_env_bot_off(bid):
+        temp.BOT_STATUS[bid] = False
+        return False
+
     try:
         from database.users_chats_db import db
         status = await db.get_bot_status(bid)
