@@ -816,11 +816,16 @@ async def remap_files_command(bot, message):
 
     target_channels = []
     text_parts = message.text.strip().split()
+    start_skip_id = 1
     if len(text_parts) > 1:
         for p in text_parts[1:]:
             p_clean = p.strip()
             if p_clean.lstrip("-").isdigit():
-                target_channels.append(int(p_clean))
+                val = int(p_clean)
+                if val < 0 or len(p_clean) > 8:
+                    target_channels.append(val)
+                else:
+                    start_skip_id = max(1, val)
             elif p_clean:
                 target_channels.append(p_clean)
     else:
@@ -852,7 +857,7 @@ async def remap_files_command(bot, message):
     total_errors = 0
     start_time = time.monotonic()
 
-    sem = asyncio.Semaphore(20)
+    sem = asyncio.Semaphore(10)
 
     def make_prog_bar(pct, length=10):
         filled = max(0, min(length, int(length * pct / 100)))
@@ -900,13 +905,14 @@ async def remap_files_command(bot, message):
 
             ch_scanned = 0
             last_edit_time = time.monotonic()
-            batch_size = 200
-            current = 1
+            batch_size = 100
+            current = start_skip_id if ch_idx == 1 and start_skip_id > 1 else 1
 
             async def fetch_ids(b_ids):
                 if not b_ids:
                     return []
-                for attempt in range(3):
+                max_retries = 5
+                for attempt in range(1, max_retries + 1):
                     if is_stopped():
                         return None
                     try:
@@ -918,12 +924,25 @@ async def remap_files_command(bot, message):
                                 return None
                             await asyncio.sleep(1)
                     except Exception as ge:
-                        logger.warning(f"[REMAP GET_MESSAGES RETRY] Attempt {attempt+1}/3: {ge}")
-                        for _ in range(int(attempt + 1)):
+                        err_msg = str(ge).lower()
+                        is_conn_error = any(k in err_msg for k in ["connection lost", "connectionerror", "broken pipe", "timeout", "network", "socket"])
+                        backoff = min(24, 2 ** attempt)
+                        logger.warning(f"[REMAP GET_MESSAGES RETRY] Attempt {attempt}/{max_retries}: {ge}. Sleeping {backoff}s...")
+                        for _ in range(backoff):
                             if is_stopped():
                                 return None
                             await asyncio.sleep(1)
-                return None
+
+                        if is_conn_error and not is_stopped():
+                            try:
+                                from utils import is_client_connected, safe_reconnect_client
+                                connected = await is_client_connected(bot)
+                                if not connected:
+                                    logger.warning(f"[REMAP CONNECTION REPAIR] Bot client disconnected during batch {b_ids[0]}..{b_ids[-1]}. Triggering safe reconnect...")
+                                    await safe_reconnect_client(bot)
+                            except Exception as re:
+                                logger.debug(f"[REMAP RECONNECT ERROR] {re}")
+                return "MIGRATION_CONN_FAILED"
 
             async def process_single_media(msg):
                 media = getattr(msg, getattr(msg.media, "value", "document"), None)
@@ -967,12 +986,34 @@ async def remap_files_command(bot, message):
 
                     current_batch_size = len(initial_ids) if initial_ids else batch_size
 
+                    # Check for fatal connection failure after bounded retries
+                    if messages == "MIGRATION_CONN_FAILED":
+                        logger.error(f"[REMAP_FILES CONNECTION FAILURE] Channel {chat_obj.id} failed at msg={current}. Pausing migration safely.")
+                        elapsed = max(1, int(time.monotonic() - start_time))
+                        elapsed_str = f"{elapsed // 60}m {elapsed % 60}s"
+                        resume_cmd = f"/remap_files {chat_obj.id} {current}"
+                        try:
+                            await status_msg.edit_text(
+                                f"⚠️ <b>File Migration Paused: Telegram Connection Lost</b>\n\n"
+                                f"Telegram connection dropped and could not reconnect after multiple retries.\n"
+                                f"Migration was paused safely to protect database integrity and avoid skipping files.\n\n"
+                                f"📌 <b>Channel:</b> <code>{pyhtml.escape(c_title)}</code> (<code>{chat_obj.id}</code>)\n"
+                                f"📍 <b>Paused at Message ID:</b> <code>{current}</code>\n"
+                                f"📁 <b>Messages Scanned before pause:</b> <code>{total_scanned}</code>\n"
+                                f"🎬 <b>Media Found:</b> <code>{total_media_detected}</code>\n"
+                                f"✅ <b>Successfully Migrated:</b> <code>{total_migrated}</code>\n"
+                                f"⚡ <b>Already Valid:</b> <code>{total_already_valid}</code>\n"
+                                f"⏱️ <b>Time Elapsed:</b> <code>{elapsed_str}</code>\n\n"
+                                f"👉 <b>To resume migration from this exact message, send:</b>\n"
+                                f"<code>{resume_cmd}</code>"
+                            )
+                        except Exception:
+                            pass
+                        return
+
                     if messages is None:
-                        current += current_batch_size
-                        next_end = min(current + batch_size, probe_limit + 1)
-                        initial_ids = list(range(current, next_end)) if current <= probe_limit else []
-                        prefetch_task = asyncio.create_task(fetch_ids(initial_ids)) if initial_ids else None
-                        continue
+                        # User stopped migration
+                        break
 
                     # Schedule next batch prefetch immediately while current batch is processed
                     next_current = current + current_batch_size
