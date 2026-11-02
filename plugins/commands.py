@@ -1072,6 +1072,40 @@ async def delete_all_index(bot, message):
     sm_count = await super_movies_col.count_documents({"status": {"$ne": "deleted"}})
     s_count = await series_col.count_documents({"status": {"$ne": "deleted"}})
 
+    # Check for direct confirmation arguments: e.g. /delfiles yes or /delfiles confirm
+    args = message.text.split(None, 1)
+    if len(args) > 1 and args[1].lower().strip() in ["yes", "confirm", "force", "now", "true"]:
+        status_msg = await message.reply_text(
+            "⏳ <b>Safely clearing old indexed files and resetting file IDs...</b>\n<i>Preserving 100% of Super Filters...</i>",
+            quote=True,
+            parse_mode=enums.ParseMode.HTML
+        )
+        from database.ia_filterdb import clear_all_indexed_files
+        results = await clear_all_indexed_files(clear_super_file_ids=True)
+        if results.get("error"):
+            return await status_msg.edit_text(
+                f"❌ <b>Error clearing files:</b>\n\n<code>{results['error']}</code>",
+                parse_mode=enums.ParseMode.HTML
+            )
+        summary_text = (
+            "✅ <b>Successfully Cleared Old Indexed Files!</b>\n\n"
+            "📊 <b>Deletion Summary:</b>\n"
+            f"• <b>Primary Collection (<code>ia_filterdb</code>):</b> <code>{results['col_deleted']}</code> records deleted\n"
+        )
+        if results.get('sec_col_deleted'):
+            summary_text += f"• <b>Secondary Collection:</b> <code>{results['sec_col_deleted']}</code> records deleted\n"
+        summary_text += (
+            f"• <b>Series Episode Files (<code>series_files</code>):</b> <code>{results['sfiles_deleted']}</code> records deleted\n\n"
+            "🛡 <b>Preserved Configurations:</b>\n"
+            f"• <b>Super Movie Filters:</b> <code>{results['super_movies_preserved']}</code> preserved (titles, posters, configs intact)\n"
+            f"• <b>Series Filters:</b> <code>{results['series_preserved']}</code> preserved (titles, seasons, configs intact)\n"
+            "• <b>MongoDB Background Indexes:</b> Preserved intact\n\n"
+            "🚀 <b>Next Steps:</b>\n"
+            "You can now run <code>/index</code> to reindex your storage channel.\n"
+            "All newly indexed files will automatically synchronize with your existing Super Filters!"
+        )
+        return await status_msg.edit_text(summary_text, parse_mode=enums.ParseMode.HTML)
+
     confirm_text = (
         "⚠️ <b>CONFIRMATION: Safely Clear Old Indexed Files</b>\n\n"
         "This will clear old indexed file records from MongoDB so you can reindex fresh.\n\n"
@@ -1083,7 +1117,8 @@ async def delete_all_index(bot, message):
         f"✅ <b>{sm_count} Super Movie Filters:</b> All titles, posters, aliases, IMDb IDs, configs preserved 100%!\n"
         f"✅ <b>{s_count} Series Filters:</b> All series names, keys, posters, captions preserved 100%!\n"
         "✅ <b>Zero lost filters:</b> Newly indexed files will automatically match & sync!\n\n"
-        "<b>Are you sure you want to proceed?</b>"
+        "<b>Are you sure you want to proceed?</b>\n"
+        "<i>💡 Tip: You can also send <code>/delfiles yes</code> to clear immediately without prompt.</i>"
     )
 
     markup = InlineKeyboardMarkup([
