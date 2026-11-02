@@ -695,7 +695,11 @@ async def index_files_to_db(lst_msg_id, chat, msg, bot):
         try:
             current = temp.CURRENT
             temp.CANCEL = False
-            async for message in bot.iter_messages(chat, lst_msg_id, temp.CURRENT):
+            from utils import get_active_delivery_bot
+            active_del = get_active_delivery_bot()
+            worker_bot = active_del if (active_del and getattr(active_del, "is_connected", False)) else bot
+            worker_bid = getattr(getattr(worker_bot, "me", None), "id", None)
+            async for message in worker_bot.iter_messages(chat, lst_msg_id, temp.CURRENT):
                 if temp.CANCEL:
                     await msg.edit(f"Successfully Cancelled!!\n\nSaved <code>{total_files}</code> files to dataBase!\nDuplicate Files Skipped: <code>{duplicate}</code>\nDeleted Messages Skipped: <code>{deleted}</code>\nNon-Media messages skipped: <code>{no_media + unsupported}</code>(Unsupported Media - `{unsupported}` )\nErrors Occurred: <code>{errors}</code>")
                     break
@@ -726,7 +730,8 @@ async def index_files_to_db(lst_msg_id, chat, msg, bot):
                 media.caption = message.caption
                 media.chat_id = chat
                 media.message_id = message.id
-                aynav, vnay = await save_file(media)
+                media.bot_id = worker_bid
+                aynav, vnay = await save_file(media, bot_id=worker_bid)
                 if aynav:
                     total_files += 1
                 elif vnay == 0:
@@ -1136,3 +1141,10 @@ async def remap_files_command(bot, message):
         if bot_id and hasattr(temp, "REMAP_STOP_BOTS") and isinstance(temp.REMAP_STOP_BOTS, dict):
             temp.REMAP_STOP_BOTS[bot_id] = False
         temp.REMAP_STOP = False
+
+
+async def start_delivery_bot_remap(caller_client, delivery_bot, message, admin_user_id):
+    """Invokes remap_files_command using the specified delivery bot client as an asynchronous background task."""
+    task = asyncio.create_task(remap_files_command(bot=delivery_bot, message=message))
+    temp.CURRENT_REMAP_TASK = task
+    return task

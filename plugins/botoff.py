@@ -3,7 +3,17 @@ import asyncio
 import logging
 from pyrogram import Client, filters, enums
 from info import ADMINS
-from utils import temp
+from utils import (
+    temp,
+    get_all_delivery_bots,
+    get_active_delivery_bot,
+    get_delivery_bot_username,
+    is_bot_active_in_memory,
+    is_bot_active,
+    set_bot_active,
+    get_active_public_bot_id,
+    is_bot_serving_public,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -15,11 +25,8 @@ def _check_env_bot_off(bot_id: int) -> bool:
     try:
         if os.environ.get("BOT_OFF", "").strip().lower() in ("true", "1", "yes"):
             return True
-        b1_id = getattr(temp, "ME", None) or getattr(temp, "ME1", None)
-        b2_id = getattr(temp, "ME2", None) or getattr(temp, "CHILD_ME", None)
-        if b1_id and int(bot_id) == int(b1_id) and os.environ.get("BOT1_OFF", "").strip().lower() in ("true", "1", "yes"):
-            return True
-        if b2_id and int(bot_id) == int(b2_id) and os.environ.get("BOT2_OFF", "").strip().lower() in ("true", "1", "yes"):
+        b_id = getattr(temp, "ME", None) or getattr(temp, "GDBOT_ID", None)
+        if b_id and int(bot_id) == int(b_id) and os.environ.get("GDBOT_OFF", "").strip().lower() in ("true", "1", "yes"):
             return True
     except Exception:
         pass
@@ -38,39 +45,6 @@ def is_bot_active_in_memory(bot_id: int) -> bool:
     if _check_env_bot_off(bid):
         return False
     return True
-
-
-def get_active_public_bot_id():
-    """
-    Determines which single bot is currently designated to serve the public.
-    Rule:
-    1. Bot 1 is primary. If Bot 1 is ON, Bot 1 serves the public.
-    2. If Bot 1 is OFF, Bot 2 serves the public (if Bot 2 is ON).
-    3. If both are OFF, returns None (maintenance mode).
-    """
-    b1_id = getattr(temp, "ME", None) or getattr(temp, "ME1", None)
-    b2_id = getattr(temp, "ME2", None) or getattr(temp, "CHILD_ME", None)
-
-    b1_int = int(b1_id) if b1_id else None
-    b2_int = int(b2_id) if b2_id else None
-
-    if b1_int and is_bot_active_in_memory(b1_int):
-        return b1_int
-
-    if b2_int and is_bot_active_in_memory(b2_int):
-        return b2_int
-
-    return None
-
-
-def is_bot_serving_public(bot_id: int) -> bool:
-    """Returns True if this specific bot is the active public bot."""
-    if not bot_id:
-        return True
-    active_id = get_active_public_bot_id()
-    if active_id is None:
-        return False
-    return int(bot_id) == int(active_id)
 
 
 async def is_bot_active(bot_id: int) -> bool:
@@ -135,67 +109,37 @@ async def cmd_botoff(client: Client, message):
     Admin command to turn bot(s) OFF.
     Usage:
     /botoff       -> turns OFF this receiving bot
-    /botoff 1     -> turns OFF Bot 1
-    /botoff 2     -> turns OFF Bot 2
-    /botoff all   -> turns OFF both Bot 1 and Bot 2
+    /botoff all   -> turns OFF all connected bots
     """
-    b1_id = getattr(temp, "ME", None) or getattr(temp, "ME1", None)
-    b2_id = getattr(temp, "ME2", None) or getattr(temp, "CHILD_ME", None)
-    b1_u = getattr(temp, "U_NAME", "Bot 1") or getattr(temp, "U_NAME1", "Bot 1")
-    b2_u = getattr(temp, "U_NAME2", "Bot 2") or getattr(temp, "CHILD_U_NAME", "Bot 2")
-
-    curr_bot_id = getattr(getattr(client, "me", None), "id", None) or b1_id
+    curr_bot_id = getattr(getattr(client, "me", None), "id", None) or getattr(temp, "ME", None)
     curr_u = getattr(getattr(client, "me", None), "username", "Bot")
 
     args = message.text.split()[1:] if message.text else []
     target = args[0].lower() if args else None
 
     if target in ["all", "both"]:
-        if b1_id:
-            await set_bot_active(int(b1_id), False)
-        if b2_id:
-            await set_bot_active(int(b2_id), False)
-        logger.info(f"[BOT POWER] Both bots turned OFF by admin {message.from_user.id}")
-        reply_msg = (
-            f"🔴 <b>Both Bot 1 (@{b1_u}) and Bot 2 (@{b2_u}) are now turned OFF.</b>\n\n"
-            f"• Maintenance mode is ACTIVE for all non-admin users.\n"
-            f"• Admins can continue to use both bots at any time.\n"
-            f"• Use <code>/boton 1</code>, <code>/boton 2</code>, or <code>/boton all</code> to turn ON."
+        if curr_bot_id:
+            await set_bot_active(int(curr_bot_id), False)
+        for b in get_all_delivery_bots():
+            if getattr(b, "me", None):
+                await set_bot_active(b.me.id, False)
+        logger.info(f"[BOT POWER] All bots turned OFF by admin {message.from_user.id}")
+        return await message.reply_text(
+            "🔴 <b>All Bots are now turned OFF.</b>\n\n"
+            "• Maintenance mode is ACTIVE for all non-admin users.\n"
+            "• Admins can continue to use bots at any time.\n"
+            "• Use <code>/boton</code> or <code>/boton all</code> to turn ON.",
+            parse_mode=enums.ParseMode.HTML
         )
-        return await message.reply_text(reply_msg, parse_mode=enums.ParseMode.HTML)
 
-    if target in ["1", "bot1", "main"]:
-        if not b1_id:
-            return await message.reply_text("❌ Bot 1 is not configured or not running.")
-        await set_bot_active(int(b1_id), False)
-        target_name = f"Bot 1 (@{b1_u})"
-        logger.info(f"[BOT POWER] Bot 1 ({b1_id}) turned OFF by admin {message.from_user.id}")
-    elif target in ["2", "bot2", "child", "second"]:
-        if not b2_id:
-            return await message.reply_text("❌ Bot 2 is not configured or not running.")
-        await set_bot_active(int(b2_id), False)
-        target_name = f"Bot 2 (@{b2_u})"
-        logger.info(f"[BOT POWER] Bot 2 ({b2_id}) turned OFF by admin {message.from_user.id}")
-    else:
-        # Default: target the current bot
-        await set_bot_active(int(curr_bot_id), False)
-        target_name = f"@{curr_u}"
-        logger.info(f"[BOT POWER] Bot @{curr_u} ({curr_bot_id}) turned OFF by admin {message.from_user.id}")
-
-    active_id = get_active_public_bot_id()
-    if active_id == (int(b1_id) if b1_id else -1):
-        active_mention = f"@{b1_u} (Primary Active)"
-    elif active_id == (int(b2_id) if b2_id else -1):
-        active_mention = f"@{b2_u} (Failover Active)"
-    else:
-        active_mention = "🔴 None (All Bots OFF - Maintenance Mode)"
+    await set_bot_active(int(curr_bot_id), False)
+    logger.info(f"[BOT POWER] Bot @{curr_u} ({curr_bot_id}) turned OFF by admin {message.from_user.id}")
 
     await message.reply_text(
-        f"🔴 <b>{target_name} is now turned OFF.</b>\n\n"
+        f"🔴 <b>Bot @{curr_u} is now turned OFF.</b>\n\n"
         f"• This bot will now <b>ONLY</b> respond to Admins.\n"
         f"• Non-admins sending /start or searching movies will receive the maintenance notice + sticker (auto-deleted in 40s).\n"
-        f"• Active public bot is now: <b>{active_mention}</b>\n\n"
-        f"<i>Tip: Use <code>/boton</code> or <code>/botstatus</code> to manage bots.</i>",
+        f"• Use <code>/boton</code> on this bot to turn it back ON.",
         parse_mode=enums.ParseMode.HTML
     )
 
@@ -206,96 +150,62 @@ async def cmd_boton(client: Client, message):
     Admin command to turn bot(s) ON.
     Usage:
     /boton       -> turns ON this receiving bot
-    /boton 1     -> turns ON Bot 1
-    /boton 2     -> turns ON Bot 2
-    /boton all   -> turns ON both Bot 1 and Bot 2
+    /boton all   -> turns ON all connected bots
     """
-    b1_id = getattr(temp, "ME", None) or getattr(temp, "ME1", None)
-    b2_id = getattr(temp, "ME2", None) or getattr(temp, "CHILD_ME", None)
-    b1_u = getattr(temp, "U_NAME", "Bot 1") or getattr(temp, "U_NAME1", "Bot 1")
-    b2_u = getattr(temp, "U_NAME2", "Bot 2") or getattr(temp, "CHILD_U_NAME", "Bot 2")
-
-    curr_bot_id = getattr(getattr(client, "me", None), "id", None) or b1_id
+    curr_bot_id = getattr(getattr(client, "me", None), "id", None) or getattr(temp, "ME", None)
     curr_u = getattr(getattr(client, "me", None), "username", "Bot")
 
     args = message.text.split()[1:] if message.text else []
     target = args[0].lower() if args else None
 
     if target in ["all", "both"]:
-        if b1_id:
-            await set_bot_active(int(b1_id), True)
-        if b2_id:
-            await set_bot_active(int(b2_id), True)
-        logger.info(f"[BOT POWER] Both bots turned ON by admin {message.from_user.id}")
-        active_id = get_active_public_bot_id()
-        active_mention = f"@{b1_u}" if active_id == int(b1_id) else (f"@{b2_u}" if active_id == int(b2_id) else "None")
+        if curr_bot_id:
+            await set_bot_active(int(curr_bot_id), True)
+        for b in get_all_delivery_bots():
+            if getattr(b, "me", None):
+                await set_bot_active(b.me.id, True)
+        logger.info(f"[BOT POWER] All bots turned ON by admin {message.from_user.id}")
         return await message.reply_text(
-            f"🟢 <b>Both Bot 1 (@{b1_u}) and Bot 2 (@{b2_u}) are now turned ON.</b>\n\n"
-            f"• Public traffic will be served by: <b>{active_mention}</b> (single active public bot)",
+            "🟢 <b>All Bots are now turned ON.</b>\n\n"
+            "• Public search traffic is active on delivery bots.",
             parse_mode=enums.ParseMode.HTML
         )
 
-    if target in ["1", "bot1", "main"]:
-        if not b1_id:
-            return await message.reply_text("❌ Bot 1 is not configured or not running.")
-        await set_bot_active(int(b1_id), True)
-        target_name = f"Bot 1 (@{b1_u})"
-        logger.info(f"[BOT POWER] Bot 1 ({b1_id}) turned ON by admin {message.from_user.id}")
-    elif target in ["2", "bot2", "child", "second"]:
-        if not b2_id:
-            return await message.reply_text("❌ Bot 2 is not configured or not running.")
-        await set_bot_active(int(b2_id), True)
-        target_name = f"Bot 2 (@{b2_u})"
-        logger.info(f"[BOT POWER] Bot 2 ({b2_id}) turned ON by admin {message.from_user.id}")
-    else:
-        await set_bot_active(int(curr_bot_id), True)
-        target_name = f"@{curr_u}"
-        logger.info(f"[BOT POWER] Bot @{curr_u} ({curr_bot_id}) turned ON by admin {message.from_user.id}")
-
-    active_id = get_active_public_bot_id()
-    if active_id == (int(b1_id) if b1_id else -1):
-        active_mention = f"@{b1_u} (Primary Active)"
-    elif active_id == (int(b2_id) if b2_id else -1):
-        active_mention = f"@{b2_u} (Failover Active)"
-    else:
-        active_mention = "🔴 None (All Bots OFF)"
+    await set_bot_active(int(curr_bot_id), True)
+    logger.info(f"[BOT POWER] Bot @{curr_u} ({curr_bot_id}) turned ON by admin {message.from_user.id}")
 
     await message.reply_text(
-        f"🟢 <b>{target_name} is now turned ON.</b>\n\n"
-        f"• Active public bot is now: <b>{active_mention}</b>",
+        f"🟢 <b>Bot @{curr_u} is now turned ON.</b>",
         parse_mode=enums.ParseMode.HTML
     )
 
 
 @Client.on_message(filters.command(["botstatus", "bot_status"]) & filters.user(ADMINS), group=-10)
 async def cmd_botstatus(client: Client, message):
-    """Admin command to check status of both bots and public designation."""
-    b1_id = getattr(temp, "ME", None) or getattr(temp, "ME1", None)
-    b2_id = getattr(temp, "ME2", None) or getattr(temp, "CHILD_ME", None)
+    """Admin command to check status of GDBOT and all connected delivery bots."""
+    gdbot_id = getattr(temp, "GDBOT_ID", None) or getattr(temp, "ME", None)
+    gdbot_u = getattr(temp, "U_NAME", "GDBOT")
+    gdbot_on = is_bot_active_in_memory(int(gdbot_id)) if gdbot_id else True
 
-    b1_on = is_bot_active_in_memory(int(b1_id)) if b1_id else None
-    b2_on = is_bot_active_in_memory(int(b2_id)) if b2_id else None
-
-    b1_u = getattr(temp, "U_NAME", "Bot 1") or getattr(temp, "U_NAME1", "Bot 1")
-    b2_u = getattr(temp, "U_NAME2", "Bot 2") or getattr(temp, "CHILD_U_NAME", "Bot 2")
-
-    active_id = get_active_public_bot_id()
-    if active_id and b1_id and active_id == int(b1_id):
-        active_desc = f"@{b1_u} (Primary Active)"
-    elif active_id and b2_id and active_id == int(b2_id):
-        active_desc = f"@{b2_u} (Failover Active)"
+    delivery_bots = get_all_delivery_bots()
+    del_lines = ""
+    if not delivery_bots:
+        del_lines = "<i>No delivery bots connected yet. Use /mybot to add.</i>"
     else:
-        active_desc = "🔴 None (All bots OFF - Maintenance Mode)"
+        for b in delivery_bots:
+            u = getattr(getattr(b, "me", None), "username", "DeliveryBot")
+            bid = getattr(getattr(b, "me", None), "id", 0)
+            b_on = is_bot_active_in_memory(bid)
+            del_lines += f"• <b>@{u}:</b> {'🟢 ON' if b_on else '🔴 OFF'} (ID: <code>{bid}</code>)\n"
 
     status_text = (
-        f"🤖 <b>Dual-Bot System Status:</b>\n\n"
-        f"• <b>Bot 1 (@{b1_u}):</b> {'🟢 ON' if b1_on else ('🔴 OFF' if b1_on is False else 'Not Connected')}\n"
-        f"• <b>Bot 2 (@{b2_u}):</b> {'🟢 ON' if b2_on else ('🔴 OFF' if b2_on is False else 'Not Connected')}\n\n"
-        f"🌐 <b>Current Public Bot:</b> <b>{active_desc}</b>\n\n"
-        f"<b>Commands:</b>\n"
-        f"• <code>/botoff [1|2|all]</code> - Turn off bot(s)\n"
-        f"• <code>/boton [1|2|all]</code> - Turn on bot(s)\n\n"
-        f"<i>Admins can use both bots at any time. Non-admin users are automatically served by the single active public bot.</i>"
+        f"🤖 <b>Bot System Status:</b>\n\n"
+        f"🛡 <b>GDBOT (@{gdbot_u}):</b> {'🟢 ON' if gdbot_on else '🔴 OFF'} (Admin Management)\n\n"
+        f"📦 <b>Delivery Bots ({len(delivery_bots)}/2):</b>\n"
+        f"{del_lines}\n"
+        f"<b>Management:</b>\n"
+        f"• Use <code>/mybot</code> to add, remove, and remap delivery bots\n"
+        f"• Use <code>/botoff</code> or <code>/boton</code> to toggle power"
     )
     await message.reply_text(status_text, parse_mode=enums.ParseMode.HTML)
 
@@ -304,55 +214,78 @@ async def cmd_botstatus(client: Client, message):
 async def maintenance_message_gate(client: Client, message):
     """
     High-priority message gate:
-    1. Admins are exempt: can always use both bots.
-    2. If this receiving bot is turned OFF via /botoff:
-       Send maintenance notice + sticker, auto-delete in 40s, stop propagation.
-    3. If this receiving bot is ON but in standby mode (other bot is active public bot):
-       Send standby redirect notice + sticker, auto-delete in 40s, stop propagation.
-    4. Otherwise, allow message to proceed to normal handlers.
+    1. Admins are exempt: can always use all bots.
+    2. GDBOT is Admin-Only: redirects non-admins to the active Delivery Bot.
+    3. Delivery Bots: serve public searches unless turned OFF via /botoff.
     """
     user_id = message.from_user.id if message.from_user else (message.sender_chat.id if message.sender_chat else 0)
     admins_list = [int(a) for a in ADMINS if str(a).lstrip("-").isdigit()]
     if user_id in admins_list or str(user_id) in [str(a) for a in ADMINS]:
         return  # Admins always pass through!
 
-    bot_id = getattr(getattr(client, "me", None), "id", None)
-    if not bot_id:
-        try:
-            b_info = await client.get_me()
-            bot_id = b_info.id
-        except Exception:
-            bot_id = getattr(temp, "ME", None)
-
+    bot_id = getattr(getattr(client, "me", None), "id", None) or getattr(temp, "ME", None)
     if bot_id:
         bot_id = int(bot_id)
 
-    # 1. Direct Power Check: Is THIS receiving bot ON or OFF?
-    bot_active = await is_bot_active(bot_id)
-    if not bot_active:
-        # This bot is turned OFF with /botoff!
-        notice_text = (
-            "⚠️ <b>This bot is currently unavailable due to maintenance.</b>\n\n"
-            "<i>Please try again later.</i>\n\n"
-            "<i>🕐 This message will be deleted in 40 seconds.</i>"
-        )
-    elif not is_bot_serving_public(bot_id):
-        # This bot is in standby backup mode (other bot is serving public)
-        active_id = get_active_public_bot_id()
-        b1_id = getattr(temp, "ME", None)
-        active_u = getattr(temp, "U_NAME", "Bot 1") if active_id == (int(b1_id) if b1_id else -1) else getattr(temp, "U_NAME2", "Bot 2")
-        notice_text = (
-            f"⚠️ <b>This bot is currently in standby backup mode.</b>\n\n"
-            f"👉 <b>Please search and get files here:</b> @{active_u}\n\n"
-            f"<i>🕐 This message will be deleted in 40 seconds.</i>"
-        )
+    gdbot_id = getattr(temp, "GDBOT_ID", None) or getattr(temp, "ME", None)
+
+    # 1. Check if receiving client is GDBOT (Admin-Only Main Bot)
+    if gdbot_id and bot_id == int(gdbot_id):
+        # Non-admin messaged GDBOT -> Redirect to active Delivery Bot!
+        del_u = get_delivery_bot_username()
+        gdbot_uname = getattr(temp, "U_NAME", "")
+        if del_u and del_u.lower() != gdbot_uname.lower():
+            notice_text = (
+                f"⚠️ <b>This bot is for Admin Management & Database operations.</b>\n\n"
+                f"👉 <b>Please search and download movies from our Delivery Bot:</b>\n"
+                f"@{del_u}\n\n"
+                f"<i>🕐 This message will be deleted in 40 seconds.</i>"
+            )
+        else:
+            notice_text = (
+                "⚠️ <b>This bot is currently unavailable due to maintenance.</b>\n\n"
+                "<i>Please try again later.</i>\n\n"
+                "<i>🕐 This message will be deleted in 40 seconds.</i>"
+            )
     else:
-        # This bot is ON and actively serving the public: proceed!
-        return
+        # 2. Receiving client is a Delivery Bot!
+        bot_active = await is_bot_active(bot_id)
+        if not bot_active:
+            active_id = get_active_public_bot_id()
+            alt_bot = temp.DELIVERY_BOTS.get(active_id) if (active_id and hasattr(temp, "DELIVERY_BOTS")) else None
+            alt_u = getattr(getattr(alt_bot, "me", None), "username", None) if alt_bot else None
+            if alt_u and active_id != bot_id:
+                notice_text = (
+                    "⚠️ <b>This bot is currently under maintenance.</b>\n\n"
+                    f"👉 <b>Please search and download movies from our active bot:</b>\n"
+                    f"@{alt_u}\n\n"
+                    "<i>🕐 This message will be deleted in 40 seconds.</i>"
+                )
+            else:
+                notice_text = (
+                    "⚠️ <b>This bot is currently unavailable due to maintenance.</b>\n\n"
+                    "<i>Please try again later.</i>\n\n"
+                    "<i>🕐 This message will be deleted in 40 seconds.</i>"
+                )
+        else:
+            # Bot is ON. Check if this bot is the single designated public bot!
+            if not is_bot_serving_public(bot_id):
+                active_id = get_active_public_bot_id()
+                alt_bot = temp.DELIVERY_BOTS.get(active_id) if (active_id and hasattr(temp, "DELIVERY_BOTS")) else None
+                alt_u = getattr(getattr(alt_bot, "me", None), "username", "DeliveryBot") if alt_bot else "our main bot"
+                notice_text = (
+                    "⚠️ <b>This bot is currently on standby.</b>\n\n"
+                    f"👉 <b>Please search and download movies from our active bot:</b>\n"
+                    f"@{alt_u}\n\n"
+                    "<i>🕐 This message will be deleted in 40 seconds.</i>"
+                )
+            else:
+                # This bot is ON and is the designated active public bot! Proceed!
+                return
 
     to_delete = [message.id]
 
-    # 1. Send maintenance notice text FIRST (guaranteed delivery)
+    # 1. Send notice text FIRST (guaranteed delivery)
     try:
         txt = await client.send_message(
             chat_id=message.chat.id,
@@ -385,9 +318,9 @@ async def maintenance_message_gate(client: Client, message):
         )
     )
 
-    logger.info(f"[MAINTENANCE GATE] Intercepted message from {user_id} on OFF/STANDBY bot {bot_id}. Notice sent, scheduled 40s delete.")
+    logger.info(f"[MAINTENANCE GATE] Redirected non-admin {user_id} on bot {bot_id}. Notice sent, scheduled 40s delete.")
 
-    # 4. Stop propagation at the very end so other handlers do NOT process this message
+    # 4. Stop propagation at the very end
     message.stop_propagation()
 
 
@@ -395,28 +328,36 @@ async def maintenance_message_gate(client: Client, message):
 async def maintenance_callback_gate(client: Client, query):
     """
     High-priority callback gate:
-    Alerts non-admins if they click a button on a bot that is not active.
+    Prevents non-admins from triggering callbacks on inactive bots or GDBOT.
     """
     user_id = query.from_user.id if query.from_user else 0
     admins_list = [int(a) for a in ADMINS if str(a).lstrip("-").isdigit()]
     if user_id in admins_list or str(user_id) in [str(a) for a in ADMINS]:
         return
 
-    bot_id = getattr(getattr(client, "me", None), "id", None)
-    if not bot_id:
-        try:
-            b_info = await client.get_me()
-            bot_id = b_info.id
-        except Exception:
-            bot_id = getattr(temp, "ME", None)
-
+    bot_id = getattr(getattr(client, "me", None), "id", None) or getattr(temp, "ME", None)
     if bot_id:
         bot_id = int(bot_id)
 
+    gdbot_id = getattr(temp, "GDBOT_ID", None) or getattr(temp, "ME", None)
+
+    if gdbot_id and bot_id == int(gdbot_id):
+        del_u = get_delivery_bot_username()
+        try:
+            await query.answer(f"⚠️ This bot is for admins only. Please use @{del_u}.", show_alert=True)
+        except Exception:
+            pass
+        query.stop_propagation()
+        return
+
     bot_active = await is_bot_active(bot_id)
     if not bot_active:
+        active_id = get_active_public_bot_id()
+        alt_bot = temp.DELIVERY_BOTS.get(active_id) if (active_id and hasattr(temp, "DELIVERY_BOTS")) else None
+        alt_u = getattr(getattr(alt_bot, "me", None), "username", None) if alt_bot else None
+        msg = f"⚠️ Under maintenance. Please use @{alt_u}." if (alt_u and active_id != bot_id) else "⚠️ Bot under maintenance."
         try:
-            await query.answer("⚠️ This bot is currently unavailable due to maintenance.", show_alert=True)
+            await query.answer(msg, show_alert=True)
         except Exception:
             pass
         query.stop_propagation()
@@ -424,10 +365,10 @@ async def maintenance_callback_gate(client: Client, query):
 
     if not is_bot_serving_public(bot_id):
         active_id = get_active_public_bot_id()
-        b1_id = getattr(temp, "ME", None)
-        active_u = getattr(temp, "U_NAME", "Bot 1") if active_id == (int(b1_id) if b1_id else -1) else getattr(temp, "U_NAME2", "Bot 2")
+        alt_bot = temp.DELIVERY_BOTS.get(active_id) if (active_id and hasattr(temp, "DELIVERY_BOTS")) else None
+        alt_u = getattr(getattr(alt_bot, "me", None), "username", "DeliveryBot") if alt_bot else "active bot"
         try:
-            await query.answer(f"⚠️ This bot is in standby. Please use @{active_u}.", show_alert=True)
+            await query.answer(f"⚠️ This bot is on standby. Please use @{alt_u}.", show_alert=True)
         except Exception:
             pass
         query.stop_propagation()
