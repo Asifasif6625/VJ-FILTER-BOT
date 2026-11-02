@@ -88,6 +88,11 @@ class temp(object):
     REMAP_STOP_BOTS = {}
     IS_REMAP_RUNNING = False
     CURRENT_REMAP_TASK = None
+    IS_INDEXING = False
+    INDEX_PAUSED = False
+    CURRENT_INDEX_CHAT = None
+    CURRENT_INDEX_TASK = None
+    MYBOT_WAITING_TOKEN = {}
 
 
 
