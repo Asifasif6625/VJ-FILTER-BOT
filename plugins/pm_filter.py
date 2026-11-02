@@ -11,6 +11,7 @@ from pyrogram import Client, filters, enums
 from pyrogram.errors import FloodWait, UserIsBlocked, MessageNotModified, PeerIdInvalid
 from pyrogram.errors import MediaEmpty, PhotoInvalidDimensions, WebpageMediaEmpty
 from utils import (
+    is_gdbot_client,
     get_size, is_subscribed, pub_is_subscribed, get_poster, search_gagala, temp, get_delivery_bot_username,
     get_settings, save_group_settings, get_shortlink, get_tutorial, send_all, get_cap,
     safe_reply_text, safe_reply_photo, safe_send_message, safe_edit_text, schedule_filter_message_delete, safe_delete_message,
@@ -140,9 +141,7 @@ def is_english_only(text: str) -> bool:
 
 @Client.on_message(filters.group & filters.text & filters.incoming)
 async def give_filter(client, message):
-    curr_bot_id = getattr(getattr(client, "me", None), "id", None) or getattr(temp, "ME", None)
-    gdbot_id = getattr(temp, "GDBOT_ID", None) or getattr(temp, "ME", None)
-    if gdbot_id and curr_bot_id and int(curr_bot_id) == int(gdbot_id):
+    if is_gdbot_client(client):
         return  # GDBOT is Admin Backend only; never processes group search filters
     user_id = message.from_user.id if message.from_user else (message.sender_chat.id if message.sender_chat else 0)
     
@@ -201,9 +200,7 @@ async def give_filter(client, message):
 
 @Client.on_message(filters.private & filters.text & filters.incoming, group=2)
 async def pm_text(bot, message):
-    curr_bot_id = getattr(getattr(bot, "me", None), "id", None) or getattr(temp, "ME", None)
-    gdbot_id = getattr(temp, "GDBOT_ID", None) or getattr(temp, "ME", None)
-    if gdbot_id and curr_bot_id and int(curr_bot_id) == int(gdbot_id):
+    if is_gdbot_client(bot):
         from info import ADMINS
         user_id = message.from_user.id if message.from_user else 0
         if user_id in ADMINS or str(user_id) in [str(a) for a in ADMINS]:
@@ -3929,9 +3926,7 @@ async def cb_handler(client: Client, query: CallbackQuery):
     await query.answer(MSG_ALRT)
 
 async def auto_filter(client, name, msg, reply_msg=None, ai_search=True, spoll=False):
-    curr_bot_id = getattr(getattr(client, "me", None), "id", None) or getattr(temp, "ME", None)
-    gdbot_id = getattr(temp, "GDBOT_ID", None) or getattr(temp, "ME", None)
-    if gdbot_id and curr_bot_id and int(curr_bot_id) == int(gdbot_id):
+    if is_gdbot_client(client):
         logger.info(f"[AUTO_FILTER SKIP] Client is GDBOT (admin backend). Skipping search for '{name}'.")
         return
 
@@ -3971,20 +3966,6 @@ async def auto_filter(client, name, msg, reply_msg=None, ai_search=True, spoll=F
             except Exception as e:
                 logger.error(f"[SUPER FILTER SEARCH ROUTING ERROR] query={search if search else name} error={e}")
 
-            # If in group: if this client is Bot 2 and Bot 1 is also active in this group, let Bot 1 handle to avoid duplicate replies
-            if message.chat and message.chat.type in [enums.ChatType.GROUP, enums.ChatType.SUPERGROUP]:
-                main_me_id = getattr(temp, "ME", None)
-                curr_me_id = getattr(getattr(client, "me", None), "id", None)
-                if curr_me_id and main_me_id and curr_me_id != main_me_id:
-                    try:
-                        from utils import is_bot_active
-                        if await is_bot_active(main_me_id):
-                            cm = await client.get_chat_member(message.chat.id, main_me_id)
-                            if cm and cm.status in [enums.ChatMemberStatus.ADMINISTRATOR, enums.ChatMemberStatus.OWNER]:
-                                logger.info(f"[PARALLEL BOT 2 GROUP ROUTE] Bot 1 is active admin in group {message.chat.id}. Bot 2 remaining silent.")
-                                return
-                    except Exception:
-                        pass
 
             # Execute Normal/Legacy Filter Search directly on Main Bot
             logger.info(f"[MAIN BOT NORMAL FILTER ROUTE] query='{search}' chat_id={message.chat.id}")

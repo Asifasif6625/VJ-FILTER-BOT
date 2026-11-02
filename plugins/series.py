@@ -2672,9 +2672,8 @@ async def cmd_delthumbseries(client: Client, message: Message):
 async def cmd_series_menu(client: Client, message: Message):
     uid = message.from_user.id if message.from_user else (message.sender_chat.id if message.sender_chat else 0)
     from utils import temp
-    curr_bot_id = getattr(getattr(client, "me", None), "id", None) or getattr(temp, "ME", None)
-    gdbot_id = getattr(temp, "GDBOT_ID", None) or getattr(temp, "ME", None)
-    if curr_bot_id and gdbot_id and int(curr_bot_id) != int(gdbot_id):
+    from utils import is_gdbot_client
+    if not is_gdbot_client(client):
         gdbot_client = getattr(temp, "GDBOT", None)
         gdbot_u = getattr(getattr(gdbot_client, "me", None), "username", None) or getattr(temp, "U_NAME", "GDBOT")
         open_url = f"https://t.me/{gdbot_u}?start=series"
@@ -4602,10 +4601,8 @@ async def cmd_quick_edit(client: Client, message: Message):
     chat_id = message.chat.id
     from utils import temp
 
-    curr_bot_id = getattr(getattr(client, "me", None), "id", None) or getattr(temp, "ME", None)
-    gdbot_id = getattr(temp, "GDBOT_ID", None) or getattr(temp, "ME", None)
-
-    if curr_bot_id and gdbot_id and int(curr_bot_id) != int(gdbot_id):
+    from utils import is_gdbot_client
+    if not is_gdbot_client(client):
         # Admin called /edt on Child/Delivery Bot -> redirect to GDBOT
         import base64
         args = message.text.split(None, 1)
