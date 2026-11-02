@@ -18,14 +18,14 @@ work_loads = {}
 
 class TechVJXBot(Client):
 
-    def __init__(self, name=SESSION, bot_token=BOT_TOKEN, in_memory=False):
+    def __init__(self, name=SESSION, bot_token=BOT_TOKEN, in_memory=False, plugins=None):
         super().__init__(
             name=name,
             api_id=API_ID,
             api_hash=API_HASH,
             bot_token=bot_token,
             workers=30,
-            plugins={"root": "plugins"},
+            plugins=plugins or {"root": "plugins"},
             sleep_threshold=5,
             in_memory=in_memory,
         )
@@ -60,15 +60,9 @@ class TechVJXBot(Client):
                 yield message
       
 TechVJBot = TechVJXBot(name=SESSION, bot_token=BOT_TOKEN)
-Bot2 = None
-if BOT_TOKEN2:
-    Bot2 = TechVJXBot(name=CHILD_SESSION, bot_token=BOT_TOKEN2)
-ChildBot = Bot2
 
 __all__ = [
     "TechVJBot",
-    "Bot2",
-    "ChildBot",
     "TechVJXBot",
     "multi_clients",
     "work_loads"
