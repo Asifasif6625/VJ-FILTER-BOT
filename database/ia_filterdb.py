@@ -426,4 +426,124 @@ def unpack_new_file_id(new_file_id):
         )
     )
     return file_id
-    
+
+
+async def clear_all_indexed_files(clear_super_file_ids: bool = True) -> dict:
+    """
+    Safely clears old indexed file records and file IDs without dropping collections.
+    Preserves all background indexes on col and sec_col.
+    Preserves 100% of Super Movie Filter documents, titles, years, posters, aliases, and settings.
+    Preserves 100% of Series Filter documents, titles, keys, posters, captions, and settings.
+    Avoids orphaned file references.
+    """
+    from datetime import datetime
+    import logging
+    log = logging.getLogger(__name__)
+
+    results = {
+        "col_deleted": 0,
+        "sec_col_deleted": 0,
+        "sfiles_deleted": 0,
+        "sbatch_deleted": 0,
+        "super_movies_preserved": 0,
+        "series_preserved": 0,
+        "error": None
+    }
+
+    # 1. Clear col (delete_many({}) keeps collection and all indexes intact!)
+    try:
+        r1 = col.delete_many({})
+        results["col_deleted"] = r1.deleted_count
+        log.info(f"[DELFILES] Deleted {results['col_deleted']} records from primary collection '{COLLECTION_NAME}'")
+    except Exception as e:
+        log.error(f"[DELFILES ERROR] Deleting from col: {e}")
+        results["error"] = str(e)
+        return results
+
+    # 2. Clear sec_col if active
+    if MULTIPLE_DATABASE:
+        try:
+            r2 = sec_col.delete_many({})
+            results["sec_col_deleted"] = r2.deleted_count
+            log.info(f"[DELFILES] Deleted {results['sec_col_deleted']} records from secondary collection '{COLLECTION_NAME}'")
+        except Exception as e:
+            log.error(f"[DELFILES ERROR] Deleting from sec_col: {e}")
+
+    # 3. Super Movies: Clear dead file IDs while PRESERVING ALL filter definitions & metadata
+    try:
+        from database.series_db import (
+            super_movies_col,
+            sfiles_col,
+            sbatch_col,
+            series_col,
+            invalidate_active_filters_cache
+        )
+
+        # Count existing super movie filters
+        sm_count = await super_movies_col.count_documents({"status": {"$ne": "deleted"}})
+        results["super_movies_preserved"] = sm_count
+
+        if clear_super_file_ids:
+            # Reset file arrays and maps to empty; KEEP all titles, years, genres, posters, aliases, configs
+            await super_movies_col.update_many(
+                {},
+                {
+                    "$set": {
+                        "file_ids": [],
+                        "file_map": {},
+                        "file_associations": {},
+                        "languages": [],
+                        "qualities": [],
+                        "updated_at": datetime.utcnow()
+                    }
+                }
+            )
+            log.info(f"[DELFILES] Preserved {sm_count} Super Movie filters, cleared stale file IDs.")
+
+        # 4. Series: Clear episode file mappings in sfiles_col
+        sfiles_res = await sfiles_col.delete_many({})
+        results["sfiles_deleted"] = sfiles_res.deleted_count
+        log.info(f"[DELFILES] Deleted {results['sfiles_deleted']} records from 'series_files'")
+
+        # Clear batch records
+        sbatch_res = await sbatch_col.delete_many({})
+        results["sbatch_deleted"] = sbatch_res.deleted_count
+
+        # Count preserved series definitions
+        s_count = await series_col.count_documents({"status": {"$ne": "deleted"}})
+        results["series_preserved"] = s_count
+
+        # Reset series dynamic fields (languages, seasons, qualities) so they populate fresh on reindex
+        await series_col.update_many(
+            {},
+            {
+                "$set": {
+                    "languages": [],
+                    "seasons": [],
+                    "qualities": [],
+                    "updated_at": datetime.utcnow()
+                }
+            }
+        )
+        log.info(f"[DELFILES] Preserved {s_count} Series definitions.")
+
+        # Invalidate in-memory caches
+        try:
+            from utils import temp
+            if hasattr(temp, "MOVIE_STATE") and isinstance(temp.MOVIE_STATE, dict):
+                temp.MOVIE_STATE.clear()
+            if hasattr(temp, "SERIES_STATE") and isinstance(temp.SERIES_STATE, dict):
+                temp.SERIES_STATE.clear()
+            if hasattr(temp, "GETALL") and isinstance(temp.GETALL, dict):
+                temp.GETALL.clear()
+        except Exception:
+            pass
+
+        invalidate_active_filters_cache()
+
+    except Exception as se:
+        log.error(f"[DELFILES ERROR] Updating series/super_movies: {se}")
+        results["error"] = str(se)
+
+    return results
+
