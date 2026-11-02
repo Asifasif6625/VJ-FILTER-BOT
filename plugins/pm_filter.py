@@ -11,7 +11,7 @@ from pyrogram import Client, filters, enums
 from pyrogram.errors import FloodWait, UserIsBlocked, MessageNotModified, PeerIdInvalid
 from pyrogram.errors import MediaEmpty, PhotoInvalidDimensions, WebpageMediaEmpty
 from utils import (
-    get_size, is_subscribed, pub_is_subscribed, get_poster, search_gagala, temp,
+    get_size, is_subscribed, pub_is_subscribed, get_poster, search_gagala, temp, get_delivery_bot_username,
     get_settings, save_group_settings, get_shortlink, get_tutorial, send_all, get_cap,
     safe_reply_text, safe_reply_photo, safe_send_message, safe_edit_text, schedule_filter_message_delete, safe_delete_message,
     schedule_set_filter_reply_delete, delete_set_filter_reply, SET_FILTER_AUTO_DELETE_DELAY,
@@ -140,6 +140,10 @@ def is_english_only(text: str) -> bool:
 
 @Client.on_message(filters.group & filters.text & filters.incoming)
 async def give_filter(client, message):
+    curr_bot_id = getattr(getattr(client, "me", None), "id", None) or getattr(temp, "ME", None)
+    gdbot_id = getattr(temp, "GDBOT_ID", None) or getattr(temp, "ME", None)
+    if gdbot_id and curr_bot_id and int(curr_bot_id) == int(gdbot_id):
+        return  # GDBOT is Admin Backend only; never processes group search filters
     user_id = message.from_user.id if message.from_user else (message.sender_chat.id if message.sender_chat else 0)
     
     # ── Check active wizard session ──
@@ -197,6 +201,27 @@ async def give_filter(client, message):
 
 @Client.on_message(filters.private & filters.text & filters.incoming, group=2)
 async def pm_text(bot, message):
+    curr_bot_id = getattr(getattr(bot, "me", None), "id", None) or getattr(temp, "ME", None)
+    gdbot_id = getattr(temp, "GDBOT_ID", None) or getattr(temp, "ME", None)
+    if gdbot_id and curr_bot_id and int(curr_bot_id) == int(gdbot_id):
+        from info import ADMINS
+        user_id = message.from_user.id if message.from_user else 0
+        if user_id in ADMINS or str(user_id) in [str(a) for a in ADMINS]:
+            del_u = get_delivery_bot_username()
+            gdbot_uname = getattr(temp, "U_NAME", "")
+            buttons = []
+            if del_u and del_u.lower() != gdbot_uname.lower():
+                buttons.append([InlineKeyboardButton("🤖 Open Delivery Bot", url=f"https://t.me/{del_u}")])
+            reply_markup = InlineKeyboardMarkup(buttons) if buttons else None
+            await message.reply_text(
+                "ℹ️ <b>GDBOT is configured as Admin Backend Only.</b>\n\n"
+                f"Normal searches and Super Filter file deliveries run exclusively on the <b>Delivery Bot</b>"
+                + (f" (@{del_u}).\n\n<i>To test searches or download files, please send your query to the Delivery Bot.</i>" if del_u else ".\n\n<i>Please add a Delivery Bot via /mybot to start serving files.</i>"),
+                reply_markup=reply_markup,
+                parse_mode=enums.ParseMode.HTML
+            )
+        return
+
     content = message.text
     user = message.from_user.first_name if message.from_user else "User"
     user_id = message.from_user.id if message.from_user else 0
@@ -3904,6 +3929,12 @@ async def cb_handler(client: Client, query: CallbackQuery):
     await query.answer(MSG_ALRT)
 
 async def auto_filter(client, name, msg, reply_msg=None, ai_search=True, spoll=False):
+    curr_bot_id = getattr(getattr(client, "me", None), "id", None) or getattr(temp, "ME", None)
+    gdbot_id = getattr(temp, "GDBOT_ID", None) or getattr(temp, "ME", None)
+    if gdbot_id and curr_bot_id and int(curr_bot_id) == int(gdbot_id):
+        logger.info(f"[AUTO_FILTER SKIP] Client is GDBOT (admin backend). Skipping search for '{name}'.")
+        return
+
     curr_time = datetime.now(pytz.timezone('Asia/Kolkata')).time()
     if not spoll:
         message = msg

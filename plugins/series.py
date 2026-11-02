@@ -2671,6 +2671,22 @@ async def cmd_delthumbseries(client: Client, message: Message):
 @Client.on_message(filters.command(["series"]), group=-1)
 async def cmd_series_menu(client: Client, message: Message):
     uid = message.from_user.id if message.from_user else (message.sender_chat.id if message.sender_chat else 0)
+    from utils import temp
+    curr_bot_id = getattr(getattr(client, "me", None), "id", None) or getattr(temp, "ME", None)
+    gdbot_id = getattr(temp, "GDBOT_ID", None) or getattr(temp, "ME", None)
+    if curr_bot_id and gdbot_id and int(curr_bot_id) != int(gdbot_id):
+        gdbot_client = getattr(temp, "GDBOT", None)
+        gdbot_u = getattr(getattr(gdbot_client, "me", None), "username", None) or getattr(temp, "U_NAME", "GDBOT")
+        open_url = f"https://t.me/{gdbot_u}?start=series"
+        markup = InlineKeyboardMarkup([[
+            InlineKeyboardButton("🛠 Open in GDBOT", url=open_url)
+        ]])
+        return await message.reply_text(
+            f"⚙️ <b>Series Management is hosted on GDBOT.</b>\n\n"
+            f"Click the button below to open <b>@{gdbot_u}</b>:",
+            reply_markup=markup,
+            parse_mode=enums.ParseMode.HTML
+        )
     logger.info(f"[SERIES COMMAND] user_id={uid}")
 
     is_authorized = _is_admin(uid)
@@ -4585,6 +4601,52 @@ async def cmd_quick_edit(client: Client, message: Message):
     uid = message.from_user.id
     chat_id = message.chat.id
     from utils import temp
+
+    curr_bot_id = getattr(getattr(client, "me", None), "id", None) or getattr(temp, "ME", None)
+    gdbot_id = getattr(temp, "GDBOT_ID", None) or getattr(temp, "ME", None)
+
+    if curr_bot_id and gdbot_id and int(curr_bot_id) != int(gdbot_id):
+        # Admin called /edt on Child/Delivery Bot -> redirect to GDBOT
+        import base64
+        args = message.text.split(None, 1)
+        query_text = args[1].strip().strip('"').strip("'") if len(args) > 1 else None
+
+        target_id = None
+        if not query_text:
+            ctx = temp.LAST_SEARCH_CONTEXT.get(uid) or temp.LAST_SEARCH_CONTEXT.get(chat_id)
+            if ctx:
+                target_id = ctx.get("id")
+
+        if target_id:
+            deep_param = f"edt_{target_id}"
+        elif query_text:
+            b64_q = base64.urlsafe_b64encode(query_text.encode('utf-8')).decode('ascii').rstrip('=')
+            if len(b64_q) <= 55:
+                deep_param = f"edq_{b64_q}"
+            else:
+                token = hex(abs(hash(query_text)))[2:10]
+                if not hasattr(temp, "PENDING_EDT") or not isinstance(temp.PENDING_EDT, dict):
+                    temp.PENDING_EDT = {}
+                temp.PENDING_EDT[token] = query_text
+                deep_param = f"edp_{token}"
+        else:
+            deep_param = "edt"
+
+        gdbot_client = getattr(temp, "GDBOT", None)
+        gdbot_u = getattr(getattr(gdbot_client, "me", None), "username", None) or getattr(temp, "U_NAME", "GDBOT")
+
+        open_url = f"https://t.me/{gdbot_u}?start={deep_param}"
+        markup = InlineKeyboardMarkup([[
+            InlineKeyboardButton("🛠 Open in GDBOT to Edit", url=open_url)
+        ]])
+
+        display_name = f" for <b>{html.escape(query_text)}</b>" if query_text else ""
+        return await message.reply_text(
+            f"⚙️ <b>Super Filter Management is hosted on GDBOT.</b>\n\n"
+            f"Click the button below to edit{display_name} directly in <b>@{gdbot_u}</b>:",
+            reply_markup=markup,
+            parse_mode=enums.ParseMode.HTML
+        )
     from database.series_db import (
         get_super_movie, get_series, search_super_movies, search_series, super_movies_col, series_col
     )
