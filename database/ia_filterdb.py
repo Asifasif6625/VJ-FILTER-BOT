@@ -2,11 +2,12 @@
 # Subscribe YouTube Channel For Amazing Bot @Tech_VJ
 # Ask Doubt on telegram @KingVJ01
 
-import re, base64, json
+import re, base64, json, asyncio, logging
 from struct import pack
 from pyrogram.file_id import FileId
 from pymongo import MongoClient
 from pymongo.errors import DuplicateKeyError
+logger = logging.getLogger(__name__)
 from info import FILE_DB_URI, SEC_FILE_DB_URI, DATABASE_NAME, COLLECTION_NAME, MULTIPLE_DATABASE, USE_CAPTION_FILTER, MAX_B_TN
 
 # First Database For File Saving 
@@ -48,8 +49,8 @@ def clean_file_name(file_name, caption=None):
     cleaned = ' '.join(filter(lambda x: not x.startswith('@'), cleaned.split()))
     return cleaned
 
-async def save_file(media, bot_id=None):
-    """Save file in the database with dual-bot and multi-token caching support."""
+async def save_file(media, bot_id=None, sync_filters=True, return_doc=False):
+    """Save file in the database with dual-bot and multi-token caching support (Optimized Fast Mode)."""
     from datetime import datetime
     from utils import temp
     file_id = unpack_new_file_id(media.file_id)
@@ -65,62 +66,38 @@ async def save_file(media, bot_id=None):
     bot_id = bot_id or getattr(media, "bot_id", None)
     bot_id_str = str(bot_id) if bot_id else None
 
-    # Step 1: Find if this file already exists in MongoDB
-    target_col = None
-    existing_doc = None
-
-    # 1a: Exact match on channel coordinates (chat_id and message_id)
+    # Step 1: Consolidated Single-Roundtrip Duplicate Check
+    or_clauses = [{'file_id': file_id}, {'file_ids': file_id}]
     if chat_id and message_id:
-        coord_q = {'chat_id': chat_id, 'message_id': message_id}
-        existing_doc = col.find_one(coord_q)
-        if existing_doc:
-            target_col = col
-        elif MULTIPLE_DATABASE:
-            existing_doc = sec_col.find_one(coord_q)
-            if existing_doc:
-                target_col = sec_col
+        or_clauses.append({'chat_id': chat_id, 'message_id': message_id})
+    if file_name and file_sz:
+        or_clauses.append({'file_name': file_name, 'file_size': file_sz})
 
-    # 1b: Exact match on file_name and file_size
-    if not existing_doc:
-        query_exact = {'file_name': file_name, 'file_size': file_sz}
-        existing_doc = col.find_one(query_exact)
-        if existing_doc:
-            target_col = col
-        elif MULTIPLE_DATABASE:
-            existing_doc = sec_col.find_one(query_exact)
-            if existing_doc:
-                target_col = sec_col
+    def _sync_find_existing():
+        try:
+            doc = col.find_one({'$or': or_clauses})
+            if doc:
+                return doc, col
+            if MULTIPLE_DATABASE:
+                s_doc = sec_col.find_one({'$or': or_clauses})
+                if s_doc:
+                    return s_doc, sec_col
+            # Secondary fallback by file_name if not found
+            fname_candidates = [file_name]
+            if raw_fname and raw_fname != file_name:
+                fname_candidates.append(raw_fname)
+            doc = col.find_one({'file_name': {'$in': fname_candidates}})
+            if doc:
+                return doc, col
+            if MULTIPLE_DATABASE:
+                s_doc = sec_col.find_one({'file_name': {'$in': fname_candidates}})
+                if s_doc:
+                    return s_doc, sec_col
+        except Exception as qe:
+            logger.debug(f"[FIND EXISTING ERROR] {qe}")
+        return None, None
 
-    # 1c: Match on file_id in primary file_id or file_ids list
-    if not existing_doc:
-        found_exact = {'$or': [{'file_id': file_id}, {'file_ids': file_id}]}
-        existing_doc = col.find_one(found_exact)
-        if existing_doc:
-            target_col = col
-        elif MULTIPLE_DATABASE:
-            existing_doc = sec_col.find_one(found_exact)
-            if existing_doc:
-                target_col = sec_col
-
-    # 1d: Match on file_name only
-    if not existing_doc:
-        existing_doc = col.find_one({'file_name': file_name})
-        if existing_doc:
-            target_col = col
-        elif MULTIPLE_DATABASE:
-            existing_doc = sec_col.find_one({'file_name': file_name})
-            if existing_doc:
-                target_col = sec_col
-
-    # 1e: Match on raw uncleaned file name if different
-    if not existing_doc and raw_fname and raw_fname != file_name:
-        existing_doc = col.find_one({'file_name': raw_fname})
-        if existing_doc:
-            target_col = col
-        elif MULTIPLE_DATABASE:
-            existing_doc = sec_col.find_one({'file_name': raw_fname})
-            if existing_doc:
-                target_col = sec_col
+    existing_doc, target_col = await asyncio.to_thread(_sync_find_existing)
 
     if existing_doc and target_col:
         old_file_id = existing_doc.get("file_id")
@@ -147,54 +124,61 @@ async def save_file(media, bot_id=None):
         if bot_id_str:
             update_fields[f'bot_file_map.{bot_id_str}'] = file_id
 
-        # If primary bot or if file_id was missing/empty, update main file_id
         is_primary = (bot_id and bot_id == getattr(temp, "ME", None)) or not old_file_id
         if is_primary:
             update_fields['file_id'] = file_id
 
-        target_col.update_one(
-            {"_id": existing_doc["_id"]},
-            {
-                "$set": update_fields,
-                "$addToSet": {"file_ids": file_id}
-            }
-        )
-
-        if not already_registered:
-            print(f"[BOT FILE CACHE] Updated {file_name}: bot={bot_id_str} fid={str(file_id)[:12]}...")
-
-        # Sync with Super Movies & Series
-        try:
-            from database.series_db import super_movies_col, sfiles_col, sync_movie_filter_for_files, sync_series_filter_for_files
-            if old_file_id:
-                # Add file_id to super movies without removing other bot file_ids
-                await super_movies_col.update_many(
-                    {"$or": [{"file_ids": old_file_id}, {"file_ids": file_id}]},
-                    {"$addToSet": {"file_ids": file_id}, "$set": {"updated_at": datetime.utcnow()}}
-                )
-                s_up_set = {"updated_at": datetime.utcnow()}
-                if chat_id:
-                    s_up_set["chat_id"] = chat_id
-                if message_id:
-                    s_up_set["message_id"] = message_id
-                if is_primary:
-                    s_up_set["file_id"] = file_id
-                if bot_id_str:
-                    s_up_set[f"bot_file_map.{bot_id_str}"] = file_id
-                await sfiles_col.update_many(
-                    {"$or": [{"file_id": old_file_id}, {"file_ids": old_file_id}]},
+        def _sync_update():
+            try:
+                target_col.update_one(
+                    {"_id": existing_doc["_id"]},
                     {
-                        "$set": s_up_set,
+                        "$set": update_fields,
                         "$addToSet": {"file_ids": file_id}
                     }
                 )
-            migrated_file_doc = {**existing_doc, **update_fields}
-            await sync_movie_filter_for_files([migrated_file_doc], trigger="bot_file_cache")
-            await sync_series_filter_for_files([migrated_file_doc], trigger="bot_file_cache")
-        except Exception as se:
-            print(f"[BOT FILE CACHE FILTER SYNC ERROR] {se}")
+            except Exception as ue:
+                logger.debug(f"[UPDATE EXISTING ERROR] {ue}")
 
-        return (True, 1) if not already_registered else (False, 0)
+        await asyncio.to_thread(_sync_update)
+
+        migrated_file_doc = {**existing_doc, **update_fields}
+
+        # Sync with Super Movies & Series if sync_filters is True
+        if sync_filters:
+            try:
+                from database.series_db import super_movies_col, sfiles_col, sync_movie_filter_for_files, sync_series_filter_for_files
+                if old_file_id:
+                    await super_movies_col.update_many(
+                        {"$or": [{"file_ids": old_file_id}, {"file_ids": file_id}]},
+                        {"$addToSet": {"file_ids": file_id}, "$set": {"updated_at": datetime.utcnow()}}
+                    )
+                    s_up_set = {"updated_at": datetime.utcnow()}
+                    if chat_id:
+                        s_up_set["chat_id"] = chat_id
+                    if message_id:
+                        s_up_set["message_id"] = message_id
+                    if is_primary:
+                        s_up_set["file_id"] = file_id
+                    if bot_id_str:
+                        s_up_set[f"bot_file_map.{bot_id_str}"] = file_id
+                    await sfiles_col.update_many(
+                        {"$or": [{"file_id": old_file_id}, {"file_ids": old_file_id}]},
+                        {
+                            "$set": s_up_set,
+                            "$addToSet": {"file_ids": file_id}
+                        }
+                    )
+                await sync_movie_filter_for_files([migrated_file_doc], trigger="bot_file_cache")
+                await sync_series_filter_for_files([migrated_file_doc], trigger="bot_file_cache")
+            except Exception as se:
+                logger.debug(f"[BOT FILE CACHE FILTER SYNC ERROR] {se}")
+
+        is_saved = not already_registered
+        code = 1 if is_saved else 0
+        if return_doc:
+            return is_saved, code, migrated_file_doc
+        return is_saved, code
 
     # Step 2: New file insertion
     file = {
@@ -211,37 +195,36 @@ async def save_file(media, bot_id=None):
     if message_id:
         file['message_id'] = message_id
 
-    try:
-        col.insert_one(file)
-        print(f"{file_name} is successfully saved.")
+    def _sync_insert():
+        try:
+            col.insert_one(file)
+            return True, 1
+        except DuplicateKeyError:
+            return False, 0
+        except Exception as e:
+            if MULTIPLE_DATABASE:
+                try:
+                    sec_col.insert_one(file)
+                    return True, 1
+                except DuplicateKeyError:
+                    return False, 0
+            logger.debug(f"[INSERT FILE ERROR] {e}")
+            return False, 2
+
+    is_saved, code = await asyncio.to_thread(_sync_insert)
+
+    if is_saved and sync_filters:
         try:
             from database.series_db import sync_movie_filter_for_files, sync_series_filter_for_files
             await sync_movie_filter_for_files([file], trigger="ia_filterdb_col")
             await sync_series_filter_for_files([file], trigger="ia_filterdb_col")
         except Exception as se:
-            print(f"[AUTO FILTER SYNC ERROR] {se}")
-        return True, 1
-    except DuplicateKeyError:
-        print(f"{file_name} is already saved.")
-        return False, 0
-    except Exception as e:
-        if MULTIPLE_DATABASE:
-            try:
-                sec_col.insert_one(file)
-                print(f"{file_name} is successfully saved.")
-                try:
-                    from database.series_db import sync_movie_filter_for_files, sync_series_filter_for_files
-                    await sync_movie_filter_for_files([file], trigger="ia_filterdb_sec_col")
-                    await sync_series_filter_for_files([file], trigger="ia_filterdb_sec_col")
-                except Exception as se:
-                    print(f"[AUTO FILTER SYNC ERROR] {se}")
-                return True, 1
-            except DuplicateKeyError:
-                print(f"{file_name} is already saved.")
-                return False, 0
-        else:
-            print(f"Error saving file: {e}")
-            return False, 2
+            logger.debug(f"[AUTO FILTER SYNC ERROR] {se}")
+
+    if return_doc:
+        return is_saved, code, file
+    return is_saved, code
+
 
 def is_file_already_saved(file_id, file_name):
     """Check if the exact file_id is already saved in either collection."""
