@@ -24,9 +24,9 @@ id_pattern = re.compile(r'^.\d+$')
 SESSION = environ.get('SESSION', 'TechVJBot').strip()
 API_ID = int(environ.get('API_ID', '6539456'))
 API_HASH = environ.get('API_HASH', '50d0f275e6d21c2709101a34d77e2bc2').strip()
-BOT_TOKEN = environ.get('BOT_TOKEN', "").strip().strip('"').strip("'")
-BOT_TOKEN2 = environ.get('BOT_TOKEN2', "").strip().strip('"').strip("'")
-CHILD_SESSION = environ.get('CHILD_SESSION', 'TechVJChildBot').strip()
+GDBOT = (environ.get('GDBOT') or environ.get('BOT_TOKEN', '')).strip().strip('"').strip("'")
+BOT_TOKEN = GDBOT
+BOT_TOKEN2 = None
 
 
 

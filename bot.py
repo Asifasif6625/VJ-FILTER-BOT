@@ -51,52 +51,25 @@ async def start():
     temp.BANNED_CHATS = b_chats
     me = await TechVJBot.get_me()
     temp.BOT = TechVJBot
-    temp.BOT1 = TechVJBot
+    temp.MAIN_BOT = TechVJBot
+    temp.GDBOT = TechVJBot
     temp.ME = me.id
-    temp.ME1 = me.id
+    temp.GDBOT_ID = me.id
     temp.U_NAME = me.username
-    temp.U_NAME1 = me.username
     temp.B_NAME = me.first_name
     try:
         from plugins.botoff import is_bot_active
         temp.BOT_STATUS[me.id] = await is_bot_active(me.id)
     except Exception:
-        try:
-            from utils import is_bot_active
-            temp.BOT_STATUS[me.id] = await is_bot_active(me.id)
-        except Exception as bse:
-            temp.BOT_STATUS[me.id] = True
-            logging.warning(f"Error loading bot 1 power status: {bse}")
-    logging.info(f"MAIN BOT 1: All handlers loaded on @{me.username}.")
+        temp.BOT_STATUS[me.id] = True
+    logging.info(f"GDBOT (Main Management Bot): Loaded @{me.username} ({me.id}).")
 
-    if BOT_TOKEN2:
-        try:
-            from TechVJ.bot import Bot2
-            if not Bot2:
-                from TechVJ.bot import TechVJXBot
-                Bot2 = TechVJXBot(name=CHILD_SESSION, bot_token=BOT_TOKEN2)
-            await Bot2.start()
-            child_me = await Bot2.get_me()
-            temp.BOT2 = Bot2
-            temp.CHILD_BOT = Bot2
-            temp.ME2 = child_me.id
-            temp.CHILD_ME = child_me.id
-            temp.U_NAME2 = child_me.username
-            temp.CHILD_U_NAME = child_me.username
-            temp.B_NAME2 = child_me.first_name
-            temp.CHILD_B_NAME = child_me.first_name
-            try:
-                from plugins.botoff import is_bot_active
-                temp.BOT_STATUS[child_me.id] = await is_bot_active(child_me.id)
-            except Exception:
-                try:
-                    from utils import is_bot_active
-                    temp.BOT_STATUS[child_me.id] = await is_bot_active(child_me.id)
-                except Exception:
-                    temp.BOT_STATUS[child_me.id] = True
-            logging.info(f"PARALLEL BOT 2: Started and registered all handlers on @{child_me.username}")
-        except Exception as e:
-            logging.error(f"Failed starting Parallel Bot 2: {e}", exc_info=True)
+    # Start and restore dynamic Delivery Bots from MongoDB (Max 2 Delivery Bots)
+    try:
+        from utils import restart_all_delivery_bots
+        await restart_all_delivery_bots()
+    except Exception as e:
+        logging.error(f"Error restoring delivery bots: {e}", exc_info=True)
 
 
     try:
