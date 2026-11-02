@@ -67,6 +67,7 @@ class Database:
         self.users = self.db.uersz
         self.bot = self.db.clone_bots
         self.bot_status = self.db.bot_power_status
+        self.delivery_bots = self.db.delivery_bots
 
 
     def new_user(self, id, name):
@@ -142,6 +143,32 @@ class Database:
     
     async def get_all_bots(self):
         return self.bot.find({})
+    # ── Delivery Bots Collection (Max 2 Delivery Bots) ──
+    async def get_all_delivery_bots(self):
+        cursor = self.delivery_bots.find({})
+        return await cursor.to_list(None)
+
+    async def get_delivery_bot(self, bot_id: int):
+        return await self.delivery_bots.find_one({'$or': [{'bot_id': int(bot_id)}, {'bot_id': str(bot_id)}]})
+
+    async def add_delivery_bot(self, bot_id: int, bot_token: str, username: str, first_name: str, added_by: int):
+        doc = {
+            'bot_id': int(bot_id),
+            'bot_token': bot_token,
+            'username': username,
+            'name': first_name,
+            'added_by': int(added_by),
+            'added_at': datetime.datetime.utcnow(),
+            'is_active': True
+        }
+        await self.delivery_bots.update_one({'bot_id': int(bot_id)}, {'$set': doc}, upsert=True)
+
+    async def delete_delivery_bot(self, bot_id: int):
+        await self.delivery_bots.delete_one({'$or': [{'bot_id': int(bot_id)}, {'bot_id': str(bot_id)}]})
+
+    async def get_delivery_bots_count(self) -> int:
+        return await self.delivery_bots.count_documents({})
+
         
     async def remove_ban(self, id):
         ban_status = dict(
