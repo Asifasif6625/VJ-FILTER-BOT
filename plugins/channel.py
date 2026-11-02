@@ -22,6 +22,9 @@ for ch in (list(CHANNELS) + ([SDATABASE_CHANNEL] if SDATABASE_CHANNEL else [])):
 @Client.on_message(filters.chat(listen_channels) & media_filter)
 async def media(bot, message):
     try:
+        from utils import get_active_delivery_bot
+        del_bot = get_active_delivery_bot()
+        target_bid = getattr(getattr(del_bot, "me", None), "id", None) if del_bot else getattr(getattr(bot, "me", None), "id", None)
         media_attr = getattr(message.media, "value", str(message.media)) if message.media else "document"
         media_obj = getattr(message, str(media_attr), None)
         if not media_obj:
@@ -29,7 +32,8 @@ async def media(bot, message):
         media_obj.caption = message.caption
         media_obj.chat_id = message.chat.id
         media_obj.message_id = message.id
-        logger.info(f"[CHANNEL FILE] Received in chat {message.chat.id} msg {message.id}: {getattr(media_obj, 'file_name', 'media')}")
-        await save_file(media_obj)
+        media_obj.bot_id = target_bid
+        logger.info(f"[CHANNEL FILE] Received in chat {message.chat.id} msg {message.id} (bot={target_bid}): {getattr(media_obj, 'file_name', 'media')}")
+        await save_file(media_obj, bot_id=target_bid)
     except Exception as e:
         logger.exception(f"[CHANNEL FILE ERROR] chat={message.chat.id} msg={message.id}: {e}")
