@@ -79,21 +79,193 @@ class temp(object):
     ACTIVE_NORMAL_DELIVERIES = set()
     NORMAL_DELIVERY_SESSIONS = {}
     LAST_SEARCH_CONTEXT = {}
-    CHILD_BOT = None
-    CHILD_ME = None
-    CHILD_U_NAME = None
-    CHILD_B_NAME = None
-    BOT1 = None
-    BOT2 = None
-    ME1 = None
-    ME2 = None
-    U_NAME1 = None
-    U_NAME2 = None
+    DELIVERY_BOTS = {}
+    DELIVERY_BOT_INFO = {}
+    GDBOT = None
+    GDBOT_ID = None
+    MAIN_BOT = None
     BOT_STATUS = {}
     REMAP_STOP_BOTS = {}
     IS_REMAP_RUNNING = False
     CURRENT_REMAP_TASK = None
 
+
+
+
+def get_active_delivery_bot(bot_id: int = None):
+    """Returns the requested delivery bot client, or the single active public delivery bot client."""
+    if not hasattr(temp, "DELIVERY_BOTS") or not isinstance(temp.DELIVERY_BOTS, dict) or not temp.DELIVERY_BOTS:
+        return None
+    if bot_id and int(bot_id) in temp.DELIVERY_BOTS:
+        return temp.DELIVERY_BOTS[int(bot_id)]
+    active_id = get_active_public_bot_id()
+    if active_id and active_id in temp.DELIVERY_BOTS:
+        return temp.DELIVERY_BOTS[active_id]
+    for client in temp.DELIVERY_BOTS.values():
+        if client and getattr(client, "is_connected", False):
+            return client
+    return None
+
+
+def get_all_delivery_bots() -> list:
+    """Returns all active delivery bot clients."""
+    if not hasattr(temp, "DELIVERY_BOTS") or not isinstance(temp.DELIVERY_BOTS, dict):
+        return []
+    return [c for c in temp.DELIVERY_BOTS.values() if c]
+
+
+def get_delivery_bot_username() -> str:
+    """Returns the username of the active delivery bot, or fallback to GDBOT username."""
+    active_id = get_active_public_bot_id()
+    if active_id and hasattr(temp, "DELIVERY_BOTS") and active_id in temp.DELIVERY_BOTS:
+        bot = temp.DELIVERY_BOTS[active_id]
+        if bot and getattr(bot, "me", None) and getattr(bot.me, "username", None):
+            return str(bot.me.username).strip().lstrip("@")
+    bot = get_active_delivery_bot()
+    if bot and getattr(bot, "me", None) and getattr(bot.me, "username", None):
+        return str(bot.me.username).strip().lstrip("@")
+    if hasattr(temp, "DELIVERY_BOTS") and temp.DELIVERY_BOTS:
+        for c in temp.DELIVERY_BOTS.values():
+            if c and getattr(c, "me", None) and getattr(c.me, "username", None):
+                return str(c.me.username).strip().lstrip("@")
+    if hasattr(temp, "U_NAME") and temp.U_NAME:
+        return str(temp.U_NAME).strip().lstrip("@")
+    return os.environ.get("BOT_USERNAME", "Bot")
+
+
+async def start_delivery_bot_client(bot_token: str, added_by: int = 0):
+    """
+    Starts a new delivery bot client using the provided token.
+    Enforces maximum of 2 delivery bots.
+    """
+    from pyrogram import Client
+    from info import API_ID, API_HASH
+    from database.users_chats_db import db
+
+    if not hasattr(temp, "DELIVERY_BOTS") or not isinstance(temp.DELIVERY_BOTS, dict):
+        temp.DELIVERY_BOTS = {}
+
+    if len(temp.DELIVERY_BOTS) >= 2:
+        return False, "Maximum 2 delivery bots allowed. Please delete one first.", None
+
+    token = bot_token.strip().strip('"').strip("'")
+    if not re.match(r"^\d+:[A-Za-z0-9_-]+$", token):
+        return False, "Invalid Bot Token format.", None
+
+    session_name = f"delivery_{token.split(':')[0]}"
+    try:
+        client = Client(
+            name=session_name,
+            api_id=API_ID,
+            api_hash=API_HASH,
+            bot_token=token,
+            plugins={"root": "plugins"},
+            workers=20,
+            sleep_threshold=5,
+            in_memory=True
+        )
+        await client.start()
+        me = await client.get_me()
+
+        if me.id in temp.DELIVERY_BOTS:
+            return False, f"Bot @{me.username} is already active.", client
+
+        await db.add_delivery_bot(
+            bot_id=me.id,
+            bot_token=token,
+            username=me.username,
+            first_name=me.first_name,
+            added_by=added_by
+        )
+
+        temp.DELIVERY_BOTS[me.id] = client
+        if not hasattr(temp, "DELIVERY_BOT_INFO"):
+            temp.DELIVERY_BOT_INFO = {}
+        temp.DELIVERY_BOT_INFO[me.id] = {
+            "username": me.username,
+            "name": me.first_name,
+            "token": token
+        }
+        logger.info(f"[DELIVERY BOT] Started and registered @{me.username} ({me.id})")
+        return True, f"@{me.username}", client
+    except Exception as e:
+        logger.error(f"[START DELIVERY BOT ERROR] {e}")
+        return False, str(e), None
+
+
+async def stop_delivery_bot_client(bot_id: int):
+    """Stops an active delivery bot and removes it from database."""
+    from database.users_chats_db import db
+    bid = int(bot_id)
+    client = temp.DELIVERY_BOTS.get(bid)
+    username = "Bot"
+    if client:
+        if getattr(client, "me", None):
+            username = getattr(client.me, "username", "Bot")
+        try:
+            await client.stop()
+        except Exception:
+            pass
+        temp.DELIVERY_BOTS.pop(bid, None)
+    if hasattr(temp, "DELIVERY_BOT_INFO"):
+        temp.DELIVERY_BOT_INFO.pop(bid, None)
+    try:
+        await db.delete_delivery_bot(bid)
+    except Exception as e:
+        logger.error(f"[DELETE DELIVERY BOT DB ERROR] {e}")
+    logger.info(f"[DELIVERY BOT] Stopped and removed @{username} ({bid})")
+    return True, f"@{username}"
+
+
+async def restart_all_delivery_bots():
+    """Restarts all saved delivery bots from database on startup."""
+    from database.users_chats_db import db
+    from pyrogram import Client
+    from info import API_ID, API_HASH
+
+    if not hasattr(temp, "DELIVERY_BOTS") or not isinstance(temp.DELIVERY_BOTS, dict):
+        temp.DELIVERY_BOTS = {}
+
+    try:
+        saved_bots = await db.get_all_delivery_bots()
+    except Exception as e:
+        logger.error(f"[GET DELIVERY BOTS ERROR] {e}")
+        return
+
+    saved_bots = saved_bots[:2]
+    started = 0
+    for b in saved_bots:
+        token = b.get("bot_token")
+        bid = b.get("bot_id")
+        if not token:
+            continue
+        session_name = f"delivery_{token.split(':')[0]}"
+        try:
+            client = Client(
+                name=session_name,
+                api_id=API_ID,
+                api_hash=API_HASH,
+                bot_token=token,
+                plugins={"root": "plugins"},
+                workers=20,
+                sleep_threshold=5,
+                in_memory=True
+            )
+            await client.start()
+            me = await client.get_me()
+            temp.DELIVERY_BOTS[me.id] = client
+            if not hasattr(temp, "DELIVERY_BOT_INFO"):
+                temp.DELIVERY_BOT_INFO = {}
+            temp.DELIVERY_BOT_INFO[me.id] = {
+                "username": me.username,
+                "name": me.first_name,
+                "token": token
+            }
+            started += 1
+            logger.info(f"[DELIVERY BOT RESTORED] @{me.username} ({me.id})")
+        except Exception as se:
+            logger.error(f"[RESTORE DELIVERY BOT ERROR] bot_id={bid} err={se}")
+    logger.info(f"[DELIVERY BOTS READY] {started} active delivery bot(s) loaded.")
 
 def get_bot_username(client=None) -> str:
     """Returns the username of the active bot client (without @), falling back to temp.U_NAME."""
@@ -136,31 +308,38 @@ def is_bot_active_in_memory(bot_id: int) -> bool:
 
 def get_active_public_bot_id():
     """
-    Determines which single bot is currently designated to serve the public.
+    Determines which single delivery bot is currently designated to serve the public.
     Rule:
-    1. Bot 1 is primary. If Bot 1 is ON, Bot 1 serves the public.
-    2. If Bot 1 is OFF, Bot 2 serves the public (if Bot 2 is ON).
-    3. If both are OFF, returns None (maintenance mode).
+    1. GDBOT is Admin-Only, never serves the public directly.
+    2. Only ONE delivery bot can serve the public at any given time.
+    3. If a primary delivery bot is selected (temp.PRIMARY_DELIVERY_BOT_ID) and ON, it serves the public.
+    4. Otherwise, the first connected delivery bot that is ON serves the public.
+    5. If the active delivery bot is turned OFF, the other standby delivery bot automatically serves the public.
+    6. If all delivery bots are OFF, returns None (maintenance mode).
     """
-    b1_id = getattr(temp, "ME", None) or getattr(temp, "ME1", None)
-    b2_id = getattr(temp, "ME2", None) or getattr(temp, "CHILD_ME", None)
+    if not hasattr(temp, "DELIVERY_BOTS") or not isinstance(temp.DELIVERY_BOTS, dict) or not temp.DELIVERY_BOTS:
+        return None
 
-    b1_int = int(b1_id) if b1_id else None
-    b2_int = int(b2_id) if b2_id else None
+    primary_id = getattr(temp, "PRIMARY_DELIVERY_BOT_ID", None)
+    if primary_id and int(primary_id) in temp.DELIVERY_BOTS:
+        client = temp.DELIVERY_BOTS[int(primary_id)]
+        if client and getattr(client, "is_connected", False) and is_bot_active_in_memory(int(primary_id)):
+            return int(primary_id)
 
-    if b1_int and is_bot_active_in_memory(b1_int):
-        return b1_int
-
-    if b2_int and is_bot_active_in_memory(b2_int):
-        return b2_int
+    for bid, client in temp.DELIVERY_BOTS.items():
+        if client and getattr(client, "is_connected", False) and is_bot_active_in_memory(bid):
+            return int(bid)
 
     return None
 
 
 def is_bot_serving_public(bot_id: int) -> bool:
-    """Returns True if this specific bot is the active public bot."""
+    """Returns True if this specific delivery bot is the single designated active public bot."""
     if not bot_id:
-        return True
+        return False
+    gdbot_id = getattr(temp, "GDBOT_ID", None) or getattr(temp, "ME", None)
+    if gdbot_id and int(bot_id) == int(gdbot_id):
+        return False
     active_id = get_active_public_bot_id()
     if active_id is None:
         return False
@@ -4251,54 +4430,38 @@ _RECONNECT_LOCK = asyncio.Lock()
 
 
 async def is_client_connected(client) -> bool:
-    """Verifies whether the client is connected and actively responsive."""
-    if not client or not getattr(client, "is_connected", False):
+    """Verifies whether the client is connected."""
+    if not client:
         return False
-    try:
-        await asyncio.wait_for(client.get_me(), timeout=12.0)
-        return True
-    except Exception:
-        return False
+    return bool(getattr(client, "is_connected", False))
 
 
 async def safe_reconnect_client(client, max_retries: int = 3) -> bool:
     """
     Safely reconnects a Pyrogram client with concurrency control and lock synchronization.
-    Prevents concurrent reconnect attempts and never calls connect() on an already-connected client.
+    Prevents concurrent reconnect attempts and never calls connect() or disconnect() on an already-connected client.
     """
     async with _RECONNECT_LOCK:
-        # Re-check under lock
-        is_conn = getattr(client, "is_connected", False)
-        if is_conn:
-            # Check if it actually responds
-            try:
-                await asyncio.wait_for(client.get_me(), timeout=10.0)
-                logger.info("[TELEGRAM CONNECTION] Client verified healthy under lock.")
-                return True
-            except Exception as pe:
-                logger.warning(f"[TELEGRAM CONNECTION] Client marked connected but unresponsive: {pe}. Performing clean disconnect first.")
-                try:
-                    await client.disconnect()
-                except Exception as de:
-                    logger.debug(f"[CLIENT DISCONNECT EXCEPTION] {de}")
-                await asyncio.sleep(2)
+        # If client is already connected, do NOT disconnect or reconnect!
+        if getattr(client, "is_connected", False):
+            logger.info("[TELEGRAM CONNECTION] Client is already connected and healthy.")
+            return True
 
-        # Now client is disconnected, attempt clean connect
+        # Client is genuinely disconnected; attempt clean connect
         for attempt in range(1, max_retries + 1):
             try:
                 logger.info(f"[TELEGRAM CONNECTION] Connecting client (attempt {attempt}/{max_retries})...")
                 await client.connect()
-                # Verify
-                await asyncio.wait_for(client.get_me(), timeout=10.0)
-                logger.info(f"[TELEGRAM CONNECTION] Client successfully connected on attempt {attempt}.")
-                return True
+                if getattr(client, "is_connected", False):
+                    logger.info(f"[TELEGRAM CONNECTION] Client successfully connected on attempt {attempt}.")
+                    return True
             except Exception as ce:
                 err_s = str(ce).lower()
                 if "already connected" in err_s:
                     logger.info("[TELEGRAM CONNECTION] Client already connected, verified.")
                     return True
                 logger.warning(f"[TELEGRAM RECONNECT ATTEMPT {attempt} FAILED] {ce}")
-                await asyncio.sleep(attempt * 3)
+                await asyncio.sleep(attempt * 2)
 
         return False
 
@@ -4306,7 +4469,8 @@ async def safe_reconnect_client(client, max_retries: int = 3) -> bool:
 async def _telegram_watchdog_loop(client, check_interval: int = 60):
     """
     Single-instance connection health watchdog.
-    Periodically checks Telegram connectivity and safely reconnects if disconnected.
+    Monitors client.is_connected state. Only acts if the connection is genuinely lost.
+    Never sends artificial RPC queries or disconnects an already-connected client.
     Pauses checks during active file migration to avoid interfering with bulk operations.
     """
     logger.info("[TELEGRAM WATCHDOG] Connection health monitor active.")
@@ -4316,18 +4480,32 @@ async def _telegram_watchdog_loop(client, check_interval: int = 60):
         try:
             await asyncio.sleep(check_interval)
 
-            # Do not ping while migration is actively running to prevent socket contention
+            # Do not monitor while migration is actively running to prevent interference
             if getattr(temp, "IS_REMAP_RUNNING", False):
                 consecutive_fails = 0
                 continue
 
-            # Check if client.is_connected property is False
-            if not getattr(client, "is_connected", False):
-                consecutive_fails += 1
-                logger.warning(
+            # Check Pyrogram's native connection property
+            is_conn = getattr(client, "is_connected", False)
+            if is_conn:
+                # Connection is healthy and managed natively by Pyrogram's ping_worker
+                consecutive_fails = 0
+                continue
+
+            # Connection is genuinely False
+            consecutive_fails += 1
+            logger.warning(
+                f"[TELEGRAM CONNECTION]\n"
+                f"status=DISCONNECTED\n"
+                f"reason=client.is_connected is False\n"
+                f"consecutive_fails={consecutive_fails}/2"
+            )
+
+            # Allow Pyrogram's internal reconnect 1 interval (60s) to self-heal
+            if consecutive_fails >= 2:
+                logger.info(
                     f"[TELEGRAM CONNECTION]\n"
-                    f"status=DISCONNECTED\n"
-                    f"reason=client.is_connected is False\n"
+                    f"action=RECONNECT\n"
                     f"attempt={consecutive_fails}"
                 )
                 success = await safe_reconnect_client(client, max_retries=3)
@@ -4336,34 +4514,6 @@ async def _telegram_watchdog_loop(client, check_interval: int = 60):
                     logger.info("[TELEGRAM CONNECTION]\naction=RECONNECTED")
                 else:
                     logger.warning("[TELEGRAM RECONNECT FAILED] Reconnect attempts exhausted.")
-            else:
-                # Test responsiveness with generous 15.0s timeout
-                try:
-                    await asyncio.wait_for(client.get_me(), timeout=15.0)
-                    consecutive_fails = 0
-                except (asyncio.TimeoutError, OSError, Exception) as ping_err:
-                    err_s = str(ping_err).lower()
-                    if "connection lost" in err_s or isinstance(ping_err, (OSError, asyncio.TimeoutError)):
-                        consecutive_fails += 1
-                        logger.warning(
-                            f"[TELEGRAM CONNECTION]\n"
-                            f"status=DISCONNECTED_UNRESPONSIVE\n"
-                            f"reason={ping_err}\n"
-                            f"consecutive_fails={consecutive_fails}/3"
-                        )
-                        # Only attempt reconnect after 3 consecutive failures to avoid flapping on transient latency
-                        if consecutive_fails >= 3:
-                            logger.info(
-                                f"[TELEGRAM CONNECTION]\n"
-                                f"action=RECONNECT\n"
-                                f"attempt={consecutive_fails}"
-                            )
-                            success = await safe_reconnect_client(client, max_retries=3)
-                            if success:
-                                consecutive_fails = 0
-                                logger.info("[TELEGRAM CONNECTION]\naction=RECONNECTED")
-                            else:
-                                logger.warning("[TELEGRAM RECONNECT ATTEMPT FAILED] Reconnect attempts exhausted.")
         except asyncio.CancelledError:
             break
         except Exception as e:
