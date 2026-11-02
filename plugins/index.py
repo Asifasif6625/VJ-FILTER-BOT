@@ -3,7 +3,7 @@
 # Ask Doubt on telegram @KingVJ01
 
 import logging, re, asyncio, time
-from utils import temp, set_wizard_session, clear_wizard_session, get_wizard_session
+from utils import temp, is_gdbot_client, set_wizard_session, clear_wizard_session, get_wizard_session
 from info import ADMINS
 from pyrogram import Client, filters, enums
 from pyrogram.errors import FloodWait, MessageNotModified
@@ -714,10 +714,9 @@ async def index_files_to_db(lst_msg_id, chat, msg, bot):
     if getattr(temp, "IS_INDEXING", False):
         return await msg.edit_text("⚠️ <b>An indexing task is already running!</b>")
 
-    active_del = get_active_delivery_bot()
-    worker_bot = active_del if (active_del and getattr(active_del, "is_connected", False)) else bot
-    worker_bid = getattr(getattr(worker_bot, "me", None), "id", None)
-    worker_uname = getattr(getattr(worker_bot, "me", None), "username", "Bot")
+    worker_bot = bot
+    worker_bid = getattr(getattr(worker_bot, "me", None), "id", None) or getattr(temp, "ME", None)
+    worker_uname = getattr(getattr(worker_bot, "me", None), "username", "Bot") or getattr(temp, "U_NAME", "GDBOT")
 
     # Resolve Chat Title
     c_title = str(chat)
@@ -742,10 +741,10 @@ async def index_files_to_db(lst_msg_id, chat, msg, bot):
     no_media = 0
     unsupported = 0
     total_scanned = 0
-    batch_size = 100
+    batch_size = 200
     start_time = time.monotonic()
     last_edit_time = time.monotonic()
-    sem = asyncio.Semaphore(15)
+    sem = asyncio.Semaphore(35)
 
     def make_prog_bar(pct, length=10):
         filled = max(0, min(length, int(length * pct / 100)))
@@ -810,6 +809,8 @@ async def index_files_to_db(lst_msg_id, chat, msg, bot):
                         logger.debug(f"[INDEX RECONNECT ERROR] {re}")
         return "CONN_FAILED"
 
+    batch_saved_docs = []
+
     async def process_single_media(m):
         nonlocal total_files, duplicate, errors
         media = getattr(m, getattr(m.media, "value", "document"), None)
@@ -821,9 +822,11 @@ async def index_files_to_db(lst_msg_id, chat, msg, bot):
         media.bot_id = worker_bid
         async with sem:
             try:
-                is_saved, code = await save_file(media, bot_id=worker_bid)
+                is_saved, code, f_doc = await save_file(media, bot_id=worker_bid, sync_filters=False, return_doc=True)
                 if is_saved:
                     total_files += 1
+                    if f_doc:
+                        batch_saved_docs.append(f_doc)
                 elif code == 0:
                     duplicate += 1
                 elif code == 2:
@@ -916,8 +919,17 @@ async def index_files_to_db(lst_msg_id, chat, msg, bot):
                     else:
                         media_msgs.append(m)
 
+                batch_saved_docs.clear()
                 if media_msgs:
                     await asyncio.gather(*(process_single_media(m) for m in media_msgs), return_exceptions=True)
+
+                if batch_saved_docs:
+                    try:
+                        from database.series_db import sync_movie_filter_for_files, sync_series_filter_for_files
+                        await sync_movie_filter_for_files(batch_saved_docs, trigger="index_batch")
+                        await sync_series_filter_for_files(batch_saved_docs, trigger="index_batch")
+                    except Exception as bse:
+                        logger.debug(f"[INDEX BATCH FILTER SYNC ERROR] {bse}")
 
                 current += current_batch_size
 
@@ -1058,10 +1070,8 @@ async def remap_files_command(bot, message, caller_bot=None):
 
     # Resolve worker delivery bot: if called on GDBOT, migrate using active Delivery Bot
     active_del = get_active_delivery_bot()
-    gdbot_id = getattr(temp, "GDBOT_ID", None) or getattr(temp, "ME", None)
-    curr_id = getattr(getattr(bot, "me", None), "id", None)
-    if gdbot_id and curr_id and int(curr_id) == int(gdbot_id):
-        if not active_del or not getattr(active_del, "is_connected", False):
+    if is_gdbot_client(bot):
+        if not active_del:
             temp.IS_REMAP_RUNNING = False
             temp.CURRENT_REMAP_TASK = None
             return await message.reply(
@@ -1210,7 +1220,7 @@ async def remap_files_command(bot, message, caller_bot=None):
 
             ch_scanned = 0
             last_edit_time = time.monotonic()
-            batch_size = 100
+            batch_size = 200
             current = start_skip_id if ch_idx == 1 and start_skip_id > 1 else 1
 
             async def fetch_ids(b_ids):
