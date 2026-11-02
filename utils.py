@@ -107,7 +107,7 @@ def get_active_delivery_bot(bot_id: int = None):
     if active_id and active_id in temp.DELIVERY_BOTS:
         return temp.DELIVERY_BOTS[active_id]
     for client in temp.DELIVERY_BOTS.values():
-        if client and getattr(client, "is_connected", False):
+        if client:
             return client
     return None
 
@@ -171,6 +171,7 @@ async def start_delivery_bot_client(bot_token: str, added_by: int = 0):
         )
         await client.start()
         me = await client.get_me()
+        client.me = me
 
         if me.id in temp.DELIVERY_BOTS:
             return False, f"Bot @{me.username} is already active.", client
@@ -258,6 +259,7 @@ async def restart_all_delivery_bots():
             )
             await client.start()
             me = await client.get_me()
+            client.me = me
             temp.DELIVERY_BOTS[me.id] = client
             if not hasattr(temp, "DELIVERY_BOT_INFO"):
                 temp.DELIVERY_BOT_INFO = {}
@@ -328,27 +330,80 @@ def get_active_public_bot_id():
     primary_id = getattr(temp, "PRIMARY_DELIVERY_BOT_ID", None)
     if primary_id and int(primary_id) in temp.DELIVERY_BOTS:
         client = temp.DELIVERY_BOTS[int(primary_id)]
-        if client and getattr(client, "is_connected", False) and is_bot_active_in_memory(int(primary_id)):
+        if client and is_bot_active_in_memory(int(primary_id)):
             return int(primary_id)
 
     for bid, client in temp.DELIVERY_BOTS.items():
-        if client and getattr(client, "is_connected", False) and is_bot_active_in_memory(bid):
+        if client and is_bot_active_in_memory(bid):
             return int(bid)
 
     return None
 
 
-def is_bot_serving_public(bot_id: int) -> bool:
-    """Returns True if this specific delivery bot is the single designated active public bot."""
-    if not bot_id:
+def is_gdbot_client(client) -> bool:
+    """Accurately checks whether the provided Pyrogram client is GDBOT (main admin backend bot)."""
+    if client is None:
         return False
+
+    # 1. Direct object identity check against GDBOT instance
+    gdbot_instance = getattr(temp, "GDBOT", None) or getattr(temp, "MAIN_BOT", None) or getattr(temp, "BOT", None)
+    if gdbot_instance is not None and client == gdbot_instance:
+        return True
+
+    # 2. Check session/client name (every delivery bot session is named 'delivery_<token_id>')
+    c_name = str(getattr(client, "name", "") or "")
+    if c_name.startswith("delivery_"):
+        return False
+
+    # 3. Check if this client is in temp.DELIVERY_BOTS
+    if hasattr(temp, "DELIVERY_BOTS") and isinstance(temp.DELIVERY_BOTS, dict):
+        for bid, d_client in temp.DELIVERY_BOTS.items():
+            if client == d_client:
+                return False
+
+    # 4. Check client bot token against GDBOT / BOT_TOKEN
+    c_token = str(getattr(client, "bot_token", "") or "").strip().strip('"').strip("'")
+    main_token = str(getattr(temp, "GDBOT_TOKEN", None) or globals().get("GDBOT") or globals().get("BOT_TOKEN") or "").strip().strip('"').strip("'")
+    if c_token and main_token:
+        if c_token == main_token:
+            return True
+        return False
+
+    # 5. Check by registered GDBOT_ID
+    gdbot_id = getattr(temp, "GDBOT_ID", None) or getattr(temp, "ME", None)
+    c_me = getattr(client, "me", None)
+    if c_me and getattr(c_me, "id", None) and gdbot_id:
+        return int(c_me.id) == int(gdbot_id)
+
+    return False
+    # 1. Direct object identity check against GDBOT instance
+    gdbot_instance = getattr(temp, "GDBOT", None)
+    if gdbot_instance is not None and client == gdbot_instance:
+        return True
+
+    # 2. Check if this client is in temp.DELIVERY_BOTS
+    if hasattr(temp, "DELIVERY_BOTS") and isinstance(temp.DELIVERY_BOTS, dict):
+        for bid, d_client in temp.DELIVERY_BOTS.items():
+            if client == d_client:
+                return False
+
+    # 3. Check by registered GDBOT_ID
+    gdbot_id = getattr(temp, "GDBOT_ID", None) or getattr(temp, "ME", None)
+    c_me = getattr(client, "me", None)
+    if c_me and getattr(c_me, "id", None) and gdbot_id:
+        return int(c_me.id) == int(gdbot_id)
+
+    return False
+
+
+def is_bot_serving_public(bot_id: int) -> bool:
+    """Returns True if this bot is an active delivery bot serving searches."""
+    if not bot_id:
+        return True
     gdbot_id = getattr(temp, "GDBOT_ID", None) or getattr(temp, "ME", None)
     if gdbot_id and int(bot_id) == int(gdbot_id):
         return False
-    active_id = get_active_public_bot_id()
-    if active_id is None:
-        return False
-    return int(bot_id) == int(active_id)
+    return is_bot_active_in_memory(int(bot_id))
 
 
 async def is_bot_active(bot_id: int) -> bool:
