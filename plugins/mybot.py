@@ -89,6 +89,22 @@ def build_mybot_panel():
 @Client.on_message(filters.command(["mybot", "mybots", "deliverybot", "deliverybots"]) & filters.user(ADMINS))
 async def cmd_mybot(client: Client, message):
     """Admin dashboard to manage up to 2 delivery bots."""
+    curr_bot_id = getattr(getattr(client, "me", None), "id", None) or getattr(temp, "ME", None)
+    gdbot_id = getattr(temp, "GDBOT_ID", None) or getattr(temp, "ME", None)
+    if curr_bot_id and gdbot_id and int(curr_bot_id) != int(gdbot_id):
+        gdbot_client = getattr(temp, "GDBOT", None)
+        gdbot_u = getattr(getattr(gdbot_client, "me", None), "username", None) or getattr(temp, "U_NAME", "GDBOT")
+        open_url = f"https://t.me/{gdbot_u}?start=mybot"
+        markup = InlineKeyboardMarkup([[
+            InlineKeyboardButton("🤖 Open /mybot on GDBOT", url=open_url)
+        ]])
+        return await message.reply_text(
+            f"⚙️ <b>Bot Management is exclusively hosted on GDBOT.</b>\n\n"
+            f"Click the button below to open <b>@{gdbot_u}</b>:",
+            reply_markup=markup,
+            parse_mode=enums.ParseMode.HTML
+        )
+
     panel_text, markup = build_mybot_panel()
     await message.reply_text(panel_text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
 
@@ -125,55 +141,93 @@ async def cb_mybot_add(client: Client, query: CallbackQuery):
         return await query.answer("❌ Maximum 2 delivery bots allowed! Remove one first.", show_alert=True)
 
     await query.answer()
-    chat_id = query.message.chat.id
 
-    cancel_btn = InlineKeyboardMarkup([[InlineKeyboardButton("Cancel", callback_data="mybot_cancel_ask")]])
-    ask_msg = await client.send_message(
-        chat_id,
+    if not hasattr(temp, "MYBOT_WAITING_TOKEN") or not isinstance(temp.MYBOT_WAITING_TOKEN, dict):
+        temp.MYBOT_WAITING_TOKEN = {}
+    temp.MYBOT_WAITING_TOKEN[query.from_user.id] = True
+
+    cancel_btn = InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="mybot_cancel_ask")]])
+    prompt_text = (
         "🤖 <b>Add New Delivery Bot:</b>\n\n"
         "1. Open @BotFather on Telegram.\n"
-        "2. Send <code>/newbot</code> and create your bot.\n"
+        "2. Send <code>/newbot</code> and follow instructions to create your bot.\n"
         "3. Copy the <b>HTTP API Token</b> and send it here.\n\n"
-        "<i>Send /cancel to abort.</i>",
-        reply_markup=cancel_btn,
-        parse_mode=enums.ParseMode.HTML
+        "💡 <i>You can also directly send:</i>\n"
+        "<code>/addbot &lt;your_bot_token&gt;</code>\n\n"
+        "<i>Send /cancel to abort.</i>"
     )
 
     try:
-        resp = await client.ask(chat_id, timeout=120)
+        await query.message.edit_text(prompt_text, reply_markup=cancel_btn, parse_mode=enums.ParseMode.HTML)
     except Exception:
-        try:
-            await ask_msg.delete()
-        except Exception:
-            pass
-        return await client.send_message(chat_id, "⌛ <b>Timed out!</b> Please run /mybot again.")
+        await client.send_message(query.message.chat.id, prompt_text, reply_markup=cancel_btn, parse_mode=enums.ParseMode.HTML)
 
-    if not resp.text or resp.text.strip().lower() in ["/cancel", "cancel"]:
-        try:
-            await ask_msg.delete()
-            await resp.delete()
-        except Exception:
-            pass
-        return await client.send_message(chat_id, "🚫 <b>Process cancelled.</b>")
 
-    raw_token = resp.text.strip()
-    match = re.search(r"\b(\d+:[A-Za-z0-9_-]+)\b", raw_token)
+@Client.on_message(filters.private & filters.text & filters.user(ADMINS), group=-5)
+async def mybot_token_listener(client: Client, message):
+    """Listens for the bot token when admin is in add-bot mode."""
+    if not hasattr(temp, "MYBOT_WAITING_TOKEN") or not isinstance(temp.MYBOT_WAITING_TOKEN, dict):
+        return
+    if not temp.MYBOT_WAITING_TOKEN.get(message.from_user.id):
+        return
+
+    text = message.text.strip()
+    if text.lower() in ["/cancel", "cancel"]:
+        temp.MYBOT_WAITING_TOKEN.pop(message.from_user.id, None)
+        return await message.reply_text("🚫 <b>Add bot cancelled.</b>", parse_mode=enums.ParseMode.HTML)
+
+    match = re.search(r"\b(\d+:[A-Za-z0-9_-]+)\b", text)
     if not match:
-        try:
-            await ask_msg.delete()
-        except Exception:
-            pass
-        return await client.send_message(chat_id, "❌ <b>Invalid Token!</b> Please provide a valid Bot API Token from @BotFather.")
+        return
 
+    temp.MYBOT_WAITING_TOKEN.pop(message.from_user.id, None)
     bot_token = match.group(1)
 
-    loading_msg = await client.send_message(chat_id, "⏳ <b>Connecting and registering Delivery Bot...</b>", parse_mode=enums.ParseMode.HTML)
-    try:
-        await ask_msg.delete()
-    except Exception:
-        pass
+    loading_msg = await message.reply_text("⏳ <b>Connecting and registering Delivery Bot...</b>", parse_mode=enums.ParseMode.HTML)
 
-    success, res, bot_client = await start_delivery_bot_client(bot_token, added_by=query.from_user.id)
+    success, res, bot_client = await start_delivery_bot_client(bot_token, added_by=message.from_user.id)
+    if not success:
+        return await loading_msg.edit_text(f"❌ <b>Failed to start Delivery Bot:</b>\n\n<code>{res}</code>", parse_mode=enums.ParseMode.HTML)
+
+    b_uname = res
+    bid = bot_client.me.id if (bot_client and getattr(bot_client, "me", None)) else ""
+    post_buttons = [
+        [InlineKeyboardButton(f"🔄 Remap Files for {b_uname}", callback_data=f"mybot_remap_{bid}")],
+        [InlineKeyboardButton("🔙 Back to /mybot", callback_data="mybot_refresh")]
+    ]
+    await loading_msg.edit_text(
+        f"✅ <b>Successfully Connected Delivery Bot {b_uname}!</b>\n\n"
+        f"• <b>Bot ID:</b> <code>{bid}</code>\n"
+        f"• <b>Status:</b> 🟢 Live & Delivering Files\n"
+        f"• <b>Capacity:</b> {len(temp.DELIVERY_BOTS)}/2 Bots Active\n\n"
+        f"<i>💡 If this is a new bot, make sure to add it as Admin in your Storage Channels, then click 'Remap Files' below to sync file IDs.</i>",
+        reply_markup=InlineKeyboardMarkup(post_buttons),
+        parse_mode=enums.ParseMode.HTML
+    )
+
+
+@Client.on_message(filters.command(["addbot", "add_bot"]) & filters.user(ADMINS))
+async def cmd_addbot_direct(client: Client, message):
+    """Direct admin command to add a delivery bot."""
+    args = message.text.split(None, 1)
+    if len(args) < 2:
+        return await message.reply_text(
+            "🤖 <b>Add Delivery Bot Usage:</b>\n\n"
+            "<code>/addbot &lt;your_bot_token_from_botfather&gt;</code>",
+            parse_mode=enums.ParseMode.HTML
+        )
+    token_text = args[1].strip()
+    match = re.search(r"\b(\d+:[A-Za-z0-9_-]+)\b", token_text)
+    if not match:
+        return await message.reply_text("❌ <b>Invalid Token!</b> Please provide a valid Bot API Token from @BotFather.")
+
+    bot_token = match.group(1)
+    active_clients = temp.DELIVERY_BOTS if hasattr(temp, "DELIVERY_BOTS") and isinstance(temp.DELIVERY_BOTS, dict) else {}
+    if len(active_clients) >= 2:
+        return await message.reply_text("❌ <b>Maximum 2 delivery bots allowed!</b> Remove one first via /mybot.", parse_mode=enums.ParseMode.HTML)
+
+    loading_msg = await message.reply_text("⏳ <b>Connecting and registering Delivery Bot...</b>", parse_mode=enums.ParseMode.HTML)
+    success, res, bot_client = await start_delivery_bot_client(bot_token, added_by=message.from_user.id)
     if not success:
         return await loading_msg.edit_text(f"❌ <b>Failed to start Delivery Bot:</b>\n\n<code>{res}</code>", parse_mode=enums.ParseMode.HTML)
 
@@ -198,8 +252,11 @@ async def cb_mybot_add(client: Client, query: CallbackQuery):
 async def cb_mybot_cancel_ask(client: Client, query: CallbackQuery):
     if query.from_user.id not in ADMINS and str(query.from_user.id) not in [str(a) for a in ADMINS]:
         return await query.answer("⚠️ Admin only.", show_alert=True)
+    if hasattr(temp, "MYBOT_WAITING_TOKEN") and isinstance(temp.MYBOT_WAITING_TOKEN, dict):
+        temp.MYBOT_WAITING_TOKEN.pop(query.from_user.id, None)
+    panel_text, markup = build_mybot_panel()
     try:
-        await query.message.delete()
+        await query.message.edit_text(panel_text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
     except Exception:
         pass
     await query.answer("Cancelled.")

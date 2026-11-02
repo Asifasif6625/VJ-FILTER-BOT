@@ -272,6 +272,53 @@ async def start(client, message):
     
     data = message.command[1]
 
+    # ── Admin deep-link handler for GDBOT (/start edt_..., edq_..., edp_..., edt, series, mybot) ──
+    if data.startswith("edt") or data.startswith("edq_") or data.startswith("edp_") or data == "series" or data == "mybot":
+        from info import ADMINS
+        user_id = message.from_user.id if message.from_user else 0
+        if user_id not in ADMINS and str(user_id) not in [str(a) for a in ADMINS]:
+            return await message.reply_text("❌ <b>This action is reserved for administrators.</b>", parse_mode=enums.ParseMode.HTML)
+
+        if data == "mybot":
+            from plugins.mybot import cmd_mybot
+            return await cmd_mybot(client, message)
+
+        if data == "series":
+            from plugins.series import cmd_series_menu
+            return await cmd_series_menu(client, message)
+
+        from plugins.series import cmd_quick_edit
+        if data == "edt":
+            return await message.reply_text(
+                "🛠 <b>Super Filter Editor (GDBOT)</b>\n\n"
+                "Please send: <code>/edt &lt;filter_name&gt;</code> to find and edit any movie or series filter.",
+                parse_mode=enums.ParseMode.HTML
+            )
+        elif data.startswith("edt_"):
+            target_id = data[4:]
+            message.text = f"/edt {target_id}"
+            return await cmd_quick_edit(client, message)
+        elif data.startswith("edq_"):
+            import base64
+            try:
+                padded = data[4:] + "=" * (-len(data[4:]) % 4)
+                q_text = base64.urlsafe_b64decode(padded).decode("utf-8")
+                message.text = f"/edt {q_text}"
+                return await cmd_quick_edit(client, message)
+            except Exception as e:
+                return await message.reply_text(f"❌ Failed to decode edit query: {e}")
+        elif data.startswith("edp_"):
+            token = data[4:]
+            q_text = getattr(temp, "PENDING_EDT", {}).get(token, "")
+            if q_text:
+                message.text = f"/edt {q_text}"
+                return await cmd_quick_edit(client, message)
+            else:
+                return await message.reply_text(
+                    "⚠️ <b>Edit session expired.</b>\n\nPlease send <code>/edt &lt;filter_name&gt;</code> directly here.",
+                    parse_mode=enums.ParseMode.HTML
+                )
+
     if data.startswith("fsub_"):
         req_id = data.split("_", 1)[1]
         req = temp.GROUP_MOVIE_REQS.get(req_id)
@@ -1015,27 +1062,81 @@ async def delete(bot, message):
                 await msg.edit('File not found in database')
 
 
-@Client.on_message(filters.command('deleteall') & filters.user(ADMINS))
+@Client.on_message(filters.command(['delfiles', 'deleteall', 'delallfiles', 'delete_files', 'clearfiles']) & filters.user(ADMINS))
 async def delete_all_index(bot, message):
-    await message.reply_text(
-        'This will delete all indexed files.\nDo you want to continue??',
-        reply_markup=InlineKeyboardMarkup(
-            [[
-                InlineKeyboardButton(text="YES", callback_data="autofilter_delete")
-            ],[
-                InlineKeyboardButton(text="CANCEL", callback_data="close_data")
-            ]]
-        ),
-        quote=True,
+    """
+    Safe command to clear old indexed file records and file IDs.
+    Preserves 100% of Super Filter definitions, titles, posters, aliases, and configurations.
+    """
+    from database.series_db import super_movies_col, series_col
+    sm_count = await super_movies_col.count_documents({"status": {"$ne": "deleted"}})
+    s_count = await series_col.count_documents({"status": {"$ne": "deleted"}})
+
+    confirm_text = (
+        "⚠️ <b>CONFIRMATION: Safely Clear Old Indexed Files</b>\n\n"
+        "This will clear old indexed file records from MongoDB so you can reindex fresh.\n\n"
+        "<b>Collections Affected:</b>\n"
+        "• <code>ia_filterdb</code>: Clears indexed file records (preserves indexes)\n"
+        "• <code>series_files</code>: Clears old episode file references\n"
+        "• <code>super_movies</code>: Clears old file ID links\n\n"
+        "🛡 <b>GUARANTEED PRESERVED:</b>\n"
+        f"✅ <b>{sm_count} Super Movie Filters:</b> All titles, posters, aliases, IMDb IDs, configs preserved 100%!\n"
+        f"✅ <b>{s_count} Series Filters:</b> All series names, keys, posters, captions preserved 100%!\n"
+        "✅ <b>Zero lost filters:</b> Newly indexed files will automatically match & sync!\n\n"
+        "<b>Are you sure you want to proceed?</b>"
     )
 
+    markup = InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("✅ Yes, Clear Old Files", callback_data="delfiles_confirm"),
+            InlineKeyboardButton("❌ Cancel", callback_data="delfiles_cancel")
+        ]
+    ])
+    await message.reply_text(confirm_text, reply_markup=markup, quote=True, parse_mode=enums.ParseMode.HTML)
 
-@Client.on_callback_query(filters.regex(r'^autofilter_delete'))
+
+@Client.on_callback_query(filters.regex(r'^(delfiles_confirm|autofilter_delete)$'))
 async def delete_all_index_confirm(bot, query):
-    col.drop()
-    sec_col.drop()
-    await query.answer('Piracy Is Crime')
-    await query.message.edit('Succesfully Deleted All The Indexed Files.')
+    if query.from_user.id not in ADMINS and str(query.from_user.id) not in [str(a) for a in ADMINS]:
+        return await query.answer("⚠️ Admin only.", show_alert=True)
+
+    await query.answer("Processing safe file clearance... ⏳")
+    await query.message.edit_text("⏳ <b>Safely clearing old indexed files and resetting file IDs...</b>\n<i>Preserving all Super Filters...</i>", parse_mode=enums.ParseMode.HTML)
+
+    from database.ia_filterdb import clear_all_indexed_files
+    results = await clear_all_indexed_files(clear_super_file_ids=True)
+
+    if results.get("error"):
+        return await query.message.edit_text(
+            f"❌ <b>Error clearing files:</b>\n\n<code>{results['error']}</code>",
+            parse_mode=enums.ParseMode.HTML
+        )
+
+    summary_text = (
+        "✅ <b>Successfully Cleared Old Indexed Files!</b>\n\n"
+        "📊 <b>Deletion Summary:</b>\n"
+        f"• <b>Primary Collection (<code>col</code>):</b> <code>{results['col_deleted']}</code> records deleted\n"
+    )
+    if results['sec_col_deleted']:
+        summary_text += f"• <b>Secondary Collection (<code>sec_col</code>):</b> <code>{results['sec_col_deleted']}</code> records deleted\n"
+    summary_text += (
+        f"• <b>Series Episode Files (<code>series_files</code>):</b> <code>{results['sfiles_deleted']}</code> records deleted\n\n"
+        "🛡 <b>Preserved Configurations:</b>\n"
+        f"• <b>Super Movie Filters:</b> <code>{results['super_movies_preserved']}</code> preserved (file IDs cleared)\n"
+        f"• <b>Series Filters:</b> <code>{results['series_preserved']}</code> preserved\n"
+        "• <b>MongoDB Background Indexes:</b> Preserved intact\n\n"
+        "🚀 <b>Next Steps:</b>\n"
+        "You can now run <code>/index</code> to reindex your channel.\n"
+        "All newly indexed files will automatically synchronize with your existing Super Filters!"
+    )
+    await query.message.edit_text(summary_text, parse_mode=enums.ParseMode.HTML)
+
+
+@Client.on_callback_query(filters.regex(r'^delfiles_cancel$'))
+async def delete_all_index_cancel(bot, query):
+    if query.from_user.id not in ADMINS and str(query.from_user.id) not in [str(a) for a in ADMINS]:
+        return await query.answer("⚠️ Admin only.", show_alert=True)
+    await query.message.edit_text("🚫 <b>Operation Cancelled.</b>\n<i>No files or database records were modified.</i>", parse_mode=enums.ParseMode.HTML)
 
 
 @Client.on_message(filters.command('settings'))
