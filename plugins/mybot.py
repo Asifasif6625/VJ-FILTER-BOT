@@ -6,6 +6,7 @@ from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup, CallbackQ
 from info import ADMINS
 from utils import (
     temp,
+    is_gdbot_client,
     get_all_delivery_bots,
     get_active_delivery_bot,
     get_active_public_bot_id,
@@ -89,9 +90,7 @@ def build_mybot_panel():
 @Client.on_message(filters.command(["mybot", "mybots", "deliverybot", "deliverybots"]) & filters.user(ADMINS))
 async def cmd_mybot(client: Client, message):
     """Admin dashboard to manage up to 2 delivery bots."""
-    curr_bot_id = getattr(getattr(client, "me", None), "id", None) or getattr(temp, "ME", None)
-    gdbot_id = getattr(temp, "GDBOT_ID", None) or getattr(temp, "ME", None)
-    if curr_bot_id and gdbot_id and int(curr_bot_id) != int(gdbot_id):
+    if not is_gdbot_client(client):
         gdbot_client = getattr(temp, "GDBOT", None)
         gdbot_u = getattr(getattr(gdbot_client, "me", None), "username", None) or getattr(temp, "U_NAME", "GDBOT")
         open_url = f"https://t.me/{gdbot_u}?start=mybot"
