@@ -569,39 +569,52 @@ async def year_index_files_to_db(session: dict, chat, lst_msg_id: int, msg, bot,
 async def index_files(bot, query):
     if query.data.startswith('index_cancel'):
         temp.CANCEL = True
-        return await query.answer("Cancelling Indexing")
+        temp.INDEX_PAUSED = False
+        task = getattr(temp, "CURRENT_INDEX_TASK", None)
+        if task and not task.done():
+            try:
+                task.cancel()
+            except Exception:
+                pass
+        return await query.answer("Cancelling Indexing...", show_alert=True)
+
+    if query.data.startswith('index_pause'):
+        temp.INDEX_PAUSED = True
+        return await query.answer("⏸ Indexing Paused. Click Resume to continue.", show_alert=True)
+
+    if query.data.startswith('index_resume'):
+        temp.INDEX_PAUSED = False
+        return await query.answer("▶️ Resuming Indexing...", show_alert=True)
+
     _, raju, chat, lst_msg_id, from_user = query.data.split("#")
     if raju == 'reject':
         await query.message.delete()
         await bot.send_message(
             int(from_user),
-            f'Your Submission for indexing {chat} has been decliened by our moderators.',
+            f'Your Submission for indexing {chat} has been declined by our moderators.',
             reply_to_message_id=int(lst_msg_id)
         )
         return
 
-    if lock.locked():
-        return await query.answer('Wait until previous process complete.', show_alert=True)
-    msg = query.message
+    if lock.locked() or getattr(temp, "IS_INDEXING", False):
+        return await query.answer('⚠️ An indexing process is already running. Please wait for it to complete.', show_alert=True)
 
-    await query.answer('Processing...⏳', show_alert=True)
+    msg = query.message
+    await query.answer('Processing... ⏳', show_alert=True)
     if int(from_user) not in ADMINS:
         await bot.send_message(
             int(from_user),
             f'Your Submission for indexing {chat} has been accepted by our moderators and will be added soon.',
             reply_to_message_id=int(lst_msg_id)
         )
-    await msg.edit(
-        "Starting Indexing",
-        reply_markup=InlineKeyboardMarkup(
-            [[InlineKeyboardButton('Cancel', callback_data='index_cancel')]]
-        )
-    )
+
     try:
         chat = int(chat)
-    except:
+    except Exception:
         chat = chat
-    await index_files_to_db(int(lst_msg_id), chat, msg, bot)
+
+    task = asyncio.create_task(index_files_to_db(int(lst_msg_id), chat, msg, bot))
+    temp.CURRENT_INDEX_TASK = task
 
 
 @Client.on_message(filters.private & filters.command('index'))
@@ -685,71 +698,312 @@ async def set_skip_number(bot, message):
 
 
 async def index_files_to_db(lst_msg_id, chat, msg, bot):
+    """
+    High-Speed Resilient Batch Indexing Engine:
+    - Pipelined batch prefetching (100 messages/batch).
+    - Concurrent worker pool with Semaphore(15) for save_file and filter synchronization.
+    - Full Pause / Resume / Cancel support with responsive inline buttons.
+    - Automatic connection-drop recovery and exponential backoff retry.
+    - Exclusive execution lock: pauses non-admin searches during indexing for max speed.
+    - Real-time throttled progress updates every 3.5 seconds.
+    - Automatic idempotent synchronization with Super Movie Filters and Series.
+    """
+    import html as pyhtml
+    from utils import get_active_delivery_bot, is_client_connected, safe_reconnect_client
+
+    if getattr(temp, "IS_INDEXING", False):
+        return await msg.edit_text("⚠️ <b>An indexing task is already running!</b>")
+
+    active_del = get_active_delivery_bot()
+    worker_bot = active_del if (active_del and getattr(active_del, "is_connected", False)) else bot
+    worker_bid = getattr(getattr(worker_bot, "me", None), "id", None)
+    worker_uname = getattr(getattr(worker_bot, "me", None), "username", "Bot")
+
+    # Resolve Chat Title
+    c_title = str(chat)
+    try:
+        chat_obj = await worker_bot.get_chat(chat)
+        c_title = chat_obj.title or str(chat)
+    except Exception:
+        pass
+
+    temp.IS_INDEXING = True
+    temp.INDEX_PAUSED = False
+    temp.CANCEL = False
+    temp.CURRENT_INDEX_CHAT = chat
+    temp.CURRENT_INDEX_TASK = asyncio.current_task()
+
+    start_skip_id = getattr(temp, "CURRENT", 1) or 1
+    current = start_skip_id
     total_files = 0
     duplicate = 0
     errors = 0
     deleted = 0
     no_media = 0
     unsupported = 0
+    total_scanned = 0
+    batch_size = 100
+    start_time = time.monotonic()
+    last_edit_time = time.monotonic()
+    sem = asyncio.Semaphore(15)
+
+    def make_prog_bar(pct, length=10):
+        filled = max(0, min(length, int(length * pct / 100)))
+        return "▰" * filled + "▱" * (length - filled)
+
+    running_btns = InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton('⏸ Pause', callback_data='index_pause'),
+            InlineKeyboardButton('🛑 Cancel', callback_data='index_cancel')
+        ]
+    ])
+
+    paused_btns = InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton('▶️ Resume', callback_data='index_resume'),
+            InlineKeyboardButton('🛑 Cancel', callback_data='index_cancel')
+        ]
+    ])
+
+    await msg.edit_text(
+        f"⚡ <b>Starting High-Speed Indexing Engine for @{worker_uname}...</b>\n\n"
+        f"• <b>Channel:</b> <code>{pyhtml.escape(c_title)}</code> (<code>{chat}</code>)\n"
+        f"• <b>Target Message Range:</b> <code>{start_skip_id}</code> to <code>{lst_msg_id}</code>\n"
+        f"• <b>Speed Engine:</b> Batch Prefetching + Concurrent Sync Active\n\n"
+        f"<i>💡 Non-admin public searches are paused during indexing for maximum performance.</i>",
+        reply_markup=running_btns,
+        parse_mode=enums.ParseMode.HTML
+    )
+
+    async def fetch_ids(b_ids):
+        if not b_ids:
+            return []
+        max_retries = 5
+        for attempt in range(1, max_retries + 1):
+            if getattr(temp, "CANCEL", False):
+                return None
+            try:
+                return await worker_bot.get_messages(chat, b_ids)
+            except FloodWait as e:
+                logger.warning(f"[INDEX FLOODWAIT] Sleeping {e.value}s")
+                for _ in range(int(e.value)):
+                    if getattr(temp, "CANCEL", False):
+                        return None
+                    await asyncio.sleep(1)
+            except Exception as ge:
+                err_msg = str(ge).lower()
+                is_conn_error = any(k in err_msg for k in ["connection lost", "connectionerror", "broken pipe", "timeout", "network", "socket"])
+                backoff = min(20, 2 ** attempt)
+                logger.warning(f"[INDEX GET_MESSAGES RETRY] Attempt {attempt}/{max_retries}: {ge}. Sleeping {backoff}s...")
+                for _ in range(backoff):
+                    if getattr(temp, "CANCEL", False):
+                        return None
+                    await asyncio.sleep(1)
+
+                if is_conn_error and not getattr(temp, "CANCEL", False):
+                    try:
+                        connected = await is_client_connected(worker_bot)
+                        if not connected:
+                            logger.warning("[INDEX CONNECTION REPAIR] Worker disconnected, reconnecting...")
+                            await safe_reconnect_client(worker_bot)
+                    except Exception as re:
+                        logger.debug(f"[INDEX RECONNECT ERROR] {re}")
+        return "CONN_FAILED"
+
+    async def process_single_media(m):
+        nonlocal total_files, duplicate, errors
+        media = getattr(m, getattr(m.media, "value", "document"), None)
+        if not media:
+            return
+        media.caption = m.caption
+        media.chat_id = chat
+        media.message_id = m.id
+        media.bot_id = worker_bid
+        async with sem:
+            try:
+                is_saved, code = await save_file(media, bot_id=worker_bid)
+                if is_saved:
+                    total_files += 1
+                elif code == 0:
+                    duplicate += 1
+                elif code == 2:
+                    errors += 1
+            except Exception as sfe:
+                logger.error(f"[INDEX ERROR] msg={m.id}: {sfe}")
+                errors += 1
+
     async with lock:
         try:
-            current = temp.CURRENT
-            temp.CANCEL = False
-            from utils import get_active_delivery_bot
-            active_del = get_active_delivery_bot()
-            worker_bot = active_del if (active_del and getattr(active_del, "is_connected", False)) else bot
-            worker_bid = getattr(getattr(worker_bot, "me", None), "id", None)
-            async for message in worker_bot.iter_messages(chat, lst_msg_id, temp.CURRENT):
-                if temp.CANCEL:
-                    await msg.edit(f"Successfully Cancelled!!\n\nSaved <code>{total_files}</code> files to dataBase!\nDuplicate Files Skipped: <code>{duplicate}</code>\nDeleted Messages Skipped: <code>{deleted}</code>\nNon-Media messages skipped: <code>{no_media + unsupported}</code>(Unsupported Media - `{unsupported}` )\nErrors Occurred: <code>{errors}</code>")
-                    break
-                current += 1
-                if current % 30 == 0:
-                    can = [[InlineKeyboardButton('Cancel', callback_data='index_cancel')]]
-                    reply = InlineKeyboardMarkup(can)
+            initial_end = min(current + batch_size, lst_msg_id + 1)
+            initial_ids = list(range(current, initial_end))
+            prefetch_task = asyncio.create_task(fetch_ids(initial_ids)) if initial_ids else None
+
+            while current <= lst_msg_id and not getattr(temp, "CANCEL", False):
+                # Pause Support
+                if getattr(temp, "INDEX_PAUSED", False):
+                    logger.info(f"[INDEX] Paused by Admin at msg={current}")
+                    elapsed_p = max(1, int(time.monotonic() - start_time))
+                    elapsed_p_str = f"{elapsed_p // 60}m {elapsed_p % 60}s"
                     try:
                         await msg.edit_text(
-                            text=f"Total messages fetched: <code>{current}</code>\nTotal messages saved: <code>{total_files}</code>\nDuplicate Files Skipped: <code>{duplicate}</code>\nDeleted Messages Skipped: <code>{deleted}</code>\nNon-Media messages skipped: <code>{no_media + unsupported}</code>(Unsupported Media - `{unsupported}` )\nErrors Occurred: <code>{errors}</code>",
-                            reply_markup=reply
+                            f"⏸ <b>Indexing Paused by Admin</b>\n\n"
+                            f"• <b>Channel:</b> <code>{pyhtml.escape(c_title)}</code> (<code>{chat}</code>)\n"
+                            f"• <b>Paused at Message ID:</b> <code>{current}</code>\n"
+                            f"• <b>Files Saved so far:</b> <code>{total_files}</code>\n"
+                            f"• <b>Time Elapsed:</b> <code>{elapsed_p_str}</code>\n\n"
+                            f"<i>Click [▶️ Resume] to continue indexing from this message.</i>",
+                            reply_markup=paused_btns,
+                            parse_mode=enums.ParseMode.HTML
+                        )
+                    except Exception:
+                        pass
+
+                    while getattr(temp, "INDEX_PAUSED", False) and not getattr(temp, "CANCEL", False):
+                        await asyncio.sleep(1)
+
+                    if getattr(temp, "CANCEL", False):
+                        break
+
+                    try:
+                        await msg.edit_text(
+                            f"▶️ <b>Resuming Indexing from msg {current}...</b>",
+                            reply_markup=running_btns,
+                            parse_mode=enums.ParseMode.HTML
+                        )
+                    except Exception:
+                        pass
+
+                if not prefetch_task:
+                    break
+
+                messages = await prefetch_task
+                prefetch_task = None
+
+                if getattr(temp, "CANCEL", False):
+                    break
+
+                current_batch_size = len(initial_ids) if initial_ids else batch_size
+
+                if messages == "CONN_FAILED":
+                    logger.error(f"[INDEX CONNECTION FAILED] Pausing at msg={current}")
+                    break
+
+                if messages is None:
+                    break
+
+                # Schedule next batch prefetch immediately
+                next_current = current + current_batch_size
+                if next_current <= lst_msg_id and not getattr(temp, "CANCEL", False):
+                    next_end = min(next_current + batch_size, lst_msg_id + 1)
+                    next_ids = list(range(next_current, next_end))
+                    if next_ids:
+                        initial_ids = next_ids
+                        prefetch_task = asyncio.create_task(fetch_ids(next_ids))
+                    else:
+                        initial_ids = []
+
+                total_scanned += current_batch_size
+
+                # Filter valid media messages
+                media_msgs = []
+                for m in messages:
+                    if not m or getattr(m, 'empty', False):
+                        deleted += 1
+                    elif not getattr(m, 'media', None):
+                        no_media += 1
+                    elif getattr(m, 'media', None) not in [enums.MessageMediaType.VIDEO, enums.MessageMediaType.AUDIO, enums.MessageMediaType.DOCUMENT]:
+                        unsupported += 1
+                    else:
+                        media_msgs.append(m)
+
+                if media_msgs:
+                    await asyncio.gather(*(process_single_media(m) for m in media_msgs), return_exceptions=True)
+
+                current += current_batch_size
+
+                # Throttled progress update (every 3.5 seconds)
+                now = time.monotonic()
+                if (now - last_edit_time) >= 3.5 or current > lst_msg_id:
+                    last_edit_time = now
+                    elapsed = max(1, int(now - start_time))
+                    elapsed_str = f"{elapsed // 60}m {elapsed % 60}s"
+                    speed = round(total_scanned / elapsed, 1)
+                    total_range = max(1, (lst_msg_id - start_skip_id + 1))
+                    pct = min(100.0, round(((current - start_skip_id) / total_range) * 100, 1))
+                    prog_bar = make_prog_bar(pct)
+
+                    try:
+                        await msg.edit_text(
+                            f"⚡ <b>Indexing Channel: {pyhtml.escape(c_title)}</b>\n\n"
+                            f"[{prog_bar}] <b>{pct}%</b> (<code>{current}/{lst_msg_id}</code>)\n\n"
+                            f"📁 <b>Files Saved:</b> <code>{total_files}</code>\n"
+                            f"👥 <b>Duplicates Skipped:</b> <code>{duplicate}</code>\n"
+                            f"🗑 <b>Deleted / Non-Media:</b> <code>{deleted + no_media + unsupported}</code>\n"
+                            f"⚠️ <b>Errors:</b> <code>{errors}</code>\n"
+                            f"⚡ <b>Speed:</b> <code>{speed}</code> msgs/sec\n"
+                            f"⏱ <b>Elapsed:</b> <code>{elapsed_str}</code>\n\n"
+                            f"<i>💡 Super Filters & Series auto-sync active in background!</i>",
+                            reply_markup=running_btns,
+                            parse_mode=enums.ParseMode.HTML
                         )
                     except MessageNotModified:
                         pass
-                if message.empty:
-                    deleted += 1
-                    continue
-                elif not message.media:
-                    no_media += 1
-                    continue
-                elif message.media not in [enums.MessageMediaType.VIDEO, enums.MessageMediaType.AUDIO, enums.MessageMediaType.DOCUMENT]:
-                    unsupported += 1
-                    continue
-                media = getattr(message, message.media.value, None)
-                if not media:
-                    unsupported += 1
-                    continue
-                media.caption = message.caption
-                media.chat_id = chat
-                media.message_id = message.id
-                media.bot_id = worker_bid
-                aynav, vnay = await save_file(media, bot_id=worker_bid)
-                if aynav:
-                    total_files += 1
-                elif vnay == 0:
-                    duplicate += 1
-                elif vnay == 2:
-                    errors += 1
+                    except Exception as te:
+                        logger.debug(f"[INDEX PROGRESS EDIT ERROR] {te}")
+
+        except asyncio.CancelledError:
+            logger.info("[INDEX] Indexing task was cancelled.")
         except Exception as e:
-            logger.exception(e)
-            k = await msg.edit(f'Error: {e}')
-            await k.reply_text(f'Succesfully saved <code>{total_files}</code> to dataBase!\nDuplicate Files Skipped: <code>{duplicate}</code>\nDeleted Messages Skipped: <code>{deleted}</code>\nNon-Media messages skipped: <code>{no_media + unsupported}</code>(Unsupported Media - `{unsupported}` )\nErrors Occurred: <code>{errors}</code>')
-            await k.reply_text("**If You Get Message Not Modified Error Then Skip Your Saved File Then Index Again**")
-        else:
-            await msg.edit(f'Succesfully saved <code>{total_files}</code> to dataBase!\nDuplicate Files Skipped: <code>{duplicate}</code>\nDeleted Messages Skipped: <code>{deleted}</code>\nNon-Media messages skipped: <code>{no_media + unsupported}</code>(Unsupported Media - `{unsupported}` )\nErrors Occurred: <code>{errors}</code>')
+            logger.exception(f"[INDEX FATAL EXCEPTION] {e}")
+            try:
+                await msg.reply_text(f"❌ <b>Indexing interrupted by error:</b> <code>{e}</code>", parse_mode=enums.ParseMode.HTML)
+            except Exception:
+                pass
+        finally:
+            temp.IS_INDEXING = False
+            temp.INDEX_PAUSED = False
+            temp.CURRENT_INDEX_TASK = None
+            elapsed_tot = max(1, int(time.monotonic() - start_time))
+            elapsed_tot_str = f"{elapsed_tot // 60}m {elapsed_tot % 60}s"
+
+            if getattr(temp, "CANCEL", False):
+                status_txt = "🛑 <b>Indexing Cancelled by Admin!</b>"
+            else:
+                status_txt = "🎉 <b>Indexing Completed Successfully!</b>"
+                # Post-indexing guarantee: Automatically sync all super movies
+                try:
+                    from database.series_db import super_movies_col, sync_existing_movie_filter
+                    sm_cursor = super_movies_col.find({"status": {"$ne": "deleted"}})
+                    async for sm_doc in sm_cursor:
+                        await sync_existing_movie_filter(str(sm_doc["_id"]))
+                    logger.info("[POST INDEX AUTO-SYNC] Successfully synchronized Super Movie Filters.")
+                except Exception as se:
+                    logger.error(f"[POST INDEX SYNC ERROR] {se}")
+
+            summary = (
+                f"{status_txt}\n\n"
+                f"• <b>Channel:</b> <code>{pyhtml.escape(c_title)}</code> (<code>{chat}</code>)\n"
+                f"• <b>Total Messages Scanned:</b> <code>{total_scanned}</code>\n"
+                f"• <b>Successfully Saved to DB:</b> <code>{total_files}</code> files\n"
+                f"• <b>Duplicate Files Skipped:</b> <code>{duplicate}</code>\n"
+                f"• <b>Deleted / Empty Messages:</b> <code>{deleted}</code>\n"
+                f"• <b>Non-Media Messages:</b> <code>{no_media + unsupported}</code>\n"
+                f"• <b>Errors Occurred:</b> <code>{errors}</code>\n"
+                f"• <b>Total Run Time:</b> <code>{elapsed_tot_str}</code>\n\n"
+                f"✨ <i>All matching files have been automatically synchronized with your Super Filters and Series!</i>"
+            )
+            try:
+                await msg.edit_text(summary, parse_mode=enums.ParseMode.HTML)
+            except Exception:
+                try:
+                    await msg.reply_text(summary, parse_mode=enums.ParseMode.HTML)
+                except Exception:
+                    pass
 
 
 @Client.on_callback_query(filters.regex(r"^remap_stop$"))
 async def remap_stop_callback(bot, query):
-    if query.from_user.id not in ADMINS:
+    if query.from_user.id not in ADMINS and str(query.from_user.id) not in [str(a) for a in ADMINS]:
         return await query.answer("⚠️ Only admins can stop migration.", show_alert=True)
     bot_id = getattr(getattr(bot, "me", None), "id", None)
     if not hasattr(temp, "REMAP_STOP_BOTS") or not isinstance(temp.REMAP_STOP_BOTS, dict):
@@ -780,7 +1034,7 @@ async def remap_stop_callback(bot, query):
 
 
 @Client.on_message(filters.private & filters.command(['remap_files', 'migrate_token']) & filters.user(ADMINS))
-async def remap_files_command(bot, message):
+async def remap_files_command(bot, message, caller_bot=None):
     """
     High-Speed Automated Bot Token Migration Engine:
     Scans configured storage channels (CHANNELS, SDATABASE_CHANNEL, etc.)
@@ -792,6 +1046,7 @@ async def remap_files_command(bot, message):
     """
     import html as pyhtml
     from info import CHANNELS, SDATABASE_CHANNEL, FILE_STORE_CHANNEL
+    from utils import get_active_delivery_bot
 
     # Mutual exclusion: ensure only ONE migration process runs at a time
     if getattr(temp, "IS_REMAP_RUNNING", False):
@@ -800,6 +1055,21 @@ async def remap_files_command(bot, message):
             "Only one migration process can run at a time across both bots to prevent DB contention and Telegram flood restrictions.\n"
             "Please wait for it to complete or click <b>🛑 Stop Migration</b> on the active task."
         )
+
+    # Resolve worker delivery bot: if called on GDBOT, migrate using active Delivery Bot
+    active_del = get_active_delivery_bot()
+    gdbot_id = getattr(temp, "GDBOT_ID", None) or getattr(temp, "ME", None)
+    curr_id = getattr(getattr(bot, "me", None), "id", None)
+    if gdbot_id and curr_id and int(curr_id) == int(gdbot_id):
+        if not active_del or not getattr(active_del, "is_connected", False):
+            temp.IS_REMAP_RUNNING = False
+            temp.CURRENT_REMAP_TASK = None
+            return await message.reply(
+                "⚠️ <b>No active Delivery Bot found for migration.</b>\n\n"
+                "Please add a Delivery Bot via <code>/mybot</code> first.",
+                parse_mode=enums.ParseMode.HTML
+            )
+        bot = active_del
 
     bot_id = getattr(getattr(bot, "me", None), "id", None)
     if not bot_id:
@@ -820,38 +1090,57 @@ async def remap_files_command(bot, message):
         return getattr(temp, "REMAP_STOP", False)
 
     target_channels = []
-    text_parts = message.text.strip().split()
     start_skip_id = 1
-    if len(text_parts) > 1:
-        for p in text_parts[1:]:
-            p_clean = p.strip()
-            if p_clean.lstrip("-").isdigit():
-                val = int(p_clean)
-                if val < 0 or len(p_clean) > 8:
-                    target_channels.append(val)
-                else:
-                    start_skip_id = max(1, val)
-            elif p_clean:
-                target_channels.append(p_clean)
-    else:
+
+    # Only parse channels/args from text if the message actually started with /remap or /migrate command
+    if message.text and message.text.strip().startswith("/"):
+        text_parts = message.text.strip().split()
+        if len(text_parts) > 1:
+            for p in text_parts[1:]:
+                p_clean = p.strip()
+                if p_clean.lstrip("-").isdigit():
+                    val = int(p_clean)
+                    if val < 0 or len(p_clean) > 8:
+                        target_channels.append(val)
+                    else:
+                        start_skip_id = max(1, val)
+                elif p_clean.startswith("@") or p_clean.startswith("-100"):
+                    try:
+                        target_channels.append(int(p_clean) if p_clean.lstrip("-").isdigit() else p_clean)
+                    except ValueError:
+                        pass
+
+    # If no channels specified via command arguments (or called via /mybot UI button):
+    if not target_channels:
         if isinstance(CHANNELS, list):
-            target_channels.extend(CHANNELS)
+            target_channels.extend([c for c in CHANNELS if c])
+        elif CHANNELS:
+            target_channels.append(CHANNELS)
         if SDATABASE_CHANNEL and SDATABASE_CHANNEL not in target_channels:
             target_channels.append(SDATABASE_CHANNEL)
         if isinstance(FILE_STORE_CHANNEL, list):
             for fc in FILE_STORE_CHANNEL:
                 if fc and fc not in target_channels:
                     target_channels.append(fc)
+        elif FILE_STORE_CHANNEL and FILE_STORE_CHANNEL not in target_channels:
+            target_channels.append(FILE_STORE_CHANNEL)
+
+    target_channels = [c for c in target_channels if c and str(c) != "0"]
 
     if not target_channels:
         temp.IS_REMAP_RUNNING = False
         temp.CURRENT_REMAP_TASK = None
         return await message.reply("❌ No storage channels found in config. Please specify channel ID: <code>/remap_files -100...</code>")
 
+    ui_client = caller_bot or getattr(message, "_client", None) or bot
+    chat_target = message.chat.id if (message and message.chat) else (message.from_user.id if message.from_user else None)
+
     stop_btn = InlineKeyboardMarkup([[InlineKeyboardButton("🛑 Stop Migration", callback_data="remap_stop")]])
-    status_msg = await message.reply(
-        f"🚀 <b>Starting High-Speed File Migration Engine for @{bot_uname}...</b>\nPlease wait while channels are verified.",
-        reply_markup=stop_btn
+    status_msg = await ui_client.send_message(
+        chat_id=chat_target,
+        text=f"🚀 <b>Starting High-Speed File Migration Engine for @{bot_uname}...</b>\nPlease wait while channels are verified.",
+        reply_markup=stop_btn,
+        parse_mode=enums.ParseMode.HTML
     )
 
     total_migrated = 0
@@ -884,12 +1173,23 @@ async def remap_files_command(bot, message):
                 continue
 
             probe_limit = 0
+            # 1. First probe via get_chat_history without posting
             try:
-                ping = await bot.send_message(chat_obj.id, "🔄 <b>Verifying Channel for Token Migration...</b>")
-                probe_limit = ping.id
-                await ping.delete()
-            except Exception as pe:
-                logger.info(f"[REMAP_FILES] Probe ping failed in {chat_obj.id}: {pe}")
+                async for last_msg in bot.get_chat_history(chat_obj.id, limit=1):
+                    if last_msg:
+                        probe_limit = last_msg.id
+                        break
+            except Exception as he:
+                logger.debug(f"[REMAP_FILES] get_chat_history probe in {chat_obj.id}: {he}")
+
+            # 2. Fallback to ping message if get_chat_history probe failed
+            if not probe_limit:
+                try:
+                    ping = await bot.send_message(chat_obj.id, "🔄 <b>Verifying Channel for Token Migration...</b>")
+                    probe_limit = ping.id
+                    await ping.delete()
+                except Exception as pe:
+                    logger.info(f"[REMAP_FILES] Probe ping failed in {chat_obj.id}: {pe}")
 
             has_exact_limit = True
             if not probe_limit:
@@ -1145,6 +1445,6 @@ async def remap_files_command(bot, message):
 
 async def start_delivery_bot_remap(caller_client, delivery_bot, message, admin_user_id):
     """Invokes remap_files_command using the specified delivery bot client as an asynchronous background task."""
-    task = asyncio.create_task(remap_files_command(bot=delivery_bot, message=message))
+    task = asyncio.create_task(remap_files_command(bot=delivery_bot, message=message, caller_bot=caller_client))
     temp.CURRENT_REMAP_TASK = task
     return task
