@@ -38,6 +38,16 @@ loop = asyncio.get_event_loop()
 
 
 async def start():
+    # Start web server immediately so Koyeb/Render health check passes without waiting for Telegram/DB
+    try:
+        app = web.AppRunner(await web_server())
+        await app.setup()
+        bind_address = "0.0.0.0"
+        await web.TCPSite(app, bind_address, int(PORT)).start()
+        logging.info(f"Web server started immediately on {bind_address}:{PORT}")
+    except Exception as w_err:
+        logging.warning(f"Failed to start web server upfront: {w_err}")
+
     print('\n')
     print('### VJ BOT MOVIE SERIES FIX V6 ACTIVE ###', flush=True)
     logging.warning('### VJ BOT MOVIE SERIES FIX V6 ACTIVE ###')
@@ -106,10 +116,6 @@ async def start():
         print("Restarting All Clone Bots.......")
         await restart_bots()
         print("Restarted All Clone Bots.")
-    app = web.AppRunner(await web_server())
-    await app.setup()
-    bind_address = "0.0.0.0"
-    await web.TCPSite(app, bind_address, int(PORT)).start()
     await idle()
 
 
