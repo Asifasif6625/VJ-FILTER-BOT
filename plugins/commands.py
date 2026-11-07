@@ -240,7 +240,8 @@ async def start(client, message):
     import logging
     log = logging.getLogger(__name__)
     
-    payload = message.command[1] if len(message.command) > 1 else ""
+    raw_parts = message.text.split() if message.text else []
+    payload = raw_parts[1] if len(raw_parts) > 1 else (message.command[1] if len(message.command) > 1 else "")
     log.info(f"[START HANDLER]\npayload={payload}")
     log.info(f"[DEBUG START] Raw text: {message.text}")
     
@@ -263,7 +264,7 @@ async def start(client, message):
     if not await db.is_user_exist(message.from_user.id):
         await db.add_user(message.from_user.id, message.from_user.first_name)
         await client.send_message(LOG_CHANNEL, script.LOG_TEXT_P.format(message.from_user.id, message.from_user.mention))
-    if len(message.command) != 2:
+    if not payload:
         from plugins.multilingual_ui import build_start_menu_keyboard
         reply_markup = build_start_menu_keyboard()
         b_name = getattr(getattr(client, "me", None), "first_name", None) or getattr(temp, "B_NAME", "Bot")
@@ -278,7 +279,7 @@ async def start(client, message):
         )
         return
     
-    data = message.command[1]
+    data = payload
 
     # ── Admin deep-link handler for GDBOT (/start edt_..., edq_..., edp_..., edt, series, mybot) ──
     if data.startswith("edt") or data.startswith("edq_") or data.startswith("edp_") or data == "series" or data == "mybot":
@@ -2026,17 +2027,22 @@ async def send_batch_files(
             fsize = get_size(raw_size) if raw_size else "Unknown Size"
             raw_lang = file_doc.get("language", "Unknown")
             lang = html.escape(str(raw_lang).strip())
+            raw_qual = file_doc.get("quality") or file_doc.get("resolution") or "HD"
+            res_str = html.escape(str(raw_qual).strip())
+            raw_codec = file_doc.get("codec") or ("H.265 10bit" if ("265" in str(raw_qual).lower() or "hevc" in str(fname).lower()) else ("H.264" if "264" in str(raw_qual).lower() else "AAC/x264"))
+            codec_str = html.escape(str(raw_codec).strip())
+            m_title = html.escape(str(file_doc.get("movie_title") or file_doc.get("title") or fname).strip())
             ep_title_line = ""
             if file_doc.get("is_series") or file_doc.get("episode"):
                 ep_t = file_doc.get("episode_title") or (f"Episode {int(file_doc.get('episode', 1)):02d}" if str(file_doc.get('episode', '')).isdigit() else "Episode 01")
-                ep_title_line = f"⇝ EP Title: {html.escape(str(ep_t).strip())}\n"
+                ep_title_line = f"o Episode Title: {html.escape(str(ep_t).strip())}\n"
             cap = (
-                f"<i>⇝ File Name: {fname}\n"
-                f"⇝ Size: {fsize}\n"
-                f"⇝ Language: {lang}\n"
+                f"o Title: {m_title}\n"
+                f"o Language: {lang}\n"
+                f"o Resolution: {res_str}\n"
+                f"o Codec: {codec_str}\n"
                 f"{ep_title_line}"
-                f"⇝ Total: {idx}/{total_files}\n\n"
-                f"❧ https://t.me/+5RSSPoQTypk3ZmE1</i>\n\n"
+                f"o File Size: {fsize}\n\n"
                 f"<blockquote>⚠️ This file will be deleted in 1 minute. Forward to Saved Messages!</blockquote>"
             )
 
@@ -2337,13 +2343,21 @@ async def send_series_files_to_user(client, user_id, files, query=None):
         ep_title = ep_titles_map.get(pair) or f"Episode {pair[1]:02d}"
         ep_title_escaped = html.escape(str(ep_title).strip())
 
+        raw_qual = file_doc.get("quality") or file_doc.get("resolution") or quality or "HD"
+        res_str = html.escape(str(raw_qual).strip())
+        raw_codec = file_doc.get("codec")
+        if not raw_codec:
+            raw_codec = "H.265 10bit" if ("265" in str(raw_qual).lower() or "hevc" in str(file_name).lower()) else ("H.264" if "264" in str(raw_qual).lower() else "AAC/x264")
+        codec_str = html.escape(str(raw_codec).strip())
+        s_title_str = html.escape(str(series_name or file_name).strip())
+
         f_caption = (
-            f"<i>⇝ File Name: {file_name}\n"
-            f"⇝ Size: {file_size}\n"
-            f"⇝ Language: {lang_str}\n"
-            f"⇝ EP Title: {ep_title_escaped}\n"
-            f"⇝ Total: {idx}/{total_eps}\n\n"
-            f"❧ https://t.me/+5RSSPoQTypk3ZmE1</i>\n\n"
+            f"o Series: {s_title_str}\n"
+            f"o Language: {lang_str}\n"
+            f"o Resolution: {res_str}\n"
+            f"o Codec: {codec_str}\n"
+            f"o Episode Title: {ep_title_escaped}\n"
+            f"o File Size: {file_size}\n\n"
             f"<blockquote>⚠️ This file will be deleted in 1 minute. Forward to Saved Messages!</blockquote>"
         )
         return f_caption
