@@ -3,6 +3,7 @@
 # Ask Doubt on telegram @KingVJ01
 
 import re
+import time
 import logging
 import unicodedata
 from datetime import datetime
@@ -113,23 +114,39 @@ _ACTIVE_SERIES_CACHE_TIME = 0.0
 
 async def get_cached_active_movies(ttl: float = 30.0) -> list[dict]:
     global _ACTIVE_MOVIES_CACHE, _ACTIVE_MOVIES_CACHE_TIME
-    now = time.monotonic()
-    if _ACTIVE_MOVIES_CACHE is not None and (now - _ACTIVE_MOVIES_CACHE_TIME) < ttl:
+    try:
+        now = time.monotonic()
+        if _ACTIVE_MOVIES_CACHE is not None and (now - _ACTIVE_MOVIES_CACHE_TIME) < ttl:
+            return _ACTIVE_MOVIES_CACHE
+        cursor = super_movies_col.find({"status": {"$ne": "deleted"}})
+        _ACTIVE_MOVIES_CACHE = [doc async for doc in cursor]
+        _ACTIVE_MOVIES_CACHE_TIME = now
         return _ACTIVE_MOVIES_CACHE
-    cursor = super_movies_col.find({"status": {"$ne": "deleted"}})
-    _ACTIVE_MOVIES_CACHE = [doc async for doc in cursor]
-    _ACTIVE_MOVIES_CACHE_TIME = now
-    return _ACTIVE_MOVIES_CACHE
+    except Exception as e:
+        logger.debug(f"[CACHE ACTIVE MOVIES ERROR] {e}")
+        try:
+            cursor = super_movies_col.find({"status": {"$ne": "deleted"}})
+            return [doc async for doc in cursor]
+        except Exception:
+            return []
 
 async def get_cached_active_series(ttl: float = 30.0) -> list[dict]:
     global _ACTIVE_SERIES_CACHE, _ACTIVE_SERIES_CACHE_TIME
-    now = time.monotonic()
-    if _ACTIVE_SERIES_CACHE is not None and (now - _ACTIVE_SERIES_CACHE_TIME) < ttl:
+    try:
+        now = time.monotonic()
+        if _ACTIVE_SERIES_CACHE is not None and (now - _ACTIVE_SERIES_CACHE_TIME) < ttl:
+            return _ACTIVE_SERIES_CACHE
+        cursor = series_col.find({"status": {"$ne": "deleted"}})
+        _ACTIVE_SERIES_CACHE = await cursor.to_list(length=2000)
+        _ACTIVE_SERIES_CACHE_TIME = now
         return _ACTIVE_SERIES_CACHE
-    cursor = series_col.find({"status": {"$ne": "deleted"}})
-    _ACTIVE_SERIES_CACHE = await cursor.to_list(length=1000)
-    _ACTIVE_SERIES_CACHE_TIME = now
-    return _ACTIVE_SERIES_CACHE
+    except Exception as e:
+        logger.debug(f"[CACHE ACTIVE SERIES ERROR] {e}")
+        try:
+            cursor = series_col.find({"status": {"$ne": "deleted"}})
+            return await cursor.to_list(length=2000)
+        except Exception:
+            return []
 
 def invalidate_active_filters_cache():
     global _ACTIVE_MOVIES_CACHE, _ACTIVE_MOVIES_CACHE_TIME, _ACTIVE_SERIES_CACHE, _ACTIVE_SERIES_CACHE_TIME
@@ -238,9 +255,11 @@ async def create_series(data: dict) -> str:
             "updated_at": datetime.utcnow(),
         }
         await series_col.update_one({"_id": existing["_id"]}, {"$set": update_fields})
+        invalidate_active_filters_cache()
         return str(existing["_id"])
 
     result = await series_col.insert_one(doc)
+    invalidate_active_filters_cache()
     return str(result.inserted_id)
 
 
@@ -579,6 +598,8 @@ async def _get_search_candidates(collection, query: str, limit: int = 60) -> lis
         {"search_aliases": q_norm},
         {"aliases": q_norm},
         {"generated_aliases": q_norm},
+        {"title": {"$regex": f"^{re.escape(raw_query)}$", "$options": "i"}},
+        {"name": {"$regex": f"^{re.escape(raw_query)}$", "$options": "i"}},
         {"second_name": {"$regex": f"^{re.escape(raw_query)}$", "$options": "i"}}
     ]
     if clean_norm and clean_norm != q_norm:
@@ -587,6 +608,8 @@ async def _get_search_candidates(collection, query: str, limit: int = 60) -> lis
             {"search_aliases": clean_norm},
             {"aliases": clean_norm},
             {"generated_aliases": clean_norm},
+            {"title": {"$regex": f"^{re.escape(clean_raw)}$", "$options": "i"}},
+            {"name": {"$regex": f"^{re.escape(clean_raw)}$", "$options": "i"}},
             {"second_name": {"$regex": f"^{re.escape(clean_raw)}$", "$options": "i"}}
         ])
 
@@ -597,7 +620,9 @@ async def _get_search_candidates(collection, query: str, limit: int = 60) -> lis
                 {"normalized_name": no_and},
                 {"search_aliases": no_and},
                 {"aliases": no_and},
-                {"generated_aliases": no_and}
+                {"generated_aliases": no_and},
+                {"title": {"$regex": f"^{re.escape(no_and)}$", "$options": "i"}},
+                {"name": {"$regex": f"^{re.escape(no_and)}$", "$options": "i"}}
             ])
 
     try:
@@ -621,6 +646,8 @@ async def _get_search_candidates(collection, query: str, limit: int = 60) -> lis
 
         token_conds = []
         for w in words[:4]:
+            token_conds.append({"title": {"$regex": re.escape(w), "$options": "i"}})
+            token_conds.append({"name": {"$regex": re.escape(w), "$options": "i"}})
             token_conds.append({"normalized_name": {"$regex": re.escape(w), "$options": "i"}})
             token_conds.append({"search_aliases": {"$regex": f"^{re.escape(w)}", "$options": "i"}})
             token_conds.append({"second_name": {"$regex": re.escape(w), "$options": "i"}})
@@ -1518,8 +1545,10 @@ async def create_super_movie(data: dict) -> str:
             "updated_at": datetime.utcnow(),
         }
         await super_movies_col.update_one({"_id": existing["_id"]}, {"$set": update_fields})
+        invalidate_active_filters_cache()
         return str(existing["_id"])
     result = await super_movies_col.insert_one(doc)
+    invalidate_active_filters_cache()
     return str(result.inserted_id)
 
 

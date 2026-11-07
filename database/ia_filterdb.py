@@ -213,7 +213,7 @@ async def save_file(media, bot_id=None, sync_filters=True, return_doc=False):
 
     is_saved, code = await asyncio.to_thread(_sync_insert)
 
-    if is_saved and sync_filters:
+    if sync_filters and code in (0, 1):
         try:
             from database.series_db import sync_movie_filter_for_files, sync_series_filter_for_files
             await sync_movie_filter_for_files([file], trigger="ia_filterdb_col")
