@@ -919,21 +919,24 @@ async def movie_qual_callback(client: Client, query: CallbackQuery):
 
     start_url = f"https://t.me/{bot_username}?start=all_{req_key}"
     
-    # If in private chat, route through /start deep-link flow
+    # If in private chat, send /start command to chat first, then deliver files (keep button as callback, NOT link)
     if query.message.chat.type == enums.ChatType.PRIVATE:
         from utils import is_delivery_in_progress, set_delivery_in_progress
         if is_delivery_in_progress(query.from_user.id):
             return await query.answer("⏳ Please wait! Previous files are still sending...", show_alert=True)
         set_delivery_in_progress(query.from_user.id, True)
 
+        try:
+            await query.answer()
+        except Exception:
+            pass
+
         from plugins.commands import process_series_start
         try:
-            await process_series_start(client, query.from_user.id, req_key, message=query.message)
+            sent_cmd = await client.send_message(query.message.chat.id, f"/start all_{req_key}")
+            await process_series_start(client, query.from_user.id, req_key, message=sent_cmd)
         finally:
-            try:
-                await query.answer()
-            except Exception:
-                pass
+            set_delivery_in_progress(query.from_user.id, False)
         return
         
     try:
@@ -4800,10 +4803,7 @@ async def cb_normal_group_select(client: Client, query: CallbackQuery):
     else:
         bot_username = "Bot"
 
-    req_user_id = group_data.get("user_id") or group_data.get("requester_user_id") or clicked_user_id
-    u_name = html.escape(query.from_user.first_name or "User")
-    requester_name = f"<a href='tg://user?id={req_user_id}'>{u_name}</a>"
-    details_caption, poster_url = await format_normal_filter_details_card(group_data, requester_name=requester_name)
+    details_caption, poster_url = await format_normal_filter_details_card(group_data)
     back_data = f"norm_back#{session_id}#{page}" if session_id else f"norm_back#{norm_group_id}#0"
 
     from plugins.series import make_styled_button
@@ -5059,10 +5059,11 @@ async def cb_norm_get_all_file(client: Client, query: CallbackQuery):
             )
             return await query.answer(unauth_text, show_alert=True)
 
-    bot_username = getattr(getattr(client, "me", None), "username", None)
-    if not bot_username:
-        from utils import get_child_bot_username
-        bot_username = get_child_bot_username()
+    try:
+        from utils import get_delivery_bot_username
+        bot_username = get_delivery_bot_username()
+    except Exception:
+        bot_username = getattr(getattr(client, "me", None), "username", None) or getattr(temp, "U_NAME", "Bot")
     if bot_username:
         bot_username = str(bot_username).lstrip("@")
     else:
@@ -5070,13 +5071,20 @@ async def cb_norm_get_all_file(client: Client, query: CallbackQuery):
 
     logger.info(f"[CHILD BOT GET_ALL_FILE] bot=@{bot_username} group_id={group_id} user_id={user_id} is_pm={is_pm}")
 
+    # Ensure group_data is preserved in MongoDB for deep link retrieval
+    if group_data:
+        from database.series_db import save_temp_request
+        try:
+            await save_temp_request(group_id, group_data)
+        except Exception:
+            pass
+
     if not is_pm:
-        # Group fallback: open Child Bot PM via deep link action
         start_url = f"https://t.me/{bot_username}?start=norm_{group_id}"
         try:
             return await query.answer(url=start_url)
         except Exception as e:
-            logger.warning(f"[NORM GETALL GROUP URL] query.answer(url=) failed: {e}. Falling back to button.")
+            logger.warning(f"[NORM GETALL URL] query.answer(url=) failed: {e}. Falling back to button.")
             from utils import schedule_filter_message_delete
             fb_msg = await query.message.reply_text(
                 "📩 Open bot to get your files:",
@@ -5129,8 +5137,15 @@ async def cb_norm_get_all_file(client: Client, query: CallbackQuery):
     if user_id in temp.ACTIVE_NORMAL_DELIVERIES:
         return await query.answer("⚠️ File delivery is already in progress!", show_alert=True)
 
-    await query.answer()
-    started = await start_normal_file_delivery_in_pm(client, user_id=user_id, norm_group_id=group_id, trigger_msg=query.message)
+    try:
+        await query.answer()
+    except Exception:
+        pass
+
+    # Send /start command first into chat before delivering files (keep button as callback, NOT link)
+    sent_cmd = await client.send_message(query.message.chat.id, f"/start norm_{group_id}")
+
+    started = await start_normal_file_delivery_in_pm(client, user_id=user_id, norm_group_id=group_id, trigger_msg=None)
     if not started:
         await query.answer("⚠️ File delivery could not be started or is already running.", show_alert=True)
 
