@@ -9718,7 +9718,7 @@ async def ser_qual_callback(client: Client, query: CallbackQuery):
 
     start_url = f"https://t.me/{bot_username}?start=all_{req_key}"
 
-    # If in private chat, send /start command to chat first, then deliver files (keep button as callback, NOT link)
+    # If in private chat, deliver files directly without converting to link button or sending bot /start message
     if query.message.chat.type == enums.ChatType.PRIVATE:
         from utils import is_delivery_in_progress, set_delivery_in_progress
         if is_delivery_in_progress(query.from_user.id):
@@ -9732,8 +9732,7 @@ async def ser_qual_callback(client: Client, query: CallbackQuery):
 
         from plugins.commands import process_series_start
         try:
-            sent_cmd = await client.send_message(query.message.chat.id, f"/start all_{req_key}")
-            await process_series_start(client, query.from_user.id, req_key, message=sent_cmd)
+            await process_series_start(client, query.from_user.id, req_key, message=query.message)
         finally:
             set_delivery_in_progress(query.from_user.id, False)
         return
