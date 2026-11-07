@@ -254,14 +254,14 @@ def _build_movie_inline_result(movie: dict, bot_username: str) -> InlineQueryRes
     if is_cs:
         card_desc = f"⏳ Coming Soon • {card_desc}"
         
-    # Build plain text and exact caption_entities
-    caption_text, caption_entities = build_movie_caption_and_entities(
-        title=title_clean,
-        year=year,
-        genres=genres,
-        rating=rating,
-        quals=quals_str,
-        langs=langs_str
+    # Build HTML formatted caption
+    caption_html = (
+        f"<i>○ <b>Movie:</b> <b>{html.escape(title_clean)}</b>\n"
+        f"○ <b>Year:</b> {html.escape(year)}\n"
+        f"○ <b>Genres:</b> {html.escape(genres)}\n"
+        f"○ <b>Rating:</b> {html.escape(rating)}\n"
+        f"○ <b>Quality:</b> {html.escape(quals_str)}\n"
+        f"○ <b>Languages:</b> {html.escape(langs_str)}</i>"
     )
     
     # 1-Click Action Button
@@ -279,8 +279,8 @@ def _build_movie_inline_result(movie: dict, bot_username: str) -> InlineQueryRes
         thumb_url=photo_url,
         title=card_title,
         description=card_desc,
-        caption=caption_text,
-        caption_entities=caption_entities,
+        caption=caption_html,
+        parse_mode=enums.ParseMode.HTML,
         reply_markup=InlineKeyboardMarkup(btn)
     )
 
@@ -339,14 +339,14 @@ def _build_series_inline_result(series: dict, bot_username: str) -> InlineQueryR
     if is_cs:
         card_desc = f"⏳ Coming Soon • {card_desc}"
         
-    # Build plain text and exact caption_entities
-    caption_text, caption_entities = build_series_caption_and_entities(
-        name=name_clean,
-        year=year,
-        genres=genres,
-        rating=rating,
-        seasons=seasons_str,
-        langs=langs_str
+    # Build HTML formatted caption
+    caption_html = (
+        f"<i>○ <b>Series:</b> <b>{html.escape(name_clean)}</b>\n"
+        f"○ <b>Year:</b> {html.escape(year)}\n"
+        f"○ <b>Genres:</b> {html.escape(genres)}\n"
+        f"○ <b>Rating:</b> {html.escape(rating)}\n"
+        f"○ <b>Seasons:</b> {html.escape(seasons_str)}\n"
+        f"○ <b>Languages:</b> {html.escape(langs_str)}</i>"
     )
     
     # 1-Click Action Button
@@ -364,8 +364,8 @@ def _build_series_inline_result(series: dict, bot_username: str) -> InlineQueryR
         thumb_url=photo_url,
         title=card_title,
         description=card_desc,
-        caption=caption_text,
-        caption_entities=caption_entities,
+        caption=caption_html,
+        parse_mode=enums.ParseMode.HTML,
         reply_markup=InlineKeyboardMarkup(btn)
     )
 
