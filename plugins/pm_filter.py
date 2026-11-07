@@ -200,9 +200,14 @@ async def give_filter(client, message):
 
 @Client.on_message(filters.private & filters.text & filters.incoming, group=2)
 async def pm_text(bot, message):
+    content = message.text or ""
+    if not content or content.startswith("/") or content.startswith("#"):
+        return  # Ignore commands and hashtags before any backend checks to prevent double replies
+
     if is_gdbot_client(bot):
         from info import ADMINS
         user_id = message.from_user.id if message.from_user else 0
+        # GDBOT is completely silent to non-admins
         if user_id in ADMINS or str(user_id) in [str(a) for a in ADMINS]:
             del_u = get_delivery_bot_username()
             gdbot_uname = getattr(temp, "U_NAME", "")
@@ -219,12 +224,8 @@ async def pm_text(bot, message):
             )
         return
 
-    content = message.text
     user = message.from_user.first_name if message.from_user else "User"
     user_id = message.from_user.id if message.from_user else 0
-    if not content or content.startswith("/") or content.startswith("#"):
-        logger.info(f"[PM SEARCH SKIP]\nreason=start_command\ntext={content}")
-        return  # ignore commands and hashtags
 
     if re.search(r"(?i)^(?:https?://|www\.|t\.me/|tt\d{5,12})", content.strip()):
         logger.info(f"[PM SEARCH SKIP]\nreason=url_or_id\ntext={content}")
@@ -905,7 +906,12 @@ async def movie_qual_callback(client: Client, query: CallbackQuery):
     except Exception:
         pass
         
-    bot_username = getattr(getattr(client, "me", None), "username", None) or getattr(temp, "U_NAME", "Bot")
+    # Always link announcement download buttons to Child/Delivery Bot (never GDBOT)
+    try:
+        from utils import get_delivery_bot_username
+        bot_username = get_delivery_bot_username()
+    except Exception:
+        bot_username = getattr(getattr(client, "me", None), "username", None) or getattr(temp, "U_NAME", "Bot")
     if bot_username:
         bot_username = str(bot_username).lstrip("@")
     else:
@@ -915,6 +921,27 @@ async def movie_qual_callback(client: Client, query: CallbackQuery):
     
     # If in private chat, route through /start deep-link flow
     if query.message.chat.type == enums.ChatType.PRIVATE:
+        from utils import is_delivery_in_progress, set_delivery_in_progress
+        if is_delivery_in_progress(query.from_user.id):
+            return await query.answer("⏳ Please wait! Previous files are still sending...", show_alert=True)
+        set_delivery_in_progress(query.from_user.id, True)
+
+        try:
+            orig_markup = query.message.reply_markup
+            if orig_markup and orig_markup.inline_keyboard:
+                new_kb = []
+                for row in orig_markup.inline_keyboard:
+                    new_row = []
+                    for b in row:
+                        if getattr(b, "callback_data", "") == query.data:
+                            new_row.append(InlineKeyboardButton(f"⏳ {qual} (Sending...)", callback_data="noop_sending"))
+                        else:
+                            new_row.append(b)
+                    new_kb.append(new_row)
+                await query.message.edit_reply_markup(InlineKeyboardMarkup(new_kb))
+        except Exception:
+            pass
+
         from plugins.commands import process_series_start
         await query.answer("🚀 Sending files...")
         await process_series_start(client, query.from_user.id, req_key, message=query.message)
@@ -932,7 +959,7 @@ async def movie_qual_callback(client: Client, query: CallbackQuery):
         )
         from utils import schedule_filter_message_delete
         if fb_msg:
-            schedule_filter_message_delete(client, fb_msg.chat.id, fb_msg.id, 600)
+            schedule_filter_message_delete(client, fb_msg.chat.id, fb_msg.id, 180)
         return
 
 async def get_movie_subtitle_files(movie: dict) -> list[dict]:
@@ -2197,6 +2224,12 @@ async def filter_qualities_cb_handler(client: Client, query: CallbackQuery):
                 
 @Client.on_callback_query()
 async def cb_handler(client: Client, query: CallbackQuery):
+    if is_gdbot_client(client):
+        from info import ADMINS
+        user_id = query.from_user.id if query.from_user else 0
+        if user_id not in ADMINS and str(user_id) not in [str(a) for a in ADMINS]:
+            return await query.answer()
+
     if query.data and query.data.startswith(("as_season#", "as_finish#", "sr#", "sw#", "edser#", "vser#", "edmov#", "delmov#", "anomov#", "emovie_", "emov#", "series_", "movie_", "smovie_", "send_fsall#", "am_", "slink_", "sfile_", "ser_", "sug_mov#", "sug_ser#", "norm_")):
         query.continue_propagation()
         return
@@ -2212,6 +2245,61 @@ async def cb_handler(client: Client, query: CallbackQuery):
         return await query.answer("⚠️ Send movie name in English.\nOther languages are not supported!", show_alert=True)
     if query.data == "close_data":
         await query.message.delete()
+        return
+
+    if query.data.startswith("user_help"):
+        from plugins.multilingual_ui import get_help_card
+        code = query.data.split("#")[1] if "#" in query.data else "eng"
+        text, markup = get_help_card(code)
+        try:
+            await query.message.edit_text(text=text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
+        except Exception:
+            pass
+        await query.answer()
+        return
+
+    if query.data.startswith("user_about") or query.data == "about":
+        from plugins.multilingual_ui import get_about_card
+        code = query.data.split("#")[1] if "#" in query.data else "eng"
+        bot_name = getattr(getattr(client, "me", None), "first_name", None) or getattr(temp, "B_NAME", "Filter Bot")
+        text, markup = get_about_card(bot_name, code)
+        try:
+            await query.message.edit_text(text=text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
+        except Exception:
+            pass
+        await query.answer()
+        return
+
+    if query.data.startswith("user_dmca"):
+        from plugins.multilingual_ui import get_dmca_card
+        code = query.data.split("#")[1] if "#" in query.data else "eng"
+        text, markup = get_dmca_card(code)
+        try:
+            await query.message.edit_text(text=text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
+        except Exception:
+            pass
+        await query.answer()
+        return
+
+    if query.data in ("user_home", "start"):
+        from plugins.multilingual_ui import build_start_menu_keyboard
+        reply_markup = build_start_menu_keyboard()
+        b_name = getattr(getattr(client, "me", None), "first_name", None) or getattr(temp, "B_NAME", "Bot")
+        u_name = getattr(getattr(client, "me", None), "username", None) or getattr(temp, "U_NAME", "Bot")
+        mention = query.from_user.mention if query.from_user else "User"
+        try:
+            await query.message.edit_text(
+                text=script.START_TXT.format(mention, u_name, b_name),
+                reply_markup=reply_markup,
+                parse_mode=enums.ParseMode.HTML
+            )
+        except Exception:
+            pass
+        await query.answer()
+        return
+
+    if query.data == "noop_sending":
+        return await query.answer("⏳ Files are currently being sent! Please wait...", show_alert=True)
     elif query.data == "get_trail":
         user_id = query.from_user.id
         free_trial_status = await db.get_free_trial_status(user_id)
@@ -3978,12 +4066,12 @@ async def auto_filter(client, name, msg, reply_msg=None, ai_search=True, spoll=F
                     msg_text = (
                         f"<b>Hᴇʏ {user_mention}, sᴏʀʀʏ ɴᴏ ꜰɪʟᴇs ᴡᴇʀᴇ ꜰᴏᴜɴᴅ ꜰᴏʀ ʏᴏᴜʀ ʀᴇǫᴜᴇꜱᴛ '{html.escape(search)}'😕\n\n"
                         f"ᴄʜᴇᴄᴋ ʏᴏᴜʀ sᴘᴇʟʟɪɴɢ ɪɴ ɢᴏᴏɢʟᴇ ᴀɴᴅ ᴛʀʏ ᴀɢᴀɪɴ 😃\n\n"
-                        f"<i>🕐 This message will be deleted in 50 seconds.</i></b>"
+                        f"<i>🕐 This message will be deleted in 3 minutes.</i></b>"
                     )
                     sent_msg = await message.reply_text(msg_text, parse_mode=enums.ParseMode.HTML, reply_to_message_id=message.id)
                     if sent_msg:
-                        schedule_filter_message_delete(client, sent_msg.chat.id, sent_msg.id, delay=50)
-                        schedule_filter_message_delete(client, message.chat.id, message.id, delay=50)
+                        schedule_filter_message_delete(client, sent_msg.chat.id, sent_msg.id, delay=180)
+                        schedule_filter_message_delete(client, message.chat.id, message.id, delay=180)
                 else:
                     await message.reply_text(f"<b>Hᴇʏ {user_mention}, no files found in database for '<i>{html.escape(search)}</i>'</b>", parse_mode=enums.ParseMode.HTML, reply_to_message_id=message.id)
                 return
@@ -4024,12 +4112,12 @@ async def auto_filter(client, name, msg, reply_msg=None, ai_search=True, spoll=F
                 msg_text = (
                     f"<b>Hᴇʏ {user_mention}, sᴏʀʀʏ ɴᴏ ꜰɪʟᴇs ᴡᴇʀᴇ ꜰᴏᴜɴᴅ ꜰᴏʀ ʏᴏᴜʀ ʀᴇǫᴜᴇꜱᴛ '{html.escape(search)}'😕\n\n"
                     f"ᴄʜᴇᴄᴋ ʏᴏᴜʀ sᴘᴇʟʟɪɴɢ ɪɴ ɢᴏᴏɢʟᴇ ᴀɴᴅ ᴛʀʏ ᴀɢᴀɪɴ 😃\n\n"
-                    f"<i>🕐 This message will be deleted in 50 seconds.</i></b>"
+                    f"<i>🕐 This message will be deleted in 3 minutes.</i></b>"
                 )
                 sent_msg = await message.reply_text(msg_text, parse_mode=enums.ParseMode.HTML, reply_to_message_id=message.id)
                 if sent_msg:
-                    schedule_filter_message_delete(client, sent_msg.chat.id, sent_msg.id, delay=50)
-                    schedule_filter_message_delete(client, message.chat.id, message.id, delay=50)
+                    schedule_filter_message_delete(client, sent_msg.chat.id, sent_msg.id, delay=180)
+                    schedule_filter_message_delete(client, message.chat.id, message.id, delay=180)
             else:
                 await message.reply_text(f"<b>Hᴇʏ {user_mention}, no files found in database for '<i>{html.escape(search)}</i>'</b>", parse_mode=enums.ParseMode.HTML, reply_to_message_id=message.id)
         return
@@ -4331,36 +4419,18 @@ async def render_normal_grouped_results(client: Client, message: Message, query_
         f"</i></b>"
     )
 
-    # ── Fetch Poster for Normal Suggestion Message ──
+    # ── Fetch Poster for Normal Suggestion Message (No IMDb query lookup to avoid random movie posters) ──
     from info import DEFAULT_POSTER, PICS
     fallback_poster = DEFAULT_POSTER or "https://files.catbox.moe/mp2y81.jpg"
 
     thumb = None
     try:
-        from utils import get_poster
-        imdb_data = await asyncio.wait_for(get_poster(query_text), timeout=2.5)
-        if imdb_data and isinstance(imdb_data, dict) and imdb_data.get("poster"):
-            p_val = imdb_data["poster"]
-            if p_val and str(p_val).startswith("http"):
-                thumb = p_val
+        from database.series_db import get_series_thumbnail
+        st = await get_series_thumbnail()
+        if st and str(st).startswith("http"):
+            thumb = st
     except Exception:
         pass
-
-    if not thumb:
-        for g in groups:
-            gp = g.get("poster")
-            if gp and str(gp).startswith("http") and str(gp).upper() != "N/A":
-                thumb = gp
-                break
-
-    if not thumb:
-        try:
-            from database.series_db import get_series_thumbnail
-            st = await get_series_thumbnail()
-            if st and str(st).startswith("http"):
-                thumb = st
-        except Exception:
-            pass
 
     if not thumb:
         thumb = fallback_poster
@@ -4473,7 +4543,7 @@ async def render_normal_grouped_results(client: Client, message: Message, query_
                 return False
 
     if sent_msg:
-        schedule_filter_message_delete(client, sent_msg.chat.id, sent_msg.id, delay=1200)
+        schedule_filter_message_delete(client, sent_msg.chat.id, sent_msg.id, delay=180)
         BUTTON_OWNERS[f"{sent_msg.chat.id}-{sent_msg.id}"] = real_user_id
     return True
 

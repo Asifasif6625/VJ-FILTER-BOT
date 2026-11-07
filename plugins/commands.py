@@ -64,6 +64,8 @@ async def process_series_start(client: Client, user_id: int, req_key: str, messa
         from plugins.series import to_series_font
         log.warning(f"[SERIES START]\naction=REQUEST_NOT_FOUND\nrequest_key={req_key}")
         msg_text = f"<b><i>⚠️ {to_series_font('Request expired. Please search again.')}</i></b>"
+        from utils import set_delivery_in_progress
+        set_delivery_in_progress(user_id, False)
         if message:
             await message.reply(msg_text)
         else:
@@ -109,6 +111,8 @@ async def process_series_start(client: Client, user_id: int, req_key: str, messa
                             await save_temp_request(req_key, req)
                     except Exception as e:
                         log.error(f"Failed to create join request: {e}")
+                from utils import set_delivery_in_progress
+                set_delivery_in_progress(user_id, False)
                 return
         
         req["delivery_status"] = "sending"
@@ -148,6 +152,8 @@ async def process_series_start(client: Client, user_id: int, req_key: str, messa
         from plugins.series import to_series_font
         log.warning(f"[SERIES START]\naction=OWNERSHIP_MISMATCH\nrequest_key={req_key}\nowner={owner}\nuser_id={user_id}")
         msg_text = f"<b><i>⚠️ {to_series_font('This link is not for you!')}</i></b>"
+        from utils import set_delivery_in_progress
+        set_delivery_in_progress(user_id, False)
         if message:
             await message.reply(msg_text)
         else:
@@ -202,6 +208,8 @@ async def process_series_start(client: Client, user_id: int, req_key: str, messa
                         log.info(f"[JOIN REQUEST]\nrequest_key={req_key}\naction=CREATED\nmessage_id={join_msg.id}")
                 except Exception as e:
                     log.error(f"Failed to create join request: {e}")
+            from utils import set_delivery_in_progress
+            set_delivery_in_progress(user_id, False)
             return
         else:
             log.info(f"[SERIES START]\naction=MEMBERSHIP_CHECK\nresult=JOINED\nrequest_key={req_key}")
@@ -221,6 +229,14 @@ async def process_series_start(client: Client, user_id: int, req_key: str, messa
 
 @Client.on_message(filters.command("start") & filters.incoming, group=-10)
 async def start(client, message):
+    from utils import is_gdbot_client
+    # GDBOT is admin backend only: non-admins must never receive any reply from GDBOT
+    if is_gdbot_client(client):
+        from info import ADMINS
+        user_id = message.from_user.id if message.from_user else 0
+        if user_id not in ADMINS and str(user_id) not in [str(a) for a in ADMINS]:
+            return
+
     import logging
     log = logging.getLogger(__name__)
     
@@ -248,23 +264,15 @@ async def start(client, message):
         await db.add_user(message.from_user.id, message.from_user.first_name)
         await client.send_message(LOG_CHANNEL, script.LOG_TEXT_P.format(message.from_user.id, message.from_user.mention))
     if len(message.command) != 2:
-        if PREMIUM_AND_REFERAL_MODE == True:
-            buttons = [[
-                InlineKeyboardButton('ᴊᴏɪɴ ᴜᴘᴅᴀᴛᴇ ᴄʜᴀɴɴᴇʟ', url=CHNL_LNK)
-            ]]
-        else:
-            buttons = [[
-                InlineKeyboardButton('ᴊᴏɪɴ ᴜᴘᴅᴀᴛᴇ ᴄʜᴀɴɴᴇʟ', url=CHNL_LNK)
-            ]]
-        if CLONE_MODE == True:
-            buttons.append([InlineKeyboardButton('ᴄʀᴇᴀᴛᴇ ᴏᴡɴ ᴄʟᴏɴᴇ ʙᴏᴛ', callback_data='clone')])
-        reply_markup = InlineKeyboardMarkup(buttons)
-        m=await message.reply_sticker("CAACAgUAAxkBAAEKVaxlCWGs1Ri6ti45xliLiUeweCnu4AACBAADwSQxMYnlHW4Ls8gQMAQ") 
-        await asyncio.sleep(1)
-        await m.delete()
+        from plugins.multilingual_ui import build_start_menu_keyboard
+        reply_markup = build_start_menu_keyboard()
+        b_name = getattr(getattr(client, "me", None), "first_name", None) or getattr(temp, "B_NAME", "Bot")
+        u_name = getattr(getattr(client, "me", None), "username", None) or getattr(temp, "U_NAME", "Bot")
+        mention = message.from_user.mention if message.from_user else "User"
+
         await message.reply_photo(
             photo=random.choice(PICS),
-            caption=script.START_TXT.format(message.from_user.mention, getattr(getattr(client, "me", None), "username", None) or temp.U_NAME, getattr(getattr(client, "me", None), "first_name", None) or temp.B_NAME),
+            caption=script.START_TXT.format(mention, u_name, b_name),
             reply_markup=reply_markup,
             parse_mode=enums.ParseMode.HTML
         )
@@ -481,27 +489,15 @@ async def start(client, message):
                     await client.send_message(chat_id = user_id, text = "<b>You Have Successfully Completed Total Referal.\n\nYou Added In Premium For {}</b>".format(REFERAL_PREMEIUM_TIME))
                     return 
         else:
-            if PREMIUM_AND_REFERAL_MODE == True:
-                buttons = [[
-                    InlineKeyboardButton('ᴊᴏɪɴ ᴜᴘᴅᴀᴛᴇ ᴄʜᴀɴɴᴇʟ', url=CHNL_LNK)
-                ]]
-            else:
-                buttons = [[
-                    InlineKeyboardButton("⚙️ 𝓑𝓞𝓣 𝓤𝓟𝓓𝓐𝓣𝓔 𝓒𝓗𝓐𝓝𝓝𝓔𝓛 ⚙️", url="https://t.me/+d8zuVyrBBcNkYzI1")
-                ],[
-                    InlineKeyboardButton("📂 𝓙𝓞𝓘𝓝 𝓕𝓞𝓡 𝓤𝓟𝓓𝓐𝓣𝓔 𝓒𝓗𝓐𝓝𝓝𝓔𝓛 📂", url="https://t.me/+rjw2I6MtjW8xYzRl")
-                ],[
-                    InlineKeyboardButton("🔰 𝓑𝓞𝓣 𝓐𝓑𝓞𝓤𝓣 𝓟𝓐𝓝𝓔𝓛 🔰", callback_data="about")
-                ]]
-            if CLONE_MODE == True:
-                buttons.append([InlineKeyboardButton('ᴄʀᴇᴀᴛᴇ ᴏᴡɴ ᴄʟᴏɴᴇ ʙᴏᴛ', callback_data='clone')])
-            reply_markup = InlineKeyboardMarkup(buttons)
-            m=await message.reply_sticker("CAACAgUAAxkBAAEKVaxlCWGs1Ri6ti45xliLiUeweCnu4AACBAADwSQxMYnlHW4Ls8gQMAQ") 
-            await asyncio.sleep(1)
-            await m.delete()
+            from plugins.multilingual_ui import build_start_menu_keyboard
+            reply_markup = build_start_menu_keyboard()
+            b_name = getattr(getattr(client, "me", None), "first_name", None) or getattr(temp, "B_NAME", "Bot")
+            u_name = getattr(getattr(client, "me", None), "username", None) or getattr(temp, "U_NAME", "Bot")
+            mention = message.from_user.mention if message.from_user else "User"
+
             await message.reply_photo(
                 photo=random.choice(PICS),
-                caption=script.START_TXT.format(message.from_user.mention, getattr(getattr(client, "me", None), "username", None) or temp.U_NAME, getattr(getattr(client, "me", None), "first_name", None) or temp.B_NAME),
+                caption=script.START_TXT.format(mention, u_name, b_name),
                 reply_markup=reply_markup,
                 parse_mode=enums.ParseMode.HTML
             )
@@ -552,6 +548,7 @@ async def start(client, message):
                     pass
             if not f_caption:
                 f_caption = f"{title}" if title else ""
+            f_caption += "\n\n<blockquote>⚠️ This file will be deleted in 1 minute. Forward to Saved Messages!</blockquote>"
             return f_caption
 
         try:
@@ -571,12 +568,12 @@ async def start(client, message):
             try:
                 k = await client.send_message(
                     chat_id=message.from_user.id,
-                    text="<blockquote><b><u>❗️❗️❗️IMPORTANT❗️️❗️❗️</u></b>\n\nᴛʜɪs ᴍᴇssᴀɢᴇ ᴡɪʟʟ ʙᴇ ᴅᴇʟᴇᴛᴇᴅ ɪɴ <b><u>10 mins</u> 🫥 <i></b>(ᴅᴜᴇ ᴛᴏ ᴄᴏᴘʏʀɪɢʜᴛ ɪssᴜᴇs)</i>.\n\n<b><i>ᴘʟᴇᴀsᴇ ғᴏʀᴡᴀʀᴅ ᴛʜɪs ᴍᴇssᴀɢᴇ ᴛᴏ ʏᴏᴜʀ sᴀᴠᴇᴅ ᴍᴇssᴀɢᴇs ᴏʀ ᴀɴʏ ᴘʀɪᴠᴀᴛᴇ ᴄʜᴀᴛ.</i></b></blockquote>",
+                    text="<blockquote><b><u>❗️❗️❗️IMPORTANT❗️️❗️❗️</u></b>\n\nᴛʜɪs ᴍᴇssᴀɢᴇ ᴡɪʟʟ ʙᴇ ᴅᴇʟᴇᴛᴇᴅ ɪɴ <b><u>1 min</u> 🫥 <i></b>(ᴅᴜᴇ ᴛᴏ ᴄᴏᴘʏʀɪɢʜᴛ ɪssᴜᴇs)</i>.\n\n<b><i>ᴘʟᴇᴀsᴇ ғᴏʀᴡᴀʀᴅ ᴛʜɪs ᴍᴇssᴀɢᴇ ᴛᴏ ʏᴏᴜʀ sᴀᴠᴇᴅ ᴍᴇssᴀɢᴇs ᴏʀ ᴀɴʏ ᴘʀɪᴠᴀᴛᴇ ᴄʜᴀᴛ.</i></b></blockquote>",
                     parse_mode=enums.ParseMode.HTML
                 )
                 from utils import schedule_filter_message_delete
                 if k:
-                    schedule_filter_message_delete(client, k.chat.id, k.id, 600)
+                    schedule_filter_message_delete(client, k.chat.id, k.id, 60)
             except Exception:
                 pass
         return
@@ -642,8 +639,8 @@ async def start(client, message):
             filesarr.append(p)
             await asyncio.sleep(1)
         await sts.delete()
-        k = await client.send_message(chat_id = message.from_user.id, text=f"<blockquote><b><u>❗️❗️❗️IMPORTANT❗️️❗️❗️</u></b>\n\nᴛʜɪs ᴍᴇssᴀɢᴇ ᴡɪʟʟ ʙᴇ ᴅᴇʟᴇᴛᴇᴅ ɪɴ <b><u>10 mins</u> 🫥 <i></b>(ᴅᴜᴇ ᴛᴏ ᴄᴏᴘʏʀɪɢʜᴛ ɪssᴜᴇs)</i>.\n\n<b><i>ᴘʟᴇᴀsᴇ ғᴏʀᴡᴀʀᴅ ᴛʜɪs ᴍᴇssᴀɢᴇ ᴛᴏ ʏᴏᴜʀ sᴀᴠᴇᴅ ᴍᴇssᴀɢᴇs ᴏʀ ᴀɴʏ ᴘʀɪᴠᴀᴛᴇ ᴄʜᴀᴛ.</i></b></blockquote>")
-        await asyncio.sleep(600)
+        k = await client.send_message(chat_id = message.from_user.id, text=f"<blockquote><b><u>❗️❗️❗️IMPORTANT❗️️❗️❗️</u></b>\n\nᴛʜɪs ᴍᴇssᴀɢᴇ ᴡɪʟʟ ʙᴇ ᴅᴇʟᴇᴛᴇᴅ ɪɴ <b><u>1 min</u> 🫥 <i></b>(ᴅᴜᴇ ᴛᴏ ᴄᴏᴘʏʀɪɢʜᴛ ɪssᴜᴇs)</i>.\n\n<b><i>ᴘʟᴇᴀsᴇ ғᴏʀᴡᴀʀᴅ ᴛʜɪs ᴍᴇssᴀɢᴇ ᴛᴏ ʏᴏᴜʀ sᴀᴠᴇᴅ ᴍᴇssᴀɢᴇs ᴏʀ ᴀɴʏ ᴘʀɪᴠᴀᴛᴇ ᴄʜᴀᴛ.</i></b></blockquote>")
+        await asyncio.sleep(60)
         for x in filesarr:
             await x.delete()
         await k.edit_text("<b>✅ ʏᴏᴜʀ ᴍᴇssᴀɢᴇ ɪs sᴜᴄᴄᴇssғᴜʟʟʏ ᴅᴇʟᴇᴛᴇᴅ</b>")
@@ -750,6 +747,7 @@ async def start(client, message):
             if not f_caption:
                 fname_str = f_doc.get('file_name', '')
                 f_caption = f"{' '.join(filter(lambda x: not x.startswith('[') and not x.startswith('@'), fname_str.split()))}"
+            f_caption += "\n\n<blockquote>⚠️ This file will be deleted in 1 minute. Forward to Saved Messages!</blockquote>"
             return f_caption
 
         merged_files = []
@@ -776,12 +774,12 @@ async def start(client, message):
             try:
                 k = await client.send_message(
                     chat_id=message.from_user.id,
-                    text="<blockquote><b><u>❗️❗️❗️IMPORTANT❗️️❗️❗️</u></b>\n\nᴛʜɪs ᴍᴇssᴀɢᴇ ᴡɪʟʟ ʙᴇ ᴅᴇʟᴇᴛᴇᴅ ɪɴ <b><u>10 mins</u> 🫥 <i></b>(ᴅᴜᴇ ᴛᴏ ᴄᴏᴘʏʀɪɢʜᴛ ɪssᴜᴇs)</i>.\n\n<b><i>ᴘʟᴇᴀsᴇ ғᴏʀᴡᴀʀᴅ ᴛʜɪs ᴍᴇssᴀɢᴇ ᴛᴏ ʏᴏᴜʀ sᴀᴠᴇᴅ ᴍᴇssᴀɢᴇs ᴏʀ ᴀɴʏ ᴘʀɪᴠᴀᴛᴇ ᴄʜᴀᴛ.</i></b></blockquote>",
+                    text="<blockquote><b><u>❗️❗️❗️IMPORTANT❗️️❗️❗️</u></b>\n\nᴛʜɪs ᴍᴇssᴀɢᴇ ᴡɪʟʟ ʙᴇ ᴅᴇʟᴇᴛᴇᴅ ɪɴ <b><u>1 min</u> 🫥 <i></b>(ᴅᴜᴇ ᴛᴏ ᴄᴏᴘʏʀɪɢʜᴛ ɪssᴜᴇs)</i>.\n\n<b><i>ᴘʟᴇᴀsᴇ ғᴏʀᴡᴀʀᴅ ᴛʜɪs ᴍᴇssᴀɢᴇ ᴛᴏ ʏᴏᴜʀ sᴀᴠᴇᴅ ᴍᴇssᴀɢᴇs ᴏʀ ᴀɴʏ ᴘʀɪᴠᴀᴛᴇ ᴄʜᴀᴛ.</i></b></blockquote>",
                     parse_mode=enums.ParseMode.HTML
                 )
                 from utils import schedule_filter_message_delete
                 if k:
-                    schedule_filter_message_delete(client, k.chat.id, k.id, 600)
+                    schedule_filter_message_delete(client, k.chat.id, k.id, 60)
             except Exception:
                 pass
         return    
@@ -850,10 +848,11 @@ async def start(client, message):
                     f_caption=CUSTOM_FILE_CAPTION.format(file_name= '' if title is None else title, file_size='' if size is None else size, file_caption='')
                 except:
                     return
+            f_caption += "\n\n<blockquote>⚠️ This file will be deleted in 1 minute. Forward to Saved Messages!</blockquote>"
             await msg.edit_caption(caption=f_caption)
             btn = [[InlineKeyboardButton("✅ ɢᴇᴛ ғɪʟᴇ ᴀɢᴀɪɴ ✅", callback_data=f'del#{file_id}')]]
-            k = await msg.reply(text=f"<blockquote><b><u>❗️❗️❗️IMPORTANT❗️️❗️❗️</u></b>\n\nᴛʜɪs ᴍᴇssᴀɢᴇ ᴡɪʟʟ ʙᴇ ᴅᴇʟᴇᴛᴇᴅ ɪɴ <b><u>10 mins</u> 🫥 <i></b>(ᴅᴜᴇ ᴛᴏ ᴄᴏᴘʏʀɪɢʜᴛ ɪssᴜᴇs)</i>.\n\n<b><i>ᴘʟᴇᴀsᴇ ғᴏʀᴡᴀʀᴅ ᴛʜɪs ᴍᴇssᴀɢᴇ ᴛᴏ ʏᴏᴜʀ sᴀᴠᴇᴅ ᴍᴇssᴀɢᴇs ᴏʀ ᴀɴʏ ᴘʀɪᴠᴀᴛᴇ ᴄʜᴀᴛ.</i></b></blockquote>")
-            await asyncio.sleep(600)
+            k = await msg.reply(text=f"<blockquote><b><u>❗️❗️❗️IMPORTANT❗️️❗️❗️</u></b>\n\nᴛʜɪs ᴍᴇssᴀɢᴇ ᴡɪʟʟ ʙᴇ ᴅᴇʟᴇᴛᴇᴅ ɪɴ <b><u>1 min</u> 🫥 <i></b>(ᴅᴜᴇ ᴛᴏ ᴄᴏᴘʏʀɪɢʜᴛ ɪssᴜᴇs)</i>.\n\n<b><i>ᴘʟᴇᴀsᴇ ғᴏʀᴡᴀʀᴅ ᴛʜɪs ᴍᴇssᴀɢᴇ ᴛᴏ ʏᴏᴜʀ sᴀᴠᴇᴅ ᴍᴇssᴀɢᴇs ᴏʀ ᴀɴʏ ᴘʀɪᴠᴀᴛᴇ ᴄʜᴀᴛ.</i></b></blockquote>")
+            await asyncio.sleep(60)
             await msg.delete()
             await k.edit_text("<b>✅ ʏᴏᴜʀ ᴍᴇssᴀɢᴇ ɪs sᴜᴄᴄᴇssғᴜʟʟʏ ᴅᴇʟᴇᴛᴇᴅ ɪғ ʏᴏᴜ ᴡᴀɴᴛ ᴀɢᴀɪɴ ᴛʜᴇɴ ᴄʟɪᴄᴋ ᴏɴ ʙᴇʟᴏᴡ ʙᴜᴛᴛᴏɴ</b>",reply_markup=InlineKeyboardMarkup(btn))
             return
@@ -871,6 +870,7 @@ async def start(client, message):
             f_caption=f_caption
     if f_caption is None:
         f_caption = f"{' '.join(filter(lambda x: not x.startswith('[') and not x.startswith('@'), files['file_name'].split()))}"
+    f_caption += "\n\n<blockquote>⚠️ This file will be deleted in 1 minute. Forward to Saved Messages!</blockquote>"
     if not await db.has_premium_access(message.from_user.id):
         if not await check_verification(client, message.from_user.id) and VERIFY == True:
             btn = [[
@@ -952,10 +952,10 @@ async def start(client, message):
             return await message.reply("⚠️ Error sending file. This file was indexed with a previous bot token. Please ask an admin to run <code>/remap_files</code>.")
         
     btn = [[InlineKeyboardButton("✅ ɢᴇᴛ ғɪʟᴇ ᴀɢᴀɪɴ ✅", callback_data=f'del#{file_id}')]]
-    k = await msg.reply(text=f"<blockquote><b><u>❗️❗️❗️IMPORTANT❗️️❗️❗️</u></b>\n\nᴛʜɪs ᴍᴇssᴀɢᴇ ᴡɪʟʟ ʙᴇ ᴅᴇʟᴇᴛᴇᴅ ɪɴ <b><u>10 mins</u> 🫥 <i></b>(ᴅᴜᴇ ᴛᴏ ᴄᴏᴘʏʀɪɢʜᴛ ɪssᴜᴇs)</i>.\n\n<b><i>ᴘʟᴇᴀsᴇ ғᴏʀᴡᴀʀᴅ ᴛʜɪs ᴍᴇssᴀɢᴇ ᴛᴏ ʏᴏᴜʀ sᴀᴠᴇᴅ ᴍᴇssᴀɢᴇs ᴏʀ ᴀɴʏ ᴘʀɪᴠᴀᴛᴇ ᴄʜᴀᴛ.</i></b></blockquote>")
+    k = await msg.reply(text=f"<blockquote><b><u>❗️❗️❗️IMPORTANT❗️️❗️❗️</u></b>\n\nᴛʜɪs ᴍᴇssᴀɢᴇ ᴡɪʟʟ ʙᴇ ᴅᴇʟᴇᴛᴇᴅ ɪɴ <b><u>1 min</u> 🫥 <i></b>(ᴅᴜᴇ ᴛᴏ ᴄᴏᴘʏʀɪɢʜᴛ ɪssᴜᴇs)</i>.\n\n<b><i>ᴘʟᴇᴀsᴇ ғᴏʀᴡᴀʀᴅ ᴛʜɪs ᴍᴇssᴀɢᴇ ᴛᴏ ʏᴏᴜʀ sᴀᴠᴇᴅ ᴍᴇssᴀɢᴇs ᴏʀ ᴀɴʏ ᴘʀɪᴠᴀᴛᴇ ᴄʜᴀᴛ.</i></b></blockquote>")
     
     async def delete_file_later():
-        await asyncio.sleep(600)
+        await asyncio.sleep(60)
         try:
             await msg.delete()
         except:
@@ -1977,7 +1977,7 @@ async def send_batch_files(
     for f in files:
         if isinstance(f, str):
             missing_lookup_ids.append(f)
-        elif isinstance(f, dict) and (not f.get("file_name") or not f.get("file_size")):
+        elif isinstance(f, dict) and (not f.get("file_name") or not f.get("file_size") or not f.get("chat_id") or not f.get("message_id")):
             fid = f.get("file_id")
             if fid:
                 missing_lookup_ids.append(fid)
@@ -2036,7 +2036,8 @@ async def send_batch_files(
                 f"⇝ Language: {lang}\n"
                 f"{ep_title_line}"
                 f"⇝ Total: {idx}/{total_files}\n\n"
-                f"❧ https://t.me/+5RSSPoQTypk3ZmE1</i>"
+                f"❧ https://t.me/+5RSSPoQTypk3ZmE1</i>\n\n"
+                f"<blockquote>⚠️ This file will be deleted in 1 minute. Forward to Saved Messages!</blockquote>"
             )
 
         prepared_items.append({
@@ -2083,7 +2084,7 @@ async def send_batch_files(
                         reply_markup=rm
                     )
                 if msg:
-                    schedule_filter_message_delete(client, msg.chat.id, msg.id, 600)
+                    schedule_filter_message_delete(client, msg.chat.id, msg.id, 60)
                     sent_results[idx_pos] = msg
                     return msg
             except FloodWait as fw:
@@ -2108,7 +2109,7 @@ async def send_batch_files(
                         reply_markup=rm
                     )
                 if msg:
-                    schedule_filter_message_delete(client, msg.chat.id, msg.id, 600)
+                    schedule_filter_message_delete(client, msg.chat.id, msg.id, 60)
                     sent_results[idx_pos] = msg
                     # Background auto-update of new valid file_id
                     try:
@@ -2256,7 +2257,7 @@ async def send_series_files_to_user(client, user_id, files, query=None):
                 protect_content=False,
             )
             if meta_msg:
-                schedule_filter_message_delete(client, meta_msg.chat.id, meta_msg.id, 600)
+                schedule_filter_message_delete(client, meta_msg.chat.id, meta_msg.id, 60)
         except Exception as ex:
             log.warning(f"Failed to send metadata message: {ex}")
 
@@ -2342,18 +2343,26 @@ async def send_series_files_to_user(client, user_id, files, query=None):
             f"⇝ Language: {lang_str}\n"
             f"⇝ EP Title: {ep_title_escaped}\n"
             f"⇝ Total: {idx}/{total_eps}\n\n"
-            f"❧ https://t.me/+5RSSPoQTypk3ZmE1</i>"
+            f"❧ https://t.me/+5RSSPoQTypk3ZmE1</i>\n\n"
+            f"<blockquote>⚠️ This file will be deleted in 1 minute. Forward to Saved Messages!</blockquote>"
         )
         return f_caption
 
     # 6. Deliver files concurrently with preserved order
-    sent_messages = await send_batch_files(
-        client=client,
-        chat_id=user_id,
-        files=ordered_files,
-        user_id=user_id,
-        custom_caption_builder=series_caption_builder
-    )
+    try:
+        sent_messages = await send_batch_files(
+            client=client,
+            chat_id=user_id,
+            files=ordered_files,
+            user_id=user_id,
+            custom_caption_builder=series_caption_builder
+        )
+    finally:
+        try:
+            from utils import set_delivery_in_progress
+            set_delivery_in_progress(user_id, False)
+        except Exception:
+            pass
 
     log.info(f"[SERIES DELIVERY]\naction=COMPLETED\ntotal_files={len(sent_messages)}")
 
@@ -2364,14 +2373,14 @@ async def send_series_files_to_user(client, user_id, files, query=None):
                 chat_id=user_id,
                 text=(
                     "<blockquote><b><u>❗️❗️❗️IMPORTANT❗️️❗️❗️</u></b>\n\n"
-                    "ᴛʜɪs ᴍᴇssᴀɢᴇ ᴡɪʟʟ ʙᴇ ᴅᴇʟᴇᴛᴇᴅ ɪɴ <b><u>10 mins</u> 🫥 <i></b>"
+                    "ᴛʜɪs ᴍᴇssᴀɢᴇ ᴡɪʟʟ ʙᴇ ᴅᴇʟᴇᴛᴇᴅ ɪɴ <b><u>1 min</u> 🫥 <i></b>"
                     "(ᴅᴜᴇ ᴛᴏ ᴄᴏᴘʏʀɪɢʜᴛ ɪssᴜᴇs)</i>.\n\n"
                     "<b><i>ᴘʟᴇᴀsᴇ ғᴏʀᴡᴀʀᴅ ᴛʜᴇsᴇ ғɪʟᴇs ᴛᴏ sᴏᴍᴇᴡʜᴇʀᴇ ᴇʟsᴇ ᴀɴᴅ sᴛᴀʀᴛ ᴅᴏᴡɴʟᴏᴀᴅɪɴɢ ᴛʜᴇʀᴇ</b></i></blockquote>"
                 ),
                 parse_mode=enums.ParseMode.HTML
             )
             if k:
-                schedule_filter_message_delete(client, k.chat.id, k.id, 600)
+                schedule_filter_message_delete(client, k.chat.id, k.id, 60)
         except Exception:
             pass
 
@@ -2420,7 +2429,7 @@ async def send_movie_files_to_user(client, user_id, files, query=None, movie_tit
                 protect_content=False,
             )
             if meta_msg:
-                schedule_filter_message_delete(client, meta_msg.chat.id, meta_msg.id, 600)
+                schedule_filter_message_delete(client, meta_msg.chat.id, meta_msg.id, 60)
         except Exception as ex:
             log.warning(f"Failed to send movie metadata message: {ex}")
 
@@ -2438,18 +2447,26 @@ async def send_movie_files_to_user(client, user_id, files, query=None, movie_tit
             f"⇝ Size: {file_size}\n"
             f"⇝ Language: {lang_str}\n"
             f"⇝ Total: {idx}/{total_files}\n\n"
-            f"❧ https://t.me/+5RSSPoQTypk3ZmE1</i>"
+            f"❧ https://t.me/+5RSSPoQTypk3ZmE1</i>\n\n"
+            f"<blockquote>⚠️ This file will be deleted in 1 minute. Forward to Saved Messages!</blockquote>"
         )
         return f_caption
 
     # 4. Deliver files concurrently with preserved order
-    sent_messages = await send_batch_files(
-        client=client,
-        chat_id=user_id,
-        files=ordered_files,
-        user_id=user_id,
-        custom_caption_builder=movie_caption_builder
-    )
+    try:
+        sent_messages = await send_batch_files(
+            client=client,
+            chat_id=user_id,
+            files=ordered_files,
+            user_id=user_id,
+            custom_caption_builder=movie_caption_builder
+        )
+    finally:
+        try:
+            from utils import set_delivery_in_progress
+            set_delivery_in_progress(user_id, False)
+        except Exception:
+            pass
 
     # 5. Send final delete notification
     if sent_messages:
@@ -2458,14 +2475,14 @@ async def send_movie_files_to_user(client, user_id, files, query=None, movie_tit
                 chat_id=user_id,
                 text=(
                     "<blockquote><b><u>❗️❗️❗️IMPORTANT❗️️❗️❗️</u></b>\n\n"
-                    "ᴛʜɪs ᴍᴇssᴀɢᴇ ᴡɪʟʟ ʙᴇ ᴅᴇʟᴇᴛᴇᴅ ɪɴ <b><u>10 mins</u> 🫥 <i></b>"
+                    "ᴛʜɪs ᴍᴇssᴀɢᴇ ᴡɪʟʟ ʙᴇ ᴅᴇʟᴇᴛᴇᴅ ɪɴ <b><u>1 min</u> 🫥 <i></b>"
                     "(ᴅᴜᴇ ᴛᴏ ᴄᴏᴘʏʀɪɢʜᴛ ɪssᴜᴇs)</i>.\n\n"
                     "<b><i>ᴘʟᴇᴀsᴇ ғᴏʀᴡᴀʀᴅ ᴛʜᴇsᴇ ғɪʟᴇs ᴛᴏ sᴏᴍᴇᴡʜᴇʀᴇ ᴇʟsᴇ ᴀɴᴅ sᴛᴀʀᴛ ᴅᴏᴡɴʟᴏᴀᴅɪɴɢ ᴛʜᴇʀᴇ</b></i></blockquote>"
                 ),
                 parse_mode=enums.ParseMode.HTML
             )
             if k:
-                schedule_filter_message_delete(client, k.chat.id, k.id, 600)
+                schedule_filter_message_delete(client, k.chat.id, k.id, 60)
         except Exception:
             pass
 
