@@ -926,25 +926,14 @@ async def movie_qual_callback(client: Client, query: CallbackQuery):
             return await query.answer("⏳ Please wait! Previous files are still sending...", show_alert=True)
         set_delivery_in_progress(query.from_user.id, True)
 
-        try:
-            orig_markup = query.message.reply_markup
-            if orig_markup and orig_markup.inline_keyboard:
-                new_kb = []
-                for row in orig_markup.inline_keyboard:
-                    new_row = []
-                    for b in row:
-                        if getattr(b, "callback_data", "") == query.data:
-                            new_row.append(InlineKeyboardButton(f"⏳ {qual} (Sending...)", callback_data="noop_sending"))
-                        else:
-                            new_row.append(b)
-                    new_kb.append(new_row)
-                await query.message.edit_reply_markup(InlineKeyboardMarkup(new_kb))
-        except Exception:
-            pass
-
         from plugins.commands import process_series_start
-        await query.answer("🚀 Sending files...")
-        await process_series_start(client, query.from_user.id, req_key, message=query.message)
+        try:
+            await process_series_start(client, query.from_user.id, req_key, message=query.message)
+        finally:
+            try:
+                await query.answer()
+            except Exception:
+                pass
         return
         
     try:
@@ -4841,14 +4830,14 @@ async def cb_normal_group_select(client: Client, query: CallbackQuery):
                             media=InputMediaPhoto(media=target_poster, caption=details_caption, parse_mode=enums.ParseMode.HTML),
                             reply_markup=markup
                         )
-                        schedule_filter_message_delete(client, chat_id, query.message.id, delay=1200)
+                        schedule_filter_message_delete(client, chat_id, query.message.id, delay=180 if chat_id < 0 else 600)
                     except Exception as me:
                         logger.warning(f"[NORMAL SELECT EDIT MEDIA ERROR] {me}")
                         try:
                             await query.message.edit_caption(caption=details_caption, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
                         except Exception:
                             await query.message.edit_reply_markup(reply_markup=markup)
-                        schedule_filter_message_delete(client, chat_id, query.message.id, delay=1200)
+                        schedule_filter_message_delete(client, chat_id, query.message.id, delay=180 if chat_id < 0 else 600)
                 else:
                     # Original message was text: delete text msg and send photo
                     try:
@@ -4863,7 +4852,7 @@ async def cb_normal_group_select(client: Client, query: CallbackQuery):
                             reply_markup=markup,
                             parse_mode=enums.ParseMode.HTML
                         )
-                        schedule_filter_message_delete(client, sent_msg.chat.id, sent_msg.id, delay=1200)
+                        schedule_filter_message_delete(client, sent_msg.chat.id, sent_msg.id, delay=180 if sent_msg.chat.id < 0 else 600)
                         BUTTON_OWNERS[f"{sent_msg.chat.id}-{sent_msg.id}"] = clicked_user_id
                     except Exception as pe:
                         logger.warning(f"[NORMAL SELECT SEND PHOTO FAILED] {pe}")
@@ -4873,7 +4862,7 @@ async def cb_normal_group_select(client: Client, query: CallbackQuery):
                             reply_markup=markup,
                             parse_mode=enums.ParseMode.HTML
                         )
-                        schedule_filter_message_delete(client, sent_msg.chat.id, sent_msg.id, delay=1200)
+                        schedule_filter_message_delete(client, sent_msg.chat.id, sent_msg.id, delay=180 if sent_msg.chat.id < 0 else 600)
                         BUTTON_OWNERS[f"{sent_msg.chat.id}-{sent_msg.id}"] = clicked_user_id
             else:
                 # No poster available for this movie/series: edit existing message in-place! DO NOT DELETE!
@@ -5490,7 +5479,8 @@ async def execute_normal_group_file_delivery(client: Client, user_id: int, group
                 f"𖡡 File Size: {html.escape(str(fsize_str))}\n"
                 f"𖡡 Total File: {idx}/{total_files}\n\n"
                 f"@{html.escape(str(bot_username))}\n"
-                f"</i>"
+                f"</i>\n\n"
+                f"<blockquote>⚠️ This file will be deleted in 1 minute. Forward to Saved Messages!</blockquote>"
             )
 
             fid = f.get("file_id")
@@ -5603,7 +5593,7 @@ async def execute_normal_group_file_delivery(client: Client, user_id: int, group
                 if sent_f and getattr(sent_f, "id", None):
                     delivered_count += 1
                     logger.info(f"[CHILD BOT FILE SENT] idx={idx}/{total_files} file_id={fid} user_id={user_id} sent_msg_id={sent_f.id}")
-                    schedule_filter_message_delete(client, user_id, sent_f.id, delay=600)
+                    schedule_filter_message_delete(client, user_id, sent_f.id, delay=60)
 
                     # Update loading/progress bar on pinned control message
                     if not sess.get("cancelled"):
@@ -5645,7 +5635,7 @@ async def execute_normal_group_file_delivery(client: Client, user_id: int, group
             quote_notice = (
                 "<blockquote>"
                 "<b><u>❗️❗️❗️IMPORTANT❗️️❗️❗️</u></b>\n\n"
-                "ᴛʜɪs ᴍᴇssᴀɢᴇ ᴡɪʟʟ ʙᴇ ᴅᴇʟᴇᴛᴇᴅ ɪɴ <b><u>10 mins</u> 🫥 <i></b>(ᴅᴜᴇ ᴛᴏ ᴄᴏᴘʏʀɪɢʜᴛ ɪssᴜᴇs)</i>.\n\n"
+                "ᴛʜɪs ᴍᴇssᴀɢᴇ ᴡɪʟʟ ʙᴇ ᴅᴇʟᴇᴛᴇᴅ ɪɴ <b><u>1 min</u> 🫥 <i></b>(ᴅᴜᴇ ᴛᴏ ᴄᴏᴘʏʀɪɢʜᴛ ɪssᴜᴇs)</i>.\n\n"
                 "<b><i>ᴘʟᴇᴀsᴇ ғᴏʀᴡᴀʀᴅ ᴛʜɪs ᴍᴇssᴀɢᴇ ᴛᴏ ʏᴏᴜʀ sᴀᴠᴇᴅ ᴍᴇssᴀɢᴇs ᴏʀ ᴀɴʏ ᴘʀɪᴠᴀᴛᴇ ᴄʜᴀᴛ.</i></b>"
                 "</blockquote>"
             )
@@ -5656,7 +5646,7 @@ async def execute_normal_group_file_delivery(client: Client, user_id: int, group
                     parse_mode=enums.ParseMode.HTML
                 )
                 if notice_msg:
-                    schedule_filter_message_delete(client, user_id, notice_msg.id, delay=600)
+                    schedule_filter_message_delete(client, user_id, notice_msg.id, delay=60)
             except Exception as ne:
                 logger.warning(f"[NORMAL END NOTICE ERROR] {ne}")
 
@@ -5868,7 +5858,7 @@ async def advantage_spell_chok(client, name, msg, reply_msg, vj_search):
             f"{rating_str}"
             f"{genre_str}\n\n"
             f"😕 <b>Requested content is currently not available in our database.</b>\n\n"
-            f"<i>🕐 This message will be deleted in 50 seconds.</i>"
+            f"<i>🕐 This message will be deleted in 3 minutes.</i>"
         )
 
         sent_msg = None
@@ -5904,16 +5894,16 @@ async def advantage_spell_chok(client, name, msg, reply_msg, vj_search):
                 sent_msg = await safe_reply_text(msg, text=cap, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
 
         if sent_msg and getattr(sent_msg, "chat", None):
-            schedule_filter_message_delete(client, sent_msg.chat.id, sent_msg.id, delay=50)
+            schedule_filter_message_delete(client, sent_msg.chat.id, sent_msg.id, delay=180)
         if msg and getattr(msg, "chat", None):
-            schedule_filter_message_delete(client, msg.chat.id, msg.id, delay=50)
+            schedule_filter_message_delete(client, msg.chat.id, msg.id, delay=180)
         return
 
     # 3. Not in IMDb / TMDB either -> Standard non-result message
     msg_text = (
         "<b>sᴏʀʀʏ ɴᴏ ꜰɪʟᴇs ᴡᴇʀᴇ ꜰᴏᴜɴᴅ ꜰᴏʀ ʏᴏᴜʀ ʀᴇǫᴜᴇꜱᴛ😕\n\n"
         "ᴄʜᴇᴄᴋ ʏᴏᴜʀ sᴘᴇʟʟɪɴɢ ɪɴ ɢᴏᴏɢʟᴇ ᴀɴᴅ ᴛʀʏ ᴀɢᴀɪɴ 😃\n\n"
-        "<i>🕐 This message will be deleted in 50 seconds.</i></b>"
+        "<i>🕐 This message will be deleted in 3 minutes.</i></b>"
     )
 
     sent_msg = None
@@ -5923,9 +5913,9 @@ async def advantage_spell_chok(client, name, msg, reply_msg, vj_search):
         sent_msg = await safe_reply_text(msg, msg_text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
 
     if sent_msg and getattr(sent_msg, "chat", None):
-        schedule_filter_message_delete(client, sent_msg.chat.id, sent_msg.id, delay=50)
+        schedule_filter_message_delete(client, sent_msg.chat.id, sent_msg.id, delay=180)
     if msg and getattr(msg, "chat", None):
-        schedule_filter_message_delete(client, msg.chat.id, msg.id, delay=50)
+        schedule_filter_message_delete(client, msg.chat.id, msg.id, delay=180)
 
 async def manual_filters(client, message, text=False):
     settings = await get_settings(message.chat.id)
@@ -6486,12 +6476,12 @@ async def child_filter_message_handler(client: Client, message: Message):
             msg_text = (
                 f"<b>Hᴇʏ {user_mention}, sᴏʀʀʏ ɴᴏ ꜰɪʟᴇs ᴡᴇʀᴇ ꜰᴏᴜɴᴅ ꜰᴏʀ ʏᴏᴜʀ ʀᴇǫᴜᴇꜱᴛ '{html.escape(search)}'😕\n\n"
                 f"ᴄʜᴇᴄᴋ ʏᴏᴜʀ sᴘᴇʟʟɪɴɢ ɪɴ ɢᴏᴏɢʟᴇ ᴀɴᴅ ᴛʀʏ ᴀɢᴀɪɴ 😃\n\n"
-                f"<i>🕐 This message will be deleted in 50 seconds.</i></b>"
+                f"<i>🕐 This message will be deleted in 3 minutes.</i></b>"
             )
             sent_msg = await message.reply_text(msg_text, parse_mode=enums.ParseMode.HTML, reply_to_message_id=message.id)
             if sent_msg:
-                schedule_filter_message_delete(client, sent_msg.chat.id, sent_msg.id, delay=50)
-                schedule_filter_message_delete(client, message.chat.id, message.id, delay=50)
+                schedule_filter_message_delete(client, sent_msg.chat.id, sent_msg.id, delay=180)
+                schedule_filter_message_delete(client, message.chat.id, message.id, delay=180)
         else:
             await message.reply_text(f"<b>Hᴇʏ {user_mention}, no files found in database for '<i>{html.escape(search)}</i>'</b>", parse_mode=enums.ParseMode.HTML, reply_to_message_id=message.id)
         return
