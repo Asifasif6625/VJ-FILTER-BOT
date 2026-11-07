@@ -9441,52 +9441,12 @@ async def ser_season_callback(client: Client, query: CallbackQuery):
     if not qualities:
         qualities = series.get("qualities") or ["480p", "720p", "1080p"]
 
-    try:
-        from utils import get_delivery_bot_username
-        bot_username = get_delivery_bot_username()
-    except Exception:
-        bot_username = getattr(getattr(client, "me", None), "username", None) or getattr(temp, "U_NAME", "Bot")
-    if bot_username:
-        bot_username = str(bot_username).lstrip("@")
-    else:
-        bot_username = "Bot"
-
-    real_sid = str(series.get("_id", series_id))
-    title = series.get("name", "Series")
-
-    import uuid, time
-    from database.series_db import save_temp_request
-
     buttons = []
     for i in range(0, len(qualities), 2):
         row = []
         for q in qualities[i:i+2]:
             text, style, icon_id = format_super_quality_button(q)
-            req_key = str(uuid.uuid4())[:8]
-            req_data = {
-                "request_key": req_key,
-                "user": query.from_user.id if (query and query.from_user) else 0,
-                "user_id": query.from_user.id if (query and query.from_user) else 0,
-                "type": "series",
-                "series_title": title,
-                "title": title,
-                "series_id": real_sid,
-                "language": lang,
-                "season": season,
-                "quality": q,
-                "delivery_status": "pending",
-                "created_at": time.time()
-            }
-            if not hasattr(temp, "SERIES_STATE"):
-                temp.SERIES_STATE = {}
-            temp.SERIES_STATE[req_key] = req_data
-            if not hasattr(temp, "GETALL"):
-                temp.GETALL = {}
-            temp.GETALL[req_key] = req_data
-            asyncio.create_task(save_temp_request(req_key, req_data))
-
-            start_url = f"https://t.me/{bot_username}?start=all_{req_key}"
-            row.append(make_styled_button(text, url=start_url, style=style, icon_custom_emoji_id=icon_id))
+            row.append(make_styled_button(text, callback_data=f"ser_qual#{series_id}#{lang}#{season}#{q}", style=style, icon_custom_emoji_id=icon_id))
         buttons.append(row)
 
     buttons.append([
