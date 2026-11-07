@@ -2329,6 +2329,8 @@ async def sync_series_filter_for_files(file_docs, *, trigger="file_add"):
                     "file_id": str(fid),
                     "file_name": fname,
                     "file_size": fsize,
+                    "chat_id": fdoc.get("chat_id"),
+                    "message_id": fdoc.get("message_id"),
                     "created_at": datetime.utcnow()
                 }
                 await sfiles_col.insert_one(file_record)
