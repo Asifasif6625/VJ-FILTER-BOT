@@ -3703,7 +3703,12 @@ async def announce_filter_created(client: Client, filter_type: str = "series", f
         logger.info(f"[ANNOUNCEMENT SKIPPED] Already sent for {ann_key}")
         return True
 
-    bot_username = getattr(getattr(client, "me", None), "username", None) or getattr(temp, "U_NAME", "Bot")
+    # Always link announcement download buttons to Child/Delivery Bot (never GDBOT)
+    try:
+        from utils import get_delivery_bot_username
+        bot_username = get_delivery_bot_username()
+    except Exception:
+        bot_username = getattr(getattr(client, "me", None), "username", None) or getattr(temp, "U_NAME", "Bot")
     if bot_username:
         bot_username = str(bot_username).lstrip("@")
     else:
@@ -4594,6 +4599,10 @@ def _build_movie_edit_card_and_markup(movie: dict) -> tuple[str, InlineKeyboardM
 
 @Client.on_message(filters.command(["edt", "edit", "quick_edit"]) & (filters.private | filters.group), group=1)
 async def cmd_quick_edit(client: Client, message: Message):
+    try:
+        message.stop_propagation()
+    except Exception:
+        pass
     if not _is_admin(message.from_user.id):
         return await message.reply_text("❌ You are not authorized to use this command.")
 
@@ -8969,24 +8978,34 @@ async def process_unified_filter_search(client: Client, message: Message, query_
     caption_text = "<b>Choose the series/movie you want to view</b>"
 
     thumb = await get_series_thumbnail()
+    if not thumb:
+        if valid_movies and valid_movies[0].get("poster") and str(valid_movies[0].get("poster")).startswith("http"):
+            thumb = valid_movies[0].get("poster")
+        elif valid_series and valid_series[0].get("poster") and str(valid_series[0].get("poster")).startswith("http"):
+            thumb = valid_series[0].get("poster")
+        else:
+            from info import DEFAULT_POSTER
+            thumb = DEFAULT_POSTER or "https://files.catbox.moe/mp2y81.jpg"
 
     if reply_msg:
         try:
             if reply_msg.photo or reply_msg.caption:
                 await reply_msg.edit_caption(caption=caption_text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
-                schedule_filter_message_delete(client, reply_msg.chat.id, reply_msg.id, 600)
+                schedule_filter_message_delete(client, reply_msg.chat.id, reply_msg.id, 180)
                 BUTTON_OWNERS[f"{reply_msg.chat.id}-{reply_msg.id}"] = real_user_id
                 return True
             else:
-                await reply_msg.edit_text(text=caption_text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
-                schedule_filter_message_delete(client, reply_msg.chat.id, reply_msg.id, 600)
-                BUTTON_OWNERS[f"{reply_msg.chat.id}-{reply_msg.id}"] = real_user_id
-                return True
+                try:
+                    await reply_msg.delete()
+                except Exception:
+                    pass
+                reply_msg = None
         except Exception:
             try:
                 await reply_msg.delete()
             except Exception:
                 pass
+            reply_msg = None
 
     if thumb:
         try:
@@ -9280,8 +9299,18 @@ async def ser_qual_callback(client: Client, query: CallbackQuery):
         return await query.answer("⚠️ Series not found in database.", show_alert=True)
 
     title = series.get("name", "Series")
+    real_sid = str(series.get("_id", series_id))
+    sid_candidates = list(set([str(series_id), real_sid, real_sid[-8:], str(series_id)[-8:]]))
+    try:
+        from bson import ObjectId
+        if ObjectId.is_valid(real_sid):
+            sid_candidates.append(ObjectId(real_sid))
+    except Exception:
+        pass
+    sid_filter = {"$in": sid_candidates}
+
     files = await sfiles_col.find({
-        "series_id": _sid_query(series_id),
+        "series_id": sid_filter,
         "language": lang,
         "season": _num_query(season),
         "quality": qual
@@ -9290,7 +9319,7 @@ async def ser_qual_callback(client: Client, query: CallbackQuery):
     if not files:
         import re
         files = await sfiles_col.find({
-            "series_id": _sid_query(series_id),
+            "series_id": sid_filter,
             "language": {"$regex": f"^{re.escape(str(lang))}$", "$options": "i"},
             "season": _num_query(season),
             "quality": qual
@@ -9298,20 +9327,20 @@ async def ser_qual_callback(client: Client, query: CallbackQuery):
 
     if not files:
         files = await sfiles_col.find({
-            "series_id": _sid_query(series_id),
+            "series_id": sid_filter,
             "season": _num_query(season),
             "quality": qual
         }).sort("episode", 1).to_list(length=300)
 
     if not files:
         files = await sfiles_col.find({
-            "series_id": _sid_query(series_id),
+            "series_id": sid_filter,
             "season": _num_query(season)
         }).sort("episode", 1).to_list(length=300)
 
     if not files:
         files = await sfiles_col.find({
-            "series_id": _sid_query(series_id)
+            "series_id": sid_filter
         }).sort("episode", 1).to_list(length=300)
 
     if not files:
@@ -9346,7 +9375,12 @@ async def ser_qual_callback(client: Client, query: CallbackQuery):
     except Exception:
         pass
 
-    bot_username = getattr(getattr(client, "me", None), "username", None) or getattr(temp, "U_NAME", "Bot")
+    # Always link announcement download buttons to Child/Delivery Bot (never GDBOT)
+    try:
+        from utils import get_delivery_bot_username
+        bot_username = get_delivery_bot_username()
+    except Exception:
+        bot_username = getattr(getattr(client, "me", None), "username", None) or getattr(temp, "U_NAME", "Bot")
     if bot_username:
         bot_username = str(bot_username).lstrip("@")
     else:
@@ -9355,6 +9389,27 @@ async def ser_qual_callback(client: Client, query: CallbackQuery):
     start_url = f"https://t.me/{bot_username}?start=all_{req_key}"
 
     if query.message.chat.type == enums.ChatType.PRIVATE:
+        from utils import is_delivery_in_progress, set_delivery_in_progress
+        if is_delivery_in_progress(query.from_user.id):
+            return await query.answer("⏳ Please wait! Previous files are still sending...", show_alert=True)
+        set_delivery_in_progress(query.from_user.id, True)
+
+        try:
+            orig_markup = query.message.reply_markup
+            if orig_markup and orig_markup.inline_keyboard:
+                new_kb = []
+                for row in orig_markup.inline_keyboard:
+                    new_row = []
+                    for b in row:
+                        if getattr(b, "callback_data", "") == query.data:
+                            new_row.append(InlineKeyboardButton(f"⏳ {qual} (Sending...)", callback_data="noop_sending"))
+                        else:
+                            new_row.append(b)
+                    new_kb.append(new_row)
+                await query.message.edit_reply_markup(InlineKeyboardMarkup(new_kb))
+        except Exception:
+            pass
+
         from plugins.commands import process_series_start
         await query.answer(f"🚀 Sending all {len(files)} episodes...")
         await process_series_start(client, query.from_user.id, req_key, message=query.message)
@@ -9372,7 +9427,7 @@ async def ser_qual_callback(client: Client, query: CallbackQuery):
         )
         from utils import schedule_filter_message_delete
         if fb_msg:
-            schedule_filter_message_delete(client, fb_msg.chat.id, fb_msg.id, 600)
+            schedule_filter_message_delete(client, fb_msg.chat.id, fb_msg.id, 180)
         return
 
 

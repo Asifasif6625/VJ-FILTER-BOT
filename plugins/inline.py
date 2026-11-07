@@ -14,7 +14,7 @@ from pyrogram.types import (
     MessageEntity
 )
 from pyrogram.enums import MessageEntityType
-from utils import is_subscribed, temp
+from utils import is_subscribed, temp, is_gdbot_client, get_delivery_bot_username
 from info import AUTH_USERS, AUTH_CHANNEL, PICS
 from database.series_db import (
     get_latest_filters,
@@ -374,9 +374,21 @@ def _build_series_inline_result(series: dict, bot_username: str) -> InlineQueryR
 async def answer(bot: Client, query: InlineQuery):
     """
     Unified Telegram Inline Mode query handler for Movie and Series filters.
+    - GDBOT is Admin Backend only: inline search runs exclusively on Child/Delivery bot.
     - No query: Shows newest/latest added movie & series poster gallery.
     - Search query: Runs Smart Search (exact -> normalized -> alias -> fuzzy) and returns matching posters.
     """
+    # GDBOT is admin backend only: redirect inline search to Child/Delivery Bot
+    if is_gdbot_client(bot):
+        del_u = get_delivery_bot_username()
+        await query.answer(
+            results=[],
+            cache_time=5,
+            switch_pm_text=f"🔍 Use @{del_u} for Search" if del_u else "⚠️ Search runs on Child Bot",
+            switch_pm_parameter="start"
+        )
+        return
+
     if not await inline_users(query):
         await query.answer(
             results=[],
@@ -395,7 +407,8 @@ async def answer(bot: Client, query: InlineQuery):
         )
         return
 
-    bot_username = getattr(temp, "U_NAME", None) or getattr(getattr(bot, "me", None), "username", None) or "Bot"
+    del_u = get_delivery_bot_username()
+    bot_username = getattr(getattr(bot, "me", None), "username", None) or del_u or getattr(temp, "U_NAME", "Bot")
     bot_username = str(bot_username).lstrip("@")
 
     string = query.query.strip()
