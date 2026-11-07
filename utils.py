@@ -1122,6 +1122,8 @@ def match_automatic_series_file(
     m4 = re.search(r"(?i)(?:^|[\s._\-\(\[\{])(?:Season|S)\s*(\d{1,3})\b.*?\b(?:Episode|Ep|E)\s*(\d{1,4})(?:[\s._\-\)\]\}]|$)", cleaned_name)
     # Pattern 5: Standalone Episode: Ep 01 / Episode 01 / E01
     m5 = re.search(r"(?i)(?:^|[\s._\-\(\[\{])(?:Episode|Ep|E)\s*(\d{1,4})(?:[\s._\-\)\]\}]|$)", cleaned_name)
+    # Pattern 6: Full Season / Season Pack: S01 / Season 1 / S1
+    m6 = re.search(r"(?i)(?:^|[\s._\-\(\[\{])(?:Season|S)\s*(\d{1,3})(?:[\s._\-\)\]\}]|$)", cleaned_name)
 
     boundary_start = -1
     boundary_end = -1
@@ -1153,8 +1155,13 @@ def match_automatic_series_file(
         boundary_end = m5.end()
         season_val = target_season if target_season is not None else 1
         episode_val = int(m5.group(1))
+    elif m6:
+        boundary_start = m6.start()
+        boundary_end = m6.end()
+        season_val = int(m6.group(1))
+        episode_val = 0
 
-    if episode_val is None or episode_val <= 0 or boundary_start < 0:
+    if episode_val is None or episode_val < 0 or boundary_start < 0:
         return {
             "matched": False,
             "status": "invalid",
@@ -1260,29 +1267,37 @@ def match_automatic_series_file(
         }
 
     # Year validation if both target_year and detected_year exist
-    if req_year is not None and detected_year is not None and detected_year != req_year:
-        reason = f"year_mismatch: file year {detected_year} != target year {req_year}"
-        logger.debug(
-            f"[AUTO SERIES MATCH REJECT] "
-            f"target_series={target_series_name!r} "
-            f"candidate_series={candidate_series_name!r} "
-            f"target_year={req_year!r} "
-            f"detected_year={detected_year!r} "
-            f"season={season_val!r} "
-            f"episode={episode_val!r} "
-            f"filename={filename!r} "
-            f"reason={reason}"
-        )
-        return {
-            "matched": False,
-            "status": "invalid",
-            "series": target_series_name,
-            "series_name": candidate_series_name,
-            "year": detected_year,
-            "season": season_val,
-            "episode": episode_val,
-            "reason": reason
-        }
+    # TV series release subsequent seasons in later years; do not reject future seasons of the same series
+    if req_year is not None and detected_year is not None:
+        is_year_mismatch = False
+        if season_val == 1 and abs(detected_year - req_year) > 2:
+            is_year_mismatch = True
+        elif season_val > 1 and detected_year < req_year - 1:
+            is_year_mismatch = True
+
+        if is_year_mismatch:
+            reason = f"year_mismatch: file year {detected_year} != target year {req_year}"
+            logger.debug(
+                f"[AUTO SERIES MATCH REJECT] "
+                f"target_series={target_series_name!r} "
+                f"candidate_series={candidate_series_name!r} "
+                f"target_year={req_year!r} "
+                f"detected_year={detected_year!r} "
+                f"season={season_val!r} "
+                f"episode={episode_val!r} "
+                f"filename={filename!r} "
+                f"reason={reason}"
+            )
+            return {
+                "matched": False,
+                "status": "invalid",
+                "series": target_series_name,
+                "series_name": candidate_series_name,
+                "year": detected_year,
+                "season": season_val,
+                "episode": episode_val,
+                "reason": reason
+            }
 
     # Target season filter check if specified
     if target_season is not None and int(season_val) != int(target_season):
@@ -1555,7 +1570,34 @@ def match_automatic_movie_file(
 
     # 6. Locate standalone 4-digit years (1900-2099) using zero-width lookaround
     year_iter = list(re.finditer(r"(?i)(?<![0-9a-zA-Z])(19\d{2}|20\d{2})(?![0-9a-zA-Z])", cleaned_name))
+    if not year_iter and cap_text:
+        year_iter = list(re.finditer(r"(?i)(?<![0-9a-zA-Z])(19\d{2}|20\d{2})(?![0-9a-zA-Z])", cap_text))
     if not year_iter:
+        norm_file_title = normalize_title_for_matching(cleaned_name)
+        title_matches = (norm_file_title in valid_targets or norm_file_title == norm_target)
+        if not title_matches:
+            for vt in valid_targets:
+                if norm_file_title == vt or norm_file_title.endswith(" " + vt) or norm_file_title.endswith(vt):
+                    prefix_part = norm_file_title[:-len(vt)].strip()
+                    if len(prefix_part.split()) <= 2:
+                        title_matches = True
+                        break
+        if title_matches:
+            from utils import extract_quality_from_filename
+            from plugins.pm_filter import detect_file_languages
+            f_qual = extract_quality_from_filename(filename)
+            f_langs = detect_file_languages(filename, caption, default=None)
+            res_lang = f_langs[0] if f_langs else (original_language or "Malayalam")
+            res_qual = f_qual if (f_qual and f_qual != "Unknown") else "720p"
+            return {
+                "matched": True,
+                "status": "valid",
+                "movie_name": target_movie_name,
+                "year": req_year or "N/A",
+                "quality": res_qual,
+                "language": res_lang,
+                "languages": f_langs or ([original_language] if original_language else ["Malayalam"])
+            }
         return {"matched": False, "status": "invalid", "reason": "year_not_found_in_filename"}
 
     # Find the matching year boundary
