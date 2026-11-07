@@ -825,12 +825,13 @@ async def index_files_to_db(lst_msg_id, chat, msg, bot):
                 is_saved, code, f_doc = await save_file(media, bot_id=worker_bid, sync_filters=False, return_doc=True)
                 if is_saved:
                     total_files += 1
-                    if f_doc:
-                        batch_saved_docs.append(f_doc)
                 elif code == 0:
                     duplicate += 1
                 elif code == 2:
                     errors += 1
+
+                if f_doc:
+                    batch_saved_docs.append(f_doc)
             except Exception as sfe:
                 logger.error(f"[INDEX ERROR] msg={m.id}: {sfe}")
                 errors += 1

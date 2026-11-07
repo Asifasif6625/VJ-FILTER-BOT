@@ -4950,30 +4950,12 @@ async def cb_normal_group_back(client: Client, query: CallbackQuery):
 
     thumb = None
     try:
-        from utils import get_poster
-        imdb_data = await asyncio.wait_for(get_poster(query_text), timeout=2.0)
-        if imdb_data and isinstance(imdb_data, dict) and imdb_data.get("poster"):
-            p_val = imdb_data["poster"]
-            if p_val and str(p_val).startswith("http"):
-                thumb = p_val
+        from database.series_db import get_series_thumbnail
+        st = await get_series_thumbnail()
+        if st and str(st).strip():
+            thumb = str(st).strip()
     except Exception:
         pass
-
-    if not thumb:
-        for g in groups:
-            gp = g.get("poster")
-            if gp and str(gp).startswith("http") and str(gp).upper() != "N/A":
-                thumb = gp
-                break
-
-    if not thumb:
-        try:
-            from database.series_db import get_series_thumbnail
-            st = await get_series_thumbnail()
-            if st and str(st).startswith("http"):
-                thumb = st
-        except Exception:
-            pass
 
     if not thumb:
         thumb = fallback_poster
@@ -6303,7 +6285,18 @@ async def child_start_handler(client: Client, message: Message):
     if len(message.command) > 1:
         data = message.command[1]
 
-        # 1. Normal Filter Deeplink Flow (/start norm_...)
+        # 1. Super Filter / Series Start Flow (/start all_...)
+        if data.startswith("all_"):
+            file_id = data.split("_", 1)[1]
+            from plugins.commands import process_series_start
+            await process_series_start(client, message.from_user.id, file_id, message=message)
+            return
+        elif data in getattr(temp, "MOVIE_STATE", {}) or data in getattr(temp, "SERIES_STATE", {}) or data in getattr(temp, "GETALL", {}):
+            from plugins.commands import process_series_start
+            await process_series_start(client, message.from_user.id, data, message=message)
+            return
+
+        # 2. Normal Filter Deeplink Flow (/start norm_...)
         if data.startswith("norm_"):
             norm_key = data[5:]
             child_u = getattr(getattr(client, "me", None), "username", None) or getattr(temp, "CHILD_U_NAME", "ChildBot")
@@ -6311,10 +6304,41 @@ async def child_start_handler(client: Client, message: Message):
             await process_normal_filter_deeplink(client, message, norm_key, user_id=message.from_user.id)
             return
 
-        # 2. Getme Normal Search Deeplink (/start getme_...)
+        # 3. Super Movie Deeplink Flow (/start movie_..., smovie_..., m_...)
+        if data.startswith("movie_") or data.startswith("smovie_") or data.startswith("m_"):
+            movie_key = data.split("_", 1)[1]
+            from plugins.series import process_movie_deeplink
+            await process_movie_deeplink(client, message, movie_key)
+            return
+
+        # 4. Super Series Deeplink Flow (/start series_..., s_...)
+        if data.startswith("series_") or data.startswith("s_"):
+            series_key = data.split("_", 1)[1]
+            from plugins.series import process_series_deeplink
+            await process_series_deeplink(client, message, series_key)
+            return
+
+        # 5. 24-character ObjectId direct lookup
+        if len(str(data).strip()) == 24 and not data.startswith(("all_", "norm_", "fsub_", "BATCH", "PBATCH", "DSTORE")):
+            from database.series_db import get_super_movie, get_series
+            m_doc = await get_super_movie(data)
+            if m_doc:
+                from plugins.series import process_movie_deeplink
+                return await process_movie_deeplink(client, message, data)
+            s_doc = await get_series(data)
+            if s_doc:
+                from plugins.series import process_series_deeplink
+                return await process_series_deeplink(client, message, data)
+
+        # 6. Getme Search Deeplink (/start getme_...)
         if data.startswith("getme_"):
             search_query = data.split("getme_", 1)[1].replace("_", " ").strip()
             if search_query:
+                from plugins.series import is_super_filter_query, process_unified_filter_search
+                if await is_super_filter_query(search_query):
+                    is_handled = await process_unified_filter_search(client, message, search_query)
+                    if is_handled:
+                        return
                 files, _, _ = await get_search_results(message.chat.id, search_query.lower(), max_results=100, offset=0, filter=True)
                 if files:
                     rendered = await render_normal_grouped_results(client=client, message=message, query_text=search_query, files=files)
@@ -6326,33 +6350,39 @@ async def child_start_handler(client: Client, message: Message):
                 await message.reply_text(f"<b>Hᴇʏ {user_mention}, no files found in database for '<i>{html.escape(search_query)}</i>'</b>", parse_mode=enums.ParseMode.HTML, reply_to_message_id=message.id)
             return
 
-    # Plain /start welcome message
+    # Plain /start welcome message with multilingual start menu keyboard
+    from plugins.multilingual_ui import build_start_menu_keyboard
+    from info import PICS
+    import random
     mention = message.from_user.mention if message.from_user else "User"
-    welcome_text = (
-        f"<b>👋 Hello {mention},</b>\n\n"
-        "Welcome to the <b>Normal Filter Bot</b>.\n\n"
-        "Search for any movie or series name in this chat or in connected groups to find available files."
+    b_name = getattr(getattr(client, "me", None), "first_name", None) or getattr(temp, "CHILD_B_NAME", "Filter Bot")
+    u_name = getattr(getattr(client, "me", None), "username", None) or getattr(temp, "CHILD_U_NAME", "Bot")
+    markup = build_start_menu_keyboard()
+    start_text = (
+        f"👋 <b>Hᴇʏ {mention},</b>\n\n"
+        f"I ᴀᴍ <b>{b_name}</b>, ᴀ ᴘᴏᴡᴇʀғᴜʟ ᴀᴜᴛᴏ ғɪʟᴛᴇʀ ʙᴏᴛ ғᴏʀ ᴍᴏᴠɪᴇs & sᴇʀɪᴇs.\n\n"
+        f"<i>ᴊᴜsᴛ ᴛʏᴘᴇ ᴀɴʏ ᴍᴏᴠɪᴇ ᴏʀ sᴇʀɪᴇs ɴᴀᴍᴇ ɪɴ ᴄʜᴀᴛ ᴏʀ ɪɴ ʏᴏᴜʀ ɢʀᴏᴜᴘ ᴛᴏ ɢᴇᴛ ғɪʟᴇs ɪɴsᴛᴀɴᴛʟʏ!</i>"
     )
-    await message.reply_text(welcome_text, parse_mode=enums.ParseMode.HTML)
+    if PICS and isinstance(PICS, list):
+        try:
+            await message.reply_photo(photo=random.choice(PICS), caption=start_text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
+            return
+        except Exception:
+            pass
+    await message.reply_text(start_text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
 
 
 async def child_about_handler(client: Client, message: Message):
-    about_text = (
-        "<b>🤖 Normal Filter Bot</b>\n\n"
-        "This bot is dedicated to <b>Normal / Legacy Movie & Series Filter</b> searches with instant file delivery.\n\n"
-        "<b>Powered by:</b> @KingVJ01"
-    )
-    await message.reply_text(about_text, parse_mode=enums.ParseMode.HTML)
+    from plugins.multilingual_ui import get_about_card
+    bot_name = getattr(getattr(client, "me", None), "first_name", None) or getattr(temp, "CHILD_B_NAME", "Filter Bot")
+    text, markup = get_about_card(bot_name, "eng")
+    await message.reply_text(text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
 
 
 async def child_help_handler(client: Client, message: Message):
-    help_text = (
-        "<b>📖 How to Search:</b>\n\n"
-        "1. Send the title of the movie or series in this chat or in connected groups.\n"
-        "2. Select your desired version from the file list buttons.\n"
-        "3. Open the bot and click <b>⌯⌲ Get All File</b> to receive your files."
-    )
-    await message.reply_text(help_text, parse_mode=enums.ParseMode.HTML)
+    from plugins.multilingual_ui import get_help_card
+    text, markup = get_help_card("eng")
+    await message.reply_text(text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
 
 
 async def child_pm_broadcast(client: Client, message: Message):
@@ -6443,30 +6473,14 @@ async def child_filter_message_handler(client: Client, message: Message):
 
     is_group = message.chat.type in [enums.ChatType.GROUP, enums.ChatType.SUPERGROUP]
 
-    # 1. Super Filter Check
+    # 1. Super Filter Check & Unified Search
     try:
-        from plugins.series import is_super_filter_query
-        is_super = await is_super_filter_query(search)
+        from plugins.series import process_unified_filter_search
+        is_handled = await process_unified_filter_search(client, message, search)
+        if is_handled:
+            return
     except Exception as e:
-        logger.warning(f"[CHILD BOT SUPER CHECK ERROR] {e}")
-        is_super = False
-
-    if is_super:
-        if is_group:
-            # GROUP ROUTING: Child Bot MUST REMAIN COMPLETELY SILENT!
-            logger.info(f"[CHILD BOT GROUP SILENT] query={search} matches Super Filter. Remaining silent.")
-            return
-        else:
-            # PM ROUTING: Redirect user to Main Bot
-            main_bot_username = temp.U_NAME if (hasattr(temp, "U_NAME") and temp.U_NAME) else "Bot"
-            main_link = f"https://t.me/{str(main_bot_username).lstrip('@')}?start=getme_{search.replace(' ', '_')}"
-            redirect_text = (
-                "<b>🌟 This title is available on our Main Bot with full qualities & languages!</b>\n\n"
-                "<i>ഈ മൂവി / സീരീസ് ലഭിക്കുന്നതിനായി താഴെ കാണുന്ന ബട്ടൺ ക്ലിക്ക് ചെയ്തു മെയിൻ ബോട്ടിൽ സേർച്ച് ചെയ്യുക.</i>"
-            )
-            markup = InlineKeyboardMarkup([[InlineKeyboardButton("🚀 Search on Main Bot", url=main_link)]])
-            await message.reply_text(redirect_text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
-            return
+        logger.warning(f"[CHILD BOT UNIFIED SEARCH ERROR] {e}")
 
     # 2. Normal / Legacy Filter Search in Mongo DB
     child_u = getattr(getattr(client, "me", None), "username", None) or getattr(temp, "CHILD_U_NAME", "ChildBot")
@@ -6539,6 +6553,34 @@ def register_normal_filter_handlers(child_bot: Client) -> int:
     child_bot.add_handler(CallbackQueryHandler(cb_norm_stop_files, filters.regex(r"^norm_stop#")), group=0)
     child_bot.add_handler(CallbackQueryHandler(english_only_reason_alert, filters.regex(r"^english_only_reason$")), group=0)
     child_bot.add_handler(CallbackQueryHandler(not_in_db_reason_alert, filters.regex(r"^not_in_db_reason$")), group=0)
+
+    # Super Movie and Series Callbacks & Navigation on Child Bot
+    from plugins.pm_filter import (
+        movie_lang_callback, movie_qual_callback, movie_sub_callback,
+        movie_sub_ok_callback, movie_page_callback, movie_back_callback,
+        movie_close_callback, cb_handler
+    )
+    from plugins.series import (
+        ser_lang_callback, ser_season_callback, ser_qual_callback, ser_back_callback,
+        cb_sug_movie, cb_sug_series, coming_soon_callback, cb_ambiguous_choice
+    )
+    child_bot.add_handler(CallbackQueryHandler(movie_lang_callback, filters.regex(r"^(mvlang#|movie_lang#)")), group=0)
+    child_bot.add_handler(CallbackQueryHandler(movie_qual_callback, filters.regex(r"^(mvqual#|movie_quality#)")), group=0)
+    child_bot.add_handler(CallbackQueryHandler(movie_sub_callback, filters.regex(r"^(mvsub#|movie_sub#)")), group=0)
+    child_bot.add_handler(CallbackQueryHandler(movie_sub_ok_callback, filters.regex(r"^(mvsub_ok#|movie_sub_ok#)")), group=0)
+    child_bot.add_handler(CallbackQueryHandler(movie_page_callback, filters.regex(r"^(mvpage#|movie_files#)")), group=0)
+    child_bot.add_handler(CallbackQueryHandler(movie_back_callback, filters.regex(r"^(mvback#|movie_back#)")), group=0)
+    child_bot.add_handler(CallbackQueryHandler(movie_close_callback, filters.regex(r"^(mvclose#|movie_close#)")), group=0)
+
+    child_bot.add_handler(CallbackQueryHandler(ser_lang_callback, filters.regex(r"^ser_lang#")), group=0)
+    child_bot.add_handler(CallbackQueryHandler(ser_season_callback, filters.regex(r"^ser_season#")), group=0)
+    child_bot.add_handler(CallbackQueryHandler(ser_qual_callback, filters.regex(r"^ser_qual#")), group=0)
+    child_bot.add_handler(CallbackQueryHandler(ser_back_callback, filters.regex(r"^ser_back#")), group=0)
+    child_bot.add_handler(CallbackQueryHandler(cb_sug_movie, filters.regex(r"^sug_mov#")), group=0)
+    child_bot.add_handler(CallbackQueryHandler(cb_sug_series, filters.regex(r"^sug_ser#")), group=0)
+    child_bot.add_handler(CallbackQueryHandler(coming_soon_callback, filters.regex(r"^cs#")), group=0)
+    child_bot.add_handler(CallbackQueryHandler(cb_ambiguous_choice, filters.regex(r"^amb_")), group=0)
+    child_bot.add_handler(CallbackQueryHandler(cb_handler, filters.regex(r"^(user_|start|about|close_data)")), group=0)
 
     count = 0
     if hasattr(child_bot, "dispatcher") and hasattr(child_bot.dispatcher, "groups"):

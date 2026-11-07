@@ -3059,6 +3059,113 @@ async def cmd_sync_series(client: Client, message: Message):
     )
 
 
+@Client.on_message(filters.command(["sync_filters", "resync_filters", "sync_all"]), group=-1)
+async def cmd_sync_all_filters(client: Client, message: Message):
+    uid = message.from_user.id if message.from_user else (message.sender_chat.id if message.sender_chat else 0)
+    if not _is_admin(uid):
+        return await message.reply_text("❌ <b>You are not authorized.</b>", parse_mode=enums.ParseMode.HTML)
+
+    status_msg = await message.reply_text("🔄 <b>Starting full synchronization of Super Movies and Series filters with database...</b>", parse_mode=enums.ParseMode.HTML)
+
+    from database.series_db import super_movies_col, series_col, sync_existing_movie_filter, scan_sdatabase_for_series, add_series_file, is_filter_coming_soon, invalidate_active_filters_cache
+    from utils import normalize_language_name
+    from bson import ObjectId
+
+    invalidate_active_filters_cache()
+
+    # 1. Sync Movies
+    m_cursor = super_movies_col.find({"status": {"$ne": "deleted"}})
+    movies = [doc async for doc in m_cursor]
+    movies_synced = 0
+    new_movie_files = 0
+    for m in movies:
+        mid = str(m["_id"])
+        res = await sync_existing_movie_filter(mid)
+        if res.get("success"):
+            movies_synced += 1
+            new_movie_files += res.get("new_files_added", 0)
+
+    # 2. Sync Series
+    s_cursor = series_col.find({"status": {"$ne": "deleted"}})
+    series_list = [doc async for doc in s_cursor]
+    series_synced = 0
+    new_series_files = 0
+    for s in series_list:
+        sid = str(s["_id"])
+        name = s.get("name", "")
+        s_year = s.get("year")
+        s_orig_lang = s.get("original_language")
+        if not s_orig_lang:
+            from utils import fetch_media_original_language
+            s_orig_lang = await fetch_media_original_language(name, s_year, imdb_id=s.get("imdb_id"), tmdb_id=s.get("tmdb_id"))
+            if s_orig_lang:
+                await series_col.update_one({"_id": s["_id"]}, {"$set": {"original_language": s_orig_lang}})
+        if s_orig_lang:
+            s_orig_lang = normalize_language_name(s_orig_lang) or s_orig_lang
+        elif s.get("languages") and len(s.get("languages")) > 0:
+            s_orig_lang = s.get("languages")[0]
+        else:
+            s_orig_lang = "English"
+
+        res = await scan_sdatabase_for_series(message.chat.id, name, season=None, series_id=sid, client=client, original_language=s_orig_lang, year=s_year)
+        new_files = res.get("valid_new_files") or []
+        new_langs = set()
+        new_quals = set()
+        new_seasons = set()
+
+        for f in new_files:
+            try:
+                ok, _ = await add_series_file({
+                    "series_id": sid,
+                    "language": f["language"],
+                    "season": f["season"],
+                    "episode": f["episode"],
+                    "quality": f["quality"],
+                    "chat_id": message.chat.id,
+                    "file_id": f.get("file_id"),
+                    "file_name": f.get("file_name"),
+                    "file_size": f.get("file_size", 0)
+                })
+                if ok:
+                    new_series_files += 1
+                    if f.get("language"):
+                        new_langs.add(f["language"])
+                    if f.get("quality") and f["quality"] != "Unknown":
+                        new_quals.add(f["quality"])
+                    if f.get("season"):
+                        new_seasons.add(int(f["season"]))
+            except Exception:
+                pass
+
+        update_fields = {}
+        if new_langs:
+            update_fields.setdefault("$addToSet", {})["languages"] = {"$each": list(new_langs)}
+        if new_quals:
+            update_fields.setdefault("$addToSet", {})["qualities"] = {"$each": list(new_quals)}
+        if new_seasons:
+            update_fields.setdefault("$addToSet", {})["seasons"] = {"$each": list(new_seasons)}
+
+        if is_filter_coming_soon(s) and (new_files or s.get("seasons")):
+            update_fields.setdefault("$set", {})["status"] = "active"
+            update_fields.setdefault("$set", {})["coming_soon"] = False
+
+        if update_fields:
+            await series_col.update_one({"_id": ObjectId(sid)}, update_fields)
+
+        series_synced += 1
+
+    invalidate_active_filters_cache()
+
+    await status_msg.edit_text(
+        f"✅ <b>Full Filter Synchronization Complete!</b>\n\n"
+        f"🎬 <b>Movies Synced:</b> <code>{movies_synced}/{len(movies)}</code>\n"
+        f"📁 <b>New Movie Files Linked:</b> <code>{new_movie_files}</code>\n\n"
+        f"📺 <b>Series Synced:</b> <code>{series_synced}/{len(series_list)}</code>\n"
+        f"📁 <b>New Series Episodes Linked:</b> <code>{new_series_files}</code>",
+        parse_mode=enums.ParseMode.HTML
+    )
+
+
 # ─── Super Filter Button Emoji Formatters ──────────────────────────────────────
 
 def format_super_language_button(lang_name: str) -> tuple[str, str, str | None]:
@@ -8514,7 +8621,7 @@ async def render_super_movie_direct(client: Client, message: Message, movie: dic
         "rating": str(movie.get("rating", "")),
         "genre": movie.get("genre", "") or movie.get("genres", ""),
         "genres": movie.get("genres", "") or movie.get("genre", ""),
-        "poster": poster,
+        "poster": movie.get("poster", "") or single_p,
         "posters": movie.get("posters", []),
         "description": movie.get("description", ""),
         "grouped": grouped,
@@ -9093,11 +9200,7 @@ async def cb_sug_movie(client: Client, query: CallbackQuery):
     chat_id = query.message.chat.id
     target_user_id = query.from_user.id
     fallback_p = query.message.photo.file_id if query.message and getattr(query.message, "photo", None) else None
-    try:
-        await query.message.delete()
-    except Exception:
-        pass
-    await render_super_movie_direct(client, None, movie, reply_msg=None, user_id=target_user_id, target_chat_id=chat_id, fallback_photo_id=fallback_p)
+    await render_super_movie_direct(client, None, movie, reply_msg=query.message, user_id=target_user_id, target_chat_id=chat_id, fallback_photo_id=fallback_p)
 
 
 @Client.on_callback_query(filters.regex(r"^sug_ser#"), group=-15)
@@ -9126,11 +9229,7 @@ async def cb_sug_series(client: Client, query: CallbackQuery):
     chat_id = query.message.chat.id
     target_user_id = query.from_user.id
     fallback_p = query.message.photo.file_id if query.message and getattr(query.message, "photo", None) else None
-    try:
-        await query.message.delete()
-    except Exception:
-        pass
-    await render_series_direct(client, None, series_doc, reply_msg=None, user_id=target_user_id, target_chat_id=chat_id, fallback_photo_id=fallback_p)
+    await render_series_direct(client, None, series_doc, reply_msg=query.message, user_id=target_user_id, target_chat_id=chat_id, fallback_photo_id=fallback_p)
 
 
 async def process_super_movie_search(client: Client, message: Message, query_text: str, reply_msg: Message = None) -> bool:
