@@ -8308,7 +8308,7 @@ async def coming_soon_callback(client: Client, query: CallbackQuery):
     return await query.answer("File only get after OTT release", show_alert=True)
 
 
-async def render_super_movie_direct(client: Client, message: Message, movie: dict, reply_msg: Message = None, user_id: int = None, target_chat_id: int = None) -> bool:
+async def render_super_movie_direct(client: Client, message: Message, movie: dict, reply_msg: Message = None, user_id: int = None, target_chat_id: int = None, fallback_photo_id: str = None) -> bool:
     """Renders the language selection UI for a specific Super Movie Filter."""
     from database.ia_filterdb import get_bulk_file_details
     from database.series_db import is_filter_coming_soon
@@ -8349,7 +8349,7 @@ async def render_super_movie_direct(client: Client, message: Message, movie: dic
     if chat_id:
         temp.LAST_SEARCH_CONTEXT[chat_id] = {"type": "movie", "id": str(movie_id), "title": title, "time": time.time()}
 
-    from utils import get_random_filter_poster
+    from utils import get_random_filter_poster, get_poster
     posters_to_try = []
     if isinstance(movie.get("posters"), list) and movie.get("posters"):
         valid_p = [str(p).strip() for p in movie["posters"] if p and str(p).strip() and str(p).strip().upper() != "N/A"]
@@ -8362,22 +8362,42 @@ async def render_super_movie_direct(client: Client, message: Message, movie: dic
     if single_p and single_p.upper() != "N/A" and single_p not in posters_to_try:
         posters_to_try.append(single_p)
 
-    poster = posters_to_try[0] if posters_to_try else (get_random_filter_poster(movie) or "")
-    if not poster or poster.upper() == "N/A":
-        try:
-            from info import DEFAULT_POSTER
-            poster = DEFAULT_POSTER
-        except Exception:
-            poster = "https://files.catbox.moe/mp2y81.jpg"
     if not posters_to_try:
-        posters_to_try = [poster]
+        try:
+            m_info = await get_poster(title)
+            if m_info and m_info.get("poster") and str(m_info["poster"]).upper() != "N/A":
+                dyn_p = str(m_info["poster"]).strip()
+                posters_to_try.append(dyn_p)
+                movie["poster"] = dyn_p
+                from database.series_db import super_movies_col
+                from bson import ObjectId
+                if ObjectId.is_valid(movie_id):
+                    await super_movies_col.update_one({"_id": ObjectId(movie_id)}, {"$set": {"poster": dyn_p, "posters": [dyn_p]}})
+        except Exception as pe:
+            logger.debug(f"[MOVIE DYNAMIC POSTER FETCH ERROR] {pe}")
 
     try:
-        from info import DEFAULT_POSTER
-        if DEFAULT_POSTER and DEFAULT_POSTER not in posters_to_try:
-            posters_to_try.append(DEFAULT_POSTER)
+        from database.series_db import get_series_thumbnail
+        st = await get_series_thumbnail()
+        if st and str(st).strip() and str(st).strip() not in posters_to_try:
+            posters_to_try.append(str(st).strip())
     except Exception:
         pass
+
+    if fallback_photo_id and str(fallback_photo_id).strip() not in posters_to_try:
+        posters_to_try.append(str(fallback_photo_id).strip())
+
+    try:
+        from info import DEFAULT_POSTER, PICS
+        if DEFAULT_POSTER and DEFAULT_POSTER not in posters_to_try:
+            posters_to_try.append(DEFAULT_POSTER)
+        if PICS and isinstance(PICS, list):
+            for pic in PICS:
+                if pic and pic not in posters_to_try:
+                    posters_to_try.append(pic)
+    except Exception:
+        pass
+
     fallback_catbox = "https://files.catbox.moe/mp2y81.jpg"
     if fallback_catbox not in posters_to_try:
         posters_to_try.append(fallback_catbox)
@@ -8599,7 +8619,7 @@ async def render_super_movie_direct(client: Client, message: Message, movie: dic
     return True
 
 
-async def render_series_direct(client: Client, message: Message, series_doc: dict, reply_msg: Message = None, user_id: int = None, target_chat_id: int = None) -> bool:
+async def render_series_direct(client: Client, message: Message, series_doc: dict, reply_msg: Message = None, user_id: int = None, target_chat_id: int = None, fallback_photo_id: str = None) -> bool:
     """Renders the language selection UI for a specific Series Filter."""
     from database.series_db import list_series_languages, is_filter_coming_soon
     from plugins.pm_filter import BUTTON_OWNERS, format_series_metadata_caption
@@ -8607,7 +8627,7 @@ async def render_series_direct(client: Client, message: Message, series_doc: dic
 
     series_id = str(series_doc["_id"])
     name = series_doc.get("name", "")
-    from utils import get_random_filter_poster
+    from utils import get_random_filter_poster, get_poster
     posters_to_try = []
     if isinstance(series_doc.get("posters"), list) and series_doc.get("posters"):
         valid_p = [str(p).strip() for p in series_doc["posters"] if p and str(p).strip() and str(p).strip().upper() != "N/A"]
@@ -8620,22 +8640,42 @@ async def render_series_direct(client: Client, message: Message, series_doc: dic
     if single_p and single_p.upper() != "N/A" and single_p not in posters_to_try:
         posters_to_try.append(single_p)
 
-    poster = posters_to_try[0] if posters_to_try else (get_random_filter_poster(series_doc) or "")
-    if not poster or poster.upper() == "N/A":
-        try:
-            from info import DEFAULT_POSTER
-            poster = DEFAULT_POSTER
-        except Exception:
-            poster = "https://files.catbox.moe/mp2y81.jpg"
     if not posters_to_try:
-        posters_to_try = [poster]
+        try:
+            s_info = await get_poster(name)
+            if s_info and s_info.get("poster") and str(s_info["poster"]).upper() != "N/A":
+                dyn_p = str(s_info["poster"]).strip()
+                posters_to_try.append(dyn_p)
+                series_doc["poster"] = dyn_p
+                from database.series_db import series_col
+                from bson import ObjectId
+                if ObjectId.is_valid(series_id):
+                    await series_col.update_one({"_id": ObjectId(series_id)}, {"$set": {"poster": dyn_p, "posters": [dyn_p]}})
+        except Exception as pe:
+            logger.debug(f"[SERIES DYNAMIC POSTER FETCH ERROR] {pe}")
 
     try:
-        from info import DEFAULT_POSTER
-        if DEFAULT_POSTER and DEFAULT_POSTER not in posters_to_try:
-            posters_to_try.append(DEFAULT_POSTER)
+        from database.series_db import get_series_thumbnail
+        st = await get_series_thumbnail()
+        if st and str(st).strip() and str(st).strip() not in posters_to_try:
+            posters_to_try.append(str(st).strip())
     except Exception:
         pass
+
+    if fallback_photo_id and str(fallback_photo_id).strip() not in posters_to_try:
+        posters_to_try.append(str(fallback_photo_id).strip())
+
+    try:
+        from info import DEFAULT_POSTER, PICS
+        if DEFAULT_POSTER and DEFAULT_POSTER not in posters_to_try:
+            posters_to_try.append(DEFAULT_POSTER)
+        if PICS and isinstance(PICS, list):
+            for pic in PICS:
+                if pic and pic not in posters_to_try:
+                    posters_to_try.append(pic)
+    except Exception:
+        pass
+
     fallback_catbox = "https://files.catbox.moe/mp2y81.jpg"
     if fallback_catbox not in posters_to_try:
         posters_to_try.append(fallback_catbox)
@@ -9052,11 +9092,12 @@ async def cb_sug_movie(client: Client, query: CallbackQuery):
 
     chat_id = query.message.chat.id
     target_user_id = query.from_user.id
+    fallback_p = query.message.photo.file_id if query.message and getattr(query.message, "photo", None) else None
     try:
         await query.message.delete()
     except Exception:
         pass
-    await render_super_movie_direct(client, None, movie, reply_msg=None, user_id=target_user_id, target_chat_id=chat_id)
+    await render_super_movie_direct(client, None, movie, reply_msg=None, user_id=target_user_id, target_chat_id=chat_id, fallback_photo_id=fallback_p)
 
 
 @Client.on_callback_query(filters.regex(r"^sug_ser#"), group=-15)
@@ -9075,18 +9116,21 @@ async def cb_sug_series(client: Client, query: CallbackQuery):
         await query.answer()
     except Exception:
         pass
-    from database.series_db import get_series
+    from database.series_db import get_series, get_series_by_key
     series_doc = await get_series(series_id)
+    if not series_doc:
+        series_doc = await get_series_by_key(series_id)
     if not series_doc:
         return await query.answer("❌ Series not found.", show_alert=True)
 
     chat_id = query.message.chat.id
     target_user_id = query.from_user.id
+    fallback_p = query.message.photo.file_id if query.message and getattr(query.message, "photo", None) else None
     try:
         await query.message.delete()
     except Exception:
         pass
-    await render_series_direct(client, None, series_doc, reply_msg=None, user_id=target_user_id, target_chat_id=chat_id)
+    await render_series_direct(client, None, series_doc, reply_msg=None, user_id=target_user_id, target_chat_id=chat_id, fallback_photo_id=fallback_p)
 
 
 async def process_super_movie_search(client: Client, message: Message, query_text: str, reply_msg: Message = None) -> bool:
@@ -9319,48 +9363,177 @@ async def ser_qual_callback(client: Client, query: CallbackQuery):
 
     title = series.get("name", "Series")
     real_sid = str(series.get("_id", series_id))
-    sid_candidates = list(set([str(series_id), real_sid, real_sid[-8:], str(series_id)[-8:]]))
+    sid_candidates = [str(series_id), real_sid, real_sid[-8:], str(series_id)[-8:]]
     try:
         from bson import ObjectId
         if ObjectId.is_valid(real_sid):
             sid_candidates.append(ObjectId(real_sid))
+        if ObjectId.is_valid(series_id):
+            sid_candidates.append(ObjectId(series_id))
     except Exception:
         pass
-    sid_filter = {"$in": sid_candidates}
+    if series.get("series_key"):
+        sid_candidates.append(series.get("series_key"))
+    if series.get("normalized_name"):
+        sid_candidates.append(series.get("normalized_name"))
+    if series.get("name"):
+        sid_candidates.append(series.get("name"))
+        from database.series_db import clean_series_title
+        sid_candidates.append(clean_series_title(series.get("name")))
+    sid_filter = {"$in": list(set(sid_candidates))}
 
-    files = await sfiles_col.find({
-        "series_id": sid_filter,
-        "language": lang,
-        "season": _num_query(season),
-        "quality": qual
-    }).sort("episode", 1).to_list(length=300)
+    import re
+    qual_pattern = re.compile(rf"{re.escape(str(qual))}", re.IGNORECASE) if qual else None
+    lang_pattern = re.compile(rf"^{re.escape(str(lang))}$", re.IGNORECASE) if lang else None
 
-    if not files:
-        import re
+    # Step 1: Specific language, season, and quality
+    q_cond = {"series_id": sid_filter, "season": _num_query(season)}
+    if lang_pattern:
+        q_cond["language"] = lang_pattern
+    if qual_pattern:
+        q_cond["quality"] = qual_pattern
+
+    files = await sfiles_col.find(q_cond).sort("episode", 1).to_list(length=300)
+
+    # Step 2: Match any language for this season and quality
+    if not files and qual_pattern:
         files = await sfiles_col.find({
             "series_id": sid_filter,
-            "language": {"$regex": f"^{re.escape(str(lang))}$", "$options": "i"},
             "season": _num_query(season),
-            "quality": qual
+            "quality": qual_pattern
         }).sort("episode", 1).to_list(length=300)
 
-    if not files:
-        files = await sfiles_col.find({
-            "series_id": sid_filter,
-            "season": _num_query(season),
-            "quality": qual
-        }).sort("episode", 1).to_list(length=300)
-
+    # Step 3: Match this season (any quality, any language)
     if not files:
         files = await sfiles_col.find({
             "series_id": sid_filter,
             "season": _num_query(season)
         }).sort("episode", 1).to_list(length=300)
 
+    # Step 4: Match any files for this series in sfiles_col
     if not files:
         files = await sfiles_col.find({
             "series_id": sid_filter
         }).sort("episode", 1).to_list(length=300)
+
+    # Step 5: Dynamic discovery from ia_filterdb if sfiles_col has no files!
+    if not files:
+        logger.info(f"[SERIES DYNAMIC SYNC TRIGGERED] series={title} season={season} qual={qual}")
+        try:
+            from plugins.series import scan_sdatabase_for_series
+            from database.series_db import add_series_file, series_col
+            s_orig_lang = series.get("original_language")
+            if not s_orig_lang and series.get("languages"):
+                s_orig_lang = series.get("languages")[0]
+            scan_res = await scan_sdatabase_for_series(
+                chat_id=query.message.chat.id,
+                title=title,
+                season=season,
+                series_id=real_sid,
+                client=client,
+                original_language=s_orig_lang,
+                year=series.get("year")
+            )
+            discovered = scan_res.get("all_matching_files") or scan_res.get("valid_new_files") or []
+            if discovered:
+                new_quals = set()
+                new_seasons = set()
+                new_langs = set()
+                for df in discovered:
+                    try:
+                        df_lang = df.get("language") or lang or s_orig_lang or "Malayalam"
+                        df_qual = df.get("quality", qual or "720p")
+                        df_season = int(df.get("season", season))
+                        df_ep = int(df.get("episode", -1)) if df.get("episode") is not None else -1
+                        await add_series_file({
+                            "series_id": real_sid,
+                            "language": df_lang,
+                            "season": df_season,
+                            "episode": df_ep,
+                            "quality": df_qual,
+                            "chat_id": df.get("chat_id") or query.message.chat.id,
+                            "file_id": df.get("file_id"),
+                            "file_name": df.get("file_name"),
+                            "file_size": df.get("file_size", 0)
+                        })
+                        if df_lang:
+                            new_langs.add(df_lang)
+                        if df_qual and df_qual != "Unknown":
+                            new_quals.add(df_qual)
+                        if df_season:
+                            new_seasons.add(df_season)
+                    except Exception as fe:
+                        logger.debug(f"[SERIES DYNAMIC FILE INSERT ERROR] {fe}")
+
+                up_fields = {}
+                if new_langs:
+                    up_fields.setdefault("$addToSet", {})["languages"] = {"$each": list(new_langs)}
+                if new_quals:
+                    up_fields.setdefault("$addToSet", {})["qualities"] = {"$each": list(new_quals)}
+                if new_seasons:
+                    up_fields.setdefault("$addToSet", {})["seasons"] = {"$each": list(new_seasons)}
+                if up_fields:
+                    try:
+                        from bson import ObjectId
+                        if ObjectId.is_valid(real_sid):
+                            await series_col.update_one({"_id": ObjectId(real_sid)}, up_fields)
+                    except Exception:
+                        pass
+
+                files = await sfiles_col.find({
+                    "series_id": sid_filter,
+                    "season": _num_query(season)
+                }).sort("episode", 1).to_list(length=300)
+
+                if files and qual:
+                    qual_matched = [f for f in files if qual.lower() in str(f.get("quality", "")).lower()]
+                    if qual_matched:
+                        files = qual_matched
+        except Exception as scan_err:
+            logger.error(f"[SERIES SCAN DATABASE ERROR] {scan_err}", exc_info=True)
+
+    # Step 6: Direct candidate search fallback
+    if not files:
+        try:
+            from plugins.series import get_movie_candidates, parse_series_filename
+            from database.series_db import add_series_file
+            from utils import is_video_file, is_subtitle_file
+            clean_t = clean_series_title(title)
+            direct_cands = await get_movie_candidates(query.message.chat.id, clean_t, limit=200)
+            for c_doc in direct_cands:
+                if not is_video_file(c_doc) or is_subtitle_file(c_doc):
+                    continue
+                fn = c_doc.get("file_name", "")
+                cap_txt = c_doc.get("caption", "") or ""
+                p_info = parse_series_filename(fn, clean_t, target_season=season, caption=cap_txt)
+                if p_info.get("status") == "matched" or (p_info.get("season") == season and p_info.get("episode") is not None):
+                    ep_num = p_info.get("episode", -1)
+                    q_found = p_info.get("quality") or "720p"
+                    l_found = p_info.get("language") or lang or "Malayalam"
+                    doc_rec = {
+                        "series_id": real_sid,
+                        "language": l_found,
+                        "season": season,
+                        "episode": ep_num,
+                        "quality": q_found,
+                        "chat_id": c_doc.get("chat_id") or query.message.chat.id,
+                        "file_id": c_doc.get("file_id"),
+                        "file_name": fn,
+                        "file_size": c_doc.get("file_size", 0)
+                    }
+                    try:
+                        await add_series_file(doc_rec)
+                    except Exception:
+                        pass
+                    files.append(doc_rec)
+            if files:
+                files = sorted(files, key=lambda x: int(x.get("episode", 0)))
+                if qual:
+                    qm = [f for f in files if qual.lower() in str(f.get("quality", "")).lower()]
+                    if qm:
+                        files = qm
+        except Exception as cand_err:
+            logger.error(f"[SERIES DIRECT CAND SEARCH ERROR] {cand_err}", exc_info=True)
 
     if not files:
         return await query.answer("⚠️ No episode files found for this quality.", show_alert=True)
