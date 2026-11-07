@@ -4416,8 +4416,8 @@ async def render_normal_grouped_results(client: Client, message: Message, query_
     try:
         from database.series_db import get_series_thumbnail
         st = await get_series_thumbnail()
-        if st and str(st).startswith("http"):
-            thumb = st
+        if st and str(st).strip():
+            thumb = str(st).strip()
     except Exception:
         pass
 
@@ -4439,13 +4439,19 @@ async def render_normal_grouped_results(client: Client, message: Message, query_
                 except Exception as me:
                     logger.warning(f"[NORMAL EDIT MEDIA FAILED with thumb {thumb}]: {me}. Retrying with fallback...")
                     if thumb != fallback_poster:
-                        await reply_msg.edit_media(media=InputMediaPhoto(media=fallback_poster, caption=caption_text, parse_mode=enums.ParseMode.HTML), reply_markup=markup)
-                        sent_msg = reply_msg
-                    else:
-                        await reply_msg.edit_caption(caption=caption_text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
-                        sent_msg = reply_msg
+                        try:
+                            await reply_msg.edit_media(media=InputMediaPhoto(media=fallback_poster, caption=caption_text, parse_mode=enums.ParseMode.HTML), reply_markup=markup)
+                            sent_msg = reply_msg
+                        except Exception:
+                            sent_msg = None
+                    if not sent_msg:
+                        try:
+                            await reply_msg.delete()
+                        except Exception:
+                            pass
+                        reply_msg = None
             else:
-                # Original reply_msg was text: try editing text or sending photo and deleting text
+                # Original reply_msg was text: try sending photo and deleting text
                 try:
                     sent_msg = await client.send_photo(
                         chat_id=chat_id,
