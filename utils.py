@@ -4203,20 +4203,41 @@ async def delete_message_after(client, chat_id: int, message_id: int, delay: int
     finally:
         _FILTER_DELETE_TASKS.pop((int(chat_id), int(message_id)), None)
 
+_DELIVERY_IN_PROGRESS_USERS = set()
+
+def is_delivery_in_progress(user_id: int) -> bool:
+    """Checks if a user is currently receiving files to prevent double-clicking/spamming quality buttons."""
+    try:
+        return int(user_id) in _DELIVERY_IN_PROGRESS_USERS
+    except Exception:
+        return False
+
+def set_delivery_in_progress(user_id: int, active: bool = True):
+    """Sets or clears the file delivery lock for a user."""
+    try:
+        uid = int(user_id)
+        if active:
+            _DELIVERY_IN_PROGRESS_USERS.add(uid)
+        else:
+            _DELIVERY_IN_PROGRESS_USERS.discard(uid)
+    except Exception:
+        pass
+
+
 def schedule_filter_message_delete(client, chat_id: int, message_id: int, delay: int = 600):
     """
     Schedules auto-deletion of a temporary bot filter/result message after `delay` seconds.
-    For group chats (chat_id < 0), default delay is 18,000s (5 hours).
-    For private messages (chat_id > 0), default delay is 600s (10 mins).
+    For group chats (chat_id < 0), all normal filters, suggestions, and super filters auto-delete in 3 minutes (180s).
+    For private messages (chat_id > 0), files and notices delete in 60s (1 min) or specified delay.
     If the message is refreshed/edited, cancels any pending task and resets the TTL.
     """
     if not client or not chat_id or not message_id:
         return None
 
     c_id = int(chat_id)
-    # If in group chat and default 600 was passed, use 5 hours (18,000s)
-    if c_id < 0 and delay == 600:
-        delay = 18000
+    # If in group chat, auto delete delay is strictly 3 minutes (180s)
+    if c_id < 0:
+        delay = 180
 
     key = (c_id, int(message_id))
     old_task = _FILTER_DELETE_TASKS.get(key)
