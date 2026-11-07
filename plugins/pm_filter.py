@@ -919,23 +919,7 @@ async def movie_qual_callback(client: Client, query: CallbackQuery):
 
     start_url = f"https://t.me/{bot_username}?start=all_{req_key}"
     
-    # If in private chat, route through /start deep-link flow
-    if query.message.chat.type == enums.ChatType.PRIVATE:
-        from utils import is_delivery_in_progress, set_delivery_in_progress
-        if is_delivery_in_progress(query.from_user.id):
-            return await query.answer("⏳ Please wait! Previous files are still sending...", show_alert=True)
-        set_delivery_in_progress(query.from_user.id, True)
-
-        from plugins.commands import process_series_start
-        try:
-            await process_series_start(client, query.from_user.id, req_key, message=query.message)
-        finally:
-            try:
-                await query.answer()
-            except Exception:
-                pass
-        return
-        
+    # Route through /start deep-link flow in both PM and groups so start command is sent before files
     try:
         return await query.answer(url=start_url)
     except Exception as e:
@@ -4800,10 +4784,7 @@ async def cb_normal_group_select(client: Client, query: CallbackQuery):
     else:
         bot_username = "Bot"
 
-    req_user_id = group_data.get("user_id") or group_data.get("requester_user_id") or clicked_user_id
-    u_name = html.escape(query.from_user.first_name or "User")
-    requester_name = f"<a href='tg://user?id={req_user_id}'>{u_name}</a>"
-    details_caption, poster_url = await format_normal_filter_details_card(group_data, requester_name=requester_name)
+    details_caption, poster_url = await format_normal_filter_details_card(group_data)
     back_data = f"norm_back#{session_id}#{page}" if session_id else f"norm_back#{norm_group_id}#0"
 
     from plugins.series import make_styled_button
@@ -5059,10 +5040,11 @@ async def cb_norm_get_all_file(client: Client, query: CallbackQuery):
             )
             return await query.answer(unauth_text, show_alert=True)
 
-    bot_username = getattr(getattr(client, "me", None), "username", None)
-    if not bot_username:
-        from utils import get_child_bot_username
-        bot_username = get_child_bot_username()
+    try:
+        from utils import get_delivery_bot_username
+        bot_username = get_delivery_bot_username()
+    except Exception:
+        bot_username = getattr(getattr(client, "me", None), "username", None) or getattr(temp, "U_NAME", "Bot")
     if bot_username:
         bot_username = str(bot_username).lstrip("@")
     else:
@@ -5070,69 +5052,28 @@ async def cb_norm_get_all_file(client: Client, query: CallbackQuery):
 
     logger.info(f"[CHILD BOT GET_ALL_FILE] bot=@{bot_username} group_id={group_id} user_id={user_id} is_pm={is_pm}")
 
-    if not is_pm:
-        # Group fallback: open Child Bot PM via deep link action
-        start_url = f"https://t.me/{bot_username}?start=norm_{group_id}"
+    # Ensure group_data is preserved in MongoDB for deep link retrieval
+    if group_data:
+        from database.series_db import save_temp_request
         try:
-            return await query.answer(url=start_url)
-        except Exception as e:
-            logger.warning(f"[NORM GETALL GROUP URL] query.answer(url=) failed: {e}. Falling back to button.")
-            from utils import schedule_filter_message_delete
-            fb_msg = await query.message.reply_text(
-                "📩 Open bot to get your files:",
-                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("📂 Open Bot", url=start_url)]])
-            )
-            if fb_msg:
-                schedule_filter_message_delete(client, fb_msg.chat.id, fb_msg.id, 60)
-            return await query.answer()
+            await save_temp_request(group_id, group_data)
+        except Exception:
+            pass
 
-    # User is in PM: Check Force Subscribe
-    from info import AUTH_CHANNEL, REQUEST_TO_JOIN_MODE
-    from utils import is_subscribed, get_fsub_invite_link
-    import time
-
-    if AUTH_CHANNEL and not await is_subscribed(client, user_id):
-        invite_link = await get_fsub_invite_link(client, AUTH_CHANNEL, creates_join_request=REQUEST_TO_JOIN_MODE)
-        if invite_link:
-            btn_text = "📢 Send Join Request" if REQUEST_TO_JOIN_MODE else "📢 Join Channel"
-            fsub_markup = InlineKeyboardMarkup([[InlineKeyboardButton(btn_text, url=invite_link)]])
-            fsub_text = (
-                "📢 <b>Join Request Required</b>\n\n"
-                "ഫയലുകൾ ലഭിക്കുന്നതിന് താഴെ കാണുന്ന ബട്ടൺ ക്ലിക്ക് ചെയ്ത് ഞങ്ങളുടെ ചാനലിലേക്ക് Join Request അയക്കുക.\n\n"
-                "<i>Please send a join request to our channel to receive the files.</i>"
-            ) if REQUEST_TO_JOIN_MODE else (
-                "📢 <b>Channel Subscription Required</b>\n\n"
-                "ഫയലുകൾ ലഭിക്കുന്നതിന് താഴെ കാണുന്ന ബട്ടൺ ക്ലിക്ക് ചെയ്ത് ഞങ്ങളുടെ ചാനലിൽ Join ചെയ്യുക.\n\n"
-                "<i>Please join our channel to receive the files.</i>"
-            )
-            fsub_msg = await client.send_message(
-                chat_id=user_id,
-                text=fsub_text,
-                reply_markup=fsub_markup,
-                parse_mode=enums.ParseMode.HTML
-            )
-            if not hasattr(temp, "PENDING_NORMAL_FSUB"):
-                temp.PENDING_NORMAL_FSUB = {}
-            temp.PENDING_NORMAL_FSUB[user_id] = {
-                "group_id": group_id,
-                "details_msg_id": query.message.id,
-                "details_chat_id": query.message.chat.id,
-                "fsub_msg_id": fsub_msg.id if fsub_msg else None,
-                "fsub_chat_id": fsub_msg.chat.id if fsub_msg else user_id,
-                "timestamp": time.time()
-            }
-            return await query.answer()
-
-    # Check duplicate delivery
-    if not hasattr(temp, "ACTIVE_NORMAL_DELIVERIES"):
-        temp.ACTIVE_NORMAL_DELIVERIES = set()
-    if user_id in temp.ACTIVE_NORMAL_DELIVERIES:
-        return await query.answer("⚠️ File delivery is already in progress!", show_alert=True)
-
-    await query.answer()
-    started = await start_normal_file_delivery_in_pm(client, user_id=user_id, norm_group_id=group_id, trigger_msg=query.message)
-    if not started:
-        await query.answer("⚠️ File delivery could not be started or is already running.", show_alert=True)
+    # Route through /start norm_{group_id} deep-link flow in both PM and groups so start command is sent before files
+    start_url = f"https://t.me/{bot_username}?start=norm_{group_id}"
+    try:
+        return await query.answer(url=start_url)
+    except Exception as e:
+        logger.warning(f"[NORM GETALL URL] query.answer(url=) failed: {e}. Falling back to button.")
+        from utils import schedule_filter_message_delete
+        fb_msg = await query.message.reply_text(
+            "📩 Open bot to get your files:",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("📂 Open Bot", url=start_url)]])
+        )
+        if fb_msg:
+            schedule_filter_message_delete(client, fb_msg.chat.id, fb_msg.id, 60)
+        return await query.answer()
 
 
 async def process_normal_filter_deeplink(client: Client, message: Message, norm_group_id: str, user_id: int = None) -> bool:
