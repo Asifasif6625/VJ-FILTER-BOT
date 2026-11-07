@@ -9441,12 +9441,52 @@ async def ser_season_callback(client: Client, query: CallbackQuery):
     if not qualities:
         qualities = series.get("qualities") or ["480p", "720p", "1080p"]
 
+    try:
+        from utils import get_delivery_bot_username
+        bot_username = get_delivery_bot_username()
+    except Exception:
+        bot_username = getattr(getattr(client, "me", None), "username", None) or getattr(temp, "U_NAME", "Bot")
+    if bot_username:
+        bot_username = str(bot_username).lstrip("@")
+    else:
+        bot_username = "Bot"
+
+    real_sid = str(series.get("_id", series_id))
+    title = series.get("name", "Series")
+
+    import uuid, time
+    from database.series_db import save_temp_request
+
     buttons = []
     for i in range(0, len(qualities), 2):
         row = []
         for q in qualities[i:i+2]:
             text, style, icon_id = format_super_quality_button(q)
-            row.append(make_styled_button(text, callback_data=f"ser_qual#{series_id}#{lang}#{season}#{q}", style=style, icon_custom_emoji_id=icon_id))
+            req_key = str(uuid.uuid4())[:8]
+            req_data = {
+                "request_key": req_key,
+                "user": query.from_user.id if (query and query.from_user) else 0,
+                "user_id": query.from_user.id if (query and query.from_user) else 0,
+                "type": "series",
+                "series_title": title,
+                "title": title,
+                "series_id": real_sid,
+                "language": lang,
+                "season": season,
+                "quality": q,
+                "delivery_status": "pending",
+                "created_at": time.time()
+            }
+            if not hasattr(temp, "SERIES_STATE"):
+                temp.SERIES_STATE = {}
+            temp.SERIES_STATE[req_key] = req_data
+            if not hasattr(temp, "GETALL"):
+                temp.GETALL = {}
+            temp.GETALL[req_key] = req_data
+            asyncio.create_task(save_temp_request(req_key, req_data))
+
+            start_url = f"https://t.me/{bot_username}?start=all_{req_key}"
+            row.append(make_styled_button(text, url=start_url, style=style, icon_custom_emoji_id=icon_id))
         buttons.append(row)
 
     buttons.append([
@@ -9802,16 +9842,33 @@ async def deliver_series_request(client, req_key, user_id, query=None, timing=No
         return
 
     files = req.get("files", [])
-    if not files:
-        if query:
-            await query.answer("⚠️ No files found for this request.", show_alert=True)
-        return
-
     title = req.get("series_title") or req.get("title") or "Series"
     lang = req.get("language")
     season = req.get("season")
     ep = req.get("episode")
     qual = req.get("quality")
+
+    if not files:
+        from database.series_db import sfiles_col, _sid_query, _num_query
+        import re
+        sid_val = req.get("series_id") or req.get("full_id") or req.get("sid")
+        if sid_val and season:
+            q_cond = {"series_id": _sid_query(sid_val), "season": _num_query(season)}
+            if lang:
+                q_cond["language"] = re.compile(rf"^{re.escape(str(lang))}$", re.IGNORECASE)
+            if qual:
+                q_cond["quality"] = re.compile(rf"{re.escape(str(qual))}", re.IGNORECASE)
+            files = await sfiles_col.find(q_cond).sort("episode", 1).to_list(length=300)
+            if not files and qual:
+                all_s_files = await sfiles_col.find({"series_id": _sid_query(sid_val), "season": _num_query(season)}).sort("episode", 1).to_list(length=300)
+                if all_s_files:
+                    files = [f for f in all_s_files if qual.lower() in str(f.get("quality", "")).lower()]
+
+    if not files:
+        log.warning(f"[SERIES DELIVERY] No files found for req_key={req_key}")
+        if query:
+            await query.answer("⚠️ No files found for this request.", show_alert=True)
+        return
 
     # Helper for sorting files strictly by numerical episode order
     def _ep_sort_key(f):
