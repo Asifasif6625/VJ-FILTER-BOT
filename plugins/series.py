@@ -8308,7 +8308,7 @@ async def coming_soon_callback(client: Client, query: CallbackQuery):
     return await query.answer("File only get after OTT release", show_alert=True)
 
 
-async def render_super_movie_direct(client: Client, message: Message, movie: dict, reply_msg: Message = None, user_id: int = None) -> bool:
+async def render_super_movie_direct(client: Client, message: Message, movie: dict, reply_msg: Message = None, user_id: int = None, target_chat_id: int = None) -> bool:
     """Renders the language selection UI for a specific Super Movie Filter."""
     from database.ia_filterdb import get_bulk_file_details
     from database.series_db import is_filter_coming_soon
@@ -8318,7 +8318,7 @@ async def render_super_movie_direct(client: Client, message: Message, movie: dic
     movie_id = str(movie["_id"])
     file_ids = movie.get("file_ids", [])
 
-    chat_id = message.chat.id if message and message.chat else (reply_msg.chat.id if reply_msg else 0)
+    chat_id = target_chat_id or (message.chat.id if message and message.chat else (reply_msg.chat.id if reply_msg and reply_msg.chat else 0))
     msg_id = message.id if message else (reply_msg.id if reply_msg else 0)
     key = f"{chat_id}-{msg_id}"
 
@@ -8337,9 +8337,9 @@ async def render_super_movie_direct(client: Client, message: Message, movie: dic
             real_user_id = chat_id
 
     BUTTON_OWNERS[key] = real_user_id
-    if reply_msg:
+    if reply_msg and reply_msg.chat and reply_msg.id:
         BUTTON_OWNERS[f"{reply_msg.chat.id}-{reply_msg.id}"] = real_user_id
-    if message:
+    if message and message.chat and message.id:
         BUTTON_OWNERS[f"{message.chat.id}-{message.id}"] = real_user_id
 
     title = movie.get("title", "")
@@ -8372,6 +8372,16 @@ async def render_super_movie_direct(client: Client, message: Message, movie: dic
     if not posters_to_try:
         posters_to_try = [poster]
 
+    try:
+        from info import DEFAULT_POSTER
+        if DEFAULT_POSTER and DEFAULT_POSTER not in posters_to_try:
+            posters_to_try.append(DEFAULT_POSTER)
+    except Exception:
+        pass
+    fallback_catbox = "https://files.catbox.moe/mp2y81.jpg"
+    if fallback_catbox not in posters_to_try:
+        posters_to_try.append(fallback_catbox)
+
     # Coming Soon Check
     if is_filter_coming_soon(movie) or (movie.get("coming_soon") and not file_ids):
         logger.info(f"[COMING SOON SEARCH] rendering super movie coming soon UI title={title} id={movie_id}")
@@ -8380,7 +8390,7 @@ async def render_super_movie_direct(client: Client, message: Message, movie: dic
 
         if reply_msg:
             try:
-                if posters_to_try and (reply_msg.photo or reply_msg.caption):
+                if posters_to_try and getattr(reply_msg, "photo", None):
                     edited = False
                     for p_cand in posters_to_try:
                         try:
@@ -8389,63 +8399,59 @@ async def render_super_movie_direct(client: Client, message: Message, movie: dic
                                 reply_markup=markup
                             )
                             edited = True
-                            schedule_filter_message_delete(client, reply_msg.chat.id, reply_msg.id, 600)
+                            schedule_filter_message_delete(client, reply_msg.chat.id, reply_msg.id, 180 if reply_msg.chat.id < 0 else 600)
                             return True
                         except Exception as me:
                             logger.warning(f"[EDIT MEDIA FAILED for {p_cand}] {me}")
                     if not edited:
-                        await reply_msg.edit_caption(
-                            caption=caption_text,
-                            reply_markup=markup,
-                            parse_mode=enums.ParseMode.HTML
-                        )
-                        schedule_filter_message_delete(client, reply_msg.chat.id, reply_msg.id, 600)
-                        return True
-                elif reply_msg.photo or reply_msg.caption:
-                    await reply_msg.edit_caption(
-                        caption=caption_text,
-                        reply_markup=markup,
-                        parse_mode=enums.ParseMode.HTML
-                    )
-                    schedule_filter_message_delete(client, reply_msg.chat.id, reply_msg.id, 600)
-                    return True
+                        try:
+                            await reply_msg.delete()
+                        except Exception:
+                            pass
+                        reply_msg = None
                 else:
-                    await reply_msg.edit_text(
-                        text=caption_text,
-                        reply_markup=markup,
-                        parse_mode=enums.ParseMode.HTML
-                    )
-                    schedule_filter_message_delete(client, reply_msg.chat.id, reply_msg.id, 600)
-                    return True
+                    try:
+                        await reply_msg.delete()
+                    except Exception:
+                        pass
+                    reply_msg = None
             except Exception:
                 try:
                     await reply_msg.delete()
                 except Exception:
                     pass
+                reply_msg = None
 
         if posters_to_try:
             sent_p = None
             for p_cand in posters_to_try:
                 try:
-                    sent_p = await (message.reply_photo(
-                        photo=p_cand,
-                        caption=caption_text,
-                        reply_markup=markup,
-                        parse_mode=enums.ParseMode.HTML
-                    ) if message else client.send_photo(
-                        chat_id=chat_id,
-                        photo=p_cand,
-                        caption=caption_text,
-                        reply_markup=markup,
-                        parse_mode=enums.ParseMode.HTML
-                    ))
+                    if message and getattr(message, "reply_photo", None):
+                        try:
+                            sent_p = await message.reply_photo(
+                                photo=p_cand,
+                                caption=caption_text,
+                                reply_markup=markup,
+                                parse_mode=enums.ParseMode.HTML
+                            )
+                        except Exception:
+                            sent_p = None
+                    if not sent_p:
+                        sent_p = await client.send_photo(
+                            chat_id=chat_id,
+                            photo=p_cand,
+                            caption=caption_text,
+                            reply_markup=markup,
+                            parse_mode=enums.ParseMode.HTML
+                        )
                     if sent_p:
                         break
                 except Exception as pe:
                     logger.warning(f"[SUPER MOVIE PHOTO ERROR for {p_cand}] {pe}")
             if sent_p:
                 BUTTON_OWNERS[f"{sent_p.chat.id}-{sent_p.id}"] = real_user_id
-                schedule_filter_message_delete(client, sent_p.chat.id, sent_p.id, 600)
+                BUTTON_OWNERS[key] = real_user_id
+                schedule_filter_message_delete(client, sent_p.chat.id, sent_p.id, 180 if sent_p.chat.id < 0 else 600)
                 return True
 
         sent_t = await (message.reply_text(
@@ -8460,7 +8466,8 @@ async def render_super_movie_direct(client: Client, message: Message, movie: dic
         ))
         if sent_t:
             BUTTON_OWNERS[f"{sent_t.chat.id}-{sent_t.id}"] = real_user_id
-            schedule_filter_message_delete(client, sent_t.chat.id, sent_t.id, 600)
+            BUTTON_OWNERS[key] = real_user_id
+            schedule_filter_message_delete(client, sent_t.chat.id, sent_t.id, 180 if sent_t.chat.id < 0 else 600)
         return True
 
     from plugins.pm_filter import get_movie_subtitle_files
@@ -8498,7 +8505,7 @@ async def render_super_movie_direct(client: Client, message: Message, movie: dic
         "languages": movie.get("languages", []),
         "qualities": movie.get("qualities", [])
     }
-    if reply_msg:
+    if reply_msg and reply_msg.chat and reply_msg.id:
         temp.MOVIE_STATE[f"{reply_msg.chat.id}-{reply_msg.id}"] = temp.MOVIE_STATE[key]
 
     caption_text = format_movie_metadata_caption(movie, grouped_data=grouped, page_type="lang")
@@ -8506,7 +8513,7 @@ async def render_super_movie_direct(client: Client, message: Message, movie: dic
 
     if reply_msg:
         try:
-            if posters_to_try and (reply_msg.photo or reply_msg.caption):
+            if posters_to_try and getattr(reply_msg, "photo", None):
                 edited = False
                 for p_cand in posters_to_try:
                     try:
@@ -8515,68 +8522,61 @@ async def render_super_movie_direct(client: Client, message: Message, movie: dic
                             reply_markup=markup
                         )
                         edited = True
-                        schedule_filter_message_delete(client, reply_msg.chat.id, reply_msg.id, 600)
+                        schedule_filter_message_delete(client, reply_msg.chat.id, reply_msg.id, 180 if reply_msg.chat.id < 0 else 600)
                         asyncio.create_task(apply_pm_styled_reply_markup(client, reply_msg.chat.id, reply_msg.id, markup))
                         return True
                     except Exception as me:
                         logger.warning(f"[EDIT MEDIA FAILED for {p_cand}] {me}")
                 if not edited:
-                    await reply_msg.edit_caption(
-                        caption=caption_text,
-                        reply_markup=markup,
-                        parse_mode=enums.ParseMode.HTML
-                    )
-                    schedule_filter_message_delete(client, reply_msg.chat.id, reply_msg.id, 600)
-                    asyncio.create_task(apply_pm_styled_reply_markup(client, reply_msg.chat.id, reply_msg.id, markup))
-                    return True
-            elif reply_msg.photo or reply_msg.caption:
-                await reply_msg.edit_caption(
-                    caption=caption_text,
-                    reply_markup=markup,
-                    parse_mode=enums.ParseMode.HTML
-                )
-                schedule_filter_message_delete(client, reply_msg.chat.id, reply_msg.id, 600)
-                asyncio.create_task(apply_pm_styled_reply_markup(client, reply_msg.chat.id, reply_msg.id, markup))
-                return True
+                    try:
+                        await reply_msg.delete()
+                    except Exception:
+                        pass
+                    reply_msg = None
             else:
-                await reply_msg.edit_text(
-                    text=caption_text,
-                    reply_markup=markup,
-                    parse_mode=enums.ParseMode.HTML
-                )
-                schedule_filter_message_delete(client, reply_msg.chat.id, reply_msg.id, 600)
-                asyncio.create_task(apply_pm_styled_reply_markup(client, reply_msg.chat.id, reply_msg.id, markup))
-                return True
+                try:
+                    await reply_msg.delete()
+                except Exception:
+                    pass
+                reply_msg = None
         except Exception:
             try:
                 await reply_msg.delete()
             except Exception:
                 pass
+            reply_msg = None
 
     if posters_to_try:
         sent_p = None
         for p_cand in posters_to_try:
             try:
-                sent_p = await (message.reply_photo(
-                    photo=p_cand,
-                    caption=caption_text,
-                    reply_markup=markup,
-                    parse_mode=enums.ParseMode.HTML
-                ) if message else client.send_photo(
-                    chat_id=chat_id,
-                    photo=p_cand,
-                    caption=caption_text,
-                    reply_markup=markup,
-                    parse_mode=enums.ParseMode.HTML
-                ))
+                if message and getattr(message, "reply_photo", None):
+                    try:
+                        sent_p = await message.reply_photo(
+                            photo=p_cand,
+                            caption=caption_text,
+                            reply_markup=markup,
+                            parse_mode=enums.ParseMode.HTML
+                        )
+                    except Exception:
+                        sent_p = None
+                if not sent_p:
+                    sent_p = await client.send_photo(
+                        chat_id=chat_id,
+                        photo=p_cand,
+                        caption=caption_text,
+                        reply_markup=markup,
+                        parse_mode=enums.ParseMode.HTML
+                    )
                 if sent_p:
                     break
             except Exception as pe:
                 logger.warning(f"[SUPER MOVIE PHOTO ERROR for {p_cand}] {pe}")
         if sent_p:
             BUTTON_OWNERS[f"{sent_p.chat.id}-{sent_p.id}"] = real_user_id
+            BUTTON_OWNERS[key] = real_user_id
             temp.MOVIE_STATE[f"{sent_p.chat.id}-{sent_p.id}"] = temp.MOVIE_STATE[key]
-            schedule_filter_message_delete(client, sent_p.chat.id, sent_p.id, 600)
+            schedule_filter_message_delete(client, sent_p.chat.id, sent_p.id, 180 if sent_p.chat.id < 0 else 600)
             asyncio.create_task(apply_pm_styled_reply_markup(client, sent_p.chat.id, sent_p.id, markup))
             return True
 
@@ -8592,13 +8592,14 @@ async def render_super_movie_direct(client: Client, message: Message, movie: dic
     ))
     if sent_t:
         BUTTON_OWNERS[f"{sent_t.chat.id}-{sent_t.id}"] = real_user_id
+        BUTTON_OWNERS[key] = real_user_id
         temp.MOVIE_STATE[f"{sent_t.chat.id}-{sent_t.id}"] = temp.MOVIE_STATE[key]
-        schedule_filter_message_delete(client, sent_t.chat.id, sent_t.id, 600)
+        schedule_filter_message_delete(client, sent_t.chat.id, sent_t.id, 180 if sent_t.chat.id < 0 else 600)
         asyncio.create_task(apply_pm_styled_reply_markup(client, sent_t.chat.id, sent_t.id, markup))
     return True
 
 
-async def render_series_direct(client: Client, message: Message, series_doc: dict, reply_msg: Message = None, user_id: int = None) -> bool:
+async def render_series_direct(client: Client, message: Message, series_doc: dict, reply_msg: Message = None, user_id: int = None, target_chat_id: int = None) -> bool:
     """Renders the language selection UI for a specific Series Filter."""
     from database.series_db import list_series_languages, is_filter_coming_soon
     from plugins.pm_filter import BUTTON_OWNERS, format_series_metadata_caption
@@ -8629,6 +8630,16 @@ async def render_series_direct(client: Client, message: Message, series_doc: dic
     if not posters_to_try:
         posters_to_try = [poster]
 
+    try:
+        from info import DEFAULT_POSTER
+        if DEFAULT_POSTER and DEFAULT_POSTER not in posters_to_try:
+            posters_to_try.append(DEFAULT_POSTER)
+    except Exception:
+        pass
+    fallback_catbox = "https://files.catbox.moe/mp2y81.jpg"
+    if fallback_catbox not in posters_to_try:
+        posters_to_try.append(fallback_catbox)
+
     from database.series_db import list_series_languages
     from utils import normalize_language_name
     db_langs = await list_series_languages(series_id)
@@ -8637,7 +8648,10 @@ async def render_series_direct(client: Client, message: Message, series_doc: dic
         orig = series_doc.get("original_language")
         langs = [normalize_language_name(orig) or orig] if orig else ["English"]
 
-    if reply_msg and reply_msg.chat:
+    if target_chat_id:
+        chat_id = target_chat_id
+        msg_id = reply_msg.id if reply_msg else (message.id if message else 0)
+    elif reply_msg and reply_msg.chat:
         chat_id = reply_msg.chat.id
         msg_id = reply_msg.id
     elif message and message.chat:
@@ -8682,7 +8696,7 @@ async def render_series_direct(client: Client, message: Message, series_doc: dic
 
         if reply_msg:
             try:
-                if posters_to_try and (reply_msg.photo or reply_msg.caption):
+                if posters_to_try and getattr(reply_msg, "photo", None):
                     edited = False
                     for p_cand in posters_to_try:
                         try:
@@ -8691,64 +8705,60 @@ async def render_series_direct(client: Client, message: Message, series_doc: dic
                                 reply_markup=markup
                             )
                             edited = True
-                            schedule_filter_message_delete(client, reply_msg.chat.id, reply_msg.id, 600)
+                            schedule_filter_message_delete(client, reply_msg.chat.id, reply_msg.id, 180 if reply_msg.chat.id < 0 else 600)
                             return True
                         except Exception as me:
                             logger.warning(f"[EDIT MEDIA FAILED for {p_cand}] {me}")
                     if not edited:
-                        await reply_msg.edit_caption(
-                            caption=caption_text,
-                            reply_markup=markup,
-                            parse_mode=enums.ParseMode.HTML
-                        )
-                        schedule_filter_message_delete(client, reply_msg.chat.id, reply_msg.id, 600)
-                        return True
-                elif reply_msg.photo or reply_msg.caption:
-                    await reply_msg.edit_caption(
-                        caption=caption_text,
-                        reply_markup=markup,
-                        parse_mode=enums.ParseMode.HTML
-                    )
-                    schedule_filter_message_delete(client, reply_msg.chat.id, reply_msg.id, 600)
-                    return True
+                        try:
+                            await reply_msg.delete()
+                        except Exception:
+                            pass
+                        reply_msg = None
                 else:
-                    await reply_msg.edit_text(
-                        text=caption_text,
-                        reply_markup=markup,
-                        parse_mode=enums.ParseMode.HTML
-                    )
-                    schedule_filter_message_delete(client, reply_msg.chat.id, reply_msg.id, 600)
-                    return True
+                    try:
+                        await reply_msg.delete()
+                    except Exception:
+                        pass
+                    reply_msg = None
             except Exception:
                 try:
                     await reply_msg.delete()
                 except Exception:
                     pass
+                reply_msg = None
 
         if posters_to_try:
             sent_p = None
             for p_cand in posters_to_try:
                 try:
-                    sent_p = await (message.reply_photo(
-                        photo=p_cand,
-                        caption=caption_text,
-                        reply_markup=markup,
-                        parse_mode=enums.ParseMode.HTML
-                    ) if message else client.send_photo(
-                        chat_id=chat_id,
-                        photo=p_cand,
-                        caption=caption_text,
-                        reply_markup=markup,
-                        parse_mode=enums.ParseMode.HTML
-                    ))
+                    if message and getattr(message, "reply_photo", None):
+                        try:
+                            sent_p = await message.reply_photo(
+                                photo=p_cand,
+                                caption=caption_text,
+                                reply_markup=markup,
+                                parse_mode=enums.ParseMode.HTML
+                            )
+                        except Exception:
+                            sent_p = None
+                    if not sent_p:
+                        sent_p = await client.send_photo(
+                            chat_id=chat_id,
+                            photo=p_cand,
+                            caption=caption_text,
+                            reply_markup=markup,
+                            parse_mode=enums.ParseMode.HTML
+                        )
                     if sent_p:
                         break
                 except Exception as pe:
                     logger.warning(f"[SERIES PHOTO ERROR for {p_cand}] {pe}")
             if sent_p:
                 BUTTON_OWNERS[f"{sent_p.chat.id}-{sent_p.id}"] = real_user_id
+                BUTTON_OWNERS[key] = real_user_id
                 logger.info(f"[SERIES OWNER REGISTER] key={sent_p.chat.id}-{sent_p.id} owner={real_user_id}")
-                schedule_filter_message_delete(client, sent_p.chat.id, sent_p.id, 600)
+                schedule_filter_message_delete(client, sent_p.chat.id, sent_p.id, 180 if sent_p.chat.id < 0 else 600)
                 return True
 
         sent_t = await (message.reply_text(
@@ -8763,8 +8773,9 @@ async def render_series_direct(client: Client, message: Message, series_doc: dic
         ))
         if sent_t:
             BUTTON_OWNERS[f"{sent_t.chat.id}-{sent_t.id}"] = real_user_id
+            BUTTON_OWNERS[key] = real_user_id
             logger.info(f"[SERIES OWNER REGISTER] key={sent_t.chat.id}-{sent_t.id} owner={real_user_id}")
-            schedule_filter_message_delete(client, sent_t.chat.id, sent_t.id, 600)
+            schedule_filter_message_delete(client, sent_t.chat.id, sent_t.id, 180 if sent_t.chat.id < 0 else 600)
         return True
 
     buttons = []
@@ -8782,7 +8793,7 @@ async def render_series_direct(client: Client, message: Message, series_doc: dic
 
     if reply_msg:
         try:
-            if posters_to_try and (reply_msg.photo or reply_msg.caption):
+            if posters_to_try and getattr(reply_msg, "photo", None):
                 edited = False
                 for p_cand in posters_to_try:
                     try:
@@ -8791,68 +8802,61 @@ async def render_series_direct(client: Client, message: Message, series_doc: dic
                             reply_markup=markup
                         )
                         edited = True
-                        schedule_filter_message_delete(client, reply_msg.chat.id, reply_msg.id, 600)
+                        schedule_filter_message_delete(client, reply_msg.chat.id, reply_msg.id, 180 if reply_msg.chat.id < 0 else 600)
                         asyncio.create_task(apply_pm_styled_reply_markup(client, reply_msg.chat.id, reply_msg.id, markup))
                         return True
                     except Exception as me:
                         logger.warning(f"[EDIT MEDIA FAILED for {p_cand}] {me}")
                 if not edited:
-                    await reply_msg.edit_caption(
-                        caption=caption_text,
-                        reply_markup=markup,
-                        parse_mode=enums.ParseMode.HTML
-                    )
-                    schedule_filter_message_delete(client, reply_msg.chat.id, reply_msg.id, 600)
-                    asyncio.create_task(apply_pm_styled_reply_markup(client, reply_msg.chat.id, reply_msg.id, markup))
-                    return True
-            elif reply_msg.photo or reply_msg.caption:
-                await reply_msg.edit_caption(
-                    caption=caption_text,
-                    reply_markup=markup,
-                    parse_mode=enums.ParseMode.HTML
-                )
-                schedule_filter_message_delete(client, reply_msg.chat.id, reply_msg.id, 600)
-                asyncio.create_task(apply_pm_styled_reply_markup(client, reply_msg.chat.id, reply_msg.id, markup))
-                return True
+                    try:
+                        await reply_msg.delete()
+                    except Exception:
+                        pass
+                    reply_msg = None
             else:
-                await reply_msg.edit_text(
-                    text=caption_text,
-                    reply_markup=markup,
-                    parse_mode=enums.ParseMode.HTML
-                )
-                schedule_filter_message_delete(client, reply_msg.chat.id, reply_msg.id, 600)
-                asyncio.create_task(apply_pm_styled_reply_markup(client, reply_msg.chat.id, reply_msg.id, markup))
-                return True
+                try:
+                    await reply_msg.delete()
+                except Exception:
+                    pass
+                reply_msg = None
         except Exception:
             try:
                 await reply_msg.delete()
             except Exception:
                 pass
+            reply_msg = None
 
     if posters_to_try:
         sent_p = None
         for p_cand in posters_to_try:
             try:
-                sent_p = await (message.reply_photo(
-                    photo=p_cand,
-                    caption=caption_text,
-                    reply_markup=markup,
-                    parse_mode=enums.ParseMode.HTML
-                ) if message else client.send_photo(
-                    chat_id=chat_id,
-                    photo=p_cand,
-                    caption=caption_text,
-                    reply_markup=markup,
-                    parse_mode=enums.ParseMode.HTML
-                ))
+                if message and getattr(message, "reply_photo", None):
+                    try:
+                        sent_p = await message.reply_photo(
+                            photo=p_cand,
+                            caption=caption_text,
+                            reply_markup=markup,
+                            parse_mode=enums.ParseMode.HTML
+                        )
+                    except Exception:
+                        sent_p = None
+                if not sent_p:
+                    sent_p = await client.send_photo(
+                        chat_id=chat_id,
+                        photo=p_cand,
+                        caption=caption_text,
+                        reply_markup=markup,
+                        parse_mode=enums.ParseMode.HTML
+                    )
                 if sent_p:
                     break
             except Exception as pe:
                 logger.warning(f"[SERIES PHOTO ERROR for {p_cand}] {pe}")
         if sent_p:
             BUTTON_OWNERS[f"{sent_p.chat.id}-{sent_p.id}"] = real_user_id
+            BUTTON_OWNERS[key] = real_user_id
             logger.info(f"[SERIES OWNER REGISTER] key={sent_p.chat.id}-{sent_p.id} owner={real_user_id}")
-            schedule_filter_message_delete(client, sent_p.chat.id, sent_p.id, 600)
+            schedule_filter_message_delete(client, sent_p.chat.id, sent_p.id, 180 if sent_p.chat.id < 0 else 600)
             asyncio.create_task(apply_pm_styled_reply_markup(client, sent_p.chat.id, sent_p.id, markup))
             return True
 
@@ -8868,8 +8872,9 @@ async def render_series_direct(client: Client, message: Message, series_doc: dic
     ))
     if sent_t:
         BUTTON_OWNERS[f"{sent_t.chat.id}-{sent_t.id}"] = real_user_id
+        BUTTON_OWNERS[key] = real_user_id
         logger.info(f"[SERIES OWNER REGISTER] key={sent_t.chat.id}-{sent_t.id} owner={real_user_id}")
-        schedule_filter_message_delete(client, sent_t.chat.id, sent_t.id, 600)
+        schedule_filter_message_delete(client, sent_t.chat.id, sent_t.id, 180 if sent_t.chat.id < 0 else 600)
         asyncio.create_task(apply_pm_styled_reply_markup(client, sent_t.chat.id, sent_t.id, markup))
     return True
 
@@ -9011,7 +9016,7 @@ async def process_unified_filter_search(client: Client, message: Message, query_
         try:
             sent_sug = await (message.reply_photo(photo=thumb, caption=caption_text, reply_markup=markup, parse_mode=enums.ParseMode.HTML) if message else client.send_photo(chat_id=message.chat.id, photo=thumb, caption=caption_text, reply_markup=markup, parse_mode=enums.ParseMode.HTML))
             if sent_sug:
-                schedule_filter_message_delete(client, sent_sug.chat.id, sent_sug.id, 600)
+                schedule_filter_message_delete(client, sent_sug.chat.id, sent_sug.id, 180 if sent_sug.chat.id < 0 else 600)
                 BUTTON_OWNERS[f"{sent_sug.chat.id}-{sent_sug.id}"] = real_user_id
             return True
         except Exception as pe:
@@ -9019,7 +9024,7 @@ async def process_unified_filter_search(client: Client, message: Message, query_
 
     sent_sug_t = await (message.reply_text(text=caption_text, reply_markup=markup, parse_mode=enums.ParseMode.HTML) if message else client.send_message(chat_id=message.chat.id, text=caption_text, reply_markup=markup, parse_mode=enums.ParseMode.HTML))
     if sent_sug_t:
-        schedule_filter_message_delete(client, sent_sug_t.chat.id, sent_sug_t.id, 600)
+        schedule_filter_message_delete(client, sent_sug_t.chat.id, sent_sug_t.id, 180 if sent_sug_t.chat.id < 0 else 600)
         BUTTON_OWNERS[f"{sent_sug_t.chat.id}-{sent_sug_t.id}"] = real_user_id
     return True
 
@@ -9044,7 +9049,14 @@ async def cb_sug_movie(client: Client, query: CallbackQuery):
     movie = await get_super_movie(movie_id)
     if not movie:
         return await query.answer("❌ Movie not found.", show_alert=True)
-    await render_super_movie_direct(client, query.message, movie, reply_msg=query.message, user_id=query.from_user.id)
+
+    chat_id = query.message.chat.id
+    target_user_id = query.from_user.id
+    try:
+        await query.message.delete()
+    except Exception:
+        pass
+    await render_super_movie_direct(client, None, movie, reply_msg=None, user_id=target_user_id, target_chat_id=chat_id)
 
 
 @Client.on_callback_query(filters.regex(r"^sug_ser#"), group=-15)
@@ -9067,7 +9079,14 @@ async def cb_sug_series(client: Client, query: CallbackQuery):
     series_doc = await get_series(series_id)
     if not series_doc:
         return await query.answer("❌ Series not found.", show_alert=True)
-    await render_series_direct(client, query.message, series_doc, reply_msg=query.message, user_id=query.from_user.id)
+
+    chat_id = query.message.chat.id
+    target_user_id = query.from_user.id
+    try:
+        await query.message.delete()
+    except Exception:
+        pass
+    await render_series_direct(client, None, series_doc, reply_msg=None, user_id=target_user_id, target_chat_id=chat_id)
 
 
 async def process_super_movie_search(client: Client, message: Message, query_text: str, reply_msg: Message = None) -> bool:
@@ -9394,25 +9413,14 @@ async def ser_qual_callback(client: Client, query: CallbackQuery):
             return await query.answer("⏳ Please wait! Previous files are still sending...", show_alert=True)
         set_delivery_in_progress(query.from_user.id, True)
 
-        try:
-            orig_markup = query.message.reply_markup
-            if orig_markup and orig_markup.inline_keyboard:
-                new_kb = []
-                for row in orig_markup.inline_keyboard:
-                    new_row = []
-                    for b in row:
-                        if getattr(b, "callback_data", "") == query.data:
-                            new_row.append(InlineKeyboardButton(f"⏳ {qual} (Sending...)", callback_data="noop_sending"))
-                        else:
-                            new_row.append(b)
-                    new_kb.append(new_row)
-                await query.message.edit_reply_markup(InlineKeyboardMarkup(new_kb))
-        except Exception:
-            pass
-
         from plugins.commands import process_series_start
-        await query.answer(f"🚀 Sending all {len(files)} episodes...")
-        await process_series_start(client, query.from_user.id, req_key, message=query.message)
+        try:
+            await process_series_start(client, query.from_user.id, req_key, message=query.message)
+        finally:
+            try:
+                await query.answer()
+            except Exception:
+                pass
         return
 
     try:
