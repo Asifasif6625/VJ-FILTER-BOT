@@ -763,15 +763,58 @@ def build_movie_language_keyboard(key, grouped_data, has_subtitles: bool = False
 
 def build_movie_quality_keyboard(key, lang, qualities_dict):
     from plugins.series import to_series_font, make_styled_button, format_super_quality_button
+    try:
+        from utils import get_delivery_bot_username
+        bot_username = get_delivery_bot_username()
+    except Exception:
+        bot_username = getattr(temp, "U_NAME", "Bot")
+    if bot_username:
+        bot_username = str(bot_username).lstrip("@")
+    else:
+        bot_username = "Bot"
+
+    state = getattr(temp, "MOVIE_STATE", {}).get(key, {})
+    title = state.get("title", "Movie")
+    user_id = state.get("user", 0)
+
     buttons = []
     quality_order = ["2160p", "4K", "1440p", "1080p", "720p", "480p", "360p", "HDRip", "WEB-DL", "BluRay", "DVDRip", "HEVC", "Unknown"]
     qualities_sorted = sorted(list(qualities_dict.keys()), key=lambda x: (quality_order.index(x) if x in quality_order else 99, x))
     
+    import uuid, time
+    from database.series_db import save_temp_request
     for i in range(0, len(qualities_sorted), 2):
         row = []
         for q in qualities_sorted[i:i+2]:
             text, style, icon_id = format_super_quality_button(q)
-            row.append(make_styled_button(text, callback_data=f"movie_quality#{key}#{lang}#{q}", style=style, icon_custom_emoji_id=icon_id))
+            req_key = str(uuid.uuid4())[:8]
+            files = qualities_dict.get(q, [])
+            req_data = {
+                "request_key": req_key,
+                "user": user_id,
+                "user_id": user_id,
+                "type": "movie",
+                "request_type": "movie",
+                "source": "MOVIE_FILTER",
+                "movie_title": title,
+                "title": title,
+                "language": lang,
+                "quality": q,
+                "files": files,
+                "delivery_status": "pending",
+                "state": "PENDING",
+                "created_at": time.time()
+            }
+            if not hasattr(temp, "MOVIE_STATE"):
+                temp.MOVIE_STATE = {}
+            temp.MOVIE_STATE[req_key] = req_data
+            if not hasattr(temp, "GETALL"):
+                temp.GETALL = {}
+            temp.GETALL[req_key] = req_data
+            asyncio.create_task(save_temp_request(req_key, req_data))
+
+            start_url = f"https://t.me/{bot_username}?start=all_{req_key}"
+            row.append(make_styled_button(text, url=start_url, style=style, icon_custom_emoji_id=icon_id))
         buttons.append(row)
     buttons.append([make_styled_button(f"⬅️  {to_series_font('Back')}", callback_data=f"movie_back#{key}#langs", style="success")])
     return InlineKeyboardMarkup(buttons)
@@ -4793,10 +4836,11 @@ async def cb_normal_group_select(client: Client, query: CallbackQuery):
             )
             return await query.answer(unauth_text, show_alert=True)
 
-    bot_username = getattr(getattr(client, "me", None), "username", None)
-    if not bot_username:
-        from utils import get_child_bot_username
-        bot_username = get_child_bot_username()
+    try:
+        from utils import get_delivery_bot_username
+        bot_username = get_delivery_bot_username()
+    except Exception:
+        bot_username = getattr(getattr(client, "me", None), "username", None) or getattr(temp, "U_NAME", "Bot")
     if bot_username:
         bot_username = str(bot_username).lstrip("@")
     else:
@@ -4806,7 +4850,8 @@ async def cb_normal_group_select(client: Client, query: CallbackQuery):
     back_data = f"norm_back#{session_id}#{page}" if session_id else f"norm_back#{norm_group_id}#0"
 
     from plugins.series import make_styled_button
-    get_all_btn = make_styled_button("⌯⌲ Get All File", callback_data=f"norm_getall#{norm_group_id}", style="danger")
+    start_url = f"https://t.me/{bot_username}?start=norm_{norm_group_id}"
+    get_all_btn = make_styled_button("⌯⌲ Get All File", url=start_url, style="danger")
     back_btn = make_styled_button("⬅️ Back", callback_data=back_data, style="primary")
     disc_btn = make_styled_button("⚠ Disclaimer", callback_data="norm_disc", style="success")
 
