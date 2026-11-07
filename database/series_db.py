@@ -245,15 +245,29 @@ async def create_series(data: dict) -> str:
 
 
 async def get_series(series_id: str) -> dict | None:
-    """Fetch a series by its string _id."""
+    """Fetch a series by its string _id, ObjectId, short 8-char id, or key."""
     try:
         raw_id = str(series_id or "").strip()
         if not raw_id:
             return None
+        doc = None
         if ObjectId.is_valid(raw_id):
             doc = await series_col.find_one({"_id": ObjectId(raw_id)})
-        else:
+        if not doc:
             doc = await series_col.find_one({"_id": raw_id})
+        if not doc and len(raw_id) == 8:
+            doc = await series_col.find_one({
+                "$expr": {
+                    "$regexMatch": {
+                        "input": {"$toString": "$_id"},
+                        "regex": f"{re.escape(raw_id)}$",
+                        "options": "i"
+                    }
+                },
+                "status": {"$ne": "deleted"}
+            })
+        if not doc:
+            doc = await series_col.find_one({"series_key": raw_id, "status": {"$ne": "deleted"}})
         if doc and doc.get("status") == "deleted":
             return None
         return doc
@@ -1233,7 +1247,7 @@ def _sid_query(series_id: str):
 def _num_query(val):
     try:
         n = int(val)
-        return {"$in": [n, str(n)]}
+        return {"$in": [n, str(n), f"{n:02d}", f"S{n:02d}", f"s{n:02d}", f"S{n}", f"s{n}", f"Season {n}"]}
     except Exception:
         return val
 
