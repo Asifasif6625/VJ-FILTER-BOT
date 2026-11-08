@@ -2537,6 +2537,12 @@ async def sync_existing_movie_filter(movie_id: str) -> dict:
     }
 
 
+async def sync_existing_series_filter(series_id: str, client = None) -> dict:
+    """Helper to resync a Series filter with the stored files database."""
+    from plugins.series import sync_existing_series_filter as _sync_func
+    return await _sync_func(series_id, client=client)
+
+
 async def get_movie_files_for_identity(title: str, year: str | int = None, imdb_id: str = None, tmdb_id: str = None) -> list:
     from database.ia_filterdb import get_search_results
     from utils import match_movie_identity, normalize_title_for_matching, extract_release_year
