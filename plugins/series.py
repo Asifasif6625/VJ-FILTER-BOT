@@ -33,7 +33,7 @@ from pyrogram.errors import (
     ChatAdminRequired,
 )
 
-from info import ADMINS, CHANNELS, SDATABASE_CHANNEL
+from info import ADMINS, AUTH_USERS, CHANNELS, SDATABASE_CHANNEL
 from database.series_db import (
     create_series,
     get_series,
@@ -117,10 +117,14 @@ def _is_admin(user_id: int) -> bool:
         return False
     try:
         uid = int(user_id)
-        admin_str_set = {str(a).strip() for a in ADMINS if str(a).strip()}
+        admin_str_set = {str(a).strip() for a in (ADMINS or []) if str(a).strip()}
+        if AUTH_USERS:
+            for au in AUTH_USERS:
+                if au is not None and str(au).strip():
+                    admin_str_set.add(str(au).strip())
         if str(uid) in admin_str_set:
             return True
-        admin_ids = [int(a) for a in ADMINS if str(a).lstrip("-").isdigit()]
+        admin_ids = [int(a) for a in admin_str_set if a.lstrip("-").isdigit()]
         return uid in admin_ids
     except Exception:
         return False
@@ -650,6 +654,8 @@ async def scan_sdatabase_for_series(chat_id: int | str, title: str, season: int 
             "file_name": doc.get("file_name"),
             "file_size": doc.get("file_size", 0),
             "caption": doc.get("caption"),
+            "chat_id": doc.get("chat_id"),
+            "message_id": doc.get("message_id"),
         }
         all_matching_files.append(file_entry)
 
@@ -2947,129 +2953,432 @@ async def cmd_get_emoji(client: Client, message: Message):
 @Client.on_message(filters.command(["sync_movies", "resync_movies"]), group=-1)
 async def cmd_sync_movies(client: Client, message: Message):
     uid = message.from_user.id if message.from_user else (message.sender_chat.id if message.sender_chat else 0)
-    if not _is_admin(uid):
-        return await message.reply_text("❌ <b>You are not authorized.</b>", parse_mode=enums.ParseMode.HTML)
+    is_authorized = _is_admin(uid)
+    if not is_authorized and message.chat and message.chat.type in [enums.ChatType.GROUP, enums.ChatType.SUPERGROUP]:
+        try:
+            member = await message.chat.get_member(uid)
+            if member and member.status in [enums.ChatMemberStatus.ADMINISTRATOR, enums.ChatMemberStatus.OWNER]:
+                is_authorized = True
+        except Exception:
+            pass
+    if not is_authorized:
+        return await message.reply_text("❌ <b>You are not authorized to use this command.</b>", parse_mode=enums.ParseMode.HTML)
 
-    status_msg = await message.reply_text("🔄 <b>Synchronizing all Super Movie filters with database...</b>", parse_mode=enums.ParseMode.HTML)
-    from database.series_db import super_movies_col, sync_existing_movie_filter
-    cursor = super_movies_col.find({"status": {"$ne": "deleted"}})
-    movies = [doc async for doc in cursor]
+    from database.series_db import super_movies_col, sync_existing_movie_filter, invalidate_active_filters_cache
+    from bson import ObjectId
+    import re
+
+    invalidate_active_filters_cache()
+    query = " ".join(message.command[1:]).strip() if len(message.command) > 1 else ""
+
+    if query:
+        status_msg = await message.reply_text(f"🔍 <b>Searching and synchronizing movie:</b> <code>{query}</code>...", parse_mode=enums.ParseMode.HTML)
+        target_movie = None
+        if len(query) == 24:
+            try:
+                target_movie = await super_movies_col.find_one({"_id": ObjectId(query), "status": {"$ne": "deleted"}})
+            except Exception:
+                pass
+        if not target_movie:
+            target_movie = await super_movies_col.find_one({
+                "status": {"$ne": "deleted"},
+                "$or": [
+                    {"title": {"$regex": f"^{re.escape(query)}$", "$options": "i"}},
+                    {"normalized_title": {"$regex": f"^{re.escape(query.lower())}$", "$options": "i"}}
+                ]
+            })
+        if not target_movie:
+            cursor = super_movies_col.find({
+                "status": {"$ne": "deleted"},
+                "$or": [
+                    {"title": {"$regex": re.escape(query), "$options": "i"}},
+                    {"second_name": {"$regex": re.escape(query), "$options": "i"}},
+                    {"aliases": {"$regex": re.escape(query), "$options": "i"}}
+                ]
+            }).limit(5)
+            candidates = [doc async for doc in cursor]
+            if candidates:
+                target_movie = candidates[0]
+        if not target_movie:
+            return await status_msg.edit_text(
+                f"❌ <b>No movie filter found matching:</b> <code>{query}</code>\n\n"
+                f"<i>Tip: Check the name using /viewmovies, or send <code>/resync_movies</code> without arguments to sync all movies.</i>",
+                parse_mode=enums.ParseMode.HTML
+            )
+        movie_list = [target_movie]
+    else:
+        status_msg = await message.reply_text("🔄 <b>Synchronizing all Super Movie filters with database...</b>", parse_mode=enums.ParseMode.HTML)
+        cursor = super_movies_col.find({"status": {"$ne": "deleted"}})
+        movie_list = [doc async for doc in cursor]
+
+    if not movie_list:
+        return await status_msg.edit_text("ℹ️ <b>No active movie filters found in database to synchronize.</b>", parse_mode=enums.ParseMode.HTML)
 
     synced = 0
     total_added = 0
-    for m in movies:
-        mid = str(m["_id"])
-        res = await sync_existing_movie_filter(mid)
-        if res.get("success"):
-            synced += 1
-            total_added += res.get("new_files_added", 0)
+    failed = 0
+    total_count = len(movie_list)
 
-    await status_msg.edit_text(
-        f"✅ <b>Movie Filter Sync Complete!</b>\n\n"
-        f"🎬 <b>Movies Synced:</b> <code>{synced}/{len(movies)}</code>\n"
-        f"📁 <b>New Files Linked:</b> <code>{total_added}</code>",
-        parse_mode=enums.ParseMode.HTML
+    for idx, m in enumerate(movie_list):
+        try:
+            mid = str(m["_id"])
+            res = await sync_existing_movie_filter(mid)
+            if res.get("success"):
+                synced += 1
+                total_added += res.get("new_files_added", 0)
+            else:
+                failed += 1
+        except Exception as e:
+            logger.error(f"[SYNC MOVIES LOOP ERROR] mid={m.get('_id')} err={e}")
+            failed += 1
+
+        if total_count > 5 and ((idx + 1) % 5 == 0 or (idx + 1) == total_count):
+            try:
+                await status_msg.edit_text(
+                    f"🔄 <b>Synchronizing Movie Filters...</b>\n\n"
+                    f"🎬 <b>Progress:</b> <code>{idx + 1}/{total_count}</code>\n"
+                    f"📁 <b>New Files Linked:</b> <code>{total_added}</code>",
+                    parse_mode=enums.ParseMode.HTML
+                )
+            except Exception:
+                pass
+
+    invalidate_active_filters_cache()
+
+    if total_count == 1:
+        m_title = movie_list[0].get("title", "Movie")
+        await status_msg.edit_text(
+            f"✅ <b>Movie Filter Synced Successfully!</b>\n\n"
+            f"🎬 <b>Title:</b> <code>{m_title}</code>\n"
+            f"📁 <b>New Files Linked:</b> <code>{total_added}</code>",
+            parse_mode=enums.ParseMode.HTML
+        )
+    else:
+        fail_text = f"\n⚠️ <b>Failed / Skipped:</b> <code>{failed}</code>" if failed > 0 else ""
+        await status_msg.edit_text(
+            f"✅ <b>Movie Filter Sync Complete!</b>\n\n"
+            f"🎬 <b>Movies Synced:</b> <code>{synced}/{total_count}</code>\n"
+            f"📁 <b>New Files Linked:</b> <code>{total_added}</code>{fail_text}",
+            parse_mode=enums.ParseMode.HTML
+        )
+
+
+async def sync_existing_series_filter(series_id: str, client: Client = None) -> dict:
+    """
+    Synchronizes an existing Series filter with files from the database:
+    - Scans stored files for this series using title, aliases, and year
+    - Inserts newly found episode files into sfiles_col
+    - Updates existing records with latest file_id, file_name, file_size, chat_id, message_id
+    - Updates series_col with all detected languages, seasons, and qualities
+    - Activates series if it has files and was in 'coming_soon'
+    - Clears active filter cache
+    """
+    from database.series_db import (
+        series_col, sfiles_col, get_series, add_series_file,
+        is_filter_coming_soon, invalidate_active_filters_cache,
+        _sid_query
     )
+    from utils import normalize_language_name
+    from bson import ObjectId
+    import asyncio
+    from datetime import datetime
+
+    s = await get_series(series_id)
+    if not s or s.get("status") == "deleted":
+        return {"success": False, "error": "Series not found or deleted"}
+
+    sid = str(s["_id"])
+    name = s.get("name", "")
+    s_year = s.get("year")
+    s_orig_lang = s.get("original_language")
+
+    if not s_orig_lang:
+        if s.get("languages") and len(s.get("languages")) > 0:
+            s_orig_lang = s.get("languages")[0]
+        else:
+            try:
+                from utils import fetch_media_original_language
+                s_orig_lang = await asyncio.wait_for(
+                    fetch_media_original_language(name, s_year, imdb_id=s.get("imdb_id"), tmdb_id=s.get("tmdb_id")),
+                    timeout=4.0
+                )
+                if s_orig_lang:
+                    await series_col.update_one({"_id": ObjectId(sid)}, {"$set": {"original_language": s_orig_lang}})
+            except Exception:
+                s_orig_lang = "English"
+
+    if s_orig_lang:
+        s_orig_lang = normalize_language_name(s_orig_lang) or s_orig_lang
+    else:
+        s_orig_lang = "English"
+
+    # Scan the file database for all matching files
+    res = await scan_sdatabase_for_series(
+        chat_id=0,
+        title=name,
+        season=None,
+        series_id=sid,
+        client=client,
+        original_language=s_orig_lang,
+        year=s_year
+    )
+
+    new_files = res.get("valid_new_files") or []
+    all_matching = res.get("all_matching_files") or []
+    new_files_added = 0
+
+    # 1. Add valid new files
+    for f in new_files:
+        try:
+            ok, _ = await add_series_file({
+                "series_id": sid,
+                "language": f["language"],
+                "season": f["season"],
+                "episode": f["episode"],
+                "quality": f["quality"],
+                "chat_id": f.get("chat_id"),
+                "message_id": f.get("message_id"),
+                "file_id": f.get("file_id"),
+                "file_name": f.get("file_name"),
+                "file_size": f.get("file_size", 0),
+                "caption": f.get("caption")
+            })
+            if ok:
+                new_files_added += 1
+        except Exception as e:
+            logger.error(f"[SYNC SERIES ADD ERROR] sid={sid} file={f.get('file_name')} err={e}")
+
+    # 2. Update existing files with fresh metadata if matching
+    for f in all_matching:
+        try:
+            fid = f.get("file_id")
+            if not fid:
+                continue
+            update_data = {
+                "file_id": fid,
+                "file_name": f.get("file_name"),
+                "file_size": f.get("file_size", 0),
+                "caption": f.get("caption"),
+                "updated_at": datetime.utcnow()
+            }
+            if f.get("chat_id"):
+                update_data["chat_id"] = f.get("chat_id")
+            if f.get("message_id"):
+                update_data["message_id"] = f.get("message_id")
+
+            await sfiles_col.update_one(
+                {
+                    "series_id": _sid_query(sid),
+                    "language": f["language"],
+                    "season": int(f["season"]),
+                    "episode": int(f["episode"]),
+                    "quality": f["quality"]
+                },
+                {"$set": update_data}
+            )
+        except Exception:
+            pass
+
+    # 3. Aggregate all languages, seasons, and qualities for this series
+    s_cursor = sfiles_col.find({"series_id": _sid_query(sid)})
+    all_stored_files = [sf async for sf in s_cursor]
+
+    all_langs = set(s.get("languages") or [])
+    all_quals = set(s.get("qualities") or [])
+    all_seasons = set(s.get("seasons") or [])
+
+    for sf in all_stored_files:
+        if sf.get("language"):
+            all_langs.add(sf["language"])
+        if sf.get("quality") and sf["quality"] != "Unknown":
+            all_quals.add(sf["quality"])
+        if sf.get("season"):
+            try:
+                all_seasons.add(int(sf["season"]))
+            except Exception:
+                pass
+
+    for mf in all_matching:
+        if mf.get("language"):
+            all_langs.add(mf["language"])
+        if mf.get("quality") and mf["quality"] != "Unknown":
+            all_quals.add(mf["quality"])
+        if mf.get("season"):
+            try:
+                all_seasons.add(int(mf["season"]))
+            except Exception:
+                pass
+
+    update_fields = {
+        "languages": sorted(list(all_langs)),
+        "qualities": sorted(list(all_quals)),
+        "seasons": sorted(list(all_seasons)),
+        "updated_at": datetime.utcnow()
+    }
+    if is_filter_coming_soon(s) and (all_stored_files or all_matching or all_seasons):
+        update_fields["status"] = "active"
+        update_fields["coming_soon"] = False
+
+    await series_col.update_one({"_id": ObjectId(sid)}, {"$set": update_fields})
+    invalidate_active_filters_cache()
+
+    return {
+        "success": True,
+        "series_id": sid,
+        "name": name,
+        "new_files_added": new_files_added,
+        "total_files": len(all_stored_files),
+        "seasons": sorted(list(all_seasons)),
+        "qualities": sorted(list(all_quals)),
+        "languages": sorted(list(all_langs))
+    }
 
 
 @Client.on_message(filters.command(["sync_series", "resync_series"]), group=-1)
 async def cmd_sync_series(client: Client, message: Message):
     uid = message.from_user.id if message.from_user else (message.sender_chat.id if message.sender_chat else 0)
-    if not _is_admin(uid):
-        return await message.reply_text("❌ <b>You are not authorized.</b>", parse_mode=enums.ParseMode.HTML)
+    is_authorized = _is_admin(uid)
+    if not is_authorized and message.chat and message.chat.type in [enums.ChatType.GROUP, enums.ChatType.SUPERGROUP]:
+        try:
+            member = await message.chat.get_member(uid)
+            if member and member.status in [enums.ChatMemberStatus.ADMINISTRATOR, enums.ChatMemberStatus.OWNER]:
+                is_authorized = True
+        except Exception:
+            pass
+    if not is_authorized:
+        return await message.reply_text("❌ <b>You are not authorized to use this command.</b>", parse_mode=enums.ParseMode.HTML)
 
-    status_msg = await message.reply_text("🔄 <b>Synchronizing all Series filters with database...</b>", parse_mode=enums.ParseMode.HTML)
-    from database.series_db import series_col, scan_sdatabase_for_series, add_series_file, is_filter_coming_soon
-    from utils import normalize_language_name
+    from database.series_db import series_col, invalidate_active_filters_cache
     from bson import ObjectId
-    cursor = series_col.find({"status": {"$ne": "deleted"}})
-    series_list = [doc async for doc in cursor]
+    import re
 
-    synced = 0
-    total_added = 0
-    for s in series_list:
-        sid = str(s["_id"])
-        name = s.get("name", "")
-        s_year = s.get("year")
-        s_orig_lang = s.get("original_language")
-        if not s_orig_lang:
-            from utils import fetch_media_original_language
-            s_orig_lang = await fetch_media_original_language(name, s_year, imdb_id=s.get("imdb_id"), tmdb_id=s.get("tmdb_id"))
-            if s_orig_lang:
-                await series_col.update_one({"_id": s["_id"]}, {"$set": {"original_language": s_orig_lang}})
-        if s_orig_lang:
-            s_orig_lang = normalize_language_name(s_orig_lang) or s_orig_lang
-        elif s.get("languages") and len(s.get("languages")) > 0:
-            s_orig_lang = s.get("languages")[0]
-        else:
-            s_orig_lang = "English"
+    invalidate_active_filters_cache()
+    query = " ".join(message.command[1:]).strip() if len(message.command) > 1 else ""
 
-        res = await scan_sdatabase_for_series(message.chat.id, name, season=None, series_id=sid, client=client, original_language=s_orig_lang, year=s_year)
-        new_files = res.get("valid_new_files") or []
-        new_langs = set()
-        new_quals = set()
-        new_seasons = set()
-
-        for f in new_files:
+    if query:
+        status_msg = await message.reply_text(f"🔍 <b>Searching and synchronizing series:</b> <code>{query}</code>...", parse_mode=enums.ParseMode.HTML)
+        target_series = None
+        if len(query) == 24:
             try:
-                ok, _ = await add_series_file({
-                    "series_id": sid,
-                    "language": f["language"],
-                    "season": f["season"],
-                    "episode": f["episode"],
-                    "quality": f["quality"],
-                    "chat_id": message.chat.id,
-                    "file_id": f.get("file_id"),
-                    "file_name": f.get("file_name"),
-                    "file_size": f.get("file_size", 0)
-                })
-                if ok:
-                    total_added += 1
-                    if f.get("language"):
-                        new_langs.add(f["language"])
-                    if f.get("quality") and f["quality"] != "Unknown":
-                        new_quals.add(f["quality"])
-                    if f.get("season"):
-                        new_seasons.add(int(f["season"]))
+                target_series = await series_col.find_one({"_id": ObjectId(query), "status": {"$ne": "deleted"}})
             except Exception:
                 pass
 
-        update_fields = {}
-        if new_langs:
-            update_fields.setdefault("$addToSet", {})["languages"] = {"$each": list(new_langs)}
-        if new_quals:
-            update_fields.setdefault("$addToSet", {})["qualities"] = {"$each": list(new_quals)}
-        if new_seasons:
-            update_fields.setdefault("$addToSet", {})["seasons"] = {"$each": list(new_seasons)}
+        if not target_series:
+            target_series = await series_col.find_one({
+                "status": {"$ne": "deleted"},
+                "$or": [
+                    {"name": {"$regex": f"^{re.escape(query)}$", "$options": "i"}},
+                    {"series_key": {"$regex": f"^{re.escape(query)}$", "$options": "i"}},
+                    {"normalized_name": {"$regex": f"^{re.escape(query.lower())}$", "$options": "i"}}
+                ]
+            })
 
-        if is_filter_coming_soon(s) and (new_files or s.get("seasons")):
-            update_fields.setdefault("$set", {})["status"] = "active"
-            update_fields.setdefault("$set", {})["coming_soon"] = False
+        if not target_series:
+            cursor = series_col.find({
+                "status": {"$ne": "deleted"},
+                "$or": [
+                    {"name": {"$regex": re.escape(query), "$options": "i"}},
+                    {"second_name": {"$regex": re.escape(query), "$options": "i"}},
+                    {"aliases": {"$regex": re.escape(query), "$options": "i"}}
+                ]
+            }).limit(5)
+            candidates = [doc async for doc in cursor]
+            if candidates:
+                target_series = candidates[0]
 
-        if update_fields:
-            await series_col.update_one({"_id": ObjectId(sid)}, update_fields)
+        if not target_series:
+            return await status_msg.edit_text(
+                f"❌ <b>No series filter found matching:</b> <code>{query}</code>\n\n"
+                f"<i>Tip: Check the name using /viewseries, or send <code>/resync_series</code> without arguments to sync all series.</i>",
+                parse_mode=enums.ParseMode.HTML
+            )
 
-        synced += 1
+        series_list = [target_series]
+    else:
+        status_msg = await message.reply_text("🔄 <b>Synchronizing all Series filters with database...</b>", parse_mode=enums.ParseMode.HTML)
+        cursor = series_col.find({"status": {"$ne": "deleted"}})
+        series_list = [doc async for doc in cursor]
 
-    await status_msg.edit_text(
-        f"✅ <b>Series Filter Sync Complete!</b>\n\n"
-        f"📺 <b>Series Synced:</b> <code>{synced}/{len(series_list)}</code>\n"
-        f"📁 <b>New Episodes Linked:</b> <code>{total_added}</code>",
-        parse_mode=enums.ParseMode.HTML
-    )
+    if not series_list:
+        return await status_msg.edit_text("ℹ️ <b>No active series filters found in database to synchronize.</b>", parse_mode=enums.ParseMode.HTML)
+
+    synced = 0
+    total_added = 0
+    failed = 0
+    total_count = len(series_list)
+    single_res = None
+
+    for idx, s in enumerate(series_list):
+        try:
+            sid = str(s["_id"])
+            res = await sync_existing_series_filter(sid, client=client)
+            if res.get("success"):
+                synced += 1
+                total_added += res.get("new_files_added", 0)
+                if total_count == 1:
+                    single_res = res
+            else:
+                failed += 1
+        except Exception as e:
+            logger.error(f"[SYNC SERIES LOOP ERROR] sid={s.get('_id')} err={e}")
+            failed += 1
+
+        if total_count > 5 and ((idx + 1) % 5 == 0 or (idx + 1) == total_count):
+            try:
+                await status_msg.edit_text(
+                    f"🔄 <b>Synchronizing Series Filters...</b>\n\n"
+                    f"📺 <b>Progress:</b> <code>{idx + 1}/{total_count}</code>\n"
+                    f"📁 <b>New Episodes Linked:</b> <code>{total_added}</code>",
+                    parse_mode=enums.ParseMode.HTML
+                )
+            except Exception:
+                pass
+
+    invalidate_active_filters_cache()
+
+    if total_count == 1 and single_res:
+        s_name = series_list[0].get("name", "Series")
+        seasons_str = ", ".join(f"Season {x}" for x in single_res.get("seasons", [])) or "None"
+        quals_str = ", ".join(single_res.get("qualities", [])) or "None"
+        langs_str = ", ".join(single_res.get("languages", [])) or "None"
+        await status_msg.edit_text(
+            f"✅ <b>Series Filter Synced Successfully!</b>\n\n"
+            f"📺 <b>Title:</b> <code>{s_name}</code>\n"
+            f"📁 <b>New Episodes Linked:</b> <code>{total_added}</code>\n"
+            f"📦 <b>Total Episodes:</b> <code>{single_res.get('total_files', 0)}</code>\n"
+            f"🎞 <b>Seasons:</b> <code>{seasons_str}</code>\n"
+            f"🌐 <b>Languages:</b> <code>{langs_str}</code>\n"
+            f"📀 <b>Qualities:</b> <code>{quals_str}</code>",
+            parse_mode=enums.ParseMode.HTML
+        )
+    else:
+        fail_text = f"\n⚠️ <b>Failed / Skipped:</b> <code>{failed}</code>" if failed > 0 else ""
+        await status_msg.edit_text(
+            f"✅ <b>Series Filter Sync Complete!</b>\n\n"
+            f"📺 <b>Series Synced:</b> <code>{synced}/{total_count}</code>\n"
+            f"📁 <b>New Episodes Linked:</b> <code>{total_added}</code>{fail_text}",
+            parse_mode=enums.ParseMode.HTML
+        )
 
 
 @Client.on_message(filters.command(["sync_filters", "resync_filters", "sync_all"]), group=-1)
 async def cmd_sync_all_filters(client: Client, message: Message):
     uid = message.from_user.id if message.from_user else (message.sender_chat.id if message.sender_chat else 0)
-    if not _is_admin(uid):
+    is_authorized = _is_admin(uid)
+    if not is_authorized and message.chat and message.chat.type in [enums.ChatType.GROUP, enums.ChatType.SUPERGROUP]:
+        try:
+            member = await message.chat.get_member(uid)
+            if member and member.status in [enums.ChatMemberStatus.ADMINISTRATOR, enums.ChatMemberStatus.OWNER]:
+                is_authorized = True
+        except Exception:
+            pass
+    if not is_authorized:
         return await message.reply_text("❌ <b>You are not authorized.</b>", parse_mode=enums.ParseMode.HTML)
 
     status_msg = await message.reply_text("🔄 <b>Starting full synchronization of Super Movies and Series filters with database...</b>", parse_mode=enums.ParseMode.HTML)
 
-    from database.series_db import super_movies_col, series_col, sync_existing_movie_filter, scan_sdatabase_for_series, add_series_file, is_filter_coming_soon, invalidate_active_filters_cache
-    from utils import normalize_language_name
-    from bson import ObjectId
+    from database.series_db import super_movies_col, series_col, sync_existing_movie_filter, invalidate_active_filters_cache
 
     invalidate_active_filters_cache()
 
@@ -3079,11 +3388,14 @@ async def cmd_sync_all_filters(client: Client, message: Message):
     movies_synced = 0
     new_movie_files = 0
     for m in movies:
-        mid = str(m["_id"])
-        res = await sync_existing_movie_filter(mid)
-        if res.get("success"):
-            movies_synced += 1
-            new_movie_files += res.get("new_files_added", 0)
+        try:
+            mid = str(m["_id"])
+            res = await sync_existing_movie_filter(mid)
+            if res.get("success"):
+                movies_synced += 1
+                new_movie_files += res.get("new_files_added", 0)
+        except Exception as e:
+            logger.error(f"[SYNC ALL FILTERS MOVIE ERROR] mid={m.get('_id')} err={e}")
 
     # 2. Sync Series
     s_cursor = series_col.find({"status": {"$ne": "deleted"}})
@@ -3091,68 +3403,14 @@ async def cmd_sync_all_filters(client: Client, message: Message):
     series_synced = 0
     new_series_files = 0
     for s in series_list:
-        sid = str(s["_id"])
-        name = s.get("name", "")
-        s_year = s.get("year")
-        s_orig_lang = s.get("original_language")
-        if not s_orig_lang:
-            from utils import fetch_media_original_language
-            s_orig_lang = await fetch_media_original_language(name, s_year, imdb_id=s.get("imdb_id"), tmdb_id=s.get("tmdb_id"))
-            if s_orig_lang:
-                await series_col.update_one({"_id": s["_id"]}, {"$set": {"original_language": s_orig_lang}})
-        if s_orig_lang:
-            s_orig_lang = normalize_language_name(s_orig_lang) or s_orig_lang
-        elif s.get("languages") and len(s.get("languages")) > 0:
-            s_orig_lang = s.get("languages")[0]
-        else:
-            s_orig_lang = "English"
-
-        res = await scan_sdatabase_for_series(message.chat.id, name, season=None, series_id=sid, client=client, original_language=s_orig_lang, year=s_year)
-        new_files = res.get("valid_new_files") or []
-        new_langs = set()
-        new_quals = set()
-        new_seasons = set()
-
-        for f in new_files:
-            try:
-                ok, _ = await add_series_file({
-                    "series_id": sid,
-                    "language": f["language"],
-                    "season": f["season"],
-                    "episode": f["episode"],
-                    "quality": f["quality"],
-                    "chat_id": message.chat.id,
-                    "file_id": f.get("file_id"),
-                    "file_name": f.get("file_name"),
-                    "file_size": f.get("file_size", 0)
-                })
-                if ok:
-                    new_series_files += 1
-                    if f.get("language"):
-                        new_langs.add(f["language"])
-                    if f.get("quality") and f["quality"] != "Unknown":
-                        new_quals.add(f["quality"])
-                    if f.get("season"):
-                        new_seasons.add(int(f["season"]))
-            except Exception:
-                pass
-
-        update_fields = {}
-        if new_langs:
-            update_fields.setdefault("$addToSet", {})["languages"] = {"$each": list(new_langs)}
-        if new_quals:
-            update_fields.setdefault("$addToSet", {})["qualities"] = {"$each": list(new_quals)}
-        if new_seasons:
-            update_fields.setdefault("$addToSet", {})["seasons"] = {"$each": list(new_seasons)}
-
-        if is_filter_coming_soon(s) and (new_files or s.get("seasons")):
-            update_fields.setdefault("$set", {})["status"] = "active"
-            update_fields.setdefault("$set", {})["coming_soon"] = False
-
-        if update_fields:
-            await series_col.update_one({"_id": ObjectId(sid)}, update_fields)
-
-        series_synced += 1
+        try:
+            sid = str(s["_id"])
+            res = await sync_existing_series_filter(sid, client=client)
+            if res.get("success"):
+                series_synced += 1
+                new_series_files += res.get("new_files_added", 0)
+        except Exception as e:
+            logger.error(f"[SYNC ALL FILTERS SERIES ERROR] sid={s.get('_id')} err={e}")
 
     invalidate_active_filters_cache()
 
