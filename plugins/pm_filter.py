@@ -5493,102 +5493,17 @@ async def execute_normal_group_file_delivery(client: Client, user_id: int, group
                         fid = fdoc["file_id"]
 
             if fid:
-                sent_f = None
-                # 1. Try direct send_cached_media
-                try:
-                    sent_f = await client.send_cached_media(
-                        chat_id=user_id,
-                        file_id=str(fid),
-                        caption=caption,
-                        parse_mode=enums.ParseMode.HTML,
-                        reply_to_message_id=ctrl_msg_id
-                    )
-                except Exception as e:
-                    logger.warning(f"[CHILD BOT DIRECT SEND FAILED] file_id={fid} user_id={user_id} error={e}. Attempting copy fallback...")
-                    ch_id_coord = f.get("chat_id")
-                    m_id_coord = f.get("message_id")
-                    if ch_id_coord and m_id_coord:
-                        try:
-                            sent_f = await client.copy_message(
-                                chat_id=user_id,
-                                from_chat_id=int(ch_id_coord),
-                                message_id=int(m_id_coord),
-                                caption=caption,
-                                parse_mode=enums.ParseMode.HTML,
-                                reply_to_message_id=ctrl_msg_id
-                            )
-                            logger.info(f"[PARALLEL BOT COPY FALLBACK SUCCESS] file_id={fid} from ch={ch_id_coord} msg={m_id_coord}")
-                            if sent_f:
-                                try:
-                                    sent_m = getattr(sent_f, getattr(sent_f.media, "value", "document"), None) if getattr(sent_f, "media", None) else None
-                                    c_bid = str(getattr(getattr(client, "me", None), "id", ""))
-                                    if sent_m and getattr(sent_m, "file_id", None) and c_bid:
-                                        from database.ia_filterdb import unpack_new_file_id, col, sec_col
-                                        from info import MULTIPLE_DATABASE
-                                        new_fid = unpack_new_file_id(sent_m.file_id)
-                                        up_d = {"$set": {f"bot_file_map.{c_bid}": new_fid}, "$addToSet": {"file_ids": new_fid}}
-                                        col.update_one({"$or": [{"file_id": fid}, {"file_ids": fid}]}, up_d)
-                                        if MULTIPLE_DATABASE:
-                                            sec_col.update_one({"$or": [{"file_id": fid}, {"file_ids": fid}]}, up_d)
-                                        logger.info(f"[AUTO CACHE FILE] Saved bot {c_bid} file_id={new_fid[:12]}...")
-                                except Exception as ace:
-                                    logger.warning(f"[AUTO CACHE FILE ERROR] {ace}")
-                        except Exception as cpe:
-                            logger.warning(f"[CHILD BOT COPY FALLBACK FAILED] {cpe}")
-
-                # 2. If direct send failed, try relaying through available shared channels
-                if not sent_f:
-                    from info import LOG_CHANNEL, PUBLIC_FILE_CHANNEL, CHANNELS, AUTH_CHANNEL
-                    main_bot = getattr(temp, "BOT", None)
-                    if main_bot:
-                        relay_candidates = []
-                        if PUBLIC_FILE_CHANNEL:
-                            relay_candidates.append(PUBLIC_FILE_CHANNEL)
-                        if LOG_CHANNEL:
-                            relay_candidates.append(LOG_CHANNEL)
-                        if isinstance(CHANNELS, list):
-                            relay_candidates.extend(CHANNELS)
-                        if AUTH_CHANNEL:
-                            relay_candidates.append(AUTH_CHANNEL)
-
-                        for ch_id in relay_candidates:
-                            try:
-                                relay_msg = await main_bot.send_cached_media(chat_id=ch_id, file_id=str(fid))
-                                vj = await client.get_messages(ch_id, relay_msg.id)
-                                mg = getattr(vj, getattr(vj.media, "value", "document"), None) if vj and getattr(vj, "media", None) else None
-                                if mg and getattr(mg, "file_id", None):
-                                    sent_f = await client.send_cached_media(
-                                        chat_id=user_id,
-                                        file_id=mg.file_id,
-                                        caption=caption,
-                                        parse_mode=enums.ParseMode.HTML,
-                                        reply_to_message_id=ctrl_msg_id
-                                    )
-                                try:
-                                    await relay_msg.delete()
-                                except Exception:
-                                    pass
-                                if sent_f:
-                                    break
-                            except Exception as re:
-                                logger.debug(f"[CHILD BOT RELAY FAILED ON {ch_id}] {re}")
-                                continue
-
-                # 3. If relay failed, attempt direct delivery via Main Bot if user has interacted with it
-                if not sent_f:
-                    main_bot = getattr(temp, "BOT", None)
-                    if main_bot and client != main_bot:
-                        try:
-                            sent_f = await main_bot.send_cached_media(
-                                chat_id=user_id,
-                                file_id=str(fid),
-                                caption=caption,
-                                parse_mode=enums.ParseMode.HTML,
-                                reply_to_message_id=ctrl_msg_id
-                            )
-                            logger.info(f"[MAIN BOT FALLBACK SENT FILE] file_id={fid} user_id={user_id}")
-                        except Exception as mbe:
-                            logger.warning(f"[MAIN BOT FALLBACK FAILED] {mbe}")
+                from utils import send_file_to_user_distributed
+                sent_f = await send_file_to_user_distributed(
+                    client=client,
+                    user_id=user_id,
+                    file_id=str(fid),
+                    caption=caption,
+                    chat_id_coord=f.get("chat_id"),
+                    message_id_coord=f.get("message_id"),
+                    reply_to_message_id=ctrl_msg_id,
+                    auto_delete_delay=60
+                )
 
                 if sent_f and getattr(sent_f, "id", None):
                     delivered_count += 1
@@ -6540,18 +6455,21 @@ def register_normal_filter_handlers(child_bot: Client) -> int:
         child_bot.dispatcher.groups[0] = []
 
     # 1. Commands
+    from plugins.commands import cmd_set_distribution, cmd_del_distribution
     child_bot.add_handler(MessageHandler(child_start_handler, filters.command("start") & filters.incoming), group=0)
     child_bot.add_handler(MessageHandler(child_about_handler, filters.command("about") & filters.incoming), group=0)
     child_bot.add_handler(MessageHandler(child_help_handler, filters.command("help") & filters.incoming), group=0)
     child_bot.add_handler(MessageHandler(child_pm_broadcast, filters.command("broadcast") & filters.user(ADMINS)), group=0)
     child_bot.add_handler(MessageHandler(child_broadcast_group, filters.command("grp_broadcast") & filters.user(ADMINS)), group=0)
     child_bot.add_handler(MessageHandler(cmd_normal_filter_announce, filters.command(["ano", "announce", "anomov", "anoser"]) & filters.user(ADMINS)), group=0)
+    child_bot.add_handler(MessageHandler(cmd_set_distribution, filters.command(["dis", "setdis", "set_dis", "distribution"])), group=0)
+    child_bot.add_handler(MessageHandler(cmd_del_distribution, filters.command(["deldis", "deldistribution", "remdis"])), group=0)
 
     # 2. Normal Filter Search
     child_bot.add_handler(
         MessageHandler(
             child_filter_message_handler,
-            filters.text & filters.incoming & ~filters.command(["start", "about", "help", "broadcast", "grp_broadcast", "edt", "edit", "quick_edit", "ano", "announce", "anomov", "anoser"])
+            filters.text & filters.incoming & ~filters.command(["start", "about", "help", "broadcast", "grp_broadcast", "edt", "edit", "quick_edit", "ano", "announce", "anomov", "anoser", "dis", "deldis", "setdis", "deldistribution"])
         ),
         group=0
     )

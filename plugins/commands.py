@@ -833,11 +833,14 @@ async def start(client, message):
                 reply_markup=InlineKeyboardMarkup(button)
             else:
                 reply_markup = None
-            msg = await client.send_cached_media(
-                chat_id=message.from_user.id,
+            from utils import send_file_to_user_distributed
+            msg = await send_file_to_user_distributed(
+                client=client,
+                user_id=message.from_user.id,
                 file_id=file_id,
                 protect_content=True if pre == 'filep' else False,
-                reply_markup=reply_markup
+                reply_markup=reply_markup,
+                auto_delete_delay=0
             )
             filetype = msg.media
             file = getattr(msg, filetype.value)
@@ -906,51 +909,24 @@ async def start(client, message):
 
     try:
         log.info(f"[FILE SEND] request_id={actual_file_id}")
-        msg = await client.send_cached_media(
-            chat_id=message.from_user.id,
+        from utils import send_file_to_user_distributed
+        msg = await send_file_to_user_distributed(
+            client=client,
+            user_id=message.from_user.id,
             file_id=actual_file_id,
             caption=f_caption,
             protect_content=True if pre == 'filep' else False,
-            reply_markup=reply_markup
+            reply_markup=reply_markup,
+            chat_id_coord=files.get("chat_id") if isinstance(files, dict) else None,
+            message_id_coord=files.get("message_id") if isinstance(files, dict) else None,
+            auto_delete_delay=0
         )
-        log.info(f"[FILE SEND] SUCCESS request_id={actual_file_id}")
+        if msg:
+            log.info(f"[FILE SEND] SUCCESS request_id={actual_file_id}")
     except Exception as e:
         log.error(f"[FILE SEND] ERROR: {e} file_id={actual_file_id}")
-        ch_id = files.get("chat_id")
-        m_id = files.get("message_id")
-        if ch_id and m_id:
-            try:
-                log.info(f"[FILE SEND] Attempting copy_message fallback from chat {ch_id} msg {m_id}")
-                msg = await client.copy_message(
-                    chat_id=message.from_user.id,
-                    from_chat_id=int(ch_id),
-                    message_id=int(m_id),
-                    caption=f_caption,
-                    protect_content=True if pre == 'filep' else False,
-                    reply_markup=reply_markup
-                )
-                log.info(f"[FILE SEND COPY FALLBACK SUCCESS] request_id={actual_file_id}")
-                if msg:
-                    try:
-                        sent_m = getattr(msg, getattr(msg.media, "value", "document"), None) if getattr(msg, "media", None) else None
-                        if sent_m and getattr(sent_m, "file_id", None) and client_bot_id:
-                            new_fid = unpack_new_file_id(sent_m.file_id)
-                            from info import MULTIPLE_DATABASE
-                            t_col = col if col.find_one({"_id": files["_id"]}) else (sec_col if MULTIPLE_DATABASE else col)
-                            t_col.update_one(
-                                {"_id": files["_id"]},
-                                {
-                                    "$set": {f"bot_file_map.{client_bot_id}": new_fid},
-                                    "$addToSet": {"file_ids": new_fid}
-                                }
-                            )
-                            log.info(f"[AUTO CACHE FILE] Saved bot {client_bot_id} file_id for {files.get('file_name')}")
-                    except Exception as ace:
-                        log.warning(f"[AUTO CACHE FILE ERROR] {ace}")
-            except Exception as ce:
-                log.error(f"[FILE SEND COPY FALLBACK FAILED] {ce}")
-        if not msg:
-            return await message.reply("⚠️ Error sending file. This file was indexed with a previous bot token. Please ask an admin to run <code>/remap_files</code>.")
+    if not msg:
+        return await message.reply("⚠️ Error sending file. This file was indexed with a previous bot token. Please ask an admin to run <code>/remap_files</code>.")
         
     btn = [[InlineKeyboardButton("✅ ɢᴇᴛ ғɪʟᴇ ᴀɢᴀɪɴ ✅", callback_data=f'del#{file_id}')]]
     k = await msg.reply(text=f"<blockquote><b><u>❗️❗️❗️IMPORTANT❗️️❗️❗️</u></b>\n\nᴛʜɪs ᴍᴇssᴀɢᴇ ᴡɪʟʟ ʙᴇ ᴅᴇʟᴇᴛᴇᴅ ɪɴ <b><u>1 min</u> 🫥 <i></b>(ᴅᴜᴇ ᴛᴏ ᴄᴏᴘʏʀɪɢʜᴛ ɪssᴜᴇs)</i>.\n\n<b><i>ᴘʟᴇᴀsᴇ ғᴏʀᴡᴀʀᴅ ᴛʜɪs ᴍᴇssᴀɢᴇ ᴛᴏ ʏᴏᴜʀ sᴀᴠᴇᴅ ᴍᴇssᴀɢᴇs ᴏʀ ᴀɴʏ ᴘʀɪᴠᴀᴛᴇ ᴄʜᴀᴛ.</i></b></blockquote>")
@@ -968,6 +944,78 @@ async def start(client, message):
             
     asyncio.create_task(delete_file_later())
     return   
+
+
+# ─── DISTRIBUTION CHANNEL COMMANDS (/dis, /deldis) ────────────────────────────
+
+@Client.on_message(filters.command(["dis", "setdis", "set_dis", "distribution"]))
+async def cmd_set_distribution(client: Client, message: Message):
+    uid = message.from_user.id if message.from_user else (message.sender_chat.id if message.sender_chat else 0)
+    from plugins.series import _is_admin
+    if not _is_admin(uid):
+        return await message.reply_text("❌ <b>You are not authorized to use this command.</b>", parse_mode=enums.ParseMode.HTML)
+
+    args = message.text.split()
+    from database.series_db import set_distribution_channel, get_distribution_channel
+
+    if len(args) < 2:
+        current_dis = await get_distribution_channel()
+        status_txt = f"📢 <b>Current Distribution Channel:</b> <code>{current_dis}</code>\n\n" if current_dis else "ℹ️ <b>No Distribution Channel is currently configured.</b>\n\n"
+        return await message.reply_text(
+            f"{status_txt}"
+            "⚙️ <b>How to configure Distribution Channel:</b>\n"
+            "<code>/dis &lt;channel_id&gt;</code>\n\n"
+            "<b>Example:</b>\n"
+            "<code>/dis -1001234567890</code>\n\n"
+            "🗑 <b>To remove:</b> <code>/deldis</code>\n\n"
+            "<i>⚠️ Note: Both GDBOT and Child Bot must be Admins with post & delete permissions in this channel.</i>",
+            parse_mode=enums.ParseMode.HTML
+        )
+
+    raw_cid = args[1].strip()
+    try:
+        cid = int(raw_cid)
+    except ValueError:
+        cid = raw_cid
+
+    ch_title = None
+    try:
+        chat = await client.get_chat(cid)
+        ch_title = chat.title
+    except Exception as ce:
+        logger.warning(f"[DISTRIBUTION] get_chat check warning for {cid}: {ce}")
+
+    await set_distribution_channel(cid)
+    logger.info(f"[DISTRIBUTION CONFIG] Channel set to {cid} by {uid}")
+
+    title_line = f"🏷 <b>Channel Title:</b> <code>{ch_title}</code>\n" if ch_title else ""
+    await message.reply_text(
+        f"✅ <b>Distribution Channel Configured Successfully!</b>\n\n"
+        f"{title_line}"
+        f"📢 <b>Channel ID:</b> <code>{cid}</code>\n\n"
+        f"🛡 <i>Requested files (Normal and Super Filters) will now be sent via this channel and forwarded with channel mention, then immediately cleared from the channel to prevent copyright strikes on your bots.</i>\n\n"
+        f"⚠️ <b>Important:</b> Make sure GDBOT and Child Bot are Admins in this channel with Post and Delete permissions.",
+        parse_mode=enums.ParseMode.HTML
+    )
+
+
+@Client.on_message(filters.command(["deldis", "deldistribution", "remdis"]))
+async def cmd_del_distribution(client: Client, message: Message):
+    uid = message.from_user.id if message.from_user else (message.sender_chat.id if message.sender_chat else 0)
+    from plugins.series import _is_admin
+    if not _is_admin(uid):
+        return await message.reply_text("❌ <b>You are not authorized to use this command.</b>", parse_mode=enums.ParseMode.HTML)
+
+    from database.series_db import delete_distribution_channel
+    await delete_distribution_channel()
+    logger.info(f"[DISTRIBUTION CONFIG] Channel deleted by {uid}")
+
+    await message.reply_text(
+        "✅ <b>Distribution channel setting removed.</b>\n\n"
+        "<i>Files will now be sent directly to users in PM.</i>",
+        parse_mode=enums.ParseMode.HTML
+    )
+
 
 @Client.on_message(filters.command('channel') & filters.user(ADMINS))
 async def channel_info(bot, message):
@@ -2081,16 +2129,20 @@ async def send_batch_files(
         last_error = None
         for attempt in range(3):
             try:
+                from utils import send_file_to_user_distributed
                 async with semaphore:
-                    msg = await client.send_cached_media(
-                        chat_id=target_id,
+                    msg = await send_file_to_user_distributed(
+                        client=client,
+                        user_id=target_id,
                         file_id=fid,
                         caption=cap,
                         protect_content=prot,
-                        reply_markup=rm
+                        reply_markup=rm,
+                        chat_id_coord=ch_id,
+                        message_id_coord=m_id,
+                        auto_delete_delay=60
                     )
                 if msg:
-                    schedule_filter_message_delete(client, msg.chat.id, msg.id, 60)
                     sent_results[idx_pos] = msg
                     return msg
             except FloodWait as fw:
@@ -2100,42 +2152,6 @@ async def send_batch_files(
                 last_error = ex
                 if attempt < 2:
                     await asyncio.sleep(1.5 ** attempt)
-
-        # Fallback: copy directly from channel if chat_id and message_id are known
-        if ch_id and m_id:
-            try:
-                log.info(f"[BATCH SEND COPY FALLBACK] Attempting copy_message chat_id={ch_id} msg_id={m_id} for file_id={fid[:16]}...")
-                async with semaphore:
-                    msg = await client.copy_message(
-                        chat_id=target_id,
-                        from_chat_id=int(ch_id),
-                        message_id=int(m_id),
-                        caption=cap,
-                        protect_content=prot,
-                        reply_markup=rm
-                    )
-                if msg:
-                    schedule_filter_message_delete(client, msg.chat.id, msg.id, 60)
-                    sent_results[idx_pos] = msg
-                    # Background auto-update of new valid file_id
-                    try:
-                        media_obj = getattr(msg, getattr(msg.media, "value", "document"), None) if getattr(msg, "media", None) else None
-                        if media_obj and getattr(media_obj, "file_id", None):
-                            from database.ia_filterdb import unpack_new_file_id, col, sec_col
-                            from info import MULTIPLE_DATABASE
-                            new_fid = unpack_new_file_id(media_obj.file_id)
-                            c_bid = str(getattr(getattr(client, 'me', None), 'id', ''))
-                            up_d = {"$addToSet": {"file_ids": new_fid}}
-                            if c_bid:
-                                up_d["$set"] = {f"bot_file_map.{c_bid}": new_fid}
-                            col.update_one({"$or": [{"file_id": fid}, {"file_ids": fid}]}, up_d)
-                            if MULTIPLE_DATABASE:
-                                sec_col.update_one({"$or": [{"file_id": fid}, {"file_ids": fid}]}, up_d)
-                    except Exception:
-                        pass
-                    return msg
-            except Exception as cpe:
-                log.error(f"[BATCH SEND COPY FALLBACK FAILED] {cpe}")
 
         log.error(
             f"[BATCH SEND FAILED]\n"
