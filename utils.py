@@ -4790,6 +4790,36 @@ async def _safe_delete_channel_message(client, chat_id: int | str, message_id: i
         logger.debug(f"[DISTRIBUTION] Delete temp message failed for {chat_id}/{message_id}: {e}")
 
 
+
+def get_file_delete_info(dist_channel=None) -> tuple:
+    """
+    Returns (delete_seconds, caption_text, alert_min_str).
+    If distribution channel is configured / connected:
+        returns (300, "5 minutes", "5 min")
+    Else:
+        returns (60, "1 minute", "1 min")
+    """
+    from utils import temp
+    import info
+    has_dis = bool(dist_channel or getattr(temp, "DISTRIBUTION_CHANNEL", None) or getattr(info, "DISTRIBUTION_CHANNEL", None))
+    if has_dis:
+        return 300, "5 minutes", "5 min"
+    return 60, "1 minute", "1 min"
+
+
+async def get_async_file_delete_info() -> tuple:
+    """
+    Asynchronously retrieves delete info by querying the configured distribution channel.
+    Returns (300, "5 minutes", "5 min") if configured, else (60, "1 minute", "1 min").
+    """
+    try:
+        from database.series_db import get_distribution_channel
+        dist_channel = await get_distribution_channel()
+    except Exception:
+        dist_channel = None
+    return get_file_delete_info(dist_channel=dist_channel)
+
+
 async def send_file_to_user_distributed(
     client,
     user_id: int,
@@ -4800,7 +4830,7 @@ async def send_file_to_user_distributed(
     chat_id_coord: int | str = None,
     message_id_coord: int = None,
     reply_to_message_id: int = None,
-    auto_delete_delay: int = 60
+    auto_delete_delay: int = None
 ):
     """
     Sends a file to user with Distribution Channel support:
@@ -4808,9 +4838,10 @@ async def send_file_to_user_distributed(
       1. Bot sends the media file to the distribution channel.
       2. Bot forwards that message from the distribution channel to the user (preserving channel mention).
       3. Bot immediately deletes the message from the distribution channel to keep it clean and copyright-free.
+      4. Auto-deletes the delivered file in user's PM in 5 minutes (300s).
     - If distribution channel is not configured or fails:
       Directly delivers to the user via send_cached_media / copy_message fallback.
-    - Automatically schedules auto-delete (default 60s) in the user's PM.
+      Auto-deletes the delivered file in user's PM in 1 minute (60s).
     """
     import asyncio
     from pyrogram import enums
@@ -4818,6 +4849,9 @@ async def send_file_to_user_distributed(
 
     from database.series_db import get_distribution_channel
     dist_channel = await get_distribution_channel()
+
+    if auto_delete_delay is None:
+        auto_delete_delay = 300 if dist_channel else 60
 
     # 1. Try Distribution Channel routing if configured
     if dist_channel:
