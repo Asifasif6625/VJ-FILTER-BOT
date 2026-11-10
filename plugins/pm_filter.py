@@ -5371,6 +5371,8 @@ async def execute_normal_group_file_delivery(client: Client, user_id: int, group
     delivered_count = 0
     total_files = 0
     ctrl_msg_id = getattr(ctrl_msg, "id", None)
+    from utils import get_async_file_delete_info
+    del_sec, del_caption_tag, del_min_str = await get_async_file_delete_info()
     try:
         bot_username = getattr(getattr(client, "me", None), "username", None)
         if not bot_username:
@@ -5480,7 +5482,7 @@ async def execute_normal_group_file_delivery(client: Client, user_id: int, group
                 f"𖡡 Total File: {idx}/{total_files}\n\n"
                 f"@{html.escape(str(bot_username))}\n"
                 f"</i>\n\n"
-                f"<blockquote>⚠️ This file will be deleted in 1 minute. Forward to Saved Messages!</blockquote>"
+                f"<blockquote>⚠️ This file will be deleted in {del_caption_tag}. Forward to Saved Messages!</blockquote>"
             )
 
             fid = f.get("file_id")
@@ -5502,13 +5504,13 @@ async def execute_normal_group_file_delivery(client: Client, user_id: int, group
                     chat_id_coord=f.get("chat_id"),
                     message_id_coord=f.get("message_id"),
                     reply_to_message_id=ctrl_msg_id,
-                    auto_delete_delay=60
+                    auto_delete_delay=del_sec
                 )
 
                 if sent_f and getattr(sent_f, "id", None):
                     delivered_count += 1
                     logger.info(f"[CHILD BOT FILE SENT] idx={idx}/{total_files} file_id={fid} user_id={user_id} sent_msg_id={sent_f.id}")
-                    schedule_filter_message_delete(client, user_id, sent_f.id, delay=60)
+                    schedule_filter_message_delete(client, user_id, sent_f.id, delay=del_sec)
 
                     # Update loading/progress bar on pinned control message
                     if not sess.get("cancelled"):
@@ -5550,7 +5552,7 @@ async def execute_normal_group_file_delivery(client: Client, user_id: int, group
             quote_notice = (
                 "<blockquote>"
                 "<b><u>❗️❗️❗️IMPORTANT❗️️❗️❗️</u></b>\n\n"
-                "ᴛʜɪs ᴍᴇssᴀɢᴇ ᴡɪʟʟ ʙᴇ ᴅᴇʟᴇᴛᴇᴅ ɪɴ <b><u>1 min</u> 🫥 <i></b>(ᴅᴜᴇ ᴛᴏ ᴄᴏᴘʏʀɪɢʜᴛ ɪssᴜᴇs)</i>.\n\n"
+                f"ᴛʜɪs ᴍᴇssᴀɢᴇ ᴡɪʟʟ ʙᴇ ᴅᴇʟᴇᴛᴇᴅ ɪɴ <b><u>{del_min_str}</u> 🫥 <i></b>(ᴅᴜᴇ ᴛᴏ ᴄᴏᴘʏʀɪɢʜᴛ ɪssᴜᴇs)</i>.\n\n"
                 "<b><i>ᴘʟᴇᴀsᴇ ғᴏʀᴡᴀʀᴅ ᴛʜɪs ᴍᴇssᴀɢᴇ ᴛᴏ ʏᴏᴜʀ sᴀᴠᴇᴅ ᴍᴇssᴀɢᴇs ᴏʀ ᴀɴʏ ᴘʀɪᴠᴀᴛᴇ ᴄʜᴀᴛ.</i></b>"
                 "</blockquote>"
             )
@@ -5561,7 +5563,7 @@ async def execute_normal_group_file_delivery(client: Client, user_id: int, group
                     parse_mode=enums.ParseMode.HTML
                 )
                 if notice_msg:
-                    schedule_filter_message_delete(client, user_id, notice_msg.id, delay=60)
+                    schedule_filter_message_delete(client, user_id, notice_msg.id, delay=del_sec)
             except Exception as ne:
                 logger.warning(f"[NORMAL END NOTICE ERROR] {ne}")
 
