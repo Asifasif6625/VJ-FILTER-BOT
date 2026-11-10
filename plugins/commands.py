@@ -538,6 +538,9 @@ async def start(client, message):
                 return await client.send_message(LOG_CHANNEL, f"UNABLE TO OPEN FILE.\n{e}")
             BATCH_FILES[identifier] = msgs
 
+        from utils import get_async_file_delete_info
+        del_sec, del_caption_tag, del_min_str = await get_async_file_delete_info()
+
         def batch_files_caption_builder(msg_doc, idx, total_count):
             title = msg_doc.get("title")
             size = get_size(int(msg_doc.get("size", 0)))
@@ -549,7 +552,7 @@ async def start(client, message):
                     pass
             if not f_caption:
                 f_caption = f"{title}" if title else ""
-            f_caption += "\n\n<blockquote>⚠️ This file will be deleted in 1 minute. Forward to Saved Messages!</blockquote>"
+            f_caption += f"\n\n<blockquote>⚠️ This file will be deleted in {del_caption_tag}. Forward to Saved Messages!</blockquote>"
             return f_caption
 
         try:
@@ -569,12 +572,12 @@ async def start(client, message):
             try:
                 k = await client.send_message(
                     chat_id=message.from_user.id,
-                    text="<blockquote><b><u>❗️❗️❗️IMPORTANT❗️️❗️❗️</u></b>\n\nᴛʜɪs ᴍᴇssᴀɢᴇ ᴡɪʟʟ ʙᴇ ᴅᴇʟᴇᴛᴇᴅ ɪɴ <b><u>1 min</u> 🫥 <i></b>(ᴅᴜᴇ ᴛᴏ ᴄᴏᴘʏʀɪɢʜᴛ ɪssᴜᴇs)</i>.\n\n<b><i>ᴘʟᴇᴀsᴇ ғᴏʀᴡᴀʀᴅ ᴛʜɪs ᴍᴇssᴀɢᴇ ᴛᴏ ʏᴏᴜʀ sᴀᴠᴇᴅ ᴍᴇssᴀɢᴇs ᴏʀ ᴀɴʏ ᴘʀɪᴠᴀᴛᴇ ᴄʜᴀᴛ.</i></b></blockquote>",
+                    text=f"<blockquote><b><u>❗️❗️❗️IMPORTANT❗️️❗️❗️</u></b>\n\nᴛʜɪs ᴍᴇssᴀɢᴇ ᴡɪʟʟ ʙᴇ ᴅᴇʟᴇᴛᴇᴅ ɪɴ <b><u>{del_min_str}</u> 🫥 <i></b>(ᴅᴜᴇ ᴛᴏ ᴄᴏᴘʏʀɪɢʜᴛ ɪssᴜᴇs)</i>.\n\n<b><i>ᴘʟᴇᴀsᴇ ғᴏʀᴡᴀʀᴅ ᴛʜɪs ᴍᴇssᴀɢᴇ ᴛᴏ ʏᴏᴜʀ sᴀᴠᴇᴅ ᴍᴇssᴀɢᴇs ᴏʀ ᴀɴʏ ᴘʀɪᴠᴀᴛᴇ ᴄʜᴀᴛ.</i></b></blockquote>",
                     parse_mode=enums.ParseMode.HTML
                 )
                 from utils import schedule_filter_message_delete
                 if k:
-                    schedule_filter_message_delete(client, k.chat.id, k.id, 60)
+                    schedule_filter_message_delete(client, k.chat.id, k.id, del_sec)
             except Exception:
                 pass
         return
@@ -640,8 +643,10 @@ async def start(client, message):
             filesarr.append(p)
             await asyncio.sleep(1)
         await sts.delete()
-        k = await client.send_message(chat_id = message.from_user.id, text=f"<blockquote><b><u>❗️❗️❗️IMPORTANT❗️️❗️❗️</u></b>\n\nᴛʜɪs ᴍᴇssᴀɢᴇ ᴡɪʟʟ ʙᴇ ᴅᴇʟᴇᴛᴇᴅ ɪɴ <b><u>1 min</u> 🫥 <i></b>(ᴅᴜᴇ ᴛᴏ ᴄᴏᴘʏʀɪɢʜᴛ ɪssᴜᴇs)</i>.\n\n<b><i>ᴘʟᴇᴀsᴇ ғᴏʀᴡᴀʀᴅ ᴛʜɪs ᴍᴇssᴀɢᴇ ᴛᴏ ʏᴏᴜʀ sᴀᴠᴇᴅ ᴍᴇssᴀɢᴇs ᴏʀ ᴀɴʏ ᴘʀɪᴠᴀᴛᴇ ᴄʜᴀᴛ.</i></b></blockquote>")
-        await asyncio.sleep(60)
+        from utils import get_async_file_delete_info
+        del_sec, del_caption_tag, del_min_str = await get_async_file_delete_info()
+        k = await client.send_message(chat_id = message.from_user.id, text=f"<blockquote><b><u>❗️❗️❗️IMPORTANT❗️️❗️❗️</u></b>\n\nᴛʜɪs ᴍᴇssᴀɢᴇ ᴡɪʟʟ ʙᴇ ᴅᴇʟᴇᴛᴇᴅ ɪɴ <b><u>{del_min_str}</u> 🫥 <i></b>(ᴅᴜᴇ ᴛᴏ ᴄᴏᴘʏʀɪɢʜᴛ ɪssᴜᴇs)</i>.\n\n<b><i>ᴘʟᴇᴀsᴇ ғᴏʀᴡᴀʀᴅ ᴛʜɪs ᴍᴇssᴀɢᴇ ᴛᴏ ʏᴏᴜʀ sᴀᴠᴇᴅ ᴍᴇssᴀɢᴇs ᴏʀ ᴀɴʏ ᴘʀɪᴠᴀᴛᴇ ᴄʜᴀᴛ.</i></b></blockquote>")
+        await asyncio.sleep(del_sec)
         for x in filesarr:
             await x.delete()
         await k.edit_text("<b>✅ ʏᴏᴜʀ ᴍᴇssᴀɢᴇ ɪs sᴜᴄᴄᴇssғᴜʟʟʏ ᴅᴇʟᴇᴛᴇᴅ</b>")
@@ -734,6 +739,8 @@ async def start(client, message):
         file_ids_list = [f["file_id"] for f in files if isinstance(f, dict) and "file_id" in f]
         from database.ia_filterdb import get_bulk_file_details
         bulk_map = await get_bulk_file_details(file_ids_list)
+        from utils import get_async_file_delete_info
+        del_sec, del_caption_tag, del_min_str = await get_async_file_delete_info()
 
         def allfiles_caption_builder(f_doc, idx, total_count):
             title = f_doc.get("file_name")
@@ -748,7 +755,7 @@ async def start(client, message):
             if not f_caption:
                 fname_str = f_doc.get('file_name', '')
                 f_caption = f"{' '.join(filter(lambda x: not x.startswith('[') and not x.startswith('@'), fname_str.split()))}"
-            f_caption += "\n\n<blockquote>⚠️ This file will be deleted in 1 minute. Forward to Saved Messages!</blockquote>"
+            f_caption += f"\n\n<blockquote>⚠️ This file will be deleted in {del_caption_tag}. Forward to Saved Messages!</blockquote>"
             return f_caption
 
         merged_files = []
@@ -775,12 +782,12 @@ async def start(client, message):
             try:
                 k = await client.send_message(
                     chat_id=message.from_user.id,
-                    text="<blockquote><b><u>❗️❗️❗️IMPORTANT❗️️❗️❗️</u></b>\n\nᴛʜɪs ᴍᴇssᴀɢᴇ ᴡɪʟʟ ʙᴇ ᴅᴇʟᴇᴛᴇᴅ ɪɴ <b><u>1 min</u> 🫥 <i></b>(ᴅᴜᴇ ᴛᴏ ᴄᴏᴘʏʀɪɢʜᴛ ɪssᴜᴇs)</i>.\n\n<b><i>ᴘʟᴇᴀsᴇ ғᴏʀᴡᴀʀᴅ ᴛʜɪs ᴍᴇssᴀɢᴇ ᴛᴏ ʏᴏᴜʀ sᴀᴠᴇᴅ ᴍᴇssᴀɢᴇs ᴏʀ ᴀɴʏ ᴘʀɪᴠᴀᴛᴇ ᴄʜᴀᴛ.</i></b></blockquote>",
+                    text=f"<blockquote><b><u>❗️❗️❗️IMPORTANT❗️️❗️❗️</u></b>\n\nᴛʜɪs ᴍᴇssᴀɢᴇ ᴡɪʟʟ ʙᴇ ᴅᴇʟᴇᴛᴇᴅ ɪɴ <b><u>{del_min_str}</u> 🫥 <i></b>(ᴅᴜᴇ ᴛᴏ ᴄᴏᴘʏʀɪɢʜᴛ ɪssᴜᴇs)</i>.\n\n<b><i>ᴘʟᴇᴀsᴇ ғᴏʀᴡᴀʀᴅ ᴛʜɪs ᴍᴇssᴀɢᴇ ᴛᴏ ʏᴏᴜʀ sᴀᴠᴇᴅ ᴍᴇssᴀɢᴇs ᴏʀ ᴀɴʏ ᴘʀɪᴠᴀᴛᴇ ᴄʜᴀᴛ.</i></b></blockquote>",
                     parse_mode=enums.ParseMode.HTML
                 )
                 from utils import schedule_filter_message_delete
                 if k:
-                    schedule_filter_message_delete(client, k.chat.id, k.id, 60)
+                    schedule_filter_message_delete(client, k.chat.id, k.id, del_sec)
             except Exception:
                 pass
         return    
@@ -833,7 +840,8 @@ async def start(client, message):
                 reply_markup=InlineKeyboardMarkup(button)
             else:
                 reply_markup = None
-            from utils import send_file_to_user_distributed
+            from utils import send_file_to_user_distributed, get_async_file_delete_info
+            del_sec, del_caption_tag, del_min_str = await get_async_file_delete_info()
             msg = await send_file_to_user_distributed(
                 client=client,
                 user_id=message.from_user.id,
@@ -852,17 +860,19 @@ async def start(client, message):
                     f_caption=CUSTOM_FILE_CAPTION.format(file_name= '' if title is None else title, file_size='' if size is None else size, file_caption='')
                 except:
                     return
-            f_caption += "\n\n<blockquote>⚠️ This file will be deleted in 1 minute. Forward to Saved Messages!</blockquote>"
+            f_caption += f"\n\n<blockquote>⚠️ This file will be deleted in {del_caption_tag}. Forward to Saved Messages!</blockquote>"
             await msg.edit_caption(caption=f_caption)
             btn = [[InlineKeyboardButton("✅ ɢᴇᴛ ғɪʟᴇ ᴀɢᴀɪɴ ✅", callback_data=f'del#{file_id}')]]
-            k = await msg.reply(text=f"<blockquote><b><u>❗️❗️❗️IMPORTANT❗️️❗️❗️</u></b>\n\nᴛʜɪs ᴍᴇssᴀɢᴇ ᴡɪʟʟ ʙᴇ ᴅᴇʟᴇᴛᴇᴅ ɪɴ <b><u>1 min</u> 🫥 <i></b>(ᴅᴜᴇ ᴛᴏ ᴄᴏᴘʏʀɪɢʜᴛ ɪssᴜᴇs)</i>.\n\n<b><i>ᴘʟᴇᴀsᴇ ғᴏʀᴡᴀʀᴅ ᴛʜɪs ᴍᴇssᴀɢᴇ ᴛᴏ ʏᴏᴜʀ sᴀᴠᴇᴅ ᴍᴇssᴀɢᴇs ᴏʀ ᴀɴʏ ᴘʀɪᴠᴀᴛᴇ ᴄʜᴀᴛ.</i></b></blockquote>")
-            await asyncio.sleep(60)
+            k = await msg.reply(text=f"<blockquote><b><u>❗️❗️❗️IMPORTANT❗️️❗️❗️</u></b>\n\nᴛʜɪs ᴍᴇssᴀɢᴇ ᴡɪʟʟ ʙᴇ ᴅᴇʟᴇᴛᴇᴅ ɪɴ <b><u>{del_min_str}</u> 🫥 <i></b>(ᴅᴜᴇ ᴛᴏ ᴄᴏᴘʏʀɪɢʜᴛ ɪssᴜᴇs)</i>.\n\n<b><i>ᴘʟᴇᴀsᴇ ғᴏʀᴡᴀʀᴅ ᴛʜɪs ᴍᴇssᴀɢᴇ ᴛᴏ ʏᴏᴜʀ sᴀᴠᴇᴅ ᴍᴇssᴀɢᴇs ᴏʀ ᴀɴʏ ᴘʀɪᴠᴀᴛᴇ ᴄʜᴀᴛ.</i></b></blockquote>")
+            await asyncio.sleep(del_sec)
             await msg.delete()
             await k.edit_text("<b>✅ ʏᴏᴜʀ ᴍᴇssᴀɢᴇ ɪs sᴜᴄᴄᴇssғᴜʟʟʏ ᴅᴇʟᴇᴛᴇᴅ ɪғ ʏᴏᴜ ᴡᴀɴᴛ ᴀɢᴀɪɴ ᴛʜᴇɴ ᴄʟɪᴄᴋ ᴏɴ ʙᴇʟᴏᴡ ʙᴜᴛᴛᴏɴ</b>",reply_markup=InlineKeyboardMarkup(btn))
             return
         except:
             pass
         return await message.reply('No such file exist.')
+    from utils import get_async_file_delete_info
+    del_sec, del_caption_tag, del_min_str = await get_async_file_delete_info()
     files = files_
     title = files["file_name"]
     size=get_size(files["file_size"])
@@ -874,7 +884,7 @@ async def start(client, message):
             f_caption=f_caption
     if f_caption is None:
         f_caption = f"{' '.join(filter(lambda x: not x.startswith('[') and not x.startswith('@'), files['file_name'].split()))}"
-    f_caption += "\n\n<blockquote>⚠️ This file will be deleted in 1 minute. Forward to Saved Messages!</blockquote>"
+    f_caption += f"\n\n<blockquote>⚠️ This file will be deleted in {del_caption_tag}. Forward to Saved Messages!</blockquote>"
     if not await db.has_premium_access(message.from_user.id):
         if not await check_verification(client, message.from_user.id) and VERIFY == True:
             btn = [[
@@ -929,10 +939,10 @@ async def start(client, message):
         return await message.reply("⚠️ Error sending file. This file was indexed with a previous bot token. Please ask an admin to run <code>/remap_files</code>.")
         
     btn = [[InlineKeyboardButton("✅ ɢᴇᴛ ғɪʟᴇ ᴀɢᴀɪɴ ✅", callback_data=f'del#{file_id}')]]
-    k = await msg.reply(text=f"<blockquote><b><u>❗️❗️❗️IMPORTANT❗️️❗️❗️</u></b>\n\nᴛʜɪs ᴍᴇssᴀɢᴇ ᴡɪʟʟ ʙᴇ ᴅᴇʟᴇᴛᴇᴅ ɪɴ <b><u>1 min</u> 🫥 <i></b>(ᴅᴜᴇ ᴛᴏ ᴄᴏᴘʏʀɪɢʜᴛ ɪssᴜᴇs)</i>.\n\n<b><i>ᴘʟᴇᴀsᴇ ғᴏʀᴡᴀʀᴅ ᴛʜɪs ᴍᴇssᴀɢᴇ ᴛᴏ ʏᴏᴜʀ sᴀᴠᴇᴅ ᴍᴇssᴀɢᴇs ᴏʀ ᴀɴʏ ᴘʀɪᴠᴀᴛᴇ ᴄʜᴀᴛ.</i></b></blockquote>")
+    k = await msg.reply(text=f"<blockquote><b><u>❗️❗️❗️IMPORTANT❗️️❗️❗️</u></b>\n\nᴛʜɪs ᴍᴇssᴀɢᴇ ᴡɪʟʟ ʙᴇ ᴅᴇʟᴇᴛᴇᴅ ɪɴ <b><u>{del_min_str}</u> 🫥 <i></b>(ᴅᴜᴇ ᴛᴏ ᴄᴏᴘʏʀɪɢʜᴛ ɪssᴜᴇs)</i>.\n\n<b><i>ᴘʟᴇᴀsᴇ ғᴏʀᴡᴀʀᴅ ᴛʜɪs ᴍᴇssᴀɢᴇ ᴛᴏ ʏᴏᴜʀ sᴀᴠᴇᴅ ᴍᴇssᴀɢᴇs ᴏʀ ᴀɴʏ ᴘʀɪᴠᴀᴛᴇ ᴄʜᴀᴛ.</i></b></blockquote>")
     
     async def delete_file_later():
-        await asyncio.sleep(60)
+        await asyncio.sleep(del_sec)
         try:
             await msg.delete()
         except:
@@ -992,7 +1002,8 @@ async def cmd_set_distribution(client: Client, message: Message):
     await message.reply_text(
         f"✅ <b>Distribution Channel Configured Successfully!</b>\n\n"
         f"{title_line}"
-        f"📢 <b>Channel ID:</b> <code>{cid}</code>\n\n"
+        f"📢 <b>Channel ID:</b> <code>{cid}</code>\n"
+        f"⏱ <b>Auto-Delete Delay:</b> <code>5 minutes</code> (Active)\n\n"
         f"🛡 <i>Requested files (Normal and Super Filters) will now be sent via this channel and forwarded with channel mention, then immediately cleared from the channel to prevent copyright strikes on your bots.</i>\n\n"
         f"⚠️ <b>Important:</b> Make sure GDBOT and Child Bot are Admins in this channel with Post and Delete permissions.",
         parse_mode=enums.ParseMode.HTML
@@ -1012,6 +1023,7 @@ async def cmd_del_distribution(client: Client, message: Message):
 
     await message.reply_text(
         "✅ <b>Distribution channel setting removed.</b>\n\n"
+        "⏱ <b>Auto-Delete Delay:</b> <code>1 minute</code> (Reverted to default)\n\n"
         "<i>Files will now be sent directly to users in PM.</i>",
         parse_mode=enums.ParseMode.HTML
     )
@@ -2003,7 +2015,8 @@ async def send_batch_files(
     import asyncio
     import time
     import logging
-    from utils import schedule_filter_message_delete, get_size, temp
+    from utils import schedule_filter_message_delete, get_size, temp, get_async_file_delete_info
+    del_sec, del_caption_tag, del_min_str = await get_async_file_delete_info()
     from pyrogram.errors import FloodWait
 
     log = logging.getLogger(__name__)
@@ -2091,7 +2104,7 @@ async def send_batch_files(
                 f"o Codec: {codec_str}\n"
                 f"{ep_title_line}"
                 f"o File Size: {fsize}\n\n"
-                f"<blockquote>⚠️ This file will be deleted in 1 minute. Forward to Saved Messages!</blockquote>"
+                f"<blockquote>⚠️ This file will be deleted in {del_caption_tag}. Forward to Saved Messages!</blockquote>"
             )
 
         prepared_items.append({
@@ -2140,7 +2153,7 @@ async def send_batch_files(
                         reply_markup=rm,
                         chat_id_coord=ch_id,
                         message_id_coord=m_id,
-                        auto_delete_delay=60
+                        auto_delete_delay=del_sec
                     )
                 if msg:
                     sent_results[idx_pos] = msg
@@ -2189,7 +2202,8 @@ async def send_batch_files(
 
 # ─── SERIES FILE DELIVERY HANDLER (WITH METADATA) ───────────────────────────
 async def send_series_files_to_user(client, user_id, files, query=None):
-    from utils import get_size, schedule_filter_message_delete, temp
+    from utils import get_size, schedule_filter_message_delete, temp, get_async_file_delete_info
+    del_sec, del_caption_tag, del_min_str = await get_async_file_delete_info()
     import logging
     import asyncio
     import html
@@ -2279,7 +2293,7 @@ async def send_series_files_to_user(client, user_id, files, query=None):
                 protect_content=False,
             )
             if meta_msg:
-                schedule_filter_message_delete(client, meta_msg.chat.id, meta_msg.id, 60)
+                schedule_filter_message_delete(client, meta_msg.chat.id, meta_msg.id, del_sec)
         except Exception as ex:
             log.warning(f"Failed to send metadata message: {ex}")
 
@@ -2374,7 +2388,7 @@ async def send_series_files_to_user(client, user_id, files, query=None):
             f"o Codec: {codec_str}\n"
             f"o Episode Title: {ep_title_escaped}\n"
             f"o File Size: {file_size}\n\n"
-            f"<blockquote>⚠️ This file will be deleted in 1 minute. Forward to Saved Messages!</blockquote>"
+            f"<blockquote>⚠️ This file will be deleted in {del_caption_tag}. Forward to Saved Messages!</blockquote>"
         )
         return f_caption
 
@@ -2403,14 +2417,14 @@ async def send_series_files_to_user(client, user_id, files, query=None):
                 chat_id=user_id,
                 text=(
                     "<blockquote><b><u>❗️❗️❗️IMPORTANT❗️️❗️❗️</u></b>\n\n"
-                    "ᴛʜɪs ᴍᴇssᴀɢᴇ ᴡɪʟʟ ʙᴇ ᴅᴇʟᴇᴛᴇᴅ ɪɴ <b><u>1 min</u> 🫥 <i></b>"
+                    f"ᴛʜɪs ᴍᴇssᴀɢᴇ ᴡɪʟʟ ʙᴇ ᴅᴇʟᴇᴛᴇᴅ ɪɴ <b><u>{del_min_str}</u> 🫥 <i></b>"
                     "(ᴅᴜᴇ ᴛᴏ ᴄᴏᴘʏʀɪɢʜᴛ ɪssᴜᴇs)</i>.\n\n"
                     "<b><i>ᴘʟᴇᴀsᴇ ғᴏʀᴡᴀʀᴅ ᴛʜᴇsᴇ ғɪʟᴇs ᴛᴏ sᴏᴍᴇᴡʜᴇʀᴇ ᴇʟsᴇ ᴀɴᴅ sᴛᴀʀᴛ ᴅᴏᴡɴʟᴏᴀᴅɪɴɢ ᴛʜᴇʀᴇ</b></i></blockquote>"
                 ),
                 parse_mode=enums.ParseMode.HTML
             )
             if k:
-                schedule_filter_message_delete(client, k.chat.id, k.id, 60)
+                schedule_filter_message_delete(client, k.chat.id, k.id, del_sec)
         except Exception:
             pass
 
@@ -2419,7 +2433,8 @@ async def send_series_files_to_user(client, user_id, files, query=None):
 
 # ─── MOVIE FILE DELIVERY HANDLER (DIRECT PM DELIVERY) ────────────────────────
 async def send_movie_files_to_user(client, user_id, files, query=None, movie_title=None, language=None, quality=None):
-    from utils import get_size, temp, schedule_filter_message_delete
+    from utils import get_size, temp, schedule_filter_message_delete, get_async_file_delete_info
+    del_sec, del_caption_tag, del_min_str = await get_async_file_delete_info()
     import logging
     import asyncio
 
@@ -2459,7 +2474,7 @@ async def send_movie_files_to_user(client, user_id, files, query=None, movie_tit
                 protect_content=False,
             )
             if meta_msg:
-                schedule_filter_message_delete(client, meta_msg.chat.id, meta_msg.id, 60)
+                schedule_filter_message_delete(client, meta_msg.chat.id, meta_msg.id, del_sec)
         except Exception as ex:
             log.warning(f"Failed to send movie metadata message: {ex}")
 
@@ -2478,7 +2493,7 @@ async def send_movie_files_to_user(client, user_id, files, query=None, movie_tit
             f"⇝ Language: {lang_str}\n"
             f"⇝ Total: {idx}/{total_files}\n\n"
             f"❧ https://t.me/+5RSSPoQTypk3ZmE1</i>\n\n"
-            f"<blockquote>⚠️ This file will be deleted in 1 minute. Forward to Saved Messages!</blockquote>"
+            f"<blockquote>⚠️ This file will be deleted in {del_caption_tag}. Forward to Saved Messages!</blockquote>"
         )
         return f_caption
 
@@ -2505,14 +2520,14 @@ async def send_movie_files_to_user(client, user_id, files, query=None, movie_tit
                 chat_id=user_id,
                 text=(
                     "<blockquote><b><u>❗️❗️❗️IMPORTANT❗️️❗️❗️</u></b>\n\n"
-                    "ᴛʜɪs ᴍᴇssᴀɢᴇ ᴡɪʟʟ ʙᴇ ᴅᴇʟᴇᴛᴇᴅ ɪɴ <b><u>1 min</u> 🫥 <i></b>"
+                    f"ᴛʜɪs ᴍᴇssᴀɢᴇ ᴡɪʟʟ ʙᴇ ᴅᴇʟᴇᴛᴇᴅ ɪɴ <b><u>{del_min_str}</u> 🫥 <i></b>"
                     "(ᴅᴜᴇ ᴛᴏ ᴄᴏᴘʏʀɪɢʜᴛ ɪssᴜᴇs)</i>.\n\n"
                     "<b><i>ᴘʟᴇᴀsᴇ ғᴏʀᴡᴀʀᴅ ᴛʜᴇsᴇ ғɪʟᴇs ᴛᴏ sᴏᴍᴇᴡʜᴇʀᴇ ᴇʟsᴇ ᴀɴᴅ sᴛᴀʀᴛ ᴅᴏᴡɴʟᴏᴀᴅɪɴɢ ᴛʜᴇʀᴇ</b></i></blockquote>"
                 ),
                 parse_mode=enums.ParseMode.HTML
             )
             if k:
-                schedule_filter_message_delete(client, k.chat.id, k.id, 60)
+                schedule_filter_message_delete(client, k.chat.id, k.id, del_sec)
         except Exception:
             pass
 
