@@ -809,6 +809,69 @@ async def delete_announcement_channel():
     """Delete the configured announcement channel setting."""
     await settings_col.delete_one({"_id": "announcement_channel"})
 
+
+async def set_distribution_channel(channel_id: int | str):
+    """Save or update the configured distribution channel ID."""
+    cid = int(channel_id) if str(channel_id).lstrip("-").isdigit() else str(channel_id)
+    await settings_col.update_one(
+        {"_id": "distribution_channel"},
+        {"$set": {"channel_id": cid}},
+        upsert=True
+    )
+    try:
+        from utils import temp
+        temp.DISTRIBUTION_CHANNEL = cid
+    except Exception:
+        pass
+
+
+async def get_distribution_channel() -> int | str | None:
+    """Retrieve the configured distribution channel ID."""
+    try:
+        from utils import temp
+        if getattr(temp, "DISTRIBUTION_CHANNEL", None):
+            return temp.DISTRIBUTION_CHANNEL
+    except Exception:
+        pass
+
+    doc = await settings_col.find_one({"_id": "distribution_channel"})
+    cid = doc.get("channel_id") if doc else None
+    if not cid:
+        try:
+            from info import DISTRIBUTION_CHANNEL
+            cid = DISTRIBUTION_CHANNEL
+        except Exception:
+            from os import environ
+            cid = environ.get("DISTRIBUTION_CHANNEL") or environ.get("DIS_CHANNEL")
+
+    if cid and str(cid).lstrip("-").isdigit():
+        cid = int(cid)
+
+    try:
+        from utils import temp
+        temp.DISTRIBUTION_CHANNEL = cid
+    except Exception:
+        pass
+    return cid
+
+
+async def delete_distribution_channel():
+    """Delete the configured distribution channel setting."""
+    await settings_col.delete_one({"_id": "distribution_channel"})
+    try:
+        from utils import temp
+        temp.DISTRIBUTION_CHANNEL = None
+    except Exception:
+        pass
+
+
+async def load_distribution_channel_cache():
+    """Preload distribution channel into memory cache at startup."""
+    try:
+        await get_distribution_channel()
+    except Exception as e:
+        logger.warning(f"Failed to load distribution channel cache: {e}")
+
 async def is_announcement_sent(announcement_key: str, filter_type: str = None, filter_id: str = None) -> bool:
     """Check if an announcement has already been sent for a series or movie."""
     key = str(announcement_key).strip()
