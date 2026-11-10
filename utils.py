@@ -93,6 +93,7 @@ class temp(object):
     CURRENT_INDEX_CHAT = None
     CURRENT_INDEX_TASK = None
     MYBOT_WAITING_TOKEN = {}
+    DISTRIBUTION_CHANNEL = None
 
 
 
@@ -4775,6 +4776,205 @@ def extract_poster_file_id(message, workflow: str = "UNKNOWN", state: str = "UNK
         or text_content.startswith("BAAC")
     ):
         return text_content
+
+    return None
+
+
+async def _safe_delete_channel_message(client, chat_id: int | str, message_id: int):
+    """Safely delete a temporary forwarded message from the distribution channel in the background."""
+    if not chat_id or not message_id:
+        return
+    try:
+        await client.delete_messages(chat_id=chat_id, message_ids=message_id)
+    except Exception as e:
+        logger.debug(f"[DISTRIBUTION] Delete temp message failed for {chat_id}/{message_id}: {e}")
+
+
+async def send_file_to_user_distributed(
+    client,
+    user_id: int,
+    file_id: str,
+    caption: str = "",
+    protect_content: bool = False,
+    reply_markup = None,
+    chat_id_coord: int | str = None,
+    message_id_coord: int = None,
+    reply_to_message_id: int = None,
+    auto_delete_delay: int = 60
+):
+    """
+    Sends a file to user with Distribution Channel support:
+    - If a distribution channel is configured:
+      1. Bot sends the media file to the distribution channel.
+      2. Bot forwards that message from the distribution channel to the user (preserving channel mention).
+      3. Bot immediately deletes the message from the distribution channel to keep it clean and copyright-free.
+    - If distribution channel is not configured or fails:
+      Directly delivers to the user via send_cached_media / copy_message fallback.
+    - Automatically schedules auto-delete (default 60s) in the user's PM.
+    """
+    import asyncio
+    from pyrogram import enums
+    from pyrogram.errors import FloodWait
+
+    from database.series_db import get_distribution_channel
+    dist_channel = await get_distribution_channel()
+
+    # 1. Try Distribution Channel routing if configured
+    if dist_channel:
+        try:
+            dis_msg = None
+            for attempt in range(2):
+                try:
+                    dis_msg = await client.send_cached_media(
+                        chat_id=dist_channel,
+                        file_id=str(file_id),
+                        caption=caption,
+                        parse_mode=enums.ParseMode.HTML
+                    )
+                    if dis_msg:
+                        break
+                except FloodWait as fw:
+                    await asyncio.sleep(fw.value + 1)
+                except Exception as ce:
+                    logger.debug(f"[DISTRIBUTION] send_cached_media attempt {attempt} failed: {ce}")
+                    break
+
+            # Fallback A: copy_message from source storage channel if coords are available
+            if not dis_msg and chat_id_coord and message_id_coord:
+                try:
+                    dis_msg = await client.copy_message(
+                        chat_id=dist_channel,
+                        from_chat_id=int(chat_id_coord),
+                        message_id=int(message_id_coord),
+                        caption=caption,
+                        parse_mode=enums.ParseMode.HTML
+                    )
+                except Exception as cpe:
+                    logger.debug(f"[DISTRIBUTION] copy_message to dist_channel failed: {cpe}")
+
+            # Fallback B: If client is child bot, try main bot (temp.BOT) to post to dist_channel
+            if not dis_msg and getattr(temp, "BOT", None) and temp.BOT != client:
+                try:
+                    dis_msg = await temp.BOT.send_cached_media(
+                        chat_id=dist_channel,
+                        file_id=str(file_id),
+                        caption=caption,
+                        parse_mode=enums.ParseMode.HTML
+                    )
+                except Exception:
+                    pass
+                if not dis_msg and chat_id_coord and message_id_coord:
+                    try:
+                        dis_msg = await temp.BOT.copy_message(
+                            chat_id=dist_channel,
+                            from_chat_id=int(chat_id_coord),
+                            message_id=int(message_id_coord),
+                            caption=caption,
+                            parse_mode=enums.ParseMode.HTML
+                        )
+                    except Exception:
+                        pass
+
+            if dis_msg and getattr(dis_msg, "id", None):
+                # Auto-update bot file cache if a new file_id was returned
+                try:
+                    sent_m = getattr(dis_msg, getattr(dis_msg.media, "value", "document"), None) if getattr(dis_msg, "media", None) else None
+                    c_bid = str(getattr(getattr(client, "me", None), "id", ""))
+                    if sent_m and getattr(sent_m, "file_id", None) and c_bid:
+                        from database.ia_filterdb import unpack_new_file_id, col, sec_col
+                        from info import MULTIPLE_DATABASE
+                        new_fid = unpack_new_file_id(sent_m.file_id)
+                        up_d = {"$set": {f"bot_file_map.{c_bid}": new_fid}, "$addToSet": {"file_ids": new_fid}}
+                        col.update_one({"$or": [{"file_id": str(file_id)}, {"file_ids": str(file_id)}]}, up_d)
+                        if MULTIPLE_DATABASE:
+                            sec_col.update_one({"$or": [{"file_id": str(file_id)}, {"file_ids": str(file_id)}]}, up_d)
+                except Exception:
+                    pass
+
+                # Forward message from distribution channel to the user (preserves channel mention header)
+                forwarded = None
+                try:
+                    forwarded = await client.forward_messages(
+                        chat_id=user_id,
+                        from_chat_id=dist_channel,
+                        message_ids=dis_msg.id,
+                        protect_content=protect_content
+                    )
+                except Exception as fe:
+                    logger.warning(f"[DISTRIBUTION] forward_messages via client failed: {fe}. Trying temp.BOT...")
+                    if getattr(temp, "BOT", None) and temp.BOT != client:
+                        try:
+                            forwarded = await temp.BOT.forward_messages(
+                                chat_id=user_id,
+                                from_chat_id=dist_channel,
+                                message_ids=dis_msg.id,
+                                protect_content=protect_content
+                            )
+                        except Exception as fe2:
+                            logger.error(f"[DISTRIBUTION] forward_messages via temp.BOT failed: {fe2}")
+
+                user_msg = forwarded[0] if isinstance(forwarded, list) else forwarded
+
+                # Immediately delete the message from the distribution channel in background
+                asyncio.create_task(_safe_delete_channel_message(client, dist_channel, dis_msg.id))
+                if getattr(temp, "BOT", None) and temp.BOT != client:
+                    asyncio.create_task(_safe_delete_channel_message(temp.BOT, dist_channel, dis_msg.id))
+
+                if user_msg and getattr(user_msg, "id", None):
+                    if auto_delete_delay:
+                        schedule_filter_message_delete(client, user_msg.chat.id, user_msg.id, auto_delete_delay)
+                    return user_msg
+
+        except Exception as dist_err:
+            logger.error(f"[DISTRIBUTION CHANNEL ERROR] {dist_err}. Falling back to direct send.")
+
+    # 2. Direct delivery fallback (if distribution channel not configured or delivery through it failed)
+    user_msg = None
+    try:
+        user_msg = await client.send_cached_media(
+            chat_id=user_id,
+            file_id=str(file_id),
+            caption=caption,
+            parse_mode=enums.ParseMode.HTML,
+            protect_content=protect_content,
+            reply_markup=reply_markup,
+            reply_to_message_id=reply_to_message_id
+        )
+    except Exception as d_err:
+        logger.warning(f"[DIRECT SEND FAILED] file_id={file_id} err={d_err}. Trying copy fallback...")
+        if chat_id_coord and message_id_coord:
+            try:
+                user_msg = await client.copy_message(
+                    chat_id=user_id,
+                    from_chat_id=int(chat_id_coord),
+                    message_id=int(message_id_coord),
+                    caption=caption,
+                    parse_mode=enums.ParseMode.HTML,
+                    protect_content=protect_content,
+                    reply_markup=reply_markup,
+                    reply_to_message_id=reply_to_message_id
+                )
+            except Exception as c_err:
+                logger.error(f"[DIRECT COPY FAILED] {c_err}")
+
+        if not user_msg and getattr(temp, "BOT", None) and temp.BOT != client:
+            try:
+                user_msg = await temp.BOT.send_cached_media(
+                    chat_id=user_id,
+                    file_id=str(file_id),
+                    caption=caption,
+                    parse_mode=enums.ParseMode.HTML,
+                    protect_content=protect_content,
+                    reply_markup=reply_markup,
+                    reply_to_message_id=reply_to_message_id
+                )
+            except Exception:
+                pass
+
+    if user_msg and getattr(user_msg, "id", None):
+        if auto_delete_delay:
+            schedule_filter_message_delete(client, user_msg.chat.id, user_msg.id, auto_delete_delay)
+        return user_msg
 
     return None
 

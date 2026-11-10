@@ -59,6 +59,10 @@ AUTH_CHANNEL = int(auth_channel) if auth_channel and id_pattern.search(auth_chan
 reqst_channel = environ.get('REQST_CHANNEL', '')
 REQST_CHANNEL = int(reqst_channel) if reqst_channel and id_pattern.search(reqst_channel) else None
 
+# Distribution Channel (files forwarded from here to users to protect main bot and file channels)
+dist_channel = environ.get('DISTRIBUTION_CHANNEL', '')
+DISTRIBUTION_CHANNEL = int(dist_channel) if dist_channel and id_pattern.search(dist_channel) else None
+
 # This Channel Is For Index Request 
 INDEX_REQ_CHANNEL = int(environ.get('INDEX_REQ_CHANNEL', LOG_CHANNEL))
 
