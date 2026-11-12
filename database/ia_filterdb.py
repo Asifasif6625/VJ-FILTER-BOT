@@ -169,8 +169,11 @@ async def save_file(media, bot_id=None, sync_filters=True, return_doc=False):
                             "$addToSet": {"file_ids": file_id}
                         }
                     )
-                await sync_movie_filter_for_files([migrated_file_doc], trigger="bot_file_cache")
-                await sync_series_filter_for_files([migrated_file_doc], trigger="bot_file_cache")
+                m_matched = await sync_movie_filter_for_files([migrated_file_doc], trigger="bot_file_cache")
+                s_matched = await sync_series_filter_for_files([migrated_file_doc], trigger="bot_file_cache")
+                if not already_registered and not m_matched and not s_matched:
+                    from database.series_db import schedule_delayed_normal_announcement_for_file
+                    await schedule_delayed_normal_announcement_for_file(migrated_file_doc, delay=60)
             except Exception as se:
                 logger.debug(f"[BOT FILE CACHE FILTER SYNC ERROR] {se}")
 
