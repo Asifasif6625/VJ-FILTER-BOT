@@ -4241,22 +4241,54 @@ def build_normal_filter_groups(files: list[dict], query_text: str = "") -> list[
             f_title = "Movie"
             norm_title = "movie"
 
-        # Group solely by normalized movie title (and season for series)
-        # All files and qualities of the same movie collapse into ONE group!
+        canonical_title = f_title.strip()
+        canonical_year = str(f_year).strip() if f_year and str(f_year).upper() != "N/A" else "N/A"
+
+        # Extract language for distinguishing different film industries (e.g. Indian vs Korean vs English)
+        f_name_full = f.get("file_name", "")
+        f_cap = f.get("caption", "")
+        f_langs = detect_file_languages(f_name_full, f_cap)
+        f_primary_lang = f_langs[0] if f_langs else "Unknown"
+
+        def _get_industry_category(lang_name: str) -> str:
+            if not lang_name or lang_name == "Unknown":
+                return "Indian_Or_General"
+            l = str(lang_name).lower()
+            if l in {"korean", "kor"}:
+                return "EastAsian_Korean"
+            if l in {"japanese", "jap", "anime"}:
+                return "EastAsian_Japanese"
+            if l in {"chinese", "chi"}:
+                return "EastAsian_Chinese"
+            if l in {"thai"}:
+                return "EastAsian_Thai"
+            if l in {"english", "eng"}:
+                return "Western_English"
+            if l in {"french", "spanish", "german", "russian", "italian", "portuguese", "turkish"}:
+                return f"Western_{lang_name.title()}"
+            # All Indian regional languages (Malayalam, Tamil, Telugu, Hindi, Kannada, etc.) & untagged stay in Indian_Or_General
+            return "Indian_Or_General"
+
+        ind_cat = _get_industry_category(f_primary_lang)
+
+        # Unique identity key: Canonical Title + Year + is_ser + season + Industry Category
+        # Merges all qualities/prints of the same movie, but keeps Indian vs Korean vs Series distinct!
         if is_ser:
-            id_key = (norm_title, True, f_season or 1)
+            id_key = (canonical_title.lower(), canonical_year, True, f_season or 1, ind_cat)
         else:
-            id_key = (norm_title, False, None)
+            id_key = (canonical_title.lower(), canonical_year, False, None, ind_cat)
 
         if id_key not in identity_map:
             import uuid
             gid = f"n_{uuid.uuid4().hex[:10]}"
             identity_map[id_key] = {
                 "group_id": gid,
-                "title": f_title,
-                "year": f_year,
+                "title": canonical_title,
+                "year": canonical_year,
                 "season": f_season,
                 "is_series": is_ser,
+                "industry_cat": ind_cat,
+                "primary_lang": f_primary_lang,
                 "files": [f],
                 "file_ids": [f.get("file_id")] if f.get("file_id") else []
             }
@@ -4265,24 +4297,62 @@ def build_normal_filter_groups(files: list[dict], query_text: str = "") -> list[
             g["files"].append(f)
             if f.get("file_id") and f["file_id"] not in g["file_ids"]:
                 g["file_ids"].append(f["file_id"])
-            if (not g.get("year") or str(g.get("year")).upper() == "N/A") and (f_year and str(f_year).upper() != "N/A"):
-                g["year"] = f_year
-            if clean_query and clean_query.lower() in f_title.lower() and len(clean_query) <= len(f_title):
-                g["title"] = f_title
+            if (not g.get("year") or str(g.get("year")).upper() == "N/A") and (canonical_year != "N/A"):
+                g["year"] = canonical_year
+            if g.get("primary_lang") == "Unknown" and f_primary_lang != "Unknown":
+                g["primary_lang"] = f_primary_lang
 
-    final_groups = []
+    from collections import defaultdict
+    # Count how many industry/language variants exist for each base identity (title, year, is_series, season)
+    base_counts = defaultdict(set)
+    for id_key in identity_map:
+        base = (id_key[0], id_key[1], id_key[2], id_key[3])
+        base_counts[base].add(id_key[4])
+
+    # Final pass: Deduplicate strictly by button_label
+    # If any two items produce the exact same button label (e.g. 'Tik Tik Tik (2018)'),
+    # merge their files and ensure only ONE single button is created!
+    deduped_groups = {}
     for id_key, g in identity_map.items():
+        base = (id_key[0], id_key[1], id_key[2], id_key[3])
+        has_conflict = len(base_counts[base]) > 1
+
         title = g["title"]
         year = g["year"]
         year_str = f" ({year})" if year and str(year).upper() != "N/A" else ""
 
-        # Clean button labels: only Movie and Year (e.g. 'Movie (Year)')
+        lang_tag = ""
+        if has_conflict:
+            plang = g.get("primary_lang", "Unknown")
+            if plang and plang != "Unknown":
+                lang_tag = f" [{plang}]"
+            elif g.get("industry_cat") == "Indian_Or_General":
+                lang_tag = " [Indian]"
+            else:
+                lang_tag = f" [{g.get('industry_cat', '').split('_')[-1]}]"
+
         if g["is_series"]:
             season_num = g.get("season", 1) or 1
-            g["button_label"] = f"S{season_num:02d} {title}{year_str}"
+            btn_label = f"S{season_num:02d} {title}{year_str}{lang_tag}"
         else:
-            g["button_label"] = f"{title}{year_str}"
+            btn_label = f"{title}{year_str}{lang_tag}"
 
+        lbl_key = btn_label.strip().lower()
+        if lbl_key in deduped_groups:
+            existing_g = deduped_groups[lbl_key]
+            for f in g.get("files", []):
+                if f not in existing_g["files"]:
+                    existing_g["files"].append(f)
+            for fid in g.get("file_ids", []):
+                if fid not in existing_g["file_ids"]:
+                    existing_g["file_ids"].append(fid)
+            continue
+
+        g["button_label"] = btn_label
+        deduped_groups[lbl_key] = g
+
+    final_groups = list(deduped_groups.values())
+    for g in final_groups:
         gid = g["group_id"]
         if not hasattr(temp, "NORMAL_FILTER_GROUPS"):
             temp.NORMAL_FILTER_GROUPS = {}
@@ -4292,7 +4362,6 @@ def build_normal_filter_groups(files: list[dict], query_text: str = "") -> list[
             asyncio.create_task(save_temp_request(gid, g))
         except Exception:
             pass
-        final_groups.append(g)
 
     return final_groups
 
@@ -4754,22 +4823,23 @@ async def start_normal_file_delivery_in_pm(client: Client, user_id: int, norm_gr
 
     temp.NORMAL_DELIVERY_SESSIONS[session_id]["kb_msg_id"] = kb_msg.id if kb_msg else None
 
-    stop_btn = InlineKeyboardButton("🛑 Stop Files", callback_data=f"norm_stop#{session_id}")
-    try:
-        import inspect
-        if "style" in inspect.signature(InlineKeyboardButton.__init__).parameters:
-            stop_btn = InlineKeyboardButton("🛑 Stop Files", callback_data=f"norm_stop#{session_id}", style="danger")
-    except Exception:
-        pass
+    from plugins.series import make_styled_button, apply_pm_styled_reply_markup
+    stop_btn = make_styled_button("🛑 Stop Files", callback_data=f"norm_stop#{session_id}", style="danger")
+    stop_markup = InlineKeyboardMarkup([[stop_btn]])
 
     ctrl_text = format_delivery_control_message(0, 0)
     try:
         ctrl_msg = await client.send_message(
             chat_id=user_id,
             text=ctrl_text,
-            reply_markup=InlineKeyboardMarkup([[stop_btn]]),
+            reply_markup=stop_markup,
             parse_mode=enums.ParseMode.HTML
         )
+        if ctrl_msg:
+            try:
+                asyncio.create_task(apply_pm_styled_reply_markup(client, user_id, ctrl_msg.id, stop_markup))
+            except Exception:
+                pass
     except Exception as ce:
         logger.error(f"[START NORMAL FILE DELIVERY SEND MSG ERROR] {ce}")
         temp.ACTIVE_NORMAL_DELIVERIES.discard(user_id)
@@ -5465,22 +5535,23 @@ async def trigger_normal_fsub_approved_delivery(client: Client, user_id: int, pe
         "group_id": group_id
     }
 
-    stop_btn = InlineKeyboardButton("🛑 Stop Files", callback_data=f"norm_stop#{session_id}")
-    try:
-        import inspect
-        if "style" in inspect.signature(InlineKeyboardButton.__init__).parameters:
-            stop_btn = InlineKeyboardButton("🛑 Stop Files", callback_data=f"norm_stop#{session_id}", style="danger")
-    except Exception:
-        pass
+    from plugins.series import make_styled_button, apply_pm_styled_reply_markup
+    stop_btn = make_styled_button("🛑 Stop Files", callback_data=f"norm_stop#{session_id}", style="danger")
+    stop_markup = InlineKeyboardMarkup([[stop_btn]])
 
     ctrl_text = format_delivery_control_message(0, 0)
     try:
         ctrl_msg = await deliv_client.send_message(
             chat_id=user_id,
             text=ctrl_text,
-            reply_markup=InlineKeyboardMarkup([[stop_btn]]),
+            reply_markup=stop_markup,
             parse_mode=enums.ParseMode.HTML
         )
+        if ctrl_msg:
+            try:
+                asyncio.create_task(apply_pm_styled_reply_markup(deliv_client, user_id, ctrl_msg.id, stop_markup))
+            except Exception:
+                pass
 
         # Pin the delivery control message in PM
         try:
@@ -5528,6 +5599,17 @@ async def cb_norm_stop_files(client: Client, query: CallbackQuery):
     if sess:
         sess["cancelled"] = True
 
+    # Cancel all active delivery sessions belonging to this user
+    for sid, s in list(getattr(temp, "NORMAL_DELIVERY_SESSIONS", {}).items()):
+        if s.get("user_id") == user_id:
+            s["cancelled"] = True
+            kb_msg_id = s.get("kb_msg_id")
+            if kb_msg_id:
+                try:
+                    await client.delete_messages(chat_id=user_id, message_ids=kb_msg_id)
+                except Exception:
+                    pass
+
     getattr(temp, "ACTIVE_NORMAL_DELIVERIES", set()).discard(user_id)
     if hasattr(temp, "USER_ACTIVE_DELIVERY_SESSIONS"):
         temp.USER_ACTIVE_DELIVERY_SESSIONS.pop(user_id, None)
@@ -5540,69 +5622,54 @@ async def cb_norm_stop_files(client: Client, query: CallbackQuery):
             await client.unpin_chat_message(chat_id=user_id, message_id=query.message.id)
         except Exception:
             pass
-
-    try:
-        await query.message.edit_text(
-            text="<i>🛑 File delivery stopped.\n\nഫയൽ അയക്കുന്നത് നിർത്തിയിരിക്കുന്നു.</i>",
-            reply_markup=None,
-            parse_mode=enums.ParseMode.HTML
-        )
-    except Exception:
-        pass
-
-    if sess:
-        kb_msg_id = sess.get("kb_msg_id")
-        if kb_msg_id:
-            try:
-                await client.delete_messages(chat_id=user_id, message_ids=kb_msg_id)
-            except Exception:
-                pass
+        try:
+            await query.message.delete()
+        except Exception:
+            pass
 
     try:
         stop_notice = await client.send_message(
             chat_id=user_id,
-            text="<i>🛑 File delivery stopped.</i>",
+            text="<i>🛑 File delivery stopped.\n\nഫയൽ അയക്കുന്നത് നിർത്തിയിരിക്കുന്നു.</i>",
             reply_markup=ReplyKeyboardRemove(remove_keyboard=True),
             parse_mode=enums.ParseMode.HTML
         )
         if stop_notice:
             from utils import schedule_filter_message_delete
             schedule_filter_message_delete(client, user_id, stop_notice.id, delay=15)
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning(f"[STOP NOTICE SEND ERROR] {e}")
 
 
-@Client.on_message(filters.regex(r"^(🛑\s*)?(Stop\s*Files|stop)$", re.IGNORECASE) & filters.private, group=-25)
+@Client.on_message(filters.regex(r"(?i)(🛑|🔴|stop\s*files|^stop$)") & filters.private, group=-25)
 async def handle_stop_delivery_reply_button(client: Client, message: Message):
     """
     Catches the bottom ReplyKeyboardMarkup '🛑 Stop Files' button press.
     Immediately halts any active delivery session for this user and removes the bottom keyboard.
     """
-    message.stop_propagation()
     user_id = message.from_user.id if message.from_user else message.chat.id
-    active_sid = getattr(temp, "USER_ACTIVE_DELIVERY_SESSIONS", {}).get(user_id)
-    sess = getattr(temp, "NORMAL_DELIVERY_SESSIONS", {}).get(active_sid) if active_sid else None
+    logger.info(f"[CHILD BOT STOP BUTTON PRESSED] user_id={user_id}")
 
-    logger.info(f"[CHILD BOT STOP BUTTON PRESSED] user_id={user_id} session={active_sid}")
-
-    if sess:
-        sess["cancelled"] = True
-        ctrl_msg_id = sess.get("ctrl_msg_id")
-        if ctrl_msg_id:
-            try:
-                await client.unpin_chat_message(chat_id=user_id, message_id=ctrl_msg_id)
-            except Exception:
-                pass
-            try:
-                await client.delete_messages(chat_id=user_id, message_ids=ctrl_msg_id)
-            except Exception:
-                pass
-        kb_msg_id = sess.get("kb_msg_id")
-        if kb_msg_id:
-            try:
-                await client.delete_messages(chat_id=user_id, message_ids=kb_msg_id)
-            except Exception:
-                pass
+    # Cancel all delivery sessions belonging to this user
+    for sid, s in list(getattr(temp, "NORMAL_DELIVERY_SESSIONS", {}).items()):
+        if s.get("user_id") == user_id:
+            s["cancelled"] = True
+            ctrl_msg_id = s.get("ctrl_msg_id")
+            if ctrl_msg_id:
+                try:
+                    await client.unpin_chat_message(chat_id=user_id, message_id=ctrl_msg_id)
+                except Exception:
+                    pass
+                try:
+                    await client.delete_messages(chat_id=user_id, message_ids=ctrl_msg_id)
+                except Exception:
+                    pass
+            kb_msg_id = s.get("kb_msg_id")
+            if kb_msg_id:
+                try:
+                    await client.delete_messages(chat_id=user_id, message_ids=kb_msg_id)
+                except Exception:
+                    pass
 
     getattr(temp, "ACTIVE_NORMAL_DELIVERIES", set()).discard(user_id)
     if hasattr(temp, "USER_ACTIVE_DELIVERY_SESSIONS"):
@@ -5625,6 +5692,12 @@ async def handle_stop_delivery_reply_button(client: Client, message: Message):
             schedule_filter_message_delete(client, user_id, stop_notice.id, delay=15)
     except Exception as e:
         logger.warning(f"[STOP NOTICE SEND ERROR] {e}")
+
+    try:
+        from pyrogram import StopPropagation
+        raise StopPropagation
+    except ImportError:
+        pass
 
 
 async def execute_normal_group_file_delivery(client: Client, user_id: int, group_id: str, session_id: str, ctrl_msg: Message):
@@ -5713,13 +5786,8 @@ async def execute_normal_group_file_delivery(client: Client, user_id: int, group
 
         logger.info(f"[CHILD BOT DELIVERY START] bot=@{bot_username} session_id={session_id} user_id={user_id} group_id={group_id} total_files={total_files}")
 
-        stop_btn = InlineKeyboardButton("🛑 Stop Files", callback_data=f"norm_stop#{session_id}")
-        try:
-            import inspect
-            if "style" in inspect.signature(InlineKeyboardButton.__init__).parameters:
-                stop_btn = InlineKeyboardButton("🛑 Stop Files", callback_data=f"norm_stop#{session_id}", style="danger")
-        except Exception:
-            pass
+        from plugins.series import make_styled_button, apply_pm_styled_reply_markup
+        stop_btn = make_styled_button("🛑 Stop Files", callback_data=f"norm_stop#{session_id}", style="danger")
         stop_markup = InlineKeyboardMarkup([[stop_btn]])
 
         # Update initial progress in pinned control message
@@ -5729,6 +5797,10 @@ async def execute_normal_group_file_delivery(client: Client, user_id: int, group
                 reply_markup=stop_markup,
                 parse_mode=enums.ParseMode.HTML
             )
+            try:
+                asyncio.create_task(apply_pm_styled_reply_markup(client, user_id, ctrl_msg.id, stop_markup))
+            except Exception:
+                pass
         except Exception:
             pass
 
@@ -5768,6 +5840,7 @@ async def execute_normal_group_file_delivery(client: Client, user_id: int, group
                     user_id=user_id,
                     file_id=str(fid),
                     caption=caption,
+                    reply_markup=stop_markup,
                     chat_id_coord=f.get("chat_id"),
                     message_id_coord=f.get("message_id"),
                     reply_to_message_id=ctrl_msg_id,
@@ -5778,6 +5851,10 @@ async def execute_normal_group_file_delivery(client: Client, user_id: int, group
                     delivered_count += 1
                     logger.info(f"[CHILD BOT FILE SENT] idx={idx}/{total_files} file_id={fid} user_id={user_id} sent_msg_id={sent_f.id}")
                     schedule_filter_message_delete(client, user_id, sent_f.id, delay=del_sec)
+                    try:
+                        asyncio.create_task(apply_pm_styled_reply_markup(client, user_id, sent_f.id, stop_markup))
+                    except Exception:
+                        pass
 
                     # Update loading/progress bar on pinned control message
                     if not sess.get("cancelled"):
@@ -5787,6 +5864,10 @@ async def execute_normal_group_file_delivery(client: Client, user_id: int, group
                                 reply_markup=stop_markup,
                                 parse_mode=enums.ParseMode.HTML
                             )
+                            try:
+                                asyncio.create_task(apply_pm_styled_reply_markup(client, user_id, ctrl_msg.id, stop_markup))
+                            except Exception:
+                                pass
                         except MessageNotModified:
                             pass
                         except Exception as ee:
@@ -5964,6 +6045,14 @@ async def cmd_normal_filter_announce(client: Client, message: Message):
         photo_id = reply_to.photo.file_id
 
     # 4. Post announcement to channel
+    # Send divider sticker before posting announcement
+    try:
+        from plugins.series import send_announcement_sticker
+        await send_announcement_sticker(client, channel_id)
+        await asyncio.sleep(0.5)
+    except Exception as se:
+        logger.warning(f"[ANNOUNCEMENT STICKER ANO ERROR] {se}")
+
     sent_msg = None
     try:
         if photo_id:
@@ -6015,6 +6104,155 @@ async def cmd_normal_filter_announce(client: Client, message: Message):
         parse_mode=enums.ParseMode.HTML,
         disable_web_page_preview=True
     )
+
+
+async def dispatch_normal_filter_announcement(client: Client, title: str, year: str, channel_id: int | str) -> bool:
+    """
+    Dispatches a consolidated Normal Filter announcement to the Announcement Channel
+    after the 1-minute debounce delay has expired.
+    First sends the divider sticker, then posts the details card with [Download] button.
+    """
+    if not channel_id:
+        from database.series_db import get_announcement_channel
+        channel_id = await get_announcement_channel()
+    if not channel_id:
+        logger.warning(f"[NORMAL AUTO ANNOUNCEMENT] Channel not configured for {title} ({year})")
+        return False
+
+    cid_int = int(channel_id) if str(channel_id).lstrip("-").isdigit() else str(channel_id)
+    query_str = f"{title} {year}" if year and str(year).upper() != "N/A" else title
+    files, _, _ = await get_search_results(0, query_str, max_results=100, filter=True)
+    if not files and year and str(year).upper() != "N/A":
+        files, _, _ = await get_search_results(0, title, max_results=100, filter=True)
+    if not files:
+        logger.warning(f"[NORMAL AUTO ANNOUNCEMENT] No files found in DB for {title} ({year})")
+        return False
+
+    groups = build_normal_filter_groups(files, query_text=title)
+    if not groups:
+        logger.warning(f"[NORMAL AUTO ANNOUNCEMENT] Could not group files for {title}")
+        return False
+
+    target_grp = groups[0]
+    for grp in groups:
+        if str(grp.get("title", "")).strip().lower() == title.strip().lower():
+            target_grp = grp
+            break
+
+    import uuid
+    norm_group_id = target_grp.get("group_id") or f"n_{uuid.uuid4().hex[:8]}"
+    target_grp["group_id"] = norm_group_id
+    if not hasattr(temp, "NORMAL_FILTER_GROUPS"):
+        temp.NORMAL_FILTER_GROUPS = {}
+    temp.NORMAL_FILTER_GROUPS[norm_group_id] = target_grp
+
+    from database.series_db import save_temp_request
+    try:
+        await save_temp_request(norm_group_id, target_grp)
+        await save_temp_request(f"n_{norm_group_id}", target_grp)
+    except Exception:
+        pass
+
+    details_caption, poster_url = await format_normal_filter_details_card(target_grp)
+
+    # Extract qualities and languages
+    quals = set()
+    langs = set()
+    for f in target_grp.get("files", []):
+        fn = f.get("file_name", "")
+        from plugins.series import extract_quality_from_filename
+        q = extract_quality_from_filename(fn)
+        if q and q != "Unknown":
+            quals.add(q)
+        ls = detect_file_languages(fn, f.get("caption", ""), default=None)
+        if ls:
+            langs.update(ls)
+
+    quality_order = ["2160p", "4K", "1440p", "1080p", "720p", "480p", "360p", "HDRip", "WEB-DL", "BluRay"]
+    qual_sorted = sorted(list(quals), key=lambda x: (quality_order.index(x) if x in quality_order else 99, x))
+    qual_str = ", ".join(qual_sorted) if qual_sorted else "720p, 1080p"
+    lang_str = ", ".join(sorted(list(langs))) if langs else "Multi"
+
+    is_ser = target_grp.get("is_series", False)
+    prefix = "📺 Series:" if is_ser else "🎬 Movie:"
+    ann_caption = (
+        f"{prefix} <b>{html.escape(title)}</b>\n"
+        f"📅 <b>Year:</b> <code>{html.escape(str(year) if year and year != 'N/A' else 'N/A')}</code>\n"
+        f"🌐 <b>Languages:</b> <code>{html.escape(lang_str)}</code>\n"
+        f"💿 <b>Quality:</b> <code>{html.escape(qual_str)}</code>\n\n"
+        f"<blockquote>⚡ <b>Click Download button below to get files!</b></blockquote>"
+    )
+
+    from utils import get_child_bot_username
+    bot_username = get_child_bot_username() or getattr(temp, "U_NAME", "Bot")
+    bot_username = str(bot_username).lstrip("@")
+    start_link = f"https://t.me/{bot_username}?start=norm_{norm_group_id}"
+
+    import info
+    btn_text = getattr(info, "ANNOUNCEMENT_DOWNLOAD_BUTTON_TEXT", "ԃσɯɳʅσαԃ ɱσʋιҽ") or "ԃσɯɳʅσαԃ ɱσʋιҽ"
+    btn_style = getattr(info, "ANNOUNCEMENT_DOWNLOAD_BUTTON_STYLE", "primary") or "primary"
+    from plugins.series import make_styled_button
+    markup = InlineKeyboardMarkup([[make_styled_button(btn_text, url=start_link, style=btn_style)]])
+
+    # 1. Send divider sticker before posting announcement
+    from plugins.series import send_announcement_sticker
+    await send_announcement_sticker(client, cid_int)
+    await asyncio.sleep(0.5)
+
+    # 2. Post announcement photo or message
+    sent_msg = None
+    target_client = client or getattr(temp, "BOT", None)
+    try:
+        if poster_url and str(poster_url).startswith("http"):
+            sent_msg = await target_client.send_photo(
+                chat_id=cid_int,
+                photo=poster_url,
+                caption=ann_caption,
+                reply_markup=markup,
+                parse_mode=enums.ParseMode.HTML
+            )
+        else:
+            sent_msg = await target_client.send_message(
+                chat_id=cid_int,
+                text=ann_caption,
+                reply_markup=markup,
+                parse_mode=enums.ParseMode.HTML
+            )
+    except Exception as e:
+        logger.warning(f"[NORMAL AUTO ANNOUNCEMENT SEND ERROR] {e}")
+        main_bot = getattr(temp, "BOT", None)
+        if main_bot and main_bot != target_client:
+            try:
+                if poster_url and str(poster_url).startswith("http"):
+                    sent_msg = await main_bot.send_photo(
+                        chat_id=cid_int,
+                        photo=poster_url,
+                        caption=ann_caption,
+                        reply_markup=markup,
+                        parse_mode=enums.ParseMode.HTML
+                    )
+                else:
+                    sent_msg = await main_bot.send_message(
+                        chat_id=cid_int,
+                        text=ann_caption,
+                        reply_markup=markup,
+                        parse_mode=enums.ParseMode.HTML
+                    )
+            except Exception as me:
+                logger.error(f"[NORMAL AUTO ANNOUNCEMENT MAIN BOT ERROR] {me}")
+
+    if sent_msg:
+        from database.series_db import save_announcement
+        norm_slug = f"{title.lower()}_{year}"
+        await save_announcement(
+            filter_id=f"normal:{norm_slug}",
+            channel_id=cid_int,
+            message_id=sent_msg.id,
+            filter_type="normal"
+        )
+        logger.info(f"[NORMAL AUTO ANNOUNCEMENT POSTED] title='{title}' year='{year}' msg_id={sent_msg.id}")
+        return True
+    return False
 
 async def advantage_spell_chok(client, name, msg, reply_msg, vj_search):
     mv_id = msg.id
@@ -6752,7 +6990,7 @@ def register_normal_filter_handlers(child_bot: Client) -> int:
     child_bot.add_handler(
         MessageHandler(
             handle_stop_delivery_reply_button,
-            filters.regex(r"^(🛑\s*)?(Stop\s*Files|stop)$", re.IGNORECASE) & filters.incoming
+            filters.regex(r"(?i)(🛑|🔴|stop\s*files|^stop$)") & filters.incoming
         ),
         group=-1
     )
@@ -6772,7 +7010,7 @@ def register_normal_filter_handlers(child_bot: Client) -> int:
     child_bot.add_handler(
         MessageHandler(
             child_filter_message_handler,
-            filters.text & filters.incoming & ~filters.command(["start", "about", "help", "broadcast", "grp_broadcast", "edt", "edit", "quick_edit", "ano", "announce", "anomov", "anoser", "dis", "deldis", "setdis", "deldistribution"]) & ~filters.regex(r"^(🛑\s*)?(Stop\s*Files|stop)$", re.IGNORECASE)
+            filters.text & filters.incoming & ~filters.command(["start", "about", "help", "broadcast", "grp_broadcast", "edt", "edit", "quick_edit", "ano", "announce", "anomov", "anoser", "dis", "deldis", "setdis", "deldistribution"]) & ~filters.regex(r"(?i)(🛑|🔴|stop\s*files|^stop$)")
         ),
         group=0
     )
