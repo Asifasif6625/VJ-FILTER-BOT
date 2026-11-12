@@ -32,7 +32,7 @@ BOT_TOKEN2 = None
 
 # This Pictures Is For Start Message Picture, You Can Add Multiple By Giving One Space Between Each.
 PICS = (environ.get('PICS', 'https://files.catbox.moe/zck4ym.jpg')).split()
-DEFAULT_POSTER = environ.get('DEFAULT_POSTER', 'https://files.catbox.moe/mp2y81.jpg')
+DEFAULT_POSTER = environ.get('DEFAULT_POSTER', 'https://files.catbox.moe/zck4ym.jpg')
 
 
 # Admins & Users
