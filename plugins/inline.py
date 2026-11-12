@@ -4,12 +4,17 @@
 
 import html
 import logging
+import asyncio
+import re
+import random
 from pyrogram import Client, emoji, enums
 from pyrogram.errors import QueryIdInvalid
 from pyrogram.types import (
     InlineKeyboardButton,
     InlineKeyboardMarkup,
     InlineQueryResultPhoto,
+    InlineQueryResultArticle,
+    InputTextMessageContent,
     InlineQuery,
     MessageEntity
 )
@@ -25,7 +30,7 @@ from database.series_db import (
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_POSTER = "https://files.catbox.moe/mp2y81.jpg"
+DEFAULT_POSTER = "https://files.catbox.moe/zck4ym.jpg"
 PAGE_SIZE = 15
 CUSTOM_EMOJI_ID = 4926956800005112527
 
@@ -434,7 +439,7 @@ async def resolve_normal_group_poster(g: dict) -> str:
     except Exception:
         pass
 
-    fallback = DEFAULT_POSTER if _is_valid_url(DEFAULT_POSTER) else "https://files.catbox.moe/mp2y81.jpg"
+    fallback = DEFAULT_POSTER if _is_valid_url(DEFAULT_POSTER) else "https://files.catbox.moe/zck4ym.jpg"
     _INLINE_POSTER_CACHE[cache_key] = fallback
     return fallback
 
@@ -469,9 +474,12 @@ def _build_normal_inline_result(g: dict, bot_username: str, thumb_url: str = Non
 
     start_url = f"https://t.me/{bot_username}?start=norm_{gid}"
     btn = [[InlineKeyboardButton("📥 Download Files", url=start_url)]]
-    photo = thumb_url if _is_valid_url(thumb_url) else (DEFAULT_POSTER if _is_valid_url(DEFAULT_POSTER) else "https://files.catbox.moe/mp2y81.jpg")
+    photo = thumb_url if _is_valid_url(thumb_url) else (DEFAULT_POSTER if _is_valid_url(DEFAULT_POSTER) else "https://files.catbox.moe/zck4ym.jpg")
 
+    import uuid
+    res_id = f"norm_{gid}_{uuid.uuid4().hex[:6]}"
     return InlineQueryResultPhoto(
+        id=res_id,
         photo_url=photo,
         thumb_url=photo,
         title=card_title,
@@ -549,7 +557,7 @@ async def answer(bot: Client, query: InlineQuery):
         page_groups = groups[:PAGE_SIZE]
         posters = await asyncio.gather(*(resolve_normal_group_poster(g) for g in page_groups), return_exceptions=True)
         for idx, g in enumerate(page_groups):
-            p = posters[idx] if (idx < len(posters) and isinstance(posters[idx], str) and _is_valid_url(posters[idx])) else (DEFAULT_POSTER if _is_valid_url(DEFAULT_POSTER) else "https://files.catbox.moe/mp2y81.jpg")
+            p = posters[idx] if (idx < len(posters) and isinstance(posters[idx], str) and _is_valid_url(posters[idx])) else (DEFAULT_POSTER if _is_valid_url(DEFAULT_POSTER) else "https://files.catbox.moe/zck4ym.jpg")
             results.append(_build_normal_inline_result(g, bot_username, p))
 
         has_more = (offset + len(page_groups)) < total_count
@@ -610,6 +618,9 @@ async def answer(bot: Client, query: InlineQuery):
         switch_pm_text = f"🔍 Results for '{string}' ({total_count})" if total_count > 0 else f"❌ No results for '{string}'"
         cache_time = 30
 
+    if switch_pm_text and len(switch_pm_text) > 64:
+        switch_pm_text = switch_pm_text[:61] + "..."
+
     try:
         await query.answer(
             results=results,
@@ -622,4 +633,32 @@ async def answer(bot: Client, query: InlineQuery):
     except QueryIdInvalid:
         pass
     except Exception as e:
-        logger.warning(f"[INLINE QUERY ERROR] {e}")
+        logger.warning(f"[INLINE QUERY ERROR] {e}. Retrying with fallback...")
+        try:
+            fallback_results = []
+            for r in results:
+                if isinstance(r, InlineQueryResultPhoto):
+                    fallback_results.append(
+                        InlineQueryResultPhoto(
+                            id=getattr(r, "id", None),
+                            photo_url=DEFAULT_POSTER,
+                            thumb_url=DEFAULT_POSTER,
+                            title=getattr(r, "title", "Media"),
+                            description=getattr(r, "description", None),
+                            caption=getattr(r, "caption", ""),
+                            parse_mode=getattr(r, "parse_mode", enums.ParseMode.HTML),
+                            reply_markup=getattr(r, "reply_markup", None)
+                        )
+                    )
+                else:
+                    fallback_results.append(r)
+            await query.answer(
+                results=fallback_results,
+                is_personal=True,
+                cache_time=cache_time,
+                switch_pm_text=switch_pm_text,
+                switch_pm_parameter="start",
+                next_offset=next_offset
+            )
+        except Exception as retry_err:
+            logger.error(f"[INLINE RETRY ERROR] {retry_err}")

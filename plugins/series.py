@@ -4167,7 +4167,7 @@ async def announce_filter_created(client: Client, filter_type: str = "series", f
                     from info import DEFAULT_POSTER
                     poster = DEFAULT_POSTER
                 except Exception:
-                    poster = "https://files.catbox.moe/mp2y81.jpg"
+                    poster = "https://files.catbox.moe/zck4ym.jpg"
 
             langs = await list_series_languages(str(filter_id))
             if not langs:
@@ -4221,7 +4221,7 @@ async def announce_filter_created(client: Client, filter_type: str = "series", f
                     from info import DEFAULT_POSTER
                     poster = DEFAULT_POSTER
                 except Exception:
-                    poster = "https://files.catbox.moe/mp2y81.jpg"
+                    poster = "https://files.catbox.moe/zck4ym.jpg"
             langs = movie.get("languages", [])
             lang_str = ", ".join(langs) if langs else "Multi"
             qualities = movie.get("qualities", [])
@@ -8848,7 +8848,7 @@ async def render_super_movie_direct(client: Client, message: Message, movie: dic
     except Exception:
         pass
 
-    fallback_catbox = "https://files.catbox.moe/mp2y81.jpg"
+    fallback_catbox = "https://files.catbox.moe/zck4ym.jpg"
     if fallback_catbox not in posters_to_try:
         posters_to_try.append(fallback_catbox)
 
@@ -9131,7 +9131,7 @@ async def render_series_direct(client: Client, message: Message, series_doc: dic
     except Exception:
         pass
 
-    fallback_catbox = "https://files.catbox.moe/mp2y81.jpg"
+    fallback_catbox = "https://files.catbox.moe/zck4ym.jpg"
     if fallback_catbox not in posters_to_try:
         posters_to_try.append(fallback_catbox)
 
@@ -9498,7 +9498,7 @@ async def process_unified_filter_search(client: Client, message: Message, query_
             thumb = valid_series[0].get("poster")
         else:
             from info import DEFAULT_POSTER
-            thumb = DEFAULT_POSTER or "https://files.catbox.moe/mp2y81.jpg"
+            thumb = DEFAULT_POSTER or "https://files.catbox.moe/zck4ym.jpg"
 
     req_msg_id = message.id if message else (reply_msg.reply_to_message.id if (reply_msg and reply_msg.reply_to_message) else (reply_msg.id if reply_msg else None))
 

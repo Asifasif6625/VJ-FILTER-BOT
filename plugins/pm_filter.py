@@ -4497,6 +4497,106 @@ async def render_normal_grouped_results(client: Client, message: Message, query_
         u_name = html.escape(reply_msg.from_user.first_name or "User")
         requester_name = f"<a href='tg://user?id={reply_msg.from_user.id}'>{u_name}</a>" if reply_msg.from_user.id else u_name
 
+    # ── Single Group Optimization: If only 1 group exists, bypass suggestion buttons and show Details Card directly! ──
+    if len(groups) == 1:
+        target_grp = groups[0]
+        norm_group_id = target_grp.get("group_id")
+
+        details_caption, poster_url = await format_normal_filter_details_card(target_grp, requester_name=requester_name)
+
+        from plugins.series import make_styled_button
+        get_all_btn = make_styled_button("⌯⌲ Get All File", callback_data=f"norm_getall#{norm_group_id}", style="danger")
+        disc_btn = make_styled_button("⚠ Disclaimer", callback_data="norm_disc", style="success")
+        markup = InlineKeyboardMarkup([
+            [get_all_btn],
+            [disc_btn]
+        ])
+
+        from info import DEFAULT_POSTER, PICS
+        fallback_poster = (random.choice(PICS) if (PICS and isinstance(PICS, list)) else DEFAULT_POSTER) or "https://files.catbox.moe/zck4ym.jpg"
+        target_poster = poster_url or target_grp.get("poster")
+        if not target_poster or str(target_poster).upper() == "N/A" or not str(target_poster).startswith("http") or "mp2y81.jpg" in str(target_poster):
+            target_poster = fallback_poster
+
+        from utils import schedule_filter_message_delete
+        reply_to_id = message.id if message else None
+
+        sent_msg = None
+        if reply_msg:
+            try:
+                if getattr(reply_msg, "photo", None) or getattr(reply_msg, "caption", None):
+                    from pyrogram.types import InputMediaPhoto
+                    try:
+                        await reply_msg.edit_media(media=InputMediaPhoto(media=target_poster, caption=details_caption, parse_mode=enums.ParseMode.HTML), reply_markup=markup)
+                        sent_msg = reply_msg
+                    except Exception:
+                        if target_poster != fallback_poster:
+                            try:
+                                await reply_msg.edit_media(media=InputMediaPhoto(media=fallback_poster, caption=details_caption, parse_mode=enums.ParseMode.HTML), reply_markup=markup)
+                                sent_msg = reply_msg
+                            except Exception:
+                                sent_msg = None
+                        if not sent_msg:
+                            try:
+                                await reply_msg.delete()
+                            except Exception:
+                                pass
+                            reply_msg = None
+                else:
+                    try:
+                        sent_msg = await client.send_photo(
+                            chat_id=chat_id,
+                            photo=target_poster,
+                            caption=details_caption,
+                            reply_markup=markup,
+                            parse_mode=enums.ParseMode.HTML,
+                            reply_to_message_id=reply_to_id
+                        )
+                        try:
+                            await reply_msg.delete()
+                        except Exception:
+                            pass
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+
+        if not sent_msg:
+            try:
+                sent_msg = await client.send_photo(
+                    chat_id=chat_id,
+                    photo=target_poster,
+                    caption=details_caption,
+                    reply_markup=markup,
+                    parse_mode=enums.ParseMode.HTML,
+                    reply_to_message_id=reply_to_id
+                )
+            except Exception as pe:
+                logger.warning(f"[NORMAL SINGLE GROUP SEND PHOTO FAILED]: {pe}. Retrying with fallback...")
+                try:
+                    sent_msg = await client.send_photo(
+                        chat_id=chat_id,
+                        photo=fallback_poster,
+                        caption=details_caption,
+                        reply_markup=markup,
+                        parse_mode=enums.ParseMode.HTML,
+                        reply_to_message_id=reply_to_id
+                    )
+                except Exception:
+                    sent_msg = await client.send_message(
+                        chat_id=chat_id,
+                        text=details_caption,
+                        reply_markup=markup,
+                        parse_mode=enums.ParseMode.HTML,
+                        reply_to_message_id=reply_to_id
+                    )
+
+        if sent_msg:
+            schedule_filter_message_delete(client, chat_id, sent_msg.id, delay=1200)
+            BUTTON_OWNERS[f"{chat_id}-{sent_msg.id}"] = real_user_id
+            return True
+        return False
+
     caption_text = (
         f"<b><i>"
         f"ᯤ Search quary: {html.escape(query_text)}\n"
@@ -4507,7 +4607,7 @@ async def render_normal_grouped_results(client: Client, message: Message, query_
 
     # ── Fetch Poster for Normal Suggestion Message ──
     from info import DEFAULT_POSTER, PICS
-    fallback_poster = (random.choice(PICS) if (PICS and isinstance(PICS, list)) else DEFAULT_POSTER) or "https://files.catbox.moe/mp2y81.jpg"
+    fallback_poster = (random.choice(PICS) if (PICS and isinstance(PICS, list)) else DEFAULT_POSTER) or "https://files.catbox.moe/zck4ym.jpg"
 
     thumb = None
     try:
@@ -4740,7 +4840,7 @@ async def format_normal_filter_details_card(group_data: dict, requester_name: st
             from info import DEFAULT_POSTER
             poster_url = DEFAULT_POSTER
         except Exception:
-            poster_url = "https://files.catbox.moe/mp2y81.jpg"
+            poster_url = "https://files.catbox.moe/zck4ym.jpg"
 
     req_line = f"☁︎ Requester: {requester_name}\n" if requester_name else ""
     details_caption = (
@@ -4944,7 +5044,7 @@ async def cb_normal_group_select(client: Client, query: CallbackQuery):
             from info import DEFAULT_POSTER
             target_poster = DEFAULT_POSTER
         except Exception:
-            target_poster = "https://files.catbox.moe/mp2y81.jpg"
+            target_poster = "https://files.catbox.moe/zck4ym.jpg"
 
     try:
         from utils import schedule_filter_message_delete
@@ -5068,7 +5168,7 @@ async def cb_normal_group_back(client: Client, query: CallbackQuery):
     )
 
     from info import DEFAULT_POSTER, PICS
-    fallback_poster = (random.choice(PICS) if (PICS and isinstance(PICS, list)) else DEFAULT_POSTER) or "https://files.catbox.moe/mp2y81.jpg"
+    fallback_poster = (random.choice(PICS) if (PICS and isinstance(PICS, list)) else DEFAULT_POSTER) or "https://files.catbox.moe/zck4ym.jpg"
 
     thumb = None
     try:
@@ -5353,7 +5453,7 @@ async def send_get_all_file_poster_in_pm(client: Client, user_id: int, group_dat
             from info import DEFAULT_POSTER
             target_poster = DEFAULT_POSTER
         except Exception:
-            target_poster = "https://files.catbox.moe/mp2y81.jpg"
+            target_poster = "https://files.catbox.moe/zck4ym.jpg"
 
     if not hasattr(temp, "NORMAL_FILTER_GROUPS"):
         temp.NORMAL_FILTER_GROUPS = {}
