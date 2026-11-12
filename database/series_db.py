@@ -1084,6 +1084,173 @@ async def delete_announcement(identifier: str, filter_type: str = None) -> dict 
                 )
             except Exception:
                 pass
+
+
+async def schedule_delayed_filter_announcement(filter_type: str, filter_id: str, delay: int = 60):
+    """
+    Schedules an announcement with a debounce timer (default 60 seconds).
+    If more files or episodes arrive within the window, the timer waits until 60 seconds of quiet.
+    Then dispatches the announcement with the divider sticker to the announcement channel.
+    """
+    import time
+    from utils import temp
+    if not hasattr(temp, "PENDING_ANNOUNCEMENTS"):
+        temp.PENDING_ANNOUNCEMENTS = {}
+
+    key = f"{filter_type}:{filter_id}"
+    now = time.time()
+
+    if key in temp.PENDING_ANNOUNCEMENTS:
+        temp.PENDING_ANNOUNCEMENTS[key]["last_file_time"] = now
+        logger.info(f"[ANNOUNCEMENT DEBOUNCE] Updated last_file_time for {key} (delay={delay}s)")
+        return
+
+    temp.PENDING_ANNOUNCEMENTS[key] = {
+        "last_file_time": now,
+        "filter_type": filter_type,
+        "filter_id": filter_id,
+        "delay": delay
+    }
+
+    async def _debounce_worker():
+        logger.info(f"[ANNOUNCEMENT DEBOUNCE START] Waiting {delay}s for {key}")
+        try:
+            await asyncio.sleep(delay)
+            while True:
+                entry = temp.PENDING_ANNOUNCEMENTS.get(key)
+                if not entry:
+                    return
+                elapsed = time.time() - entry["last_file_time"]
+                target_delay = entry.get("delay", delay)
+                if elapsed < target_delay:
+                    await asyncio.sleep(target_delay - elapsed)
+                else:
+                    break
+
+            temp.PENDING_ANNOUNCEMENTS.pop(key, None)
+
+            # Check if channel is configured
+            cid = await get_announcement_channel()
+            if not cid:
+                logger.info(f"[ANNOUNCEMENT DEBOUNCE CANCELLED] Channel not configured for {key}")
+                return
+
+            # Check if already sent
+            if await is_announcement_sent(key, filter_type=filter_type, filter_id=str(filter_id)):
+                logger.info(f"[ANNOUNCEMENT DEBOUNCE SKIP] Already sent for {key}")
+                return
+
+            # Dispatch announcement
+            from utils import get_active_delivery_bot
+            deliv_bot = get_active_delivery_bot() or getattr(temp, "BOT", None)
+            from plugins.series import announce_filter_created
+            await announce_filter_created(client=deliv_bot, filter_type=filter_type, filter_id=str(filter_id), force=True)
+            logger.info(f"[ANNOUNCEMENT DEBOUNCE DISPATCHED] Successfully announced {key}")
+        except Exception as e:
+            logger.error(f"[ANNOUNCEMENT DEBOUNCE ERROR] {key}: {e}", exc_info=True)
+        finally:
+            temp.PENDING_ANNOUNCEMENTS.pop(key, None)
+
+    task = asyncio.create_task(_debounce_worker())
+    temp.PENDING_ANNOUNCEMENTS[key]["task"] = task
+
+
+async def schedule_delayed_normal_announcement(title: str, year: str = "N/A", delay: int = 60):
+    """
+    Schedules an announcement for a Normal Filter movie/series with a 60-second debounce delay.
+    Waits 60 seconds after the last file is added before dispatching the announcement with divider sticker.
+    """
+    import time
+    from utils import temp
+    if not hasattr(temp, "PENDING_ANNOUNCEMENTS"):
+        temp.PENDING_ANNOUNCEMENTS = {}
+
+    clean_t = str(title).strip()
+    clean_y = str(year).strip() if year and str(year).upper() != "N/A" else "N/A"
+    norm_slug = f"{clean_t.lower()}_{clean_y}"
+    key = f"normal:{norm_slug}"
+    now = time.time()
+
+    if key in temp.PENDING_ANNOUNCEMENTS:
+        temp.PENDING_ANNOUNCEMENTS[key]["last_file_time"] = now
+        logger.info(f"[NORMAL ANNOUNCEMENT DEBOUNCE] Updated last_file_time for {key}")
+        return
+
+    temp.PENDING_ANNOUNCEMENTS[key] = {
+        "last_file_time": now,
+        "title": clean_t,
+        "year": clean_y,
+        "delay": delay
+    }
+
+    async def _normal_debounce_worker():
+        logger.info(f"[NORMAL ANNOUNCEMENT DEBOUNCE START] Waiting {delay}s for {key}")
+        try:
+            await asyncio.sleep(delay)
+            while True:
+                entry = temp.PENDING_ANNOUNCEMENTS.get(key)
+                if not entry:
+                    return
+                elapsed = time.time() - entry["last_file_time"]
+                target_delay = entry.get("delay", delay)
+                if elapsed < target_delay:
+                    await asyncio.sleep(target_delay - elapsed)
+                else:
+                    break
+
+            temp.PENDING_ANNOUNCEMENTS.pop(key, None)
+
+            # Check announcement channel
+            cid = await get_announcement_channel()
+            if not cid:
+                logger.info(f"[NORMAL ANNOUNCEMENT DEBOUNCE CANCELLED] Channel not configured for {key}")
+                return
+
+            # Check if already sent
+            if await is_announcement_sent(key, filter_type="normal", filter_id=norm_slug):
+                logger.info(f"[NORMAL ANNOUNCEMENT DEBOUNCE SKIP] Already sent for {key}")
+                return
+
+            from plugins.pm_filter import dispatch_normal_filter_announcement
+            from utils import get_active_delivery_bot
+            deliv_bot = get_active_delivery_bot() or getattr(temp, "BOT", None)
+            await dispatch_normal_filter_announcement(client=deliv_bot, title=clean_t, year=clean_y, channel_id=cid)
+            logger.info(f"[NORMAL ANNOUNCEMENT DEBOUNCE DISPATCHED] Successfully announced {key}")
+        except Exception as e:
+            logger.error(f"[NORMAL ANNOUNCEMENT DEBOUNCE ERROR] {key}: {e}", exc_info=True)
+        finally:
+            temp.PENDING_ANNOUNCEMENTS.pop(key, None)
+
+    task = asyncio.create_task(_normal_debounce_worker())
+    temp.PENDING_ANNOUNCEMENTS[key]["task"] = task
+
+
+async def schedule_delayed_normal_announcement_for_file(file_doc: dict, delay: int = 60):
+    """
+    Parses title and year from a new file document and schedules a delayed Normal Filter announcement.
+    """
+    if not file_doc:
+        return
+    fname = file_doc.get("file_name", "")
+    if not fname:
+        return
+    from utils import clean_file_name, strip_file_prefix_markers
+    cleaned = strip_file_prefix_markers(fname)
+    # Extract year if present
+    year_match = re.search(r"(?i)(?<!\d)(19\d\d|20\d\d)(?!\d)", cleaned)
+    year = year_match.group(1) if year_match else "N/A"
+
+    if year_match:
+        raw_title = cleaned[:year_match.start()]
+    else:
+        raw_title = re.sub(r"(?i)\.(mkv|mp4|avi|mov|flv|wmv|webm)$", "", cleaned)
+        raw_title = re.sub(r"(?i)[\s._\-\(\[]*(480p|720p|1080p|2160p|4k|hdrip|bluray|web-dl|webrip|dvdrip|hevc|x264|x265)[\s._\-\)\]]*.*$", "", raw_title)
+
+    title = re.sub(r"[\s._\-+]+", " ", raw_title).strip()
+    if len(title) < 2:
+        return
+
+    await schedule_delayed_normal_announcement(title=title, year=year, delay=delay)
 # ─── Super Filter Custom Emoji Settings ───────────────────────────────────────
 
 async def set_super_button_emoji(button_type: str, custom_emoji_id: str, fallback_emoji: str) -> bool:
@@ -2385,6 +2552,12 @@ async def sync_movie_filter_for_files(file_docs, *, trigger="file_add"):
                         f"expected={total_files}\n"
                         f"found={len(v_fids)}"
                     )
+
+            if new_fids:
+                try:
+                    await schedule_delayed_filter_announcement(filter_type="movie", filter_id=str(mid), delay=60)
+                except Exception as de:
+                    logger.debug(f"[DELAYED MOVIE ANNOUNCEMENT ERROR] {de}")
         except Exception as e:
             logger.error(
                 f"[AUTO MOVIE FILTER SYNC ERROR]\n"
@@ -2393,6 +2566,7 @@ async def sync_movie_filter_for_files(file_docs, *, trigger="file_add"):
                 f"error={e}",
                 exc_info=True
             )
+    return len(matched_updates) > 0
 
 
 async def sync_series_filter_for_files(file_docs, *, trigger="file_add"):
@@ -2531,6 +2705,11 @@ async def sync_series_filter_for_files(file_docs, *, trigger="file_add"):
 
                 if update_fields:
                     await series_col.update_one({"_id": ObjectId(series_id)}, update_fields)
+
+                try:
+                    await schedule_delayed_filter_announcement(filter_type="series", filter_id=str(series_id), delay=60)
+                except Exception as de:
+                    logger.debug(f"[DELAYED SERIES ANNOUNCEMENT ERROR] {de}")
                 break
         except Exception as e:
             logger.error(f"[AUTO SERIES FILTER SYNC ERROR] {e}", exc_info=True)
