@@ -370,7 +370,76 @@ def _build_series_inline_result(series: dict, bot_username: str) -> InlineQueryR
     )
 
 
-def _build_normal_inline_result(g: dict, bot_username: str, thumb_url: str) -> InlineQueryResultPhoto:
+_INLINE_POSTER_CACHE = {}
+
+async def resolve_normal_group_poster(g: dict) -> str:
+    """
+    Resolves the actual movie or series poster for a normal filter group.
+    1. Check memory cache.
+    2. Check if poster already present on group or files.
+    3. Check super_movies_col or series_col in DB.
+    4. Fetch from IMDb / TMDB via get_poster.
+    5. Fallback to DEFAULT_POSTER.
+    """
+    title = str(g.get("title", "")).strip()
+    year = str(g.get("year", "N/A")).strip()
+    year_str = year if year and year.upper() != "N/A" else ""
+    cache_key = f"{title.lower()}_{year_str}"
+
+    if cache_key in _INLINE_POSTER_CACHE:
+        return _INLINE_POSTER_CACHE[cache_key]
+
+    # 1. Existing valid poster on group
+    grp_poster = g.get("poster")
+    if grp_poster and _is_valid_url(grp_poster):
+        _INLINE_POSTER_CACHE[cache_key] = grp_poster
+        return grp_poster
+
+    # 2. Check if a Super Movie or Series has this poster in DB
+    try:
+        from database.series_db import super_movies_col, series_col
+        m_doc = await super_movies_col.find_one({
+            "$or": [
+                {"movie.title": re.compile(rf"^{re.escape(title)}$", re.IGNORECASE)},
+                {"title": re.compile(rf"^{re.escape(title)}$", re.IGNORECASE)}
+            ]
+        })
+        if m_doc and m_doc.get("poster") and _is_valid_url(m_doc["poster"]):
+            _INLINE_POSTER_CACHE[cache_key] = m_doc["poster"]
+            return m_doc["poster"]
+
+        s_doc = await series_col.find_one({
+            "name": re.compile(rf"^{re.escape(title)}$", re.IGNORECASE)
+        })
+        if s_doc and s_doc.get("poster") and _is_valid_url(s_doc["poster"]):
+            _INLINE_POSTER_CACHE[cache_key] = s_doc["poster"]
+            return s_doc["poster"]
+    except Exception:
+        pass
+
+    # 3. Fast IMDb / TMDB poster fetch
+    try:
+        from utils import get_poster
+        q = f"{title} {year_str}".strip() if year_str else title
+        imdb_res = await asyncio.wait_for(get_poster(q), timeout=2.5)
+        if (not imdb_res or not imdb_res.get("poster")) and year_str:
+            try:
+                imdb_res = await asyncio.wait_for(get_poster(title), timeout=2.0)
+            except Exception:
+                pass
+        if imdb_res and isinstance(imdb_res, dict) and imdb_res.get("poster") and _is_valid_url(imdb_res["poster"]):
+            p = imdb_res["poster"]
+            _INLINE_POSTER_CACHE[cache_key] = p
+            return p
+    except Exception:
+        pass
+
+    fallback = DEFAULT_POSTER if _is_valid_url(DEFAULT_POSTER) else "https://files.catbox.moe/mp2y81.jpg"
+    _INLINE_POSTER_CACHE[cache_key] = fallback
+    return fallback
+
+
+def _build_normal_inline_result(g: dict, bot_username: str, thumb_url: str = None) -> InlineQueryResultPhoto:
     gid = g.get("group_id", "")
     title = g.get("title", "Movie")
     year = str(g.get("year", "N/A")).strip()
@@ -400,7 +469,7 @@ def _build_normal_inline_result(g: dict, bot_username: str, thumb_url: str) -> I
 
     start_url = f"https://t.me/{bot_username}?start=norm_{gid}"
     btn = [[InlineKeyboardButton("📥 Download Files", url=start_url)]]
-    photo = thumb_url if _is_valid_url(thumb_url) else DEFAULT_POSTER
+    photo = thumb_url if _is_valid_url(thumb_url) else (DEFAULT_POSTER if _is_valid_url(DEFAULT_POSTER) else "https://files.catbox.moe/mp2y81.jpg")
 
     return InlineQueryResultPhoto(
         photo_url=photo,
@@ -468,8 +537,6 @@ async def answer(bot: Client, query: InlineQuery):
         from plugins.pm_filter import build_normal_filter_groups
         from database.series_db import get_series_thumbnail
 
-        thumb = await get_series_thumbnail() or DEFAULT_POSTER
-
         if not string:
             files, _, total_count = await get_search_results(chat_id=0, query="", max_results=30, offset=offset, filter=True)
             groups = build_normal_filter_groups(files)
@@ -480,8 +547,10 @@ async def answer(bot: Client, query: InlineQuery):
             switch_pm_text = f"🔍 Results for '{string}' ({len(groups)})" if groups else f"❌ No results for '{string}'"
 
         page_groups = groups[:PAGE_SIZE]
-        for g in page_groups:
-            results.append(_build_normal_inline_result(g, bot_username, thumb))
+        posters = await asyncio.gather(*(resolve_normal_group_poster(g) for g in page_groups), return_exceptions=True)
+        for idx, g in enumerate(page_groups):
+            p = posters[idx] if (idx < len(posters) and isinstance(posters[idx], str) and _is_valid_url(posters[idx])) else (DEFAULT_POSTER if _is_valid_url(DEFAULT_POSTER) else "https://files.catbox.moe/mp2y81.jpg")
+            results.append(_build_normal_inline_result(g, bot_username, p))
 
         has_more = (offset + len(page_groups)) < total_count
         next_offset = str(offset + len(page_groups)) if has_more else ""

@@ -4505,18 +4505,27 @@ async def render_normal_grouped_results(client: Client, message: Message, query_
         f"</i></b>"
     )
 
-    # ── Fetch Poster for Normal Suggestion Message (No IMDb query lookup to avoid random movie posters) ──
+    # ── Fetch Poster for Normal Suggestion Message ──
     from info import DEFAULT_POSTER, PICS
-    fallback_poster = DEFAULT_POSTER or "https://files.catbox.moe/mp2y81.jpg"
+    fallback_poster = (random.choice(PICS) if (PICS and isinstance(PICS, list)) else DEFAULT_POSTER) or "https://files.catbox.moe/mp2y81.jpg"
 
     thumb = None
     try:
         from database.series_db import get_series_thumbnail
         st = await get_series_thumbnail()
-        if st and str(st).strip():
+        if st and str(st).strip() and str(st).startswith("http"):
             thumb = str(st).strip()
     except Exception:
         pass
+
+    if (not thumb or "mp2y81.jpg" in str(thumb)) and groups:
+        try:
+            from plugins.inline import resolve_normal_group_poster
+            p_res = await asyncio.wait_for(resolve_normal_group_poster(groups[0]), timeout=3.5)
+            if p_res and str(p_res).startswith("http") and "mp2y81.jpg" not in str(p_res):
+                thumb = str(p_res).strip()
+        except Exception:
+            pass
 
     if not thumb:
         thumb = fallback_poster
@@ -4802,26 +4811,18 @@ async def start_normal_file_delivery_in_pm(client: Client, user_id: int, norm_gr
     }
     temp.USER_ACTIVE_DELIVERY_SESSIONS[user_id] = session_id
 
-    # Bottom action keyboard (ReplyKeyboardMarkup) shown docked below input while files are streaming
-    stop_reply_markup = ReplyKeyboardMarkup(
-        keyboard=[[KeyboardButton("🛑 Stop Files")]],
-        resize_keyboard=True,
-        one_time_keyboard=False,
-        placeholder="🛑 Tap here to stop file delivery"
-    )
-
-    kb_msg = None
+    # Ensure any previous bottom keyboard is dismissed cleanly
     try:
-        kb_msg = await client.send_message(
+        await client.send_message(
             chat_id=user_id,
-            text="<i>⚡ ഫയലുകൾ അയച്ചു തുടങ്ങുന്നു... നിർത്താൻ താഴെ കാണുന്ന 🛑 Stop Files ബട്ടൺ ഉപയോഗിക്കുക.</i>",
-            reply_markup=stop_reply_markup,
+            text="<i>⚡ ഫയലുകൾ അയച്ചു തുടങ്ങുന്നു...</i>",
+            reply_markup=ReplyKeyboardRemove(remove_keyboard=True),
             parse_mode=enums.ParseMode.HTML
         )
-    except Exception as kbe:
-        logger.warning(f"[START NORMAL KB MSG ERROR] {kbe}")
+    except Exception:
+        pass
 
-    temp.NORMAL_DELIVERY_SESSIONS[session_id]["kb_msg_id"] = kb_msg.id if kb_msg else None
+    temp.NORMAL_DELIVERY_SESSIONS[session_id]["kb_msg_id"] = None
 
     from plugins.series import make_styled_button, apply_pm_styled_reply_markup
     stop_btn = make_styled_button("🛑 Stop Files", callback_data=f"norm_stop#{session_id}", style="danger")
@@ -5067,16 +5068,25 @@ async def cb_normal_group_back(client: Client, query: CallbackQuery):
     )
 
     from info import DEFAULT_POSTER, PICS
-    fallback_poster = DEFAULT_POSTER or "https://files.catbox.moe/mp2y81.jpg"
+    fallback_poster = (random.choice(PICS) if (PICS and isinstance(PICS, list)) else DEFAULT_POSTER) or "https://files.catbox.moe/mp2y81.jpg"
 
     thumb = None
     try:
         from database.series_db import get_series_thumbnail
         st = await get_series_thumbnail()
-        if st and str(st).strip():
+        if st and str(st).strip() and str(st).startswith("http"):
             thumb = str(st).strip()
     except Exception:
         pass
+
+    if (not thumb or "mp2y81.jpg" in str(thumb)) and groups:
+        try:
+            from plugins.inline import resolve_normal_group_poster
+            p_res = await asyncio.wait_for(resolve_normal_group_poster(groups[0]), timeout=3.5)
+            if p_res and str(p_res).startswith("http") and "mp2y81.jpg" not in str(p_res):
+                thumb = str(p_res).strip()
+        except Exception:
+            pass
 
     if not thumb:
         thumb = fallback_poster
@@ -5945,22 +5955,81 @@ async def execute_normal_group_file_delivery(client: Client, user_id: int, group
 async def cmd_normal_filter_announce(client: Client, message: Message):
     """
     Announces a Normal Filter movie/series to the connected Announcement Channel.
-    Triggered by replying /ano to a Normal Filter details card.
+    Supported usages:
+    1. Reply /ano to a Normal Filter details card.
+    2. Directly type /ano <movie_or_series_name>
     Includes the movie poster, details caption, and deep-link download button.
     """
-    from info import ADMINS
+    from info import ADMINS, AUTH_USERS
     uid = message.from_user.id if message.from_user else (message.sender_chat.id if message.sender_chat else 0)
-    if uid not in ADMINS:
+    is_authorized = False
+    try:
+        from plugins.series import _is_admin
+        is_authorized = _is_admin(uid)
+    except Exception:
+        pass
+    if not is_authorized:
+        admin_set = set(ADMINS or []) | set(AUTH_USERS or [])
+        if uid in admin_set or str(uid) in [str(x) for x in admin_set]:
+            is_authorized = True
+    if not is_authorized:
         return await message.reply_text("❌ <b>You are not authorized to use this command.</b>", parse_mode=enums.ParseMode.HTML)
 
+    args = message.text.split(None, 1) if message.text else []
+    query_arg = args[1].strip() if len(args) > 1 else ""
     reply_to = message.reply_to_message
-    if not reply_to:
+
+    if not reply_to and not query_arg:
         return await message.reply_text(
-            "⚠️ <b>Please reply to a Normal Filter movie/series details message with /ano to announce it.</b>\n\n"
-            "<i>മൂവി/സീരീസ് ഡീറ്റെയിൽസ് കാർഡിന് റിപ്ലൈ ആയി /ano എന്ന് അയക്കുക.</i>",
+            "⚠️ <b>Usage:</b>\n\n"
+            "• <code>/ano &lt;Movie or Series Name&gt;</code>\n"
+            "• Or reply <code>/ano</code> to any Movie/Series details message.\n\n"
+            "<i>ഉദാഹരണം: <code>/ano Tik Tik Tik</code></i>",
             parse_mode=enums.ParseMode.HTML
         )
 
+    from database.series_db import get_announcement_channel, save_temp_request
+    channel_id = await get_announcement_channel()
+    if not channel_id:
+        return await message.reply_text(
+            "⚠️ <b>Announcement channel is not configured!</b>\n\n"
+            "Use <code>/add_ano &lt;channel_id&gt;</code> to set the announcement channel.",
+            parse_mode=enums.ParseMode.HTML
+        )
+
+    # Mode A: User provided search query directly (e.g. /ano Tik Tik Tik)
+    if query_arg and not reply_to:
+        status_msg = await message.reply_text(f"🔍 <i>Searching for '{html.escape(query_arg)}' to announce...</i>", parse_mode=enums.ParseMode.HTML)
+        from database.ia_filterdb import get_search_results
+        files, _, _ = await get_search_results(chat_id=0, query=query_arg, max_results=50, filter=True)
+        if not files:
+            return await status_msg.edit_text(f"❌ <b>No files found for:</b> <code>{html.escape(query_arg)}</code>", parse_mode=enums.ParseMode.HTML)
+
+        groups = build_normal_filter_groups(files, query_text=query_arg)
+        if not groups:
+            return await status_msg.edit_text(f"❌ <b>Could not build details card for:</b> <code>{html.escape(query_arg)}</code>", parse_mode=enums.ParseMode.HTML)
+
+        target_grp = groups[0]
+        ok = await dispatch_normal_filter_announcement(
+            client=client,
+            title=target_grp.get("title", query_arg),
+            year=str(target_grp.get("year", "N/A")),
+            channel_id=channel_id
+        )
+        if ok:
+            post_link = f"https://t.me/c/{str(channel_id).replace('-100', '')}" if str(channel_id).startswith("-100") else ""
+            link_info = f"\n🔗 <a href='{post_link}'>View Channel</a>" if post_link else ""
+            return await status_msg.edit_text(
+                f"✅ <b>Announcement posted successfully!</b>\n\n"
+                f"🎬 <b>Title:</b> <code>{html.escape(target_grp.get('title', query_arg))}</code>\n"
+                f"📢 <b>Channel:</b> <code>{channel_id}</code>{link_info}",
+                parse_mode=enums.ParseMode.HTML,
+                disable_web_page_preview=True
+            )
+        else:
+            return await status_msg.edit_text("❌ <b>Failed to post announcement.</b> Please ensure the bot is an admin in the channel.", parse_mode=enums.ParseMode.HTML)
+
+    # Mode B: User replied to a details card
     # 1. Extract norm_group_id from replied message's inline keyboard or callback_data
     norm_group_id = None
     group_data = None
@@ -5989,16 +6058,6 @@ async def cmd_normal_filter_announce(client: Client, message: Message):
         if not group_data:
             from database.series_db import get_temp_request
             group_data = await get_temp_request(norm_group_id)
-
-    # 2. Get announcement channel
-    from database.series_db import get_announcement_channel, save_temp_request
-    channel_id = await get_announcement_channel()
-    if not channel_id:
-        return await message.reply_text(
-            "⚠️ <b>Announcement channel is not configured!</b>\n\n"
-            "Use <code>/add_ano &lt;channel_id&gt;</code> to set the announcement channel.",
-            parse_mode=enums.ParseMode.HTML
-        )
 
     # 3. Determine bot username for deep link
     from utils import get_child_bot_username
@@ -6195,9 +6254,12 @@ async def dispatch_normal_filter_announcement(client: Client, title: str, year: 
     markup = InlineKeyboardMarkup([[make_styled_button(btn_text, url=start_link, style=btn_style)]])
 
     # 1. Send divider sticker before posting announcement
-    from plugins.series import send_announcement_sticker
-    await send_announcement_sticker(client, cid_int)
-    await asyncio.sleep(0.5)
+    try:
+        from plugins.series import send_announcement_sticker
+        await send_announcement_sticker(client, cid_int)
+        await asyncio.sleep(0.5)
+    except Exception as se:
+        logger.warning(f"[NORMAL AUTO ANNOUNCEMENT STICKER ERROR]: {se}")
 
     # 2. Post announcement photo or message
     sent_msg = None
@@ -7002,7 +7064,11 @@ def register_normal_filter_handlers(child_bot: Client) -> int:
     child_bot.add_handler(MessageHandler(child_help_handler, filters.command("help") & filters.incoming), group=0)
     child_bot.add_handler(MessageHandler(child_pm_broadcast, filters.command("broadcast") & filters.user(ADMINS)), group=0)
     child_bot.add_handler(MessageHandler(child_broadcast_group, filters.command("grp_broadcast") & filters.user(ADMINS)), group=0)
-    child_bot.add_handler(MessageHandler(cmd_normal_filter_announce, filters.command(["ano", "announce", "anomov", "anoser"]) & filters.user(ADMINS)), group=0)
+    child_bot.add_handler(MessageHandler(cmd_normal_filter_announce, filters.command(["ano", "announce", "anomov", "anoser"])), group=0)
+    from plugins.series import cmd_set_announcement, cmd_del_announcement, cmd_get_announcement
+    child_bot.add_handler(MessageHandler(cmd_set_announcement, filters.command(["add_ano", "set_ano"])), group=0)
+    child_bot.add_handler(MessageHandler(cmd_del_announcement, filters.command(["del_ano", "rem_ano"])), group=0)
+    child_bot.add_handler(MessageHandler(cmd_get_announcement, filters.command(["get_ano", "ano_channel"])), group=0)
     child_bot.add_handler(MessageHandler(cmd_set_distribution, filters.command(["dis", "setdis", "set_dis", "distribution"])), group=0)
     child_bot.add_handler(MessageHandler(cmd_del_distribution, filters.command(["deldis", "deldistribution", "remdis"])), group=0)
 
@@ -7010,7 +7076,7 @@ def register_normal_filter_handlers(child_bot: Client) -> int:
     child_bot.add_handler(
         MessageHandler(
             child_filter_message_handler,
-            filters.text & filters.incoming & ~filters.command(["start", "about", "help", "broadcast", "grp_broadcast", "edt", "edit", "quick_edit", "ano", "announce", "anomov", "anoser", "dis", "deldis", "setdis", "deldistribution"]) & ~filters.regex(r"(?i)(🛑|🔴|stop\s*files|^stop$)")
+            filters.text & filters.incoming & ~filters.command(["start", "about", "help", "broadcast", "grp_broadcast", "edt", "edit", "quick_edit", "ano", "announce", "anomov", "anoser", "add_ano", "set_ano", "del_ano", "rem_ano", "get_ano", "ano_channel", "dis", "deldis", "setdis", "deldistribution"]) & ~filters.regex(r"(?i)(🛑|🔴|stop\s*files|^stop$)")
         ),
         group=0
     )
