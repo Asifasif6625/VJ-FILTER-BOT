@@ -4257,8 +4257,11 @@ async def announce_filter_created(client: Client, filter_type: str = "series", f
         cid_int = int(channel_id) if str(channel_id).lstrip("-").isdigit() else str(channel_id)
 
         # Send divider sticker before posting announcement
-        await send_announcement_sticker(client, cid_int)
-        await asyncio.sleep(0.5)
+        try:
+            await send_announcement_sticker(client, cid_int)
+            await asyncio.sleep(0.5)
+        except Exception as se:
+            logger.warning(f"[ANNOUNCEMENT STICKER SEND ERROR]: {se}")
 
         # 1. First attempt: Direct Send via Telegram Bot API HTTP with primary styled button in initial message
         direct_send_res = None
