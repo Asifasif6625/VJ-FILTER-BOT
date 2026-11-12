@@ -791,7 +791,7 @@ def get_random_filter_poster(filter_data: dict | None) -> str | None:
             from info import DEFAULT_POSTER
             return DEFAULT_POSTER
         except Exception:
-            return "https://files.catbox.moe/mp2y81.jpg"
+            return "https://files.catbox.moe/zck4ym.jpg"
 
     posters = filter_data.get("posters")
     if isinstance(posters, list) and posters:
@@ -815,7 +815,7 @@ def get_random_filter_poster(filter_data: dict | None) -> str | None:
         from info import DEFAULT_POSTER
         return DEFAULT_POSTER
     except Exception:
-        return "https://files.catbox.moe/mp2y81.jpg"
+        return "https://files.catbox.moe/zck4ym.jpg"
 
 
 def strip_file_prefix_markers(text: str) -> str:
