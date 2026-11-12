@@ -758,13 +758,35 @@ async def save_series_thumbnail(file_id: str):
         {"$set": {"file_id": file_id}},
         upsert=True
     )
+    try:
+        from utils import temp
+        temp.GLOBAL_SERIES_THUMBNAIL = file_id
+    except Exception:
+        pass
 
 async def get_series_thumbnail() -> str | None:
+    try:
+        from utils import temp
+        if getattr(temp, "GLOBAL_SERIES_THUMBNAIL", None):
+            return temp.GLOBAL_SERIES_THUMBNAIL
+    except Exception:
+        pass
     doc = await settings_col.find_one({"_id": "global_thumbnail"})
-    return doc.get("file_id") if doc else None
+    fid = doc.get("file_id") if doc else None
+    try:
+        from utils import temp
+        temp.GLOBAL_SERIES_THUMBNAIL = fid
+    except Exception:
+        pass
+    return fid
 
 async def delete_series_thumbnail():
     await settings_col.delete_one({"_id": "global_thumbnail"})
+    try:
+        from utils import temp
+        temp.GLOBAL_SERIES_THUMBNAIL = None
+    except Exception:
+        pass
 
 
 async def update_series(series_id: str, data: dict):
@@ -871,6 +893,49 @@ async def load_distribution_channel_cache():
         await get_distribution_channel()
     except Exception as e:
         logger.warning(f"Failed to load distribution channel cache: {e}")
+
+
+async def set_super_filter_enabled(enabled: bool):
+    """Save or update super filter enabled status in DB and memory cache."""
+    val = bool(enabled)
+    await settings_col.update_one(
+        {"_id": "super_filter_enabled"},
+        {"$set": {"enabled": val}},
+        upsert=True
+    )
+    try:
+        from utils import temp
+        temp.SUPER_FILTER_ENABLED = val
+    except Exception:
+        pass
+    return val
+
+
+async def is_super_filter_enabled() -> bool:
+    """Retrieve super filter enabled state (default True)."""
+    try:
+        from utils import temp
+        if hasattr(temp, "SUPER_FILTER_ENABLED") and temp.SUPER_FILTER_ENABLED is not None:
+            return bool(temp.SUPER_FILTER_ENABLED)
+    except Exception:
+        pass
+
+    doc = await settings_col.find_one({"_id": "super_filter_enabled"})
+    val = doc.get("enabled", True) if doc else True
+    try:
+        from utils import temp
+        temp.SUPER_FILTER_ENABLED = bool(val)
+    except Exception:
+        pass
+    return bool(val)
+
+
+async def load_super_filter_cache():
+    """Preload super filter state into memory cache at startup."""
+    try:
+        await is_super_filter_enabled()
+    except Exception as e:
+        logger.warning(f"Failed to load super filter cache: {e}")
 
 async def is_announcement_sent(announcement_key: str, filter_type: str = None, filter_id: str = None) -> bool:
     """Check if an announcement has already been sent for a series or movie."""

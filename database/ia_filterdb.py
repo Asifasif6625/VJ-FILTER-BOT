@@ -2,7 +2,7 @@
 # Subscribe YouTube Channel For Amazing Bot @Tech_VJ
 # Ask Doubt on telegram @KingVJ01
 
-import re, base64, json, asyncio, logging
+import re, base64, json, asyncio, logging, time
 from struct import pack
 from pyrogram.file_id import FileId
 from pymongo import MongoClient
@@ -235,18 +235,15 @@ def is_file_already_saved(file_id, file_name):
             return True
     return False
 
-async def get_search_results(chat_id, query, file_type=None, max_results=5, offset=0, filter=False):
-    """For given query return (results, next_offset)"""
-    try:
-        max_results = int(max_results)
-    except Exception:
-        max_results = 5
-    
-    query = query.strip()
-    if not query:
+_SEARCH_CACHE = {}
+_SEARCH_CACHE_TTL = 60  # seconds
+
+def _sync_search_worker(query: str, offset: int, max_results: int):
+    clean_query = query.strip()
+    if not clean_query:
         raw_pattern = '.'
     else:
-        words = [re.escape(w) for w in query.split() if w]
+        words = [re.escape(w) for w in clean_query.split() if w]
         if len(words) == 1:
             raw_pattern = r'(\b|[\.\+\-_])' + words[0] + r'(\b|[\.\+\-_])'
         else:
@@ -254,31 +251,42 @@ async def get_search_results(chat_id, query, file_type=None, max_results=5, offs
     try:
         regex = re.compile(raw_pattern, flags=re.IGNORECASE)
     except Exception:
-        regex = re.compile(re.escape(query), flags=re.IGNORECASE)
+        regex = re.compile(re.escape(clean_query), flags=re.IGNORECASE)
+
     filter_criteria = {'file_name': regex}
+    projection = {
+        "_id": 1, "file_id": 1, "file_name": 1, "file_size": 1,
+        "caption": 1, "chat_id": 1, "message_id": 1, "bot_file_map": 1, "file_type": 1
+    }
+
     files = []
     if MULTIPLE_DATABASE:
-        cursor1 = col.find(filter_criteria).sort('$natural', -1).skip(offset).limit(max_results)
-        cursor2 = sec_col.find(filter_criteria).sort('$natural', -1).skip(offset).limit(max_results)
-        
-        for file in cursor1:
-            files.append(file)
-        for file in cursor2:
-            if len(files) >= max_results:
-                break
-            files.append(file)
-        files = files[:max_results]
+        cursor1 = col.find(filter_criteria, projection).sort('$natural', -1).skip(offset).limit(max_results)
+        for f in cursor1:
+            files.append(f)
+        if len(files) < max_results:
+            cursor2 = sec_col.find(filter_criteria, projection).sort('$natural', -1).skip(offset).limit(max_results - len(files))
+            for f in cursor2:
+                files.append(f)
     else:
-        cursor = col.find(filter_criteria).sort('$natural', -1).skip(offset).limit(max_results)
-        
-        for file in cursor:
-            files.append(file)
+        cursor = col.find(filter_criteria, projection).sort('$natural', -1).skip(offset).limit(max_results)
+        for f in cursor:
+            files.append(f)
 
-    total_results = col.count_documents(filter_criteria) if not MULTIPLE_DATABASE else (col.count_documents(filter_criteria) + sec_col.count_documents(filter_criteria))
+    # Fast total estimation: if returned files < max_results, total is exact without scanning the whole DB
+    if len(files) < max_results:
+        total_results = offset + len(files)
+    else:
+        try:
+            total_results = col.count_documents(filter_criteria)
+            if MULTIPLE_DATABASE:
+                total_results += sec_col.count_documents(filter_criteria)
+        except Exception:
+            total_results = offset + len(files) + 1
 
     # Fallback search if no results and query contains punctuation or apostrophe (e.g. Butcher's vs Butchers)
-    if not files and query and any(c in query for c in ("'", "’", "-", ":", ".")):
-        alt_query = re.sub(r"['’\-:\.]+", " ", query).strip()
+    if not files and clean_query and any(c in clean_query for c in ("'", "’", "-", ":", ".")):
+        alt_query = re.sub(r"['’\-:\.]+", " ", clean_query).strip()
         alt_words = [re.escape(w) for w in alt_query.split() if len(w) > 1]
         if alt_words:
             alt_pattern = r'.*[\s\.\+\-_]'.join(alt_words)
@@ -286,26 +294,55 @@ async def get_search_results(chat_id, query, file_type=None, max_results=5, offs
                 alt_regex = re.compile(alt_pattern, flags=re.IGNORECASE)
                 alt_filter = {'file_name': alt_regex}
                 if MULTIPLE_DATABASE:
-                    alt_cur1 = col.find(alt_filter).sort('$natural', -1).skip(offset).limit(max_results)
-                    alt_cur2 = sec_col.find(alt_filter).sort('$natural', -1).skip(offset).limit(max_results)
-                    for file in alt_cur1:
-                        files.append(file)
-                    for file in alt_cur2:
-                        if len(files) >= max_results:
-                            break
-                        files.append(file)
-                    files = files[:max_results]
+                    alt_cur1 = col.find(alt_filter, projection).sort('$natural', -1).skip(offset).limit(max_results)
+                    for f in alt_cur1:
+                        files.append(f)
+                    if len(files) < max_results:
+                        alt_cur2 = sec_col.find(alt_filter, projection).sort('$natural', -1).skip(offset).limit(max_results - len(files))
+                        for f in alt_cur2:
+                            files.append(f)
                 else:
-                    alt_cur = col.find(alt_filter).sort('$natural', -1).skip(offset).limit(max_results)
-                    for file in alt_cur:
-                        files.append(file)
-                total_results = col.count_documents(alt_filter) if not MULTIPLE_DATABASE else (col.count_documents(alt_filter) + sec_col.count_documents(alt_filter))
+                    alt_cur = col.find(alt_filter, projection).sort('$natural', -1).skip(offset).limit(max_results)
+                    for f in alt_cur:
+                        files.append(f)
+                if len(files) < max_results:
+                    total_results = offset + len(files)
+                else:
+                    total_results = col.count_documents(alt_filter)
+                    if MULTIPLE_DATABASE:
+                        total_results += sec_col.count_documents(alt_filter)
             except Exception:
                 pass
 
     next_offset = "" if (offset + len(files)) >= total_results or (offset + max_results) >= total_results else (offset + max_results)
-
     return files, next_offset, total_results
+
+async def get_search_results(chat_id, query, file_type=None, max_results=5, offset=0, filter=False):
+    """For given query return (results, next_offset, total_results) with fast non-blocking worker & memory cache"""
+    try:
+        max_results = int(max_results)
+    except Exception:
+        max_results = 5
+    try:
+        offset = int(offset)
+    except Exception:
+        offset = 0
+
+    clean_q = str(query or "").strip().lower()
+    cache_key = (clean_q, offset, max_results)
+    now = time.time()
+
+    if cache_key in _SEARCH_CACHE:
+        cached_time, cached_res = _SEARCH_CACHE[cache_key]
+        if now - cached_time < _SEARCH_CACHE_TTL:
+            return cached_res
+
+    res = await asyncio.to_thread(_sync_search_worker, clean_q, offset, max_results)
+
+    if len(_SEARCH_CACHE) > 500:
+        _SEARCH_CACHE.clear()
+    _SEARCH_CACHE[cache_key] = (now, res)
+    return res
 
 async def get_bad_files(query, file_type=None, use_filter=False):
     """For given query return (results, next_offset)"""
