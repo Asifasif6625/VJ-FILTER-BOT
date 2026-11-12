@@ -216,8 +216,11 @@ async def save_file(media, bot_id=None, sync_filters=True, return_doc=False):
     if sync_filters and code in (0, 1):
         try:
             from database.series_db import sync_movie_filter_for_files, sync_series_filter_for_files
-            await sync_movie_filter_for_files([file], trigger="ia_filterdb_col")
-            await sync_series_filter_for_files([file], trigger="ia_filterdb_col")
+            m_matched = await sync_movie_filter_for_files([file], trigger="ia_filterdb_col")
+            s_matched = await sync_series_filter_for_files([file], trigger="ia_filterdb_col")
+            if not m_matched and not s_matched:
+                from database.series_db import schedule_delayed_normal_announcement_for_file
+                await schedule_delayed_normal_announcement_for_file(file, delay=60)
         except Exception as se:
             logger.debug(f"[AUTO FILTER SYNC ERROR] {se}")
 
