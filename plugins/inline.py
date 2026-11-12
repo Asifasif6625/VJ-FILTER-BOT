@@ -370,13 +370,55 @@ def _build_series_inline_result(series: dict, bot_username: str) -> InlineQueryR
     )
 
 
+def _build_normal_inline_result(g: dict, bot_username: str, thumb_url: str) -> InlineQueryResultPhoto:
+    gid = g.get("group_id", "")
+    title = g.get("title", "Movie")
+    year = str(g.get("year", "N/A")).strip()
+    year_str = f" ({year})" if year and year != "N/A" else ""
+    is_series = g.get("is_series", False)
+    season = g.get("season", 1) or 1
+    files_count = len(g.get("files", []))
+
+    if is_series:
+        card_title = f"📺 S{season:02d} {title}{year_str}"
+        card_desc = f"Series • {files_count} file(s) available"
+        caption_html = (
+            f"📺 <b>Series:</b> <b>{html.escape(title)}</b>\n"
+            f"📅 <b>Year:</b> {html.escape(year)}\n"
+            f"📁 <b>Available Files:</b> {files_count}\n\n"
+            f"<i>Tap Download below to get files in Bot!</i>"
+        )
+    else:
+        card_title = f"🎬 {title}{year_str}"
+        card_desc = f"Movie • {files_count} file(s) available"
+        caption_html = (
+            f"🎬 <b>Movie:</b> <b>{html.escape(title)}</b>\n"
+            f"📅 <b>Year:</b> {html.escape(year)}\n"
+            f"📁 <b>Available Files:</b> {files_count}\n\n"
+            f"<i>Tap Download below to get files in Bot!</i>"
+        )
+
+    start_url = f"https://t.me/{bot_username}?start=norm_{gid}"
+    btn = [[InlineKeyboardButton("📥 Download Files", url=start_url)]]
+    photo = thumb_url if _is_valid_url(thumb_url) else DEFAULT_POSTER
+
+    return InlineQueryResultPhoto(
+        photo_url=photo,
+        thumb_url=photo,
+        title=card_title,
+        description=card_desc,
+        caption=caption_html,
+        parse_mode=enums.ParseMode.HTML,
+        reply_markup=InlineKeyboardMarkup(btn)
+    )
+
+
 @Client.on_inline_query()
 async def answer(bot: Client, query: InlineQuery):
     """
     Unified Telegram Inline Mode query handler for Movie and Series filters.
-    - GDBOT is Admin Backend only: inline search runs exclusively on Child/Delivery bot.
-    - No query: Shows newest/latest added movie & series poster gallery.
-    - Search query: Runs Smart Search (exact -> normalized -> alias -> fuzzy) and returns matching posters.
+    - If Super Filter is ON: displays Super Movies & Series cards.
+    - If Super Filter is OFF: displays Normal Filter movies & series cards from ia_filterdb.
     """
     # GDBOT is admin backend only: redirect inline search to Child/Delivery Bot
     if is_gdbot_client(bot):
@@ -416,9 +458,37 @@ async def answer(bot: Client, query: InlineQuery):
     offset = int(offset_str) if offset_str.isdigit() else 0
 
     results = []
-    
-    if not string:
-        # ─── CASE 1: NO QUERY -> SHOW LATEST / NEW MOVIES & SERIES ─────────────
+
+    from database.series_db import is_super_filter_enabled
+    super_filter_on = await is_super_filter_enabled()
+
+    if not super_filter_on:
+        # ─── NORMAL FILTER INLINE MODE ──────────────────────────────────────────
+        from database.ia_filterdb import get_search_results
+        from plugins.pm_filter import build_normal_filter_groups
+        from database.series_db import get_series_thumbnail
+
+        thumb = await get_series_thumbnail() or DEFAULT_POSTER
+
+        if not string:
+            files, _, total_count = await get_search_results(chat_id=0, query="", max_results=30, offset=offset, filter=True)
+            groups = build_normal_filter_groups(files)
+            switch_pm_text = f"🔥 Normal Movies & Series ({len(groups)})"
+        else:
+            files, _, total_count = await get_search_results(chat_id=0, query=string.lower(), max_results=50, offset=offset, filter=True)
+            groups = build_normal_filter_groups(files, query_text=string)
+            switch_pm_text = f"🔍 Results for '{string}' ({len(groups)})" if groups else f"❌ No results for '{string}'"
+
+        page_groups = groups[:PAGE_SIZE]
+        for g in page_groups:
+            results.append(_build_normal_inline_result(g, bot_username, thumb))
+
+        has_more = (offset + len(page_groups)) < total_count
+        next_offset = str(offset + len(page_groups)) if has_more else ""
+        cache_time = 15
+
+    elif not string:
+        # ─── SUPER FILTER CASE 1: NO QUERY -> SHOW LATEST / NEW MOVIES & SERIES ─
         page_items, total_count = await get_latest_filters(limit=PAGE_SIZE, offset=offset)
         
         for item in page_items:

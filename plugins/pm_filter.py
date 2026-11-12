@@ -6,7 +6,10 @@ import os, logging, string, asyncio, time, re, ast, random, math, pytz, pyrogram
 from datetime import datetime, timedelta, date, time
 from Script import script
 from info import *
-from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery, InputMediaPhoto, ChatPermissions, WebAppInfo, Message
+from pyrogram.types import (
+    InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery, InputMediaPhoto,
+    ChatPermissions, WebAppInfo, Message, ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove
+)
 from pyrogram import Client, filters, enums
 from pyrogram.errors import FloodWait, UserIsBlocked, MessageNotModified, PeerIdInvalid
 from pyrogram.errors import MediaEmpty, PhotoInvalidDimensions, WebpageMediaEmpty
@@ -1470,10 +1473,12 @@ async def advantage_spoll_choker(bot, query):
         if k == False:
             # ── 1. Check Super Movie ──
             try:
-                from plugins.series import process_super_movie_search
-                is_super_movie = await process_super_movie_search(bot, query.message.reply_to_message or query.message, movie, query.message)
-                if is_super_movie:
-                    return
+                from database.series_db import is_super_filter_enabled
+                if await is_super_filter_enabled():
+                    from plugins.series import process_super_movie_search
+                    is_super_movie = await process_super_movie_search(bot, query.message.reply_to_message or query.message, movie, query.message)
+                    if is_super_movie:
+                        return
             except Exception as e:
                 logger.error(f"[SUPER MOVIE SEARCH ROUTING ERROR in spoll] {e}")
 
@@ -1488,10 +1493,12 @@ async def advantage_spoll_choker(bot, query):
             else:
                 # ── 3. Check Series ──
                 try:
-                    from plugins.series import process_series_search
-                    is_series = await process_series_search(bot, query.message.reply_to_message or query.message, movie, query.message)
-                    if is_series:
-                        return
+                    from database.series_db import is_super_filter_enabled
+                    if await is_super_filter_enabled():
+                        from plugins.series import process_series_search
+                        is_series = await process_series_search(bot, query.message.reply_to_message or query.message, movie, query.message)
+                        if is_series:
+                            return
                 except Exception:
                     pass
 
@@ -4037,11 +4044,13 @@ async def auto_filter(client, name, msg, reply_msg=None, ai_search=True, spoll=F
 
             # -- 1. Check Unified Movie & Series Filter Search (SUPER FILTERS ONLY) --
             try:
-                from plugins.series import process_unified_filter_search
-                is_handled = await process_unified_filter_search(client, message, search if search else name, reply_msg)
-                if is_handled:
-                    logger.info(f"[SUPER FILTER ROUTE] query={search if search else name} handled=True")
-                    return
+                from database.series_db import is_super_filter_enabled
+                if await is_super_filter_enabled():
+                    from plugins.series import process_unified_filter_search
+                    is_handled = await process_unified_filter_search(client, message, search if search else name, reply_msg)
+                    if is_handled:
+                        logger.info(f"[SUPER FILTER ROUTE] query={search if search else name} handled=True")
+                        return
             except Exception as e:
                 logger.error(f"[SUPER FILTER SEARCH ROUTING ERROR] query={search if search else name} error={e}")
 
@@ -4083,11 +4092,13 @@ async def auto_filter(client, name, msg, reply_msg=None, ai_search=True, spoll=F
         except Exception:
             pass
         try:
-            from plugins.series import process_unified_filter_search
-            is_handled = await process_unified_filter_search(client, message, search)
-            if is_handled:
-                logger.info(f"[SUPER FILTER ROUTE - SPOLL] query={search} handled=True")
-                return
+            from database.series_db import is_super_filter_enabled
+            if await is_super_filter_enabled():
+                from plugins.series import process_unified_filter_search
+                is_handled = await process_unified_filter_search(client, message, search)
+                if is_handled:
+                    logger.info(f"[SUPER FILTER ROUTE - SPOLL] query={search} handled=True")
+                    return
         except Exception as e:
             logger.error(f"[SPOLL SUPER FILTER SEARCH ERROR] query={search} error={e}")
 
@@ -4118,18 +4129,16 @@ def build_normal_filter_groups(files: list[dict], query_text: str = "") -> list[
     """
     Groups raw normal/legacy files into Movie groups and Series season groups.
     Enforces strict canonical movie identity extraction:
-    - Strips all leading prefixes, bracket tags ([MV], (SS), [PM], [MM], @channelid, etc.)
+    - Strips all leading prefixes, URLs, domains, bracket tags ([MV], (SS), [PM], [MM], @channelid, etc.)
     - Strips standalone leading channel noise words (Links, PM, MV, SS, VJ, V, TG, MM, MS, etc.)
-    - Normalizes and collapses all versions of the SAME movie with the SAME year into ONE single group/button!
-    - Assigns button labels:
-      - Movie: '🪶 {Title} ({Year})'
-      - Series: '🪶 S01 {Title} ({Year})'
+    - Deduplicates: collapses all versions/qualities of the SAME movie into ONE single button!
+    - Assigns clean button labels with only Movie Name and Year (e.g. 'Movie (Year)' or 'S01 Series (Year)').
     """
-    from utils import normalize_series_identity_title, get_filter_button_filename_text, strip_file_prefix_markers
+    from utils import normalize_series_identity_title, strip_file_prefix_markers
 
     series_pattern = re.compile(r"(?i)(?:^|[\s._\-\(\[\{])(S\d{1,2}(?:E\d{1,4})?|Season\s*\d{1,2}|E\d{1,4}|Episode\s*\d{1,4})(?:[\s._\-\)\]\}]|$)")
     year_regex = re.compile(r"(?i)(?<!\d)(19\d\d|20\d\d)(?!\d)")
-    
+
     clean_query = clean_child_search_query(query_text) if query_text else ""
     norm_query = normalize_series_identity_title(clean_query) if clean_query else ""
 
@@ -4156,39 +4165,52 @@ def build_normal_filter_groups(files: list[dict], query_text: str = "") -> list[
         ).strip()
         raw_clean = re.sub(r"(?i)\b(mkv|mp4|avi|mov|wmv|flv|webm|ts|3gp)$", "", raw_clean).strip(" ._+-")
 
-        # 3. Strip all leading prefixes, bracket tags ([MV], (SS), [PM], @id, Links, PM, etc.)
+        # 3. Strip all leading URLs, domain names, and bracket prefixes
+        raw_clean = re.sub(r"(?i)^(?:https?://\S+|www\.\S+|t\.me/\S+|telegram\.me/\S+)[\s\._\-\+:]*", "", raw_clean).strip()
+        raw_clean = re.sub(r"(?i)^[a-z0-9_\-\.]+\.(?:com|org|net|in|me|xyz|co|info|top|vip|site|fun|ws|cc|to|is|li|live|cloud|tv|movie|app|store|club|cz|link)[\s\._\-\+:]*", "", raw_clean).strip()
         clean_name = strip_file_prefix_markers(raw_clean)
+        clean_name = re.sub(r"(?i)^[a-z0-9_\-\.]+\.(?:com|org|net|in|me|xyz|co|info|top|vip|site|fun|ws|cc|to|is|li|live|cloud|tv|movie|app|store|club|cz|link)[\s\._\-\+:]*", "", clean_name).strip()
 
         # 4. Extract Release Year
         year_matches = list(year_regex.finditer(clean_name))
+        f_year = "N/A"
+        cand_title = clean_name
+
         if year_matches:
-            ym = year_matches[0]
-            f_year = ym.group(1)
-            text_before_year = clean_name[:ym.start()].strip(" ._+-")
-            text_after_year = clean_name[ym.end():].strip(" ._+-")
-        else:
-            f_year = "N/A"
-            text_before_year = clean_name
-            text_after_year = ""
+            found_year = False
+            for ym in year_matches:
+                before = clean_name[:ym.start()].strip(" ._+-[](){}")
+                if len(before) >= 2:
+                    f_year = ym.group(1)
+                    cand_title = before
+                    found_year = True
+                    break
+            if not found_year:
+                ym = year_matches[0]
+                f_year = ym.group(1)
+                after = clean_name[ym.end():].strip(" ._+-[](){}")
+                if after:
+                    cand_title = after
 
         # 5. Detect Series vs Movie
-        is_ser = bool(series_pattern.search(clean_name)) or bool(series_pattern.search(text_before_year)) or bool(series_pattern.search(text_after_year))
+        is_ser = bool(series_pattern.search(clean_name)) or bool(series_pattern.search(cand_title))
         if is_ser:
-            s_match = series_pattern.search(clean_name)
+            s_match = series_pattern.search(clean_name) or series_pattern.search(cand_title)
             if s_match:
                 s_digits = re.search(r"\d{1,2}", s_match.group(1))
                 f_season = int(s_digits.group(0)) if s_digits else 1
             else:
                 f_season = 1
-            cand_prefix = re.split(r"(?i)(?:s\d{1,2}|season\s*\d{1,2})", text_before_year if text_before_year else clean_name)[0].strip(" ._+-")
-            cand_title = cand_prefix if cand_prefix else text_before_year
+            cand_prefix = re.split(r"(?i)(?:s\d{1,2}|season\s*\d{1,2})", cand_title)[0].strip(" ._+-")
+            if cand_prefix:
+                cand_title = cand_prefix
         else:
             f_season = None
-            cand_title = text_before_year if text_before_year else clean_name
 
         # 6. Clean candidate title strictly
+        cand_title = re.sub(r"(?i)^[a-z0-9_\-\.]+\.(?:com|org|net|in|me|xyz|co|info|top|vip|site|fun|ws|cc|to|is|li|live|cloud|tv|movie|app|store|club|cz|link)[\s\._\-\+:]*", "", cand_title).strip()
         cand_title = strip_file_prefix_markers(cand_title)
-        
+
         # Strip any trailing quality markers, languages, or rip tags
         cand_title = re.sub(
             r"(?i)\b(1080p|720p|480p|360p|2160p|4k|fhd|hd|uhd|bluray|bdrip|brrip|hdrip|dvdrip|dvd|web[\s\-_]?dl|web[\s\-_]?rip|web|hevc|x264|x265|h264|h265|avc|10bit|8bit|aac|ac3|dts|mp3|dd5[\s\._]?1|5[\s\._]?1|dual[\s\-_]?audio|multi[\s\-_]?audio|tamil|telugu|malayalam|hindi|english|kannada|bengali|marathi|gujarati|punjabi|dubbed|subbed|esub|sub|clean|proper|repack|unrated|extended|directors[\s\-_]?cut|imax)\b.*$",
@@ -4197,7 +4219,7 @@ def build_normal_filter_groups(files: list[dict], query_text: str = "") -> list[
         ).strip()
 
         if f_year != "N/A":
-            cand_title = re.sub(rf"(?i)[\s\._\-\(\[\{{]*{re.escape(str(f_year))}[\s\._\-\)\]\}}]*$", "", cand_title).strip()
+            cand_title = re.sub(rf"(?i)[\s\._\-\(\[\{{]*{re.escape(str(f_year))}[\s\._\-\)\]\}}]*", " ", cand_title).strip()
 
         cand_title = strip_file_prefix_markers(cand_title)
         cand_title = re.sub(r"[\._]", " ", cand_title)
@@ -4207,14 +4229,11 @@ def build_normal_filter_groups(files: list[dict], query_text: str = "") -> list[
 
         norm_title = normalize_series_identity_title(cand_title)
 
-        # 7. Preserve actual movie/series title extracted from filename!
         if cand_title:
-            if norm_query and norm_title == norm_query:
+            if norm_query and (norm_title == norm_query or norm_query in norm_title):
                 f_title = clean_query.title()
-                norm_title = norm_query
             else:
                 f_title = cand_title.title()
-                norm_title = normalize_series_identity_title(cand_title)
         elif clean_query:
             f_title = clean_query.title()
             norm_title = norm_query
@@ -4222,12 +4241,17 @@ def build_normal_filter_groups(files: list[dict], query_text: str = "") -> list[
             f_title = "Movie"
             norm_title = "movie"
 
-        id_key = (norm_title, f_year, f_season, is_ser)
+        # Group solely by normalized movie title (and season for series)
+        # All files and qualities of the same movie collapse into ONE group!
+        if is_ser:
+            id_key = (norm_title, True, f_season or 1)
+        else:
+            id_key = (norm_title, False, None)
 
         if id_key not in identity_map:
             import uuid
             gid = f"n_{uuid.uuid4().hex[:10]}"
-            identity_map[id_key] = [{
+            identity_map[id_key] = {
                 "group_id": gid,
                 "title": f_title,
                 "year": f_year,
@@ -4235,38 +4259,40 @@ def build_normal_filter_groups(files: list[dict], query_text: str = "") -> list[
                 "is_series": is_ser,
                 "files": [f],
                 "file_ids": [f.get("file_id")] if f.get("file_id") else []
-            }]
+            }
         else:
-            g = identity_map[id_key][0]
+            g = identity_map[id_key]
             g["files"].append(f)
             if f.get("file_id") and f["file_id"] not in g["file_ids"]:
                 g["file_ids"].append(f["file_id"])
+            if (not g.get("year") or str(g.get("year")).upper() == "N/A") and (f_year and str(f_year).upper() != "N/A"):
+                g["year"] = f_year
+            if clean_query and clean_query.lower() in f_title.lower() and len(clean_query) <= len(f_title):
+                g["title"] = f_title
 
     final_groups = []
-    for id_key, g_list in identity_map.items():
-        total = len(g_list)
-        for idx, g in enumerate(g_list, 1):
-            title = g["title"]
-            year = g["year"]
-            year_str = f" ({year})" if year and str(year).upper() != "N/A" else ""
-            v_suffix = f" v{idx}" if total > 1 and idx > 1 else ""
+    for id_key, g in identity_map.items():
+        title = g["title"]
+        year = g["year"]
+        year_str = f" ({year})" if year and str(year).upper() != "N/A" else ""
 
-            if g["is_series"]:
-                season_num = g.get("season", 1) or 1
-                g["button_label"] = f"🪶 S{season_num:02d} {title}{year_str}{v_suffix}"
-            else:
-                g["button_label"] = f"🪶 {title}{year_str}{v_suffix}"
+        # Clean button labels: only Movie and Year (e.g. 'Movie (Year)')
+        if g["is_series"]:
+            season_num = g.get("season", 1) or 1
+            g["button_label"] = f"S{season_num:02d} {title}{year_str}"
+        else:
+            g["button_label"] = f"{title}{year_str}"
 
-            gid = g["group_id"]
-            if not hasattr(temp, "NORMAL_FILTER_GROUPS"):
-                temp.NORMAL_FILTER_GROUPS = {}
-            temp.NORMAL_FILTER_GROUPS[gid] = g
-            try:
-                from database.series_db import save_temp_request
-                asyncio.create_task(save_temp_request(gid, g))
-            except Exception:
-                pass
-            final_groups.append(g)
+        gid = g["group_id"]
+        if not hasattr(temp, "NORMAL_FILTER_GROUPS"):
+            temp.NORMAL_FILTER_GROUPS = {}
+        temp.NORMAL_FILTER_GROUPS[gid] = g
+        try:
+            from database.series_db import save_temp_request
+            asyncio.create_task(save_temp_request(gid, g))
+        except Exception:
+            pass
+        final_groups.append(g)
 
     return final_groups
 
@@ -4323,7 +4349,7 @@ async def render_normal_grouped_results(client: Client, message: Message, query_
                 "is_series": False,
                 "files": files,
                 "file_ids": [f.get("file_id") for f in files if f.get("file_id")],
-                "button_label": f"🪶 {cand_title}"
+                "button_label": f"{cand_title}"
             }
             if not hasattr(temp, "NORMAL_FILTER_GROUPS"):
                 temp.NORMAL_FILTER_GROUPS = {}
@@ -4697,12 +4723,36 @@ async def start_normal_file_delivery_in_pm(client: Client, user_id: int, norm_gr
     session_id = f"normdel_{user_id}_{uuid.uuid4().hex[:6]}"
     if not hasattr(temp, "NORMAL_DELIVERY_SESSIONS"):
         temp.NORMAL_DELIVERY_SESSIONS = {}
+    if not hasattr(temp, "USER_ACTIVE_DELIVERY_SESSIONS"):
+        temp.USER_ACTIVE_DELIVERY_SESSIONS = {}
 
     temp.NORMAL_DELIVERY_SESSIONS[session_id] = {
         "cancelled": False,
         "user_id": user_id,
         "group_id": norm_group_id
     }
+    temp.USER_ACTIVE_DELIVERY_SESSIONS[user_id] = session_id
+
+    # Bottom action keyboard (ReplyKeyboardMarkup) shown docked below input while files are streaming
+    stop_reply_markup = ReplyKeyboardMarkup(
+        keyboard=[[KeyboardButton("🛑 Stop Files")]],
+        resize_keyboard=True,
+        one_time_keyboard=False,
+        placeholder="🛑 Tap here to stop file delivery"
+    )
+
+    kb_msg = None
+    try:
+        kb_msg = await client.send_message(
+            chat_id=user_id,
+            text="<i>⚡ ഫയലുകൾ അയച്ചു തുടങ്ങുന്നു... നിർത്താൻ താഴെ കാണുന്ന 🛑 Stop Files ബട്ടൺ ഉപയോഗിക്കുക.</i>",
+            reply_markup=stop_reply_markup,
+            parse_mode=enums.ParseMode.HTML
+        )
+    except Exception as kbe:
+        logger.warning(f"[START NORMAL KB MSG ERROR] {kbe}")
+
+    temp.NORMAL_DELIVERY_SESSIONS[session_id]["kb_msg_id"] = kb_msg.id if kb_msg else None
 
     stop_btn = InlineKeyboardButton("🛑 Stop Files", callback_data=f"norm_stop#{session_id}")
     try:
@@ -4723,6 +4773,7 @@ async def start_normal_file_delivery_in_pm(client: Client, user_id: int, norm_gr
     except Exception as ce:
         logger.error(f"[START NORMAL FILE DELIVERY SEND MSG ERROR] {ce}")
         temp.ACTIVE_NORMAL_DELIVERIES.discard(user_id)
+        temp.USER_ACTIVE_DELIVERY_SESSIONS.pop(user_id, None)
         return False
 
     # Pin the delivery control message in PM
@@ -5050,6 +5101,47 @@ async def cb_norm_get_all_file(client: Client, query: CallbackQuery):
         from database.series_db import get_temp_request
         group_data = await get_temp_request(group_id)
 
+    if not group_data and group_id.startswith("m_"):
+        from database.series_db import get_super_movie
+        from database.ia_filterdb import get_bulk_file_details
+        mid = group_id[2:]
+        m_doc = await get_super_movie(mid)
+        if m_doc:
+            f_ids = m_doc.get("file_ids", [])
+            f_map = await get_bulk_file_details(f_ids) if f_ids else {}
+            group_data = {
+                "group_id": group_id,
+                "title": m_doc.get("title") or m_doc.get("name") or "Movie",
+                "year": str(m_doc.get("year", "N/A")),
+                "poster": m_doc.get("poster"),
+                "is_series": False,
+                "file_ids": f_ids,
+                "files": [f_map[fid] for fid in f_ids if fid in f_map],
+                "user_id": user_id
+            }
+    elif not group_data and group_id.startswith("s_"):
+        from database.series_db import get_series, sfiles_col
+        from bson import ObjectId
+        sid = group_id[2:]
+        s_doc = await get_series(sid)
+        if s_doc:
+            s_files = []
+            try:
+                s_cursor = sfiles_col.find({"$or": [{"series_id": sid}, {"series_id": ObjectId(sid)} if ObjectId.is_valid(sid) else {"series_id": sid}]})
+                s_files = await s_cursor.to_list(length=1000)
+            except Exception:
+                pass
+            group_data = {
+                "group_id": group_id,
+                "title": s_doc.get("name") or s_doc.get("title") or "Series",
+                "year": str(s_doc.get("year", "N/A")),
+                "poster": s_doc.get("poster"),
+                "is_series": True,
+                "file_ids": [str(f.get("file_id")) for f in s_files if f.get("file_id")],
+                "files": s_files,
+                "user_id": user_id
+            }
+
     if not is_pm and group_data:
         req_user_id = group_data.get("user_id") or group_data.get("requester_user_id")
         if req_user_id and str(user_id) != str(req_user_id):
@@ -5147,6 +5239,79 @@ async def cb_norm_get_all_file(client: Client, query: CallbackQuery):
         await query.answer("⚠️ File delivery could not be started or is already running.", show_alert=True)
 
 
+async def send_get_all_file_poster_in_pm(client: Client, user_id: int, group_data: dict, norm_group_id: str, message: Message = None) -> bool:
+    """
+    Renders and sends the authoritative 'Get All File' details poster in PM:
+    - Poster photo
+    - Metadata caption (File Name, Year, Languages, Release Date, Rating)
+    - Buttons: [ ⌯⌲ Get All File ], [ ⚠ Disclaimer ]
+    """
+    from plugins.series import make_styled_button
+    from utils import schedule_filter_message_delete
+
+    details_caption, poster_url = await format_normal_filter_details_card(group_data)
+    get_all_btn = make_styled_button("⌯⌲ Get All File", callback_data=f"norm_getall#{norm_group_id}", style="danger")
+    disc_btn = make_styled_button("⚠ Disclaimer", callback_data="norm_disc", style="success")
+
+    rows = [[get_all_btn]]
+    if norm_group_id.startswith("m_"):
+        mid = norm_group_id[2:]
+        lang_btn = make_styled_button("🌐 Select Language", callback_data=f"mvlang#{mid}#None#{user_id}-0", style="primary")
+        rows.append([lang_btn, disc_btn])
+    elif norm_group_id.startswith("s_"):
+        sid = norm_group_id[2:]
+        lang_btn = make_styled_button("🌐 Select Language", callback_data=f"ser_lang#{sid}#None#{user_id}-0", style="primary")
+        rows.append([lang_btn, disc_btn])
+    else:
+        rows.append([disc_btn])
+
+    markup = InlineKeyboardMarkup(rows)
+
+    target_poster = poster_url or group_data.get("poster")
+    if not target_poster or str(target_poster).upper() == "N/A" or not str(target_poster).startswith("http"):
+        try:
+            from info import DEFAULT_POSTER
+            target_poster = DEFAULT_POSTER
+        except Exception:
+            target_poster = "https://files.catbox.moe/mp2y81.jpg"
+
+    if not hasattr(temp, "NORMAL_FILTER_GROUPS"):
+        temp.NORMAL_FILTER_GROUPS = {}
+    temp.NORMAL_FILTER_GROUPS[norm_group_id] = group_data
+    try:
+        from database.series_db import save_temp_request
+        await save_temp_request(norm_group_id, group_data)
+    except Exception:
+        pass
+
+    try:
+        sent_msg = await client.send_photo(
+            chat_id=user_id,
+            photo=target_poster,
+            caption=details_caption,
+            reply_markup=markup,
+            parse_mode=enums.ParseMode.HTML
+        )
+        schedule_filter_message_delete(client, sent_msg.chat.id, sent_msg.id, delay=600)
+        BUTTON_OWNERS[f"{sent_msg.chat.id}-{sent_msg.id}"] = user_id
+        return True
+    except Exception as pe:
+        logger.warning(f"[GET ALL POSTER PHOTO ERROR] {pe}")
+        try:
+            sent_msg = await client.send_message(
+                chat_id=user_id,
+                text=details_caption,
+                reply_markup=markup,
+                parse_mode=enums.ParseMode.HTML
+            )
+            schedule_filter_message_delete(client, sent_msg.chat.id, sent_msg.id, delay=600)
+            BUTTON_OWNERS[f"{sent_msg.chat.id}-{sent_msg.id}"] = user_id
+            return True
+        except Exception as me:
+            logger.error(f"[GET ALL POSTER MSG ERROR] {me}")
+            return False
+
+
 async def process_normal_filter_deeplink(client: Client, message: Message, norm_group_id: str, user_id: int = None) -> bool:
     """
     Handles /start norm_{group_id} in PM.
@@ -5161,6 +5326,25 @@ async def process_normal_filter_deeplink(client: Client, message: Message, norm_
         group_data = getattr(temp, "NORMAL_FILTER_GROUPS", {}).get(f"n_{norm_group_id}")
     if not group_data:
         group_data = await get_temp_request(norm_group_id)
+
+    if not group_data:
+        try:
+            from database.ia_filterdb import get_file_details, get_search_results
+            f_doc = await get_file_details(norm_group_id)
+            if f_doc:
+                fb_groups = build_normal_filter_groups([f_doc])
+                if fb_groups:
+                    group_data = fb_groups[0]
+            else:
+                clean_term = norm_group_id.replace("n_", "").replace("_", " ").strip()
+                if clean_term:
+                    fb_files, _, _ = await get_search_results(chat_id=0, query=clean_term.lower(), max_results=50, offset=0, filter=True)
+                    if fb_files:
+                        fb_groups = build_normal_filter_groups(fb_files, query_text=clean_term)
+                        if fb_groups:
+                            group_data = fb_groups[0]
+        except Exception:
+            pass
 
     if not group_data:
         logger.warning(f"[CHILD BOT DEEPLINK FAILED] bot=@{bot_u} group_id={norm_group_id} not found in memory or DB")
@@ -5225,10 +5409,9 @@ async def process_normal_filter_deeplink(client: Client, message: Message, norm_
             logger.info(f"[CHILD BOT FSUB REQUIRED] bot=@{bot_u} user_id={clicked_user_id} group_id={norm_group_id}")
             return False
 
-    # 3. DIRECT FILE DELIVERY IN PM
-    logger.info(f"[CHILD BOT START DIRECT DELIVERY] bot=@{bot_u} user_id={clicked_user_id} group_id={norm_group_id}")
-    started = await start_normal_file_delivery_in_pm(client, user_id=clicked_user_id, norm_group_id=norm_group_id, trigger_msg=message)
-    return started
+    # 3. Render Details Poster with '⌯⌲ Get All File' Button in PM
+    logger.info(f"[CHILD BOT SHOW GET ALL POSTER] bot=@{bot_u} user_id={clicked_user_id} group_id={norm_group_id}")
+    return await send_get_all_file_poster_in_pm(client, user_id=clicked_user_id, group_data=group_data, norm_group_id=norm_group_id, message=message)
 
 
 async def trigger_normal_fsub_approved_delivery(client: Client, user_id: int, pending_norm: dict):
@@ -5337,10 +5520,18 @@ async def cb_norm_stop_files(client: Client, query: CallbackQuery):
     user_id = query.from_user.id
 
     sess = getattr(temp, "NORMAL_DELIVERY_SESSIONS", {}).get(session_id)
+    if not sess:
+        active_sid = getattr(temp, "USER_ACTIVE_DELIVERY_SESSIONS", {}).get(user_id)
+        if active_sid:
+            sess = getattr(temp, "NORMAL_DELIVERY_SESSIONS", {}).get(active_sid)
+
     if sess:
         sess["cancelled"] = True
 
     getattr(temp, "ACTIVE_NORMAL_DELIVERIES", set()).discard(user_id)
+    if hasattr(temp, "USER_ACTIVE_DELIVERY_SESSIONS"):
+        temp.USER_ACTIVE_DELIVERY_SESSIONS.pop(user_id, None)
+
     logger.info(f"[CHILD BOT STOP CLICKED] session_id={session_id} user_id={user_id}")
     await query.answer("🛑 Stopping file delivery...", show_alert=False)
 
@@ -5358,6 +5549,82 @@ async def cb_norm_stop_files(client: Client, query: CallbackQuery):
         )
     except Exception:
         pass
+
+    if sess:
+        kb_msg_id = sess.get("kb_msg_id")
+        if kb_msg_id:
+            try:
+                await client.delete_messages(chat_id=user_id, message_ids=kb_msg_id)
+            except Exception:
+                pass
+
+    try:
+        stop_notice = await client.send_message(
+            chat_id=user_id,
+            text="<i>🛑 File delivery stopped.</i>",
+            reply_markup=ReplyKeyboardRemove(remove_keyboard=True),
+            parse_mode=enums.ParseMode.HTML
+        )
+        if stop_notice:
+            from utils import schedule_filter_message_delete
+            schedule_filter_message_delete(client, user_id, stop_notice.id, delay=15)
+    except Exception:
+        pass
+
+
+@Client.on_message(filters.regex(r"^(🛑\s*)?(Stop\s*Files|stop)$", re.IGNORECASE) & filters.private, group=-25)
+async def handle_stop_delivery_reply_button(client: Client, message: Message):
+    """
+    Catches the bottom ReplyKeyboardMarkup '🛑 Stop Files' button press.
+    Immediately halts any active delivery session for this user and removes the bottom keyboard.
+    """
+    message.stop_propagation()
+    user_id = message.from_user.id if message.from_user else message.chat.id
+    active_sid = getattr(temp, "USER_ACTIVE_DELIVERY_SESSIONS", {}).get(user_id)
+    sess = getattr(temp, "NORMAL_DELIVERY_SESSIONS", {}).get(active_sid) if active_sid else None
+
+    logger.info(f"[CHILD BOT STOP BUTTON PRESSED] user_id={user_id} session={active_sid}")
+
+    if sess:
+        sess["cancelled"] = True
+        ctrl_msg_id = sess.get("ctrl_msg_id")
+        if ctrl_msg_id:
+            try:
+                await client.unpin_chat_message(chat_id=user_id, message_id=ctrl_msg_id)
+            except Exception:
+                pass
+            try:
+                await client.delete_messages(chat_id=user_id, message_ids=ctrl_msg_id)
+            except Exception:
+                pass
+        kb_msg_id = sess.get("kb_msg_id")
+        if kb_msg_id:
+            try:
+                await client.delete_messages(chat_id=user_id, message_ids=kb_msg_id)
+            except Exception:
+                pass
+
+    getattr(temp, "ACTIVE_NORMAL_DELIVERIES", set()).discard(user_id)
+    if hasattr(temp, "USER_ACTIVE_DELIVERY_SESSIONS"):
+        temp.USER_ACTIVE_DELIVERY_SESSIONS.pop(user_id, None)
+
+    try:
+        await message.delete()
+    except Exception:
+        pass
+
+    try:
+        stop_notice = await client.send_message(
+            chat_id=user_id,
+            text="<i>🛑 File delivery stopped.\n\nഫയൽ അയക്കുന്നത് നിർത്തിയിരിക്കുന്നു.</i>",
+            reply_markup=ReplyKeyboardRemove(remove_keyboard=True),
+            parse_mode=enums.ParseMode.HTML
+        )
+        if stop_notice:
+            from utils import schedule_filter_message_delete
+            schedule_filter_message_delete(client, user_id, stop_notice.id, delay=15)
+    except Exception as e:
+        logger.warning(f"[STOP NOTICE SEND ERROR] {e}")
 
 
 async def execute_normal_group_file_delivery(client: Client, user_id: int, group_id: str, session_id: str, ctrl_msg: Message):
@@ -5543,6 +5810,13 @@ async def execute_normal_group_file_delivery(client: Client, user_id: int, group
                 pass
 
         sess = getattr(temp, "NORMAL_DELIVERY_SESSIONS", {}).get(session_id, {})
+        kb_msg_id = sess.get("kb_msg_id") if sess else None
+        if kb_msg_id:
+            try:
+                await client.delete_messages(chat_id=user_id, message_ids=kb_msg_id)
+            except Exception:
+                pass
+
         if not sess.get("cancelled") and delivered_count > 0:
             try:
                 await ctrl_msg.delete()
@@ -5560,15 +5834,28 @@ async def execute_normal_group_file_delivery(client: Client, user_id: int, group
                 notice_msg = await client.send_message(
                     chat_id=user_id,
                     text=quote_notice,
+                    reply_markup=ReplyKeyboardRemove(remove_keyboard=True),
                     parse_mode=enums.ParseMode.HTML
                 )
                 if notice_msg:
                     schedule_filter_message_delete(client, user_id, notice_msg.id, delay=del_sec)
             except Exception as ne:
                 logger.warning(f"[NORMAL END NOTICE ERROR] {ne}")
+        else:
+            try:
+                await client.send_message(
+                    chat_id=user_id,
+                    text="<i>🛑 File delivery finished.</i>" if not sess.get("cancelled") else "<i>🛑 File delivery stopped.</i>",
+                    reply_markup=ReplyKeyboardRemove(remove_keyboard=True),
+                    parse_mode=enums.ParseMode.HTML
+                )
+            except Exception:
+                pass
 
     finally:
         getattr(temp, "ACTIVE_NORMAL_DELIVERIES", set()).discard(user_id)
+        if hasattr(temp, "USER_ACTIVE_DELIVERY_SESSIONS"):
+            temp.USER_ACTIVE_DELIVERY_SESSIONS.pop(user_id, None)
         if hasattr(temp, "NORMAL_DELIVERY_SESSIONS"):
             temp.NORMAL_DELIVERY_SESSIONS.pop(session_id, None)
 
@@ -5737,16 +6024,18 @@ async def advantage_spell_chok(client, name, msg, reply_msg, vj_search):
     settings = await get_settings(msg.chat.id)
 
     # 1. First check if any saved filters match in database (Super Movies & Series)
-    from database.series_db import search_super_movies, search_series
-    saved_movies = await search_super_movies(mv_rqst)
-    saved_series = await search_series(mv_rqst)
+    from database.series_db import is_super_filter_enabled
+    if await is_super_filter_enabled():
+        from database.series_db import search_super_movies, search_series
+        saved_movies = await search_super_movies(mv_rqst)
+        saved_series = await search_series(mv_rqst)
 
-    valid_movies = [m for m in saved_movies if m.get("file_ids") or m.get("coming_soon") or m.get("status") == "coming_soon"]
-    valid_series = saved_series
+        valid_movies = [m for m in saved_movies if m.get("file_ids") or m.get("coming_soon") or m.get("status") == "coming_soon"]
+        valid_series = saved_series
 
-    if valid_movies or valid_series:
-        from plugins.series import process_unified_filter_search
-        return await process_unified_filter_search(client, msg, mv_rqst, reply_msg)
+        if valid_movies or valid_series:
+            from plugins.series import process_unified_filter_search
+            return await process_unified_filter_search(client, msg, mv_rqst, reply_msg)
 
     # 2. No saved filter in database -> Check IMDb / TMDB for movie metadata
     imdb = None
@@ -6404,10 +6693,12 @@ async def child_filter_message_handler(client: Client, message: Message):
 
     # 1. Super Filter Check & Unified Search
     try:
-        from plugins.series import process_unified_filter_search
-        is_handled = await process_unified_filter_search(client, message, search)
-        if is_handled:
-            return
+        from database.series_db import is_super_filter_enabled
+        if await is_super_filter_enabled():
+            from plugins.series import process_unified_filter_search
+            is_handled = await process_unified_filter_search(client, message, search)
+            if is_handled:
+                return
     except Exception as e:
         logger.warning(f"[CHILD BOT UNIFIED SEARCH ERROR] {e}")
 
@@ -6452,9 +6743,19 @@ def register_normal_filter_handlers(child_bot: Client) -> int:
     from pyrogram.handlers import MessageHandler, CallbackQueryHandler
     from info import ADMINS
 
-    # Reset group 0 handlers to prevent duplicate accumulation
+    # Reset group 0 and group -1 handlers to prevent duplicate accumulation
     if hasattr(child_bot, "dispatcher") and hasattr(child_bot.dispatcher, "groups"):
         child_bot.dispatcher.groups[0] = []
+        child_bot.dispatcher.groups[-1] = []
+
+    # Priority -1: Stop Files bottom keyboard action
+    child_bot.add_handler(
+        MessageHandler(
+            handle_stop_delivery_reply_button,
+            filters.regex(r"^(🛑\s*)?(Stop\s*Files|stop)$", re.IGNORECASE) & filters.incoming
+        ),
+        group=-1
+    )
 
     # 1. Commands
     from plugins.commands import cmd_set_distribution, cmd_del_distribution
@@ -6471,7 +6772,7 @@ def register_normal_filter_handlers(child_bot: Client) -> int:
     child_bot.add_handler(
         MessageHandler(
             child_filter_message_handler,
-            filters.text & filters.incoming & ~filters.command(["start", "about", "help", "broadcast", "grp_broadcast", "edt", "edit", "quick_edit", "ano", "announce", "anomov", "anoser", "dis", "deldis", "setdis", "deldistribution"])
+            filters.text & filters.incoming & ~filters.command(["start", "about", "help", "broadcast", "grp_broadcast", "edt", "edit", "quick_edit", "ano", "announce", "anomov", "anoser", "dis", "deldis", "setdis", "deldistribution"]) & ~filters.regex(r"^(🛑\s*)?(Stop\s*Files|stop)$", re.IGNORECASE)
         ),
         group=0
     )

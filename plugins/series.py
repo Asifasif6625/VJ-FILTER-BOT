@@ -2717,6 +2717,10 @@ async def cmd_series_menu(client: Client, message: Message):
     temp.AUTO_SERIES.pop(uid, None)
     temp.SERIES_WIZARD.pop(uid, None)
 
+    from database.series_db import is_super_filter_enabled
+    is_sf = await is_super_filter_enabled()
+    sf_btn_text = "⚡ Super Filter: 🟢 ON" if is_sf else "⚡ Super Filter: 🔴 OFF"
+
     markup = InlineKeyboardMarkup([
         [
             InlineKeyboardButton("📝 Manual Adding", callback_data="sw#start_manual"),
@@ -2724,6 +2728,9 @@ async def cmd_series_menu(client: Client, message: Message):
         ],
         [
             InlineKeyboardButton("🎬 Auto Movie Add", callback_data="sw#start_auto_movie")
+        ],
+        [
+            InlineKeyboardButton(sf_btn_text, callback_data="sw#toggle_super_filter")
         ]
     ])
     await message.reply_text(
@@ -4080,7 +4087,7 @@ async def announce_filter_created(client: Client, filter_type: str = "series", f
         bot_username = "Bot"
 
     btn_style = getattr(info, "ANNOUNCEMENT_DOWNLOAD_BUTTON_STYLE", "primary")
-    btn_text = getattr(info, "ANNOUNCEMENT_DOWNLOAD_BUTTON_TEXT", "ԃσɯɳʅσαԃ ɱσʋιҽ")
+    btn_text = getattr(info, "ANNOUNCEMENT_DOWNLOAD_BUTTON_TEXT", "📥 Download") or "📥 Download"
 
     try:
         if filter_type == "series":
@@ -4096,11 +4103,6 @@ async def announce_filter_created(client: Client, filter_type: str = "series", f
 
             name = series.get("name", "Series")
             year = str(series.get("year", ""))
-            year_str = f" ({year})" if year and year != "N/A" else ""
-            rating = str(series.get("rating", ""))
-            rating_str = f"\n⭐ <b>Rating:</b> {rating}/10" if rating else ""
-            genre = series.get("genre", "")
-            genre_str = f"\n🎭 <b>Genre:</b> {genre}" if genre and genre != "N/A" else ""
             poster = series.get("poster")
             if not poster or str(poster).upper() == "N/A":
                 try:
@@ -4114,11 +4116,8 @@ async def announce_filter_created(client: Client, filter_type: str = "series", f
                 langs = series.get("languages", [])
             lang_str = ", ".join(langs) if langs else "All Languages"
 
-            seasons = series.get("seasons", [])
-            if isinstance(seasons, list) and seasons:
-                season_str = ", ".join(f"Season {s}" for s in sorted(seasons) if str(s).isdigit())
-            else:
-                season_str = "Season 1"
+            quals = series.get("qualities", [])
+            qual_str = ", ".join(quals) if quals else "720p, 1080p"
 
             download_url = f"https://t.me/{bot_username}?start=series_{filter_id}" if filter_id else None
             logger.info(
@@ -4138,14 +4137,11 @@ async def announce_filter_created(client: Client, filter_type: str = "series", f
             )
 
             caption = (
-                f"📢 <b>NEW SERIES ADDED!</b> 🎬\n\n"
-                f"📺 <b>Title:</b> <code>{html.escape(name)}{year_str}</code>"
-                f"{rating_str}"
-                f"{genre_str}\n"
+                f"📺 <b>Series:</b> <code>{html.escape(name)}</code>\n"
+                f"📅 <b>Year:</b> <code>{html.escape(year if year and year != 'N/A' else 'N/A')}</code>\n"
                 f"🌐 <b>Languages:</b> <code>{html.escape(lang_str)}</code>\n"
-                f"🎞 <b>Available:</b> <code>{html.escape(season_str)}</code>\n\n"
-                f"<blockquote>⚡ <b>Click Download button below to get files!</b></blockquote>\n\n"
-                f"@{bot_username}"
+                f"💿 <b>Quality:</b> <code>{html.escape(qual_str)}</code>\n\n"
+                f"<blockquote>⚡ <b>Click Download button below to get files!</b></blockquote>"
             )
 
         elif filter_type == "movie":
@@ -4161,11 +4157,6 @@ async def announce_filter_created(client: Client, filter_type: str = "series", f
 
             title = movie.get("title", "Movie")
             year = str(movie.get("year", ""))
-            year_str = f" ({year})" if year and year != "N/A" else ""
-            rating = str(movie.get("rating", ""))
-            rating_str = f"\n⭐ <b>Rating:</b> {rating}/10" if rating else ""
-            genre = movie.get("genre", "")
-            genre_str = f"\n🎭 <b>Genre:</b> {genre}" if genre and genre != "N/A" else ""
             poster = movie.get("poster")
             if not poster or str(poster).upper() == "N/A":
                 try:
@@ -4196,14 +4187,11 @@ async def announce_filter_created(client: Client, filter_type: str = "series", f
             )
 
             caption = (
-                f"📢 <b>NEW MOVIE ADDED!</b> 🎬\n\n"
-                f"🎬 <b>Title:</b> <code>{html.escape(title)}{year_str}</code>"
-                f"{rating_str}"
-                f"{genre_str}\n"
+                f"🎬 <b>Movie:</b> <code>{html.escape(title)}</code>\n"
+                f"📅 <b>Year:</b> <code>{html.escape(year if year and year != 'N/A' else 'N/A')}</code>\n"
                 f"🌐 <b>Languages:</b> <code>{html.escape(lang_str)}</code>\n"
-                f"⚡ <b>Qualities:</b> <code>{html.escape(qual_str)}</code>\n\n"
-                f"<blockquote>⚡ <b>Click Download button below to get files!</b></blockquote>\n\n"
-                f"@{bot_username}"
+                f"💿 <b>Quality:</b> <code>{html.escape(qual_str)}</code>\n\n"
+                f"<blockquote>⚡ <b>Click Download button below to get files!</b></blockquote>"
             )
         else:
             return False
@@ -6834,6 +6822,32 @@ async def series_wizard_callback(client: Client, query: CallbackQuery):
     data = query.data
     chat_id = query.message.chat.id if query.message and query.message.chat else uid
 
+    if data == "sw#toggle_super_filter":
+        from database.series_db import is_super_filter_enabled, set_super_filter_enabled
+        current = await is_super_filter_enabled()
+        new_val = not current
+        await set_super_filter_enabled(new_val)
+        status_str = "ENABLED (ON) 🟢" if new_val else "DISABLED (OFF) 🔴"
+        await query.answer(f"⚡ Super Filter is now {status_str}!", show_alert=True)
+        sf_btn_text = "⚡ Super Filter: 🟢 ON" if new_val else "⚡ Super Filter: 🔴 OFF"
+        markup = InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton("📝 Manual Adding", callback_data="sw#start_manual"),
+                InlineKeyboardButton("📺 Auto S Add", callback_data="sw#start_auto")
+            ],
+            [
+                InlineKeyboardButton("🎬 Auto Movie Add", callback_data="sw#start_auto_movie")
+            ],
+            [
+                InlineKeyboardButton(sf_btn_text, callback_data="sw#toggle_super_filter")
+            ]
+        ])
+        try:
+            await query.message.edit_reply_markup(reply_markup=markup)
+        except Exception:
+            pass
+        return
+
     if data == "sw#start_manual":
         clear_wizard_session(uid)
         temp.AUTO_MOVIE.pop(uid, None)
@@ -9309,8 +9323,10 @@ async def is_super_filter_query(query_text: str) -> bool:
         return False
     from database.series_db import search_super_movies, search_series
     clean_q = clean_series_title(q)
-    super_movies = await search_super_movies(q)
-    series_list = await search_series(clean_q)
+    super_movies, series_list = await asyncio.gather(
+        search_super_movies(q),
+        search_series(clean_q)
+    )
     valid_movies = [m for m in super_movies if m.get("file_ids") or m.get("coming_soon") or m.get("status") == "coming_soon"]
     return (len(valid_movies) + len(series_list)) > 0
 
@@ -9330,8 +9346,10 @@ async def process_unified_filter_search(client: Client, message: Message, query_
     from utils import schedule_filter_message_delete
 
     clean_q = clean_series_title(q)
-    super_movies = await search_super_movies(q)
-    series_list = await search_series(clean_q)
+    super_movies, series_list = await asyncio.gather(
+        search_super_movies(q),
+        search_series(clean_q)
+    )
 
     # Filter out super movies with 0 files (unless marked Coming Soon)
     valid_movies = [m for m in super_movies if m.get("file_ids") or m.get("coming_soon") or m.get("status") == "coming_soon"]
@@ -9542,9 +9560,9 @@ async def process_series_search(client: Client, message: Message, query_text: st
 async def process_series_deeplink(client: Client, message: Message, series_key: str) -> bool:
     """
     Handles /start series_{series_id/series_key} deep link in PM.
-    Directly renders the Series filter language selection UI.
+    Directly renders the authoritative 'Get All File' details poster in PM with [ ⌯⌲ Get All File ] button.
     """
-    from database.series_db import get_series, get_series_by_key, series_col
+    from database.series_db import get_series, get_series_by_key, series_col, sfiles_col
     from bson import ObjectId
 
     series_doc = await get_series(series_key)
@@ -9561,15 +9579,44 @@ async def process_series_deeplink(client: Client, message: Message, series_key: 
         await message.reply_text("<b>❌ Requested series filter was not found or has been removed.</b>")
         return False
     u_id = message.from_user.id if message.from_user else (message.chat.id if message.chat else 0)
-    return await render_series_direct(client, message, series_doc, reply_msg=None, user_id=u_id)
+
+    series_id = str(series_doc["_id"])
+    norm_group_id = f"s_{series_id}"
+
+    try:
+        s_cursor = sfiles_col.find({
+            "$or": [
+                {"series_id": series_id},
+                {"series_id": ObjectId(series_id)} if ObjectId.is_valid(series_id) else {"series_id": series_id}
+            ]
+        })
+        s_files = await s_cursor.to_list(length=1000)
+    except Exception:
+        s_files = []
+    file_ids = [str(f.get("file_id")) for f in s_files if f.get("file_id")]
+
+    group_data = {
+        "group_id": norm_group_id,
+        "title": series_doc.get("name") or series_doc.get("title") or "Series",
+        "year": str(series_doc.get("year", "N/A")),
+        "poster": series_doc.get("poster"),
+        "is_series": True,
+        "file_ids": file_ids,
+        "files": s_files,
+        "user_id": u_id
+    }
+
+    from plugins.pm_filter import send_get_all_file_poster_in_pm
+    return await send_get_all_file_poster_in_pm(client, user_id=u_id, group_data=group_data, norm_group_id=norm_group_id, message=message)
 
 
 async def process_movie_deeplink(client: Client, message: Message, movie_key: str) -> bool:
     """
     Handles /start movie_{movie_id} deep link in PM.
-    Directly renders the Super Movie filter language selection UI.
+    Directly renders the authoritative 'Get All File' details poster in PM with [ ⌯⌲ Get All File ] button.
     """
     from database.series_db import get_super_movie, super_movies_col
+    from database.ia_filterdb import get_bulk_file_details
     from bson import ObjectId
 
     movie_doc = await get_super_movie(movie_key)
@@ -9584,7 +9631,26 @@ async def process_movie_deeplink(client: Client, message: Message, movie_key: st
         await message.reply_text("<b>❌ Requested movie filter was not found or has been removed.</b>")
         return False
     u_id = message.from_user.id if message.from_user else (message.chat.id if message.chat else 0)
-    return await render_super_movie_direct(client, message, movie_doc, reply_msg=None, user_id=u_id)
+
+    movie_id = str(movie_doc["_id"])
+    norm_group_id = f"m_{movie_id}"
+    file_ids = movie_doc.get("file_ids", [])
+    file_map = await get_bulk_file_details(file_ids) if file_ids else {}
+    files = [file_map[fid] for fid in file_ids if fid in file_map]
+
+    group_data = {
+        "group_id": norm_group_id,
+        "title": movie_doc.get("title") or movie_doc.get("name") or "Movie",
+        "year": str(movie_doc.get("year", "N/A")),
+        "poster": movie_doc.get("poster"),
+        "is_series": False,
+        "file_ids": file_ids,
+        "files": files,
+        "user_id": u_id
+    }
+
+    from plugins.pm_filter import send_get_all_file_poster_in_pm
+    return await send_get_all_file_poster_in_pm(client, user_id=u_id, group_data=group_data, norm_group_id=norm_group_id, message=message)
 
 
 # ─── SERIES FILTER NAVIGATION CALLBACKS (Language -> Season (if multiple) -> Quality -> Delivery) ───
