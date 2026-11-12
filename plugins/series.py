@@ -1673,7 +1673,8 @@ async def fetch_auto_series_metadata(client: Client, chat_id: int | str, loading
                 logger.error(f"[AUTO SERIES FILE ADD ERROR] {fe}")
 
         try:
-            await announce_filter_created(client, filter_type="series", filter_id=str(series_id))
+            from database.series_db import schedule_delayed_filter_announcement
+            await schedule_delayed_filter_announcement(filter_type="series", filter_id=str(series_id), delay=60)
         except Exception as ae:
             logger.warning(f"[AUTO SERIES ANNOUNCEMENT ERROR] {ae}")
 
@@ -3708,6 +3709,63 @@ def build_announcement_download_keyboard(
     return InlineKeyboardMarkup(rows)
 
 
+async def send_announcement_sticker(client: Client, chat_id: int | str, sticker_id: str = None) -> bool:
+    """
+    Sends the configured divider sticker to the announcement channel.
+    Uses Pyrogram client first, then falls back to Main Bot or Bot API HTTP.
+    """
+    import info
+    stk_id = sticker_id or getattr(info, "ANNOUNCEMENT_STICKER_ID", "CAACAgUAAxkBAAESMk5q9hkLY_fO05bJ3hVEUlQBT--WSwAC8QIAAudAgFUqxt2NVqeaJT0E")
+    if not stk_id or not chat_id:
+        return False
+
+    cid = int(chat_id) if str(chat_id).lstrip("-").isdigit() else str(chat_id)
+
+    # 1. Try via current Client
+    if client:
+        try:
+            await client.send_sticker(chat_id=cid, sticker=stk_id)
+            logger.info(f"[ANNOUNCEMENT STICKER] Sent via Pyrogram to {cid}")
+            return True
+        except Exception as pe:
+            logger.warning(f"[ANNOUNCEMENT STICKER PYROGRAM FAILED] {pe}")
+
+    # Fallback to Main Bot client if client was not main bot
+    main_bot = getattr(temp, "BOT", None)
+    if main_bot and main_bot != client:
+        try:
+            await main_bot.send_sticker(chat_id=cid, sticker=stk_id)
+            logger.info(f"[ANNOUNCEMENT STICKER] Sent via Main Bot to {cid}")
+            return True
+        except Exception as me:
+            logger.warning(f"[ANNOUNCEMENT STICKER MAIN BOT FAILED] {me}")
+
+    # 2. Fallback via Telegram Bot API HTTP sendSticker
+    try:
+        import aiohttp
+        bot_tok = (
+            getattr(client, "bot_token", None)
+            or getattr(client, "_bot_token", None)
+            or getattr(info, "BOT_TOKEN", "")
+            or os.environ.get("BOT_TOKEN", "")
+        )
+        if bot_tok:
+            async with aiohttp.ClientSession() as sess:
+                url = f"https://api.telegram.org/bot{bot_tok}/sendSticker"
+                payload = {"chat_id": cid, "sticker": stk_id}
+                async with sess.post(url, json=payload, timeout=aiohttp.ClientTimeout(total=5)) as resp:
+                    data = await resp.json()
+                    if data.get("ok"):
+                        logger.info(f"[ANNOUNCEMENT STICKER] Sent via Bot API HTTP to {cid}")
+                        return True
+                    else:
+                        logger.warning(f"[ANNOUNCEMENT STICKER HTTP ERROR] {data.get('description')}")
+    except Exception as he:
+        logger.warning(f"[ANNOUNCEMENT STICKER HTTP EXCEPTION] {he}")
+
+    return False
+
+
 async def send_announcement_media(
     client: Client,
     chat_id: int | str,
@@ -4197,6 +4255,10 @@ async def announce_filter_created(client: Client, filter_type: str = "series", f
             return False
 
         cid_int = int(channel_id) if str(channel_id).lstrip("-").isdigit() else str(channel_id)
+
+        # Send divider sticker before posting announcement
+        await send_announcement_sticker(client, cid_int)
+        await asyncio.sleep(0.5)
 
         # 1. First attempt: Direct Send via Telegram Bot API HTTP with primary styled button in initial message
         direct_send_res = None
@@ -7137,7 +7199,8 @@ async def series_wizard_callback(client: Client, query: CallbackQuery):
 
         try:
             if movie_id:
-                await announce_filter_created(client, filter_type="movie", filter_id=str(movie_id))
+                from database.series_db import schedule_delayed_filter_announcement
+                await schedule_delayed_filter_announcement(filter_type="movie", filter_id=str(movie_id), delay=60)
         except Exception as ae:
             logger.warning(f"[MANUAL MOVIE ANNOUNCEMENT ERROR] {ae}")
 
@@ -7550,7 +7613,8 @@ async def series_wizard_callback(client: Client, query: CallbackQuery):
 
         try:
             if series_id:
-                await announce_filter_created(client, filter_type="series", filter_id=str(series_id))
+                from database.series_db import schedule_delayed_filter_announcement
+                await schedule_delayed_filter_announcement(filter_type="series", filter_id=str(series_id), delay=60)
         except Exception as ae:
             logger.warning(f"[MANUAL SERIES ANNOUNCEMENT ERROR] {ae}")
 
@@ -8080,7 +8144,8 @@ async def series_wizard_callback(client: Client, query: CallbackQuery):
         clear_wizard_session(uid)
         temp.SERIES_WIZARD.pop(uid, None)
         try:
-            await announce_filter_created(client, filter_type="series", filter_id=str(series_id))
+            from database.series_db import schedule_delayed_filter_announcement
+            await schedule_delayed_filter_announcement(filter_type="series", filter_id=str(series_id), delay=60)
         except Exception:
             pass
 
@@ -8387,7 +8452,8 @@ async def auto_movie_callbacks(client: Client, query: CallbackQuery):
         temp.AUTO_MOVIE.pop(session_id, None)
 
         try:
-            await announce_filter_created(client, filter_type="movie", filter_id=str(movie_id))
+            from database.series_db import schedule_delayed_filter_announcement
+            await schedule_delayed_filter_announcement(filter_type="movie", filter_id=str(movie_id), delay=60)
         except Exception as ae:
             logger.warning(f"[AUTO MOVIE ANNOUNCEMENT ERROR] {ae}")
 
