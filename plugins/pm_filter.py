@@ -5914,6 +5914,20 @@ async def execute_normal_group_file_delivery(client: Client, user_id: int, group
         except Exception:
             pass
 
+        # Determine the private message link of the stop message (delivery control message)
+        ctrl_msg_id = getattr(ctrl_msg, "id", None)
+        bot_id = getattr(getattr(client, "me", None), "id", None)
+        if getattr(ctrl_msg, "link", None):
+            stop_msg_link = ctrl_msg.link
+        elif str(user_id).startswith("-100"):
+            stop_msg_link = f"https://t.me/c/{str(user_id).replace('-100', '')}/{ctrl_msg_id}"
+        elif bot_id:
+            stop_msg_link = f"https://t.me/c/{bot_id}/{ctrl_msg_id}"
+        else:
+            stop_msg_link = f"https://t.me/c/{user_id}/{ctrl_msg_id}"
+
+        stop_link_html = f"<a href='{stop_msg_link}'>click -🆂🆃🅾🅿 🅵🅸🅻🅴🆂</a>"
+
         for idx, f in enumerate(sorted_files, 1):
             sess = getattr(temp, "NORMAL_DELIVERY_SESSIONS", {}).get(session_id, {})
             if sess.get("cancelled"):
@@ -5930,7 +5944,8 @@ async def execute_normal_group_file_delivery(client: Client, user_id: int, group
                 f"𖡡 File Size: {html.escape(str(fsize_str))}\n"
                 f"𖡡 Total File: {idx}/{total_files}\n\n"
                 f"@{html.escape(str(bot_username))}\n"
-                f"</i>\n\n"
+                f"</i>\n"
+                f"🛑 {stop_link_html}\n\n"
                 f"<blockquote>⚠️ This file will be deleted in {del_caption_tag}. Forward to Saved Messages!</blockquote>"
             )
 
@@ -6902,6 +6917,16 @@ async def child_start_handler(client: Client, message: Message):
 
     if len(message.command) > 1:
         data = message.command[1]
+
+        # Stop Files Flow (/start stop_...)
+        if data.startswith("stop_"):
+            stop_sess_id = data[5:]
+            user_id = message.from_user.id
+            for sid, s in list(getattr(temp, "NORMAL_DELIVERY_SESSIONS", {}).items()):
+                if s.get("user_id") == user_id or sid == stop_sess_id:
+                    s["cancelled"] = True
+            await message.reply_text("<i>🛑 File delivery stopped.\n\nഫയൽ അയക്കുന്നത് നിർത്തിയിരിക്കുന്നു.</i>", parse_mode=enums.ParseMode.HTML)
+            return
 
         # 1. Super Filter / Series Start Flow (/start all_...)
         if data.startswith("all_"):
