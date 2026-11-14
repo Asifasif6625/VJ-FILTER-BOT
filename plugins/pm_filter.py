@@ -5916,25 +5916,20 @@ async def execute_normal_group_file_delivery(client: Client, user_id: int, group
 
         # Determine the private message link of the stop message (delivery control message)
         ctrl_msg_id = getattr(ctrl_msg, "id", None)
-        bot_me = getattr(client, "me", None)
-        bot_id = getattr(bot_me, "id", None)
-        if not bot_id and hasattr(temp, "BOT") and getattr(temp.BOT, "me", None):
+        bot_id = getattr(getattr(client, "me", None), "id", None)
+        if not bot_id and getattr(ctrl_msg, "from_user", None):
+            bot_id = getattr(ctrl_msg.from_user, "id", None)
+        if not bot_id and getattr(client, "bot_token", None):
+            try:
+                bot_id = int(str(client.bot_token).split(":")[0])
+            except Exception:
+                pass
+        if not bot_id and hasattr(temp, "BOT") and getattr(getattr(temp, "BOT", None), "me", None):
             bot_id = getattr(temp.BOT.me, "id", None)
         if not bot_id and hasattr(temp, "ME"):
             bot_id = temp.ME
 
-        if getattr(ctrl_msg, "link", None):
-            stop_msg_link = ctrl_msg.link
-        elif str(user_id).startswith("-100"):
-            stop_msg_link = f"https://t.me/c/{str(user_id).replace('-100', '')}/{ctrl_msg_id}"
-        elif bot_id and ctrl_msg_id:
-            # Native Telegram deep link: directly jumps and scrolls to the delivery control message in 1-on-1 PM
-            stop_msg_link = f"tg://openmessage?user_id={bot_id}&message_id={ctrl_msg_id}"
-        elif bot_username:
-            stop_msg_link = f"https://t.me/{bot_username}?start=stop_{session_id}"
-        else:
-            stop_msg_link = f"https://t.me/c/{user_id}/{ctrl_msg_id}"
-
+        stop_msg_link = f"tg://openmessage?user_id={bot_id}&message_id={ctrl_msg_id}"
         stop_link_html = f"<a href='{stop_msg_link}'>click -🆂🆃🅾🅿 🅵🅸🅻🅴🆂</a>"
 
         for idx, f in enumerate(sorted_files, 1):
